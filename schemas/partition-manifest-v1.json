@@ -1,0 +1,436 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:market-platform:schema:partition-manifest-v1",
+  "title": "partition-manifest-v1",
+  "description": "Descrive UNA PARTIZIONE FISICA: il data file, la sua integrita', la sua copertura temporale e di sequence, la sua revisione, il suo stato e chi l'ha materializzata. E' la sorgente ricostruibile di catalog.partitions. Ne esiste uno per partizione, accanto al data file. Porta per esteso l'IDENTITA' NATURALE del dataset di appartenenza invece di dedurla dalla posizione nell'albero: costa ridondanza, ma l'alternativa sarebbe ricavare il dataset dal path, cioe' la convenzione nascosta che vogliamo evitare. La coerenza fra questa identita' e il dataset-manifest dell'albero in cui il file vive la verifica il semantic validator. NON contiene path assoluti. NON contiene nulla di strategico o derivato.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layer",
+    "dataset_kind",
+    "venue",
+    "instrument",
+    "record_schema_id",
+    "partition_key",
+    "revision",
+    "state",
+    "rel_path",
+    "file_size_bytes",
+    "row_count",
+    "first_exchange_ts",
+    "last_exchange_ts",
+    "created_at",
+    "producer",
+    "code_ref"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "partition-manifest-v1"
+    },
+    "layer": {
+      "description": "Strato del dataset di appartenenza. Parte dell'identita' naturale.",
+      "enum": [
+        "raw",
+        "canonical",
+        "features"
+      ]
+    },
+    "dataset_kind": {
+      "description": "Natura del dato. Parte dell'identita' naturale.",
+      "enum": [
+        "trades",
+        "l2",
+        "footprint",
+        "trade_microstructure",
+        "footprint_microstructure",
+        "l2_microstructure"
+      ]
+    },
+    "venue": {
+      "description": "Venue del dataset di appartenenza. In v1 obbligatoria e non nulla in tutti i layer.",
+      "$ref": "#/$defs/venue_name"
+    },
+    "instrument": {
+      "description": "Strumento del dataset di appartenenza. Parte dell'identita' naturale. Conserva il valore NATIVO della venue: case e punteggiatura non vengono normalizzati. Nel rel_root entra percent-encodato in modo iniettivo e reversibile, quindi 'BTC/USD', 'BTC-USD' e 'btc-usd' restano tre dataset distinti.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "feature_set_slug": {
+      "description": "Obbligatorio se e solo se layer e' 'features'.",
+      "$ref": "#/$defs/canonical_identifier"
+    },
+    "feature_set_version": {
+      "description": "Obbligatoria se e solo se layer e' 'features'.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "record_schema_id": {
+      "description": "Schema dei record, es. 'trade-v1'. Parte dell'identita' naturale del dataset: un cambio incompatibile produce un dataset distinto.",
+      "$ref": "#/$defs/canonical_identifier"
+    },
+    "partition_key": {
+      "description": "Chiave di partizionamento canonica: 'dt=2026-08-25', oppure 'dt=2026-08-26/hour=14' per dataset a rotazione piu' fine. Non impone granularita' giornaliera. La copertura temporale REALE resta descritta da first/last_exchange_ts.",
+      "type": "string",
+      "pattern": "^[a-z_]+=[A-Za-z0-9._-]+(/[a-z_]+=[A-Za-z0-9._-]+)*$"
+    },
+    "revision": {
+      "description": "Revisione della partizione, da 1 in su. Una ri-materializzazione della stessa (dataset, partition_key) incrementa revision e manda la precedente in 'superseded'.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "state": {
+      "description": "'writing': il produttore ci sta ancora scrivendo, NON leggibile. 'closed': sigillata, non ancora validata. 'valid': validata, pienamente utilizzabile. 'degraded': utilizzabile con riserva. 'invalid': da non usare, conservata per diagnosi. 'superseded': rimpiazzata da una revisione successiva.",
+      "enum": [
+        "writing",
+        "closed",
+        "valid",
+        "degraded",
+        "invalid",
+        "superseded"
+      ]
+    },
+    "rel_path": {
+      "description": "Path del DATA FILE, relativo a dataset_manifest.rel_root. Esempio: 'dt=2026-08-25/part-000.parquet'. Punta al file e non alla directory, perche' e' cio' che serve per verificare un checksum: per questo non esiste un campo file_name separato. Mai assoluto, mai con '..'. NESSUN '%': contiene solo partition_key e nome file, entrambi gia' path-safe, e il percent-encoding serve al solo instrument che vive in rel_root. Ammetterlo qui sarebbe permissivita' senza uso e una superficie di traversal encodato in piu'. La coerenza col partition_key la verifica il semantic validator.",
+      "type": "string",
+      "allOf": [
+        {
+          "$ref": "#/$defs/relative_path_shape"
+        },
+        {
+          "$ref": "#/$defs/no_traversal"
+        },
+        {
+          "not": {
+            "pattern": "%"
+          }
+        }
+      ]
+    },
+    "file_size_bytes": {
+      "description": "Dimensione del data file in byte.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "row_count": {
+      "description": "Numero di record nel file. Zero e' legittimo: una giornata senza trade e' un fatto, non un errore. Se e' un valore sospetto per quel mercato lo dira' la quality policy, non questo schema.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "sha256": {
+      "description": "SHA-256 del contenuto del data file, esadecimale lowercase. Assente o null solo mentre lo stato e' 'writing'.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/sha256_hex"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "first_exchange_ts": {
+      "description": "exchange_ts del PRIMO record. Null quando row_count e' 0 o la partizione e' in 'writing'.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/utc_timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "last_exchange_ts": {
+      "description": "exchange_ts dell'ULTIMO record. Null alle stesse condizioni. Insieme a first_exchange_ts definisce la copertura da cui si rilevano gap e overlap fra partizioni.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/utc_timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "first_sequence": {
+      "description": "sequence del primo record, come stringa decimale canonica. Assente o null quando la venue non fornisce sequence o la partizione e' vuota. Confronto NUMERICO, mai lessicografico.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/digit_string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "last_sequence": {
+      "description": "sequence dell'ultimo record. Insieme a first_sequence individua i boundary da cui si rilevano buchi di sequence fra partizioni contigue.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/digit_string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "description": "Istante in cui la partizione e' stata aperta dal produttore.",
+      "$ref": "#/$defs/utc_timestamp"
+    },
+    "closed_at": {
+      "description": "Istante in cui la partizione e' stata sigillata. Null solo finche' lo stato e' 'writing'.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/utc_timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "producer": {
+      "description": "Processo che ha materializzato QUESTA partizione (es. 'bybit-collector'). NON e' il transform del dataset-manifest: quello nomina l'arco di derivazione fra dataset, questo dice chi ha scritto questo file.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "code_ref": {
+      "description": "Revisione Git ESATTA con cui questa partizione e' stata materializzata. E' l'UNICO posto in cui vive l'implementation identity: dataset-manifest.transform porta l'identita' semantica e versionata della trasformazione (es. 'canonicalize-trades-v1'), non un commit. Il codice evolve durante un backfill, quindi trenta partizioni dello stesso dataset possono avere trenta code_ref sotto un unico arco di lineage, senza che l'arco debba dichiararne uno solo e mentire.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  },
+  "allOf": [
+    {
+      "description": "Una partizione fuori da 'writing' e' sigillata: sha256 e closed_at devono esserci e non essere null.",
+      "if": {
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "closed",
+              "valid",
+              "degraded",
+              "invalid",
+              "superseded"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "sha256",
+          "closed_at"
+        ],
+        "properties": {
+          "sha256": {
+            "$ref": "#/$defs/sha256_hex"
+          },
+          "closed_at": {
+            "$ref": "#/$defs/utc_timestamp"
+          }
+        }
+      }
+    },
+    {
+      "description": "Se ci sono record, la copertura temporale deve esistere.",
+      "if": {
+        "required": [
+          "row_count"
+        ],
+        "properties": {
+          "row_count": {
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "first_exchange_ts": {
+            "$ref": "#/$defs/utc_timestamp"
+          },
+          "last_exchange_ts": {
+            "$ref": "#/$defs/utc_timestamp"
+          }
+        }
+      }
+    },
+    {
+      "description": "I due confini di sequence stanno insieme: o entrambi noti o entrambi ignoti.",
+      "if": {
+        "required": [
+          "first_sequence"
+        ],
+        "properties": {
+          "first_sequence": {
+            "$ref": "#/$defs/digit_string"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "last_sequence"
+        ],
+        "properties": {
+          "last_sequence": {
+            "$ref": "#/$defs/digit_string"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "last_sequence": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "description": "layer 'features' <-> identita' della definizione di feature.",
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "features"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "feature_set_slug",
+          "feature_set_version"
+        ]
+      },
+      "else": {
+        "properties": {
+          "feature_set_slug": false,
+          "feature_set_version": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "raw"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trades",
+              "l2"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "canonical"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trades",
+              "footprint",
+              "l2"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "features"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trade_microstructure",
+              "footprint_microstructure",
+              "l2_microstructure"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "venue_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+([_-][a-z0-9]+)*$"
+    },
+    "relative_path_shape": {
+      "description": "Componenti di [A-Za-z0-9._=%-] separati da singole '/'. Rifiuta path assoluti, componenti vuoti, slash finale, spazi.",
+      "pattern": "^[A-Za-z0-9._=%-]+(/[A-Za-z0-9._=%-]+)*$"
+    },
+    "no_traversal": {
+      "description": "Nessun componente '.' o '..' letterale, nessun escape non canonico e nessun '%2E'. Il '%' e' ammesso per il percent-encoding iniettivo di instrument, ma '%2E%2E' decodificato diventerebbe '..': gli ultimi due vincoli chiudono quella via. Ogni '%' deve essere seguito da esattamente due cifre esadecimali MAIUSCOLE, il che impone anche la forma canonica: senza, '%2f' e '%2F' sarebbero due stringhe per lo stesso valore e l'encoding non sarebbe piu' iniettivo.",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "(^|/)\\.\\.?(/|$)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "%(?![0-9A-F]{2})"
+          }
+        },
+        {
+          "not": {
+            "pattern": "%2[Ee]"
+          }
+        }
+      ]
+    },
+    "sha256_hex": {
+      "description": "Digest SHA-256 esadecimale lowercase, 64 caratteri. Il lowercase e' imposto perche' lo stesso digest non abbia due rappresentazioni.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "digit_string": {
+      "description": "Intero ordinale non negativo come stringa decimale canonica, senza limite di grandezza. Zeri iniziali rifiutati, '0' ammesso. La forma canonica NON rende la stringa ordinabile lessicograficamente: il confronto va fatto sul valore numerico.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "utc_timestamp": {
+      "description": "Istante UTC in RFC 3339, suffisso 'Z' obbligatorio, fino a 9 cifre decimali. ORDINAMENTO E CONFRONTO: va sempre usato il VALORE TEMPORALE PARSATO, mai la stringa.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "canonical_identifier": {
+      "description": "Identificatore canonico path-safe: minuscolo, componenti alfanumeriche separate da un solo '.', '_' o '-'. Ristretto di proposito, cosi' che possa entrare in un path senza trasformazioni lossy.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*$"
+    }
+  }
+}

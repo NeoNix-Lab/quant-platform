@@ -1,0 +1,19 @@
+{
+  "schema_version": "partition-manifest-v1",
+  "layer": "raw",
+  "dataset_kind": "l2",
+  "venue": "kraken",
+  "instrument": "XBT/USD",
+  "record_schema_id": "l2-v1",
+  "partition_key": "dt=2026-08-26/hour=14",
+  "revision": 1,
+  "state": "writing",
+  "rel_path": "dt=2026-08-26/hour=14/part-000.parquet",
+  "file_size_bytes": 0,
+  "row_count": 0,
+  "first_exchange_ts": null,
+  "last_exchange_ts": null,
+  "created_at": "2026-08-25T00:00:00.001Z",
+  "producer": "bybit-collector",
+  "code_ref": "4f1a9c3"
+}

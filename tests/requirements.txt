@@ -1,1 +1,2 @@
 jsonschema>=4.19
+rfc3339-validator>=0.1.4

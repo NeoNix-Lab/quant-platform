@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Valida le fixture di trade-v1 contro il suo JSON Schema.
+"""Valida le fixture di dataset-manifest-v1 contro il suo JSON Schema.
 
-Due asserzioni simmetriche:
+Stessa forma del test di trade-v1, deliberatamente autonomo: i due contratti
+devono poter evolvere e fallire in modo indipendente.
+
   * ogni fixture valid-*.json DEVE passare;
-  * ogni fixture sotto invalid/ DEVE essere respinta.
-
-Per ogni fixture negativa viene stampato il motivo del rifiuto (keyword dello
-schema + percorso del campo). Serve a smascherare la fixture che viene respinta
-per la ragione sbagliata: un file pensato per testare 'price = 0' ma rifiutato
-per un refuso nel timestamp darebbe un PASS senza aver provato nulla.
+  * ogni fixture sotto invalid/ DEVE essere respinta, e viene stampato il
+    motivo del rifiuto, cosi' che una fixture respinta per la ragione
+    sbagliata non passi per verificata.
 
 Uscita: 0 se tutto conforme, 1 altrimenti.
 """
@@ -21,14 +20,12 @@ try:
     from jsonschema import Draft202012Validator, FormatChecker
 except ImportError:
     sys.exit(
-        "manca la dipendenza 'jsonschema'. Installala con:\n"
-        "  python3 -m venv ~/.venvs/market-platform\n"
-        "  ~/.venvs/market-platform/bin/pip install -r tests/requirements.txt"
+        "manca la dipendenza 'jsonschema'. Vedi tests/requirements.txt"
     )
 
 ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_PATH = ROOT / "schemas" / "trade-v1.json"
-FIXTURES = ROOT / "fixtures" / "trade-v1"
+SCHEMA_PATH = ROOT / "schemas" / "dataset-manifest-v1.json"
+FIXTURES = ROOT / "fixtures" / "dataset-manifest-v1"
 
 GREEN, RED, DIM, OFF = "\033[32m", "\033[31m", "\033[90m", "\033[0m"
 
@@ -39,7 +36,6 @@ def load(path):
 
 
 def why(error):
-    """Keyword dello schema e percorso del campo che ha causato il rifiuto."""
     where = ".".join(str(p) for p in error.absolute_path) or "<root>"
     return f"{error.validator} @ {where}"
 

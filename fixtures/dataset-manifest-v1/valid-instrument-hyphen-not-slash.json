@@ -1,0 +1,10 @@
+{
+  "schema_version": "dataset-manifest-v1",
+  "layer": "raw",
+  "dataset_kind": "trades",
+  "venue": "kraken",
+  "instrument": "XBT-USD",
+  "record_schema_id": "trade-v1",
+  "created_at": "2026-08-01T00:00:00Z",
+  "rel_root": "raw/trades/kraken/XBT-USD/trade-v1"
+}

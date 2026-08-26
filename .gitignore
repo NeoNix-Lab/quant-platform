@@ -1,0 +1,15 @@
+# Artefatti Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Ambienti virtuali e cache di test
+.venv/
+venv/
+.pytest_cache/
+
+# Segreti: il .env del catalogo vive in /srv/docker/market-catalog, non qui,
+# ma la regola resta come rete di sicurezza se qualcuno lo copiasse nel repo.
+.env
+*.env
+!env.example

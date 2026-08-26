@@ -55,15 +55,33 @@ SET search_path TO catalog, public;
 -- consumatore (DataGateway, Quant) dal proprio storage root. Il vincolo sta
 -- qui, nel dominio, e non nelle singole colonne: non e' dimenticabile.
 --
--- Ammesso: componenti di [A-Za-z0-9._=-] separati da singole '/'.
---   'raw/bybit/btcusdt/trades'   ok
---   'dt=2026-08-24'              ok  (il '=' serve alle chiavi di partizione)
+-- Ammesso: componenti di [A-Za-z0-9._=%-] separati da singole '/'.
+--   'raw/trades/bybit/BTCUSDT/trade-v1'   ok
+--   'raw/trades/kraken/XBT%2FUSD/trade-v1' ok  ('%' per l'encoding iniettivo)
+--   'dt=2026-08-24'                        ok  ('=' per le chiavi di partizione)
 -- Rifiutato: path assoluti, '..', '.', componenti vuoti ('//'), slash finale,
 --            spazi e caratteri di controllo.
+--
+-- Il '%' e' ammesso perche' instrument viene percent-encoded in modo iniettivo
+-- (vedi la convenzione rel_root sotto datasets). Questo pero' aprirebbe una
+-- via di traversal: '%2E%2E' decodificato diventa '..', che il controllo sui
+-- punti letterali non vedrebbe. Due vincoli lo chiudono:
+--
+--   canonical_escapes  ogni '%' e' seguito da ESATTAMENTE due cifre esadecimali
+--                      MAIUSCOLE. Impone la forma canonica (senza, '%2f' e
+--                      '%2F' sarebbero due stringhe per lo stesso valore e
+--                      l'encoding non sarebbe piu' iniettivo) e respinge un
+--                      '%' isolato.
+--   no_encoded_dot     nessun '%2E': l'encoder canonico non lo emette mai,
+--                      perche' '.' e' fra i caratteri sicuri e resta letterale.
+--                      Se compare, e' stato scritto a mano per aggirare
+--                      no_traversal.
 -- ---------------------------------------------------------------------------
 CREATE DOMAIN rel_path_safe AS text
-    CONSTRAINT well_formed  CHECK (VALUE ~ '^[A-Za-z0-9._=-]+(/[A-Za-z0-9._=-]+)*$')
-    CONSTRAINT no_traversal CHECK (VALUE !~ '(^|/)\.\.?(/|$)');
+    CONSTRAINT well_formed       CHECK (VALUE ~ '^[A-Za-z0-9._=%-]+(/[A-Za-z0-9._=%-]+)*$')
+    CONSTRAINT no_traversal      CHECK (VALUE !~ '(^|/)\.\.?(/|$)')
+    CONSTRAINT canonical_escapes CHECK (VALUE !~ '%(?![0-9A-F]{2})')
+    CONSTRAINT no_encoded_dot    CHECK (VALUE !~ '%2[Ee]');
 
 -- ---------------------------------------------------------------------------
 -- storage_roots — i punti di ancoraggio fisici. Aggiungerne uno (un terzo
@@ -124,9 +142,13 @@ CREATE TABLE feature_set_definitions (
     -- Il database non puo' farlo rispettare: e' un contratto, e va letto.
     params             jsonb       NOT NULL DEFAULT '{}'::jsonb,
 
-    -- implementation identity: senza questo, fra un anno sapremmo QUALI
-    -- parametri, ma non QUALE codice li ha materializzati. Obbligatorio.
-    code_ref           text        NOT NULL CHECK (length(trim(code_ref)) > 0),
+    -- Riferimento IMMUTABILE alla definizione/spec del feature set: il
+    -- documento che stabilisce cosa la misura sia. NON e' la revisione con cui
+    -- una partizione e' stata materializzata — quella e' partitions.code_ref,
+    -- l'exact execution revision, e cambia da un giorno all'altro mentre questa
+    -- resta ferma. Chiamarli entrambi 'code_ref' faceva sembrare la stessa cosa
+    -- due livelli diversi.
+    definition_ref     text        NOT NULL CHECK (length(trim(definition_ref)) > 0),
 
     schema_id          text        REFERENCES schema_registry(schema_id),
     description        text,
@@ -141,21 +163,42 @@ CREATE TABLE feature_set_definitions (
 -- ---------------------------------------------------------------------------
 CREATE TABLE datasets (
     dataset_id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    slug               text     NOT NULL UNIQUE,    -- 'canonical.trades.coinbase.btc-usd'
     layer              text     NOT NULL CHECK (layer IN ('raw','canonical','features')),
     kind               text     NOT NULL,
-    venue              text,
-    symbol             text,
-    rel_root           rel_path_safe NOT NULL UNIQUE, -- 'raw/coinbase/btc-usd/trades'
-    schema_id          text     REFERENCES schema_registry(schema_id),
+    -- In v1 ogni dataset e' venue-native e strumento-specifico, in TUTTI i
+    -- layer. Un eventuale dataset cross-venue richiedera' un modello esplicito
+    -- di aggregazione.
+    venue              text     NOT NULL,
+    instrument         text     NOT NULL,
+
+    -- rel_root e' DERIVATO deterministicamente dall'identita' naturale
+    -- completa, secondo la convenzione documentata sotto la tabella. Resta
+    -- UNIQUE come guardia: se due identita' distinte producessero lo stesso
+    -- path, l'inserimento fallisce rumorosamente invece di far condividere in
+    -- silenzio una directory a due dataset.
+    rel_root           rel_path_safe NOT NULL UNIQUE,
+    schema_id          text     NOT NULL REFERENCES schema_registry(schema_id),
     feature_set_def_id uuid     REFERENCES feature_set_definitions ON DELETE RESTRICT,
     manifest_sha256    char(64) NOT NULL,
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now(),
 
-    -- raw e' venue-native: venue e symbol sono obbligatori li'
-    CONSTRAINT raw_requires_venue
-        CHECK (layer <> 'raw' OR (venue IS NOT NULL AND symbol IS NOT NULL)),
+    -- IDENTITA' NATURALE. dataset_id e' un surrogato interno: non va mai usato
+    -- come identificatore esterno, e nessun manifest lo contiene. L'identita'
+    -- vera e' questa tupla semantica, che i manifest portano per esteso senza
+    -- che nessuno debba interpretare un path.
+    --
+    -- schema_id ne fa parte per una ragione precisa: una versione di schema
+    -- incompatibile produce un DATASET DISTINTO, non una revisione dello
+    -- stesso. Cosi' trade-v1 e trade-v2 sullo stesso strumento convivono
+    -- invece di sovrascriversi.
+    --
+    -- NULLS NOT DISTINCT e' obbligatorio perche' feature_set_def_id e' NULL
+    -- per raw e canonical: col comportamento di default PostgreSQL considera
+    -- due NULL distinti, quindi il vincolo non morderebbe proprio li'.
+    CONSTRAINT datasets_natural_key
+        UNIQUE NULLS NOT DISTINCT
+        (layer, kind, venue, instrument, feature_set_def_id, schema_id),
 
     -- ogni layer ammette solo i propri kind. 'footprint' e' il dato canonico
     -- ricostruito dai trade; 'footprint_microstructure' sono le misure derivate
@@ -181,15 +224,87 @@ CREATE TABLE datasets (
 );
 
 CREATE INDEX ON datasets (layer, kind);
-CREATE INDEX ON datasets (venue, symbol);
+CREATE INDEX ON datasets (venue, instrument);
 CREATE INDEX ON datasets (feature_set_def_id);
+
+-- ---------------------------------------------------------------------------
+-- CONVENZIONE rel_root — unica per tutti e tre i layer.
+--
+--   <layer>/<kind>/<venue>/<instrument_path>
+--           [/<feature_set_slug>/v<feature_set_version>]
+--           /<record_schema_id>
+--
+--   raw/trades/bybit/BTCUSDT/trade-v1
+--   raw/trades/kraken/XBT%2FUSD/trade-v1
+--   canonical/footprint/bybit/BTCUSDT/footprint-v1
+--   features/trade_microstructure/bybit/BTCUSDT/trade_microstructure/v1/feature-set-v1
+--
+-- Il segmento fra parentesi compare se e solo se layer = 'features'.
+--
+-- record_schema_id e' l'ULTIMO segmento perche' fa parte dell'identita'
+-- naturale: due dataset identici salvo la versione di schema dei record devono
+-- avere rel_root diversi, quindi directory diverse, altrimenti trade-v1 e
+-- trade-v2 si sovrascriverebbero sullo stesso disco.
+--
+-- instrument_path: PERCENT-ENCODING CANONICO, iniettivo e reversibile.
+-- Ogni carattere fuori da [A-Za-z0-9._-] viene sostituito dai byte del suo
+-- UTF-8 in forma %XX con esadecimale MAIUSCOLO. Il case NON viene normalizzato
+-- e la punteggiatura NON viene collassata: sono differenze semantiche.
+--
+--   BTCUSDT  -> BTCUSDT
+--   BTC-USD  -> BTC-USD
+--   btc-usd  -> btc-usd        (diverso da BTC-USD)
+--   BTC/USD  -> BTC%2FUSD      (diverso da BTC-USD)
+--   BTC%USD  -> BTC%25USD      (il '%' stesso viene encodato, quindi nessuna
+--                               stringa gia' encodata puo' essere prodotta da
+--                               un altro input: la mappa e' iniettiva)
+--
+-- La mappa e' iniettiva e reversibile: due instrument distinti non possono
+-- produrre lo stesso componente di path, quindi la collisione non e' possibile
+-- per costruzione e non va intercettata a valle.
+--
+-- Gli altri componenti non hanno bisogno di encoding perche' i loro contratti
+-- sono gia' identificatori path-safe: layer e kind sono enum; venue,
+-- feature_set_slug e record_schema_id sono ristretti a
+-- ^[a-z0-9]+([._-][a-z0-9]+)*$; feature_set_version e' un intero reso come 'vN'.
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- TIERING E UNICITA' DEL DATASET-MANIFEST
+--
+-- Un dataset-manifest e' LOGICAMENTE UNICO: descrive il dataset, non una sua
+-- copia. Ma le partizioni di uno stesso dataset possono vivere su piu' storage
+-- root contemporaneamente — e' il senso stesso del tiering hot/cold — e ogni
+-- root deve essere autosufficiente, altrimenti montare il solo SanDisk darebbe
+-- partizioni orfane senza il dataset che le descrive.
+--
+-- Quindi: il dataset-manifest e' REPLICATO IDENTICO in ogni storage root che
+-- contenga almeno una partizione del dataset, sotto lo stesso rel_root.
+-- Tutte le copie devono avere lo STESSO SHA-256, byte per byte.
+--
+-- Il rebuilder:
+--   * DEDUPLICA le copie identiche, producendo una sola riga in datasets;
+--   * FALLISCE su copie divergenti, invece di sceglierne una. Due manifest
+--     diversi per lo stesso dataset significano che qualcuno ha modificato una
+--     copia sola: quale sia quella giusta non e' deducibile, e indovinare
+--     sarebbe peggio che fermarsi.
+--
+-- datasets.manifest_sha256 registra quell'unico hash condiviso: e' anche cio'
+-- che rende la divergenza rilevabile a posteriori.
+-- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------
 -- partitions — l'unita' fisica, tipicamente un giorno, ed e' QUI che vive la
 -- location. Spostare una partizione da hot a cold e' un UPDATE di
 -- storage_root_id: il dataset non si accorge di nulla.
 --
--- Path assoluto = storage_roots.abs_path / datasets.rel_root / partitions.rel_path
+-- Path assoluto del DATA FILE = storage_roots.abs_path
+--                             / datasets.rel_root
+--                             / partitions.rel_path
+--
+-- rel_path punta al FILE, non alla directory della partizione: e' cio' che
+-- serve per verificare un checksum. Esempio: 'dt=2026-08-25/part-000.parquet'.
+-- Per questo non esiste una colonna file_name separata.
 --
 -- Lifecycle:
 --   writing     il collector ci sta ancora scrivendo — NON leggibile
@@ -202,14 +317,27 @@ CREATE INDEX ON datasets (feature_set_def_id);
 CREATE TABLE partitions (
     partition_id    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     dataset_id      uuid        NOT NULL REFERENCES datasets ON DELETE CASCADE,
-    partition_key   text        NOT NULL,           -- 'dt=2026-08-24'
+    -- 'dt=2026-08-24', oppure 'dt=2026-08-26/hour=14' a rotazione piu' fine.
+    -- La grammatica e' la stessa congelata in partition-manifest-v1: senza
+    -- questo CHECK un rebuilder che scrivesse direttamente in Postgres
+    -- aggirerebbe il vincolo che il manifest impone.
+    partition_key   text        NOT NULL
+                                CHECK (partition_key ~
+                                       '^[a-z_]+=[A-Za-z0-9._-]+(/[a-z_]+=[A-Za-z0-9._-]+)*$'),
     revision        integer     NOT NULL DEFAULT 1 CHECK (revision > 0),
     storage_root_id text        NOT NULL REFERENCES storage_roots ON DELETE RESTRICT,
-    rel_path        rel_path_safe NOT NULL,         -- relativo a datasets.rel_root
+    -- Path del DATA FILE relativo a datasets.rel_root, es.
+    -- 'dt=2026-08-25/part-000.parquet'. Contiene solo partition_key e nome
+    -- file, entrambi gia' path-safe: il percent-encoding serve al solo
+    -- instrument, che vive in rel_root. Ammetterlo anche qui sarebbe
+    -- permissivita' senza uso, e ogni '%' in piu' e' una superficie di
+    -- traversal encodato da presidiare.
+    rel_path        rel_path_safe NOT NULL
+                                CHECK (position('%' in rel_path) = 0),
     ts_start        timestamptz,
     ts_end          timestamptz,
-    row_count       bigint      CHECK (row_count >= 0),
-    byte_size       bigint      CHECK (byte_size >= 0),
+    row_count       bigint      NOT NULL CHECK (row_count >= 0),
+    byte_size       bigint      NOT NULL CHECK (byte_size >= 0),
     content_sha256  char(64),
     state           text        NOT NULL DEFAULT 'writing'
                                 CHECK (state IN ('writing','closed','valid',
@@ -217,14 +345,68 @@ CREATE TABLE partitions (
     manifest_sha256 char(64),
     tiered_at       timestamptz,                    -- ultimo spostamento di tier
     created_at      timestamptz NOT NULL DEFAULT now(),
+    closed_at       timestamptz,                    -- sigillatura della partizione
+
+    -- Confini di sequence, per rilevare buchi fra partizioni contigue.
+    -- numeric e NON text: una sequence va confrontata NUMERICAMENTE. Con text
+    -- '9' risulterebbe maggiore di '10'. numeric ha precisione arbitraria,
+    -- quindi regge valori oltre 2^53 senza perdita, come le stringhe di cifre
+    -- dei manifest da cui proviene.
+    first_sequence  numeric,
+    last_sequence   numeric,
+
+    -- Provenance della produzione di QUESTA partizione.
+    --   producer  chi l'ha scritta (es. 'bybit-collector')
+    --   code_ref  EXACT EXECUTION REVISION: il commit con cui e' stata
+    --             materializzata. E' l'unico posto in cui vive.
+    --
+    -- Non confondere con i due riferimenti che stanno un livello sopra e sono
+    -- stabili nel tempo: dataset_lineage.transform, che nomina semanticamente
+    -- la trasformazione, e feature_set_definitions.definition_ref, che punta
+    -- alla spec della misura. Quelli descrivono COSA si fa; questo registra
+    -- CON QUALE CODICE e' stato fatto, e cambia da una partizione all'altra.
+    producer        text        NOT NULL CHECK (length(trim(producer)) > 0),
+    code_ref        text        NOT NULL CHECK (length(trim(code_ref)) > 0),
 
     UNIQUE (dataset_id, partition_key, revision),
     CONSTRAINT ts_ordered
         CHECK (ts_start IS NULL OR ts_end IS NULL OR ts_start <= ts_end),
-    -- una partizione chiusa e' stata sigillata: hash e manifest sono obbligatori
-    CONSTRAINT closed_is_hashed
+
+    -- una partizione uscita da 'writing' e' sigillata: hash, manifest e
+    -- istante di chiusura sono tutti obbligatori. Dichiararla chiusa senza
+    -- sapere quando e' un'informazione inutilmente incompleta.
+    CONSTRAINT closed_is_sealed
         CHECK (state = 'writing'
-               OR (content_sha256 IS NOT NULL AND manifest_sha256 IS NOT NULL))
+               OR (content_sha256 IS NOT NULL
+                   AND manifest_sha256 IS NOT NULL
+                   AND closed_at IS NOT NULL)),
+
+    -- una sequence e' un ordinale non negativo, non un decimale
+    CONSTRAINT sequence_is_ordinal CHECK (
+            (first_sequence IS NULL
+             OR (first_sequence >= 0 AND first_sequence = trunc(first_sequence)))
+        AND (last_sequence IS NULL
+             OR (last_sequence >= 0 AND last_sequence = trunc(last_sequence)))),
+    CONSTRAINT sequence_co_null
+        CHECK ((first_sequence IS NULL) = (last_sequence IS NULL)),
+    CONSTRAINT sequence_ordered
+        CHECK (first_sequence IS NULL OR last_sequence IS NULL
+               OR first_sequence <= last_sequence),
+
+    -- il data file sta DENTRO la propria partizione. starts_with e non LIKE:
+    -- un partition_key contiene '_' e '=' che in un pattern LIKE sarebbero
+    -- wildcard, rendendo il vincolo silenziosamente piu' permissivo.
+    CONSTRAINT rel_path_inside_partition
+        CHECK (starts_with(rel_path, partition_key || '/')),
+
+    -- una partizione non puo' essere stata sigillata prima di essere aperta
+    CONSTRAINT closed_after_created
+        CHECK (closed_at IS NULL OR closed_at >= created_at),
+
+    -- se ci sono record, la copertura temporale deve esistere
+    CONSTRAINT rows_imply_coverage
+        CHECK (row_count IS NULL OR row_count = 0
+               OR (ts_start IS NOT NULL AND ts_end IS NOT NULL))
 );
 
 -- al massimo una revisione viva per (dataset, partition_key): le altre sono
@@ -238,16 +420,29 @@ CREATE INDEX ON partitions (storage_root_id);
 CREATE INDEX ON partitions (state) WHERE state NOT IN ('valid','superseded');
 
 -- ---------------------------------------------------------------------------
--- dataset_lineage — quale dataset deriva da quale, e per mano di quale codice.
+-- dataset_lineage — quale dataset deriva da quale, e per mano di quale
+-- TRASFORMAZIONE, identificata semanticamente e per versione.
 -- Risponde a "se raw X e' sbagliato, cosa devo rigenerare".
+--
+-- Un arco porta solo l'identita' della trasformazione, non una revisione di
+-- codice: durante un backfill il codice evolve, quindi trenta partizioni dello
+-- stesso arco possono essere state prodotte da trenta commit diversi. Farlo
+-- dichiarare all'arco significherebbe sceglierne uno e mentire sugli altri.
+-- L'exact execution revision vive in partitions.code_ref, una per partizione.
 -- ---------------------------------------------------------------------------
 CREATE TABLE dataset_lineage (
     child_id    uuid NOT NULL REFERENCES datasets ON DELETE CASCADE,
     parent_id   uuid NOT NULL REFERENCES datasets ON DELETE RESTRICT,
-    transform   text NOT NULL,          -- nome del job che l'ha prodotto
-    -- implementation identity del passo di derivazione: sapere CHE canonical
-    -- deriva da raw non basta, serve sapere QUALE codice l'ha derivato.
-    code_ref    text NOT NULL CHECK (length(trim(code_ref)) > 0),
+
+    -- Identita' SEMANTICA E VERSIONATA della trasformazione, es.
+    -- 'canonicalize-trades-v1'. Non e' una revisione di codice: la revisione
+    -- Git esatta con cui una singola partizione e' stata materializzata vive
+    -- SOLO in partitions.code_ref. Tenerle separate evita la contraddizione di
+    -- un arco di lineage che dovrebbe dichiarare un unico commit mentre le sue
+    -- partizioni ne hanno trenta diversi, perche' il codice evolve durante un
+    -- backfill. Qui sta cosa fa la trasformazione; li' sta cosa e' girato.
+    transform   text NOT NULL CHECK (length(trim(transform)) > 0),
+
     recorded_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (child_id, parent_id, transform),
     CONSTRAINT no_self_lineage CHECK (child_id <> parent_id)
@@ -319,18 +514,22 @@ CREATE TABLE rebuild_log (
 );
 
 -- ---------------------------------------------------------------------------
--- v_partitions — ricompone il path assoluto dalle tre parti. E' l'unico posto
--- in cui il path completo esiste: nessuna tabella lo duplica.
+-- v_partitions — ricompone dalle tre parti il path assoluto del DATA FILE,
+-- non della directory di partizione: e' direttamente apribile e verificabile
+-- contro content_sha256. E' l'unico posto in cui il path completo esiste:
+-- nessuna tabella lo duplica.
 -- ---------------------------------------------------------------------------
 CREATE VIEW v_partitions AS
 SELECT p.partition_id,
-       d.slug        AS dataset_slug,
-       d.layer, d.kind, d.venue, d.symbol,
+       d.rel_root    AS dataset_rel_root,
+       d.layer, d.kind, d.venue, d.instrument,
        p.partition_key, p.revision, p.state,
        sr.tier,
-       sr.abs_path || '/' || d.rel_root || '/' || p.rel_path AS abs_path,
+       sr.abs_path || '/' || d.rel_root || '/' || p.rel_path AS file_abs_path,
        p.ts_start, p.ts_end, p.row_count, p.byte_size,
-       p.content_sha256, p.tiered_at, p.created_at
+       p.first_sequence, p.last_sequence,
+       p.content_sha256, p.producer, p.code_ref,
+       p.tiered_at, p.created_at, p.closed_at
 FROM partitions p
 JOIN datasets      d  ON d.dataset_id      = p.dataset_id
 JOIN storage_roots sr ON sr.storage_root_id = p.storage_root_id;

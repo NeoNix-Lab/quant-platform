@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:market-platform:schema:dataset-manifest-v1",
+  "title": "dataset-manifest-v1",
+  "description": "Descrive UN DATASET LOGICO: la sua identita' naturale, dove vive relativamente a uno storage root, quale schema hanno i suoi record e da quali dataset deriva. Non descrive file: quello e' compito di partition-manifest-v1. E' la sorgente ricostruibile di catalog.datasets e catalog.dataset_lineage. Ne esiste esattamente UNO per dataset, alla radice del dataset. NON contiene path assoluti: la posizione fisica nasce componendo lo storage root (che il rebuilder conosce perche' e' cio' che sta scansionando) con rel_root. NON contiene nulla di strategico o derivato.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layer",
+    "dataset_kind",
+    "venue",
+    "instrument",
+    "record_schema_id",
+    "rel_root",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Contratto a cui questo manifest aderisce. Identifica lo schema, non un numero: il file resta autodescrittivo anche estratto dal suo contesto.",
+      "const": "dataset-manifest-v1"
+    },
+    "layer": {
+      "description": "Strato del dataset. Determina quali dataset_kind sono ammessi e se il dataset debba avere una lineage.",
+      "enum": [
+        "raw",
+        "canonical",
+        "features"
+      ]
+    },
+    "dataset_kind": {
+      "description": "Natura del dato. Stesso enum di catalog.datasets.kind, cosi' che il rebuild non debba tradurre. Da solo NON determina il layer: 'trades' e 'l2' esistono sia in raw sia in canonical.",
+      "enum": [
+        "trades",
+        "l2",
+        "footprint",
+        "trade_microstructure",
+        "footprint_microstructure",
+        "l2_microstructure"
+      ]
+    },
+    "venue": {
+      "description": "Venue sorgente, lowercase normalizzata. In v1 e' obbligatoria e non nulla in TUTTI i layer: un dataset cross-venue richiedera' un modello esplicito di aggregazione, non una venue NULL che significherebbe 'non si sa'.",
+      "$ref": "#/$defs/venue_name"
+    },
+    "instrument": {
+      "description": "Identificatore canonico dello strumento. Parte dell'identita' naturale. Conserva il valore NATIVO della venue: case e punteggiatura non vengono normalizzati. Nel rel_root entra percent-encodato in modo iniettivo e reversibile, quindi 'BTC/USD', 'BTC-USD' e 'btc-usd' restano tre dataset distinti.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "feature_set_slug": {
+      "description": "Slug della definizione di feature materializzata. Obbligatorio se e solo se layer e' 'features': e' cio' che distingue due materializzazioni della stessa misura su versioni diverse della definizione.",
+      "$ref": "#/$defs/canonical_identifier"
+    },
+    "feature_set_version": {
+      "description": "Versione della definizione di feature. Obbligatoria se e solo se layer e' 'features'. Insieme allo slug forma l'identita' naturale della definizione, che nel catalogo e' UNIQUE (slug, version).",
+      "type": "integer",
+      "minimum": 1
+    },
+    "record_schema_id": {
+      "description": "Schema dei RECORD contenuti nel dataset, es. 'trade-v1'. Da non confondere con schema_version, che e' il contratto di questo manifest. E' PARTE DELL'IDENTITA' NATURALE: una versione di schema incompatibile produce un dataset distinto, non una revisione dello stesso, cosi' che trade-v1 e trade-v2 sullo stesso strumento convivano invece di sovrascriversi.",
+      "$ref": "#/$defs/canonical_identifier"
+    },
+    "rel_root": {
+      "description": "Radice del dataset, RELATIVA allo storage root, DERIVATA deterministicamente dall'identita' naturale completa secondo la convenzione unica: <layer>/<kind>/<venue>/<instrument_path>[/<feature_set_slug>/v<feature_set_version>]/<record_schema_id>. record_schema_id e' l'ultimo segmento perche' fa parte dell'identita': due dataset identici salvo la versione di schema dei record devono stare in directory diverse, altrimenti si sovrascriverebbero. instrument_path e' il PERCENT-ENCODING UTF-8 CANONICO di instrument: ogni carattere fuori da [A-Za-z0-9._-] diventa %XX con esadecimale MAIUSCOLO, il '%' compreso. Case e punteggiatura non vengono normalizzati, quindi 'BTC/USD', 'BTC-USD' e 'btc-usd' restano tre dataset distinti. La derivazione la verifica il semantic validator, non questo schema.",
+      "type": "string",
+      "allOf": [
+        {
+          "$ref": "#/$defs/relative_path_shape"
+        },
+        {
+          "$ref": "#/$defs/no_traversal"
+        }
+      ]
+    },
+    "derived_from": {
+      "description": "Dataset da cui questo deriva, ciascuno espresso con la propria IDENTITA' NATURALE e mai con un ID del catalogo. Piu' genitori sono legittimi: un footprint canonico deriva da canonical trades e canonical l2. Assente o vuoto se e solo se layer e' 'raw'.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/dataset_identity"
+      },
+      "uniqueItems": true
+    },
+    "transform": {
+      "description": "Identita' SEMANTICA E VERSIONATA della trasformazione, es. 'canonicalize-trades-v1'. Va in catalog.dataset_lineage.transform. NON e' una revisione di codice: la revisione Git esatta con cui una singola partizione e' stata materializzata vive solo in partition-manifest.code_ref. NON e' il producer: producer sta sulla partizione e dice chi ha scritto quel file.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "created_at": {
+      "description": "Istante in cui il dataset e' stato dichiarato. Momento reale, non ricostruito.",
+      "$ref": "#/$defs/utc_timestamp"
+    }
+  },
+  "allOf": [
+    {
+      "description": "layer 'features' <-> identita' della definizione di feature.",
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "features"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "feature_set_slug",
+          "feature_set_version"
+        ]
+      },
+      "else": {
+        "properties": {
+          "feature_set_slug": false,
+          "feature_set_version": false
+        }
+      }
+    },
+    {
+      "description": "raw non deriva da nulla; canonical e features devono dichiarare da cosa derivano e per mano di quale trasformazione.",
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "raw"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "derived_from": {
+            "maxItems": 0
+          },
+          "transform": false
+        }
+      },
+      "else": {
+        "required": [
+          "derived_from",
+          "transform"
+        ],
+        "properties": {
+          "derived_from": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "description": "Ogni layer ammette solo i propri kind.",
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "raw"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trades",
+              "l2"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "canonical"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trades",
+              "footprint",
+              "l2"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "features"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trade_microstructure",
+              "footprint_microstructure",
+              "l2_microstructure"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "dataset_identity": {
+      "description": "Identita' naturale di un dataset: la tupla semantica, non un ID e non un path. record_schema_id ne fa parte perche' un cambio di schema incompatibile produce un dataset distinto.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "dataset_kind",
+        "venue",
+        "instrument",
+        "record_schema_id"
+      ],
+      "properties": {
+        "layer": {
+          "enum": [
+            "raw",
+            "canonical",
+            "features"
+          ]
+        },
+        "dataset_kind": {
+          "enum": [
+            "trades",
+            "l2",
+            "footprint",
+            "trade_microstructure",
+            "footprint_microstructure",
+            "l2_microstructure"
+          ]
+        },
+        "venue": {
+          "$ref": "#/$defs/venue_name"
+        },
+        "instrument": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "feature_set_slug": {
+          "$ref": "#/$defs/canonical_identifier"
+        },
+        "feature_set_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "record_schema_id": {
+          "$ref": "#/$defs/canonical_identifier"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "layer"
+            ],
+            "properties": {
+              "layer": {
+                "const": "features"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "feature_set_slug",
+              "feature_set_version"
+            ]
+          },
+          "else": {
+            "properties": {
+              "feature_set_slug": false,
+              "feature_set_version": false
+            }
+          }
+        }
+      ]
+    },
+    "venue_name": {
+      "description": "Identificatore normalizzato di venue, lowercase. Stesso dominio di trade-v1.venue.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+([_-][a-z0-9]+)*$"
+    },
+    "relative_path_shape": {
+      "description": "Componenti di [A-Za-z0-9._=%-] separati da singole '/'. Rifiuta path assoluti, componenti vuoti, slash finale, spazi.",
+      "pattern": "^[A-Za-z0-9._=%-]+(/[A-Za-z0-9._=%-]+)*$"
+    },
+    "no_traversal": {
+      "description": "Nessun componente '.' o '..' letterale, nessun escape non canonico e nessun '%2E'. Il '%' e' ammesso per il percent-encoding iniettivo di instrument, ma '%2E%2E' decodificato diventerebbe '..': gli ultimi due vincoli chiudono quella via. Ogni '%' deve essere seguito da esattamente due cifre esadecimali MAIUSCOLE, il che impone anche la forma canonica: senza, '%2f' e '%2F' sarebbero due stringhe per lo stesso valore e l'encoding non sarebbe piu' iniettivo.",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "(^|/)\\.\\.?(/|$)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "%(?![0-9A-F]{2})"
+          }
+        },
+        {
+          "not": {
+            "pattern": "%2[Ee]"
+          }
+        }
+      ]
+    },
+    "utc_timestamp": {
+      "description": "Istante UTC in RFC 3339, suffisso 'Z' obbligatorio, fino a 9 cifre decimali. ORDINAMENTO E CONFRONTO: va sempre usato il VALORE TEMPORALE PARSATO, mai la stringa. Il pattern non verifica la validita' di calendario.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "canonical_identifier": {
+      "description": "Identificatore canonico path-safe: minuscolo, componenti alfanumeriche separate da un solo '.', '_' o '-'. Ristretto di proposito, cosi' che possa entrare in un path senza trasformazioni lossy.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*$"
+    }
+  }
+}

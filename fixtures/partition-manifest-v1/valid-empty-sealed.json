@@ -1,0 +1,23 @@
+{
+  "schema_version": "partition-manifest-v1",
+  "layer": "raw",
+  "dataset_kind": "trades",
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "record_schema_id": "trade-v1",
+  "partition_key": "dt=2026-01-01",
+  "revision": 1,
+  "state": "valid",
+  "rel_path": "dt=2026-01-01/part-000.parquet",
+  "file_size_bytes": 812,
+  "row_count": 0,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "first_exchange_ts": null,
+  "last_exchange_ts": null,
+  "first_sequence": null,
+  "last_sequence": null,
+  "created_at": "2026-08-25T00:00:00.001Z",
+  "closed_at": "2026-08-26T00:00:04.220Z",
+  "producer": "bybit-collector",
+  "code_ref": "4f1a9c3"
+}
