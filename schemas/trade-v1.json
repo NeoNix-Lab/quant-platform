@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:market-platform:schema:trade-v1",
+  "title": "trade-v1",
+  "description": "Un singolo trade ESEGUITO, canonicalizzato e venue-independent. Non e' una candela, non e' un livello di book, non contiene nulla di derivato o strategico (delta, footprint, imbalance, absorption, signal, label, pnl, position): quelli appartengono agli strati canonical/footprint e features, non qui.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "venue",
+    "instrument",
+    "exchange_ts",
+    "price",
+    "size",
+    "aggressor_side"
+  ],
+  "properties": {
+    "venue": {
+      "description": "Identificatore normalizzato della venue sorgente, lowercase (bybit, coinbase, kraken). Nessuna informazione di dataset o di strategia.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+([_-][a-z0-9]+)*$"
+    },
+    "instrument": {
+      "description": "Identificatore canonico dello strumento. In v1 e' una stringa non vuota: la normalizzazione precisa (instrument master, tick size, lot size) e' responsabilita' del canonicalizer e degli instrument metadata, non di questo schema.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "exchange_ts": {
+      "description": "Timestamp assegnato dalla VENUE al trade. Concetto distinto da receive_ts: non derivare l'uno dall'altro.",
+      "$ref": "#/$defs/utc_timestamp"
+    },
+    "receive_ts": {
+      "description": "Timestamp locale REALE in cui la nostra infrastruttura ha ricevuto l'evento. Assente o null quando non lo abbiamo osservato davvero: e' il caso degli import storici, dove il dato arriva da un dump e non da un feed. NON va MAI ricostruito da exchange_ts, dal nome del file, dalla data di import o dall'ordine dei record: un receive_ts inventato falsifica ogni misura futura di latenza e qualita' del feed. Concetto distinto da exchange_ts: non derivare l'uno dall'altro. Quando e' presente deve essere un istante UTC valido come exchange_ts: nullable non significa meno validato.",
+      "anyOf": [
+        { "$ref": "#/$defs/utc_timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "price": {
+      "description": "Prezzo di esecuzione. Decimal esatto rappresentato come stringa, mai float binario. Strettamente positivo. Gli zeri finali NON vanno normalizzati: la precisione strumentale la definiranno gli instrument metadata.",
+      "$ref": "#/$defs/positive_decimal"
+    },
+    "size": {
+      "description": "Quantita' eseguita. Decimal esatto rappresentato come stringa, mai float binario. Strettamente positiva. Gli zeri finali NON vanno normalizzati.",
+      "$ref": "#/$defs/positive_decimal"
+    },
+    "aggressor_side": {
+      "description": "Lato dell'ordine AGGRESSORE, cioe' di chi ha attraversato lo spread consumando liquidita' resting. 'buy' = buyer aggressor / taker buy / consumo della resting ask. 'sell' = seller aggressor / taker sell / consumo della resting bid. 'unknown' = non determinabile in modo affidabile dalla sorgente. NON e' la direzione del prezzo. NON e' il lato del book colpito (un aggressor buy colpisce l'ask). Il valore non va mai inferito quando la venue non lo garantisce.",
+      "enum": ["buy", "sell", "unknown"]
+    },
+    "trade_id": {
+      "description": "ID nativo del trade fornito dalla venue. Assente o null quando la venue non lo fornisce: in trade-v1 non si inventano ID sintetici. Non assumere unicita' globale fra venue o strumenti.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "sequence": {
+      "description": "Sequence/update number nativo della venue. E' un INTERO ORDINALE NON NEGATIVO della sorgente, serializzato come stringa decimale canonica senza leading zero, eccetto \"0\". Non e' un numero JSON: oltre 2^53 un intero JSON perde precisione in float64, e una sequence troncata in silenzio e' indistinguibile da una corretta. Stesso principio di price e size. ORDINAMENTO E CONFRONTO: la sequence va confrontata NUMERICAMENTE, mai lessicograficamente come stringa, altrimenti \"9\" risulterebbe maggiore di \"10\". NORMALIZZAZIONE: una sequence zero-padded della sorgente puo' essere normalizzata rimuovendo il padding SOLO quando la semantica numerica e' garantita dalla venue; il valore sorgente originale resta comunque nel RAW, che e' immutabile e venue-native. Assente o null quando la venue non lo fornisce: non si inventa una sequence sintetica. Non assumere unicita' globale fra venue o strumenti.",
+      "anyOf": [
+        { "$ref": "#/$defs/digit_string" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "$defs": {
+    "utc_timestamp": {
+      "description": "Istante UTC in RFC 3339, con suffisso 'Z' obbligatorio e fino a 9 cifre decimali, cosi' che la precisione al nanosecondo di una venue non venga persa. Un timestamp senza timezone e' rifiutato. ORDINAMENTO E CONFRONTO: va sempre usato il VALORE TEMPORALE PARSATO, mai la stringa. La forma canonica con 'Z' non rende l'ordinamento lessicografico affidabile: precisioni decimali diverse dello stesso istante ('...:11Z', '...:11.0Z', '...:11.000000Z') sono stringhe diverse e si ordinano in modo scorretto fra loro. Il pattern NON verifica la validita' di calendario (un 2026-13-45 lo supera): quella la controlla 'format' quando l'ambiente ha un format checker.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "digit_string": {
+      "description": "Intero ordinale non negativo rappresentato come stringa decimale canonica, senza limite di grandezza. Zeri iniziali rifiutati: '7' e '007' sarebbero due stringhe distinte per lo stesso valore, e un ordinale deve avere UNA sola rappresentazione perche' confronti e deduplicazione siano affidabili. Lo zero e' ammesso come \"0\". La forma canonica NON rende la stringa ordinabile lessicograficamente: il confronto va fatto sul valore numerico.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "positive_decimal": {
+      "description": "Decimal esatto strettamente positivo, come stringa. Ammesso: parte intera senza zeri iniziali e parte decimale opzionale, oppure 0.<qualcosa di non nullo>. Rifiutato: zero, negativi, segno esplicito, notazione esponenziale, zeri iniziali, punto sospeso, stringhe non numeriche. Nessun limite di precisione imposto qui: lo definiranno gli instrument metadata.",
+      "type": "string",
+      "pattern": "^([1-9][0-9]*(\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+    }
+  }
+}

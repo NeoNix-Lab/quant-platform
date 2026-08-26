@@ -1,0 +1,10 @@
+{
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "exchange_ts": "2020-01-01T00:00:00Z",
+  "receive_ts": "2026-08-25T11:00:00Z",
+  "price": "7200.00",
+  "size": "0.01",
+  "aggressor_side": "unknown",
+  "trade_id": "legacy-000001"
+}

@@ -1,0 +1,10 @@
+{
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "exchange_ts": "2021-05-01T12:34:56.123Z",
+  "price": "57120.50",
+  "size": "0.015",
+  "aggressor_side": "buy",
+  "trade_id": "hist-0001",
+  "sequence": "9007199254740993"
+}

@@ -1,0 +1,9 @@
+{
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "exchange_ts": "2026-08-25T14:32:11.250Z",
+  "receive_ts": "2026-08-25T14:32:11.310Z",
+  "price": "sessantaquattromila",
+  "size": "0.00250000",
+  "aggressor_side": "buy"
+}

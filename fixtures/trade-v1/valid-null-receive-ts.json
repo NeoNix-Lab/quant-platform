@@ -1,0 +1,11 @@
+{
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "exchange_ts": "2021-05-01T12:34:56.123Z",
+  "receive_ts": null,
+  "price": "57120.50",
+  "size": "0.015",
+  "aggressor_side": "unknown",
+  "trade_id": null,
+  "sequence": null
+}

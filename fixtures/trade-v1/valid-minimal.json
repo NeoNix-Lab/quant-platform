@@ -1,0 +1,9 @@
+{
+  "venue": "coinbase",
+  "instrument": "BTC-USD",
+  "exchange_ts": "2026-08-25T14:32:11Z",
+  "receive_ts": "2026-08-25T14:32:12Z",
+  "price": "64230",
+  "size": "1",
+  "aggressor_side": "sell"
+}
