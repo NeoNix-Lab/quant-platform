@@ -88,7 +88,7 @@ CREATE DOMAIN rel_path_safe AS text
 -- disco, un NAS) non tocca nessun'altra tabella.
 -- ---------------------------------------------------------------------------
 CREATE TABLE storage_roots (
-    storage_root_id text PRIMARY KEY,               -- 'hot', 'cold'
+    storage_root_id text PRIMARY KEY,               -- 'hot', 'cold', 'deepcold'
     tier            text        NOT NULL CHECK (tier IN ('hot','cold')),
     abs_path        text        NOT NULL UNIQUE,
     device_uuid     text,                           -- UUID del filesystem, per audit
@@ -103,7 +103,15 @@ INSERT INTO storage_roots (storage_root_id, tier, abs_path, device_uuid, descrip
     ('hot',  'hot',  '/srv/marketdata',        '0b56b5ac-eb32-4e9a-a8b2-5aaba41f8676',
      'Samsung 870 EVO 500GB — dati caldi, write path del collector'),
     ('cold', 'cold', '/archive/marketdata-cold','4c63f36c-9885-40a6-89e0-a35a6271fc6f',
-     'SanDisk SSD PLUS 480GB — partizioni invecchiate, read-mostly');
+     'SanDisk SSD PLUS 480GB — partizioni invecchiate, read-mostly'),
+    -- 'deepcold' e' uno storage_root_id, NON un tier: il contratto resta
+    -- tier IN ('hot','cold') e questo disco e' cold quanto /archive. Cio' che
+    -- li distingue e' operativo — SSD da 480GB contro HDD da 2TB — e vive
+    -- nell'id del root, non in una terza categoria semantica. Aggiungere un
+    -- tier 'deepcold' costringerebbe ogni consumatore a conoscere una scala
+    -- di freddezza che il modello non ha mai promesso.
+    ('deepcold', 'cold', '/cold/marketdata-deepcold','98f9e6c7-adb9-4858-a671-b941dfb3e4f0',
+     'Toshiba MQ04UBD200 2TB HDD — deep-cold bulk storage, read-mostly');
 
 -- ---------------------------------------------------------------------------
 -- schema_registry — quali JSON Schema erano in vigore, e con quale contenuto.

@@ -427,7 +427,46 @@ SELECT assert(rifiuta($q$
 $q$), 'definition_ref di soli spazi respinto');
 
 \echo ''
-\echo '=== 24. il test non lascia residui ==='
+\echo '=== 24. storage_roots: tre root, un solo enum di tier ==='
+SELECT assert(count(*) = 3, 'il bootstrap semina esattamente tre storage root')
+FROM storage_roots;
+SELECT assert(count(*) = 3, 'sono hot, cold e deepcold')
+FROM storage_roots WHERE storage_root_id IN ('hot','cold','deepcold');
+SELECT assert(tier = 'cold', 'deepcold ha tier=cold, non un tier nuovo')
+FROM storage_roots WHERE storage_root_id = 'deepcold';
+SELECT assert(abs_path = '/cold/marketdata-deepcold', 'abs_path di deepcold esatto')
+FROM storage_roots WHERE storage_root_id = 'deepcold';
+SELECT assert(device_uuid = '98f9e6c7-adb9-4858-a671-b941dfb3e4f0',
+              'device_uuid di deepcold esatto')
+FROM storage_roots WHERE storage_root_id = 'deepcold';
+SELECT assert(count(*) = 0, 'nessun tier fuori da hot/cold')
+FROM storage_roots WHERE tier NOT IN ('hot','cold');
+SELECT assert(rifiuta($q$
+  INSERT INTO storage_roots (storage_root_id, tier, abs_path)
+  VALUES ('nuovo','deepcold','/cold/altro')
+$q$), 'un tier deepcold viene respinto: l enum resta hot/cold');
+
+-- hot e cold preesistenti non devono essere cambiati dall aggiunta
+SELECT assert(abs_path = '/srv/marketdata'
+              AND device_uuid = '0b56b5ac-eb32-4e9a-a8b2-5aaba41f8676'
+              AND tier = 'hot', 'hot invariato')
+FROM storage_roots WHERE storage_root_id = 'hot';
+SELECT assert(abs_path = '/archive/marketdata-cold'
+              AND device_uuid = '4c63f36c-9885-40a6-89e0-a35a6271fc6f'
+              AND tier = 'cold', 'cold invariato')
+FROM storage_roots WHERE storage_root_id = 'cold';
+
+-- una partizione puo' vivere su deepcold senza che il dataset cambi identita'
+UPDATE partitions SET storage_root_id = 'deepcold', tiered_at = now()
+WHERE partition_key = 'dt=2026-08-25' AND revision = 2;
+SELECT assert(count(*) = 1 AND bool_and(file_abs_path LIKE '/cold/marketdata-deepcold/%'),
+              'una partizione tierizzata su deepcold risolve sotto /cold')
+FROM v_partitions WHERE partition_key = 'dt=2026-08-25' AND revision = 2;
+SELECT assert(count(*) = 1, 'il dataset non si e duplicato spostandosi su deepcold')
+FROM datasets WHERE rel_root = 'raw/trades/bybit/BTCUSDT/trade-v1';
+
+\echo ''
+\echo '=== 25. il test non lascia residui ==='
 -- Si guarda PRIMA del rollback che i dati di prova ci siano davvero: se fossero
 -- gia' zero, il ROLLBACK sotto non proverebbe nulla.
 SELECT assert(count(*) > 0, 'dentro la transazione i dati di prova esistono')
@@ -461,12 +500,12 @@ BEGIN
     IF n_helpers <> 0 THEN
         RAISE EXCEPTION 'ROLLBACK incompleto: % funzioni di supporto sopravvissute', n_helpers;
     END IF;
-    IF n_roots <> 2 THEN
-        RAISE EXCEPTION 'storage_roots alterata: attese 2 righe seminate dal DDL, trovate %', n_roots;
+    IF n_roots <> 3 THEN
+        RAISE EXCEPTION 'storage_roots alterata: attese 3 righe seminate dal DDL, trovate %', n_roots;
     END IF;
     RAISE NOTICE '  ok  dopo il ROLLBACK il database e tornato allo stato iniziale';
     RAISE NOTICE '      (0 datasets, 0 partitions, 0 lineage, 0 schema_registry,';
-    RAISE NOTICE '       0 funzioni di supporto, 2 storage_roots del DDL)';
+    RAISE NOTICE '       0 funzioni di supporto, 3 storage_roots del DDL)';
 END $$;
 
 \echo ''
