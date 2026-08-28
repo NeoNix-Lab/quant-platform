@@ -144,7 +144,8 @@ Before designing research-layer L1/L2/L3 schemas:
 3. determine whether extension belongs in the data plane;
 4. define quantitative features only above the raw/canonical data contract.
 
-Raw market-data levels and derived feature levels must remain separate concepts.
+Raw market-data levels and derived feature semantics must remain separate
+concepts.
 
 ---
 
