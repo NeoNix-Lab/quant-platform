@@ -54,21 +54,32 @@ policy, and this document does not design their replication or backup.
 Run the repository-owned `infra/promote-main.sh` directly on the server, or
 follow this equivalent guarded procedure:
 
-1. Confirm the expected repository path and Git remote.
+1. Confirm the expected repository path and that `origin` is the canonical
+   Quant Platform GitHub repository (HTTPS or its equivalent SSH URL).
 2. Inspect the current branch and exact SHA.
 3. Require a clean working tree; a dirty server is a stop condition.
 4. Fetch `origin` explicitly.
 5. Inspect current and incoming commits and confirm the intended reviewed
    `origin/main` target.
-6. Require the target to descend from the current SHA.
+6. Require the target to descend from the current SHA and print the concise
+   incoming commit list (or explicitly report none).
 7. Run `git merge --ff-only origin/main`.
-8. Run designated lightweight/server smoke validation.
-9. Report the final branch, exact SHA, tag and clean/dirty state.
+8. Run `python3 tools/run_tests.py` as the canonical post-promotion smoke
+   validation.
+9. Report the final branch, exact SHA, tag and clean/dirty state with
+   `python3 tools/repo_identity.py`.
 
 The helper never stashes, resets, cleans, force-checks out, deletes files,
 auto-pulls, runs periodically, deploys automatically or alters bulk market
-data. It refuses non-fast-forward updates. Use `--inspect-only` to report the
-state without requiring `main` or changing the repository.
+data. It refuses non-fast-forward updates and rejects an arbitrary `origin`
+URL. `QUANT_PLATFORM_ORIGIN` is an explicit operational override when a
+controlled deployment uses a different approved mirror. Use `--inspect-only`
+to report the state, including an origin mismatch, without changing the
+repository.
+
+If the fast-forward succeeds but the post-promotion test suite fails, the
+helper exits non-zero and reports that the repository was promoted but requires
+human inspection. It never rolls back, resets, stashes or cleans.
 
 ## Repository identity
 

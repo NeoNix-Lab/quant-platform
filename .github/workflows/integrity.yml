@@ -48,12 +48,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Initialize catalog schema
         env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: market_catalog
           PGPASSWORD: ci-postgres-password
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
         run: |
           docker run --rm --network host \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
-            -e PGPASSWORD \
-            postgres:17 psql -h 127.0.0.1 -U postgres -d market_catalog \
+            -e POSTGRES_USER -e POSTGRES_DB -e PGPASSWORD \
+            -e PGHOST -e PGPORT \
+            postgres:17 psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
               -v ON_ERROR_STOP=1 -f /workspace/db/init/001_catalog.sql
       - name: Initialize catalog roles
         env:
@@ -63,19 +68,26 @@ jobs:
           CATALOG_WRITER_PASSWORD: ci-writer-password
           CATALOG_READER_PASSWORD: ci-reader-password
           PGPASSWORD: ci-postgres-password
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
         run: |
           docker run --rm --network host \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -e POSTGRES_USER -e POSTGRES_DB -e PGPASSWORD \
             -e CATALOG_ADMIN_PASSWORD -e CATALOG_WRITER_PASSWORD \
-            -e CATALOG_READER_PASSWORD \
+            -e CATALOG_READER_PASSWORD -e PGHOST -e PGPORT \
             postgres:17 bash /workspace/db/init/002_roles.sh
       - name: Run disposable catalog DDL test
         env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: market_catalog
           PGPASSWORD: ci-postgres-password
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
         run: |
           docker run --rm --network host \
             -v "$GITHUB_WORKSPACE:/workspace:ro" \
-            -e PGPASSWORD \
-            postgres:17 psql -h 127.0.0.1 -U postgres -d market_catalog \
+            -e POSTGRES_USER -e POSTGRES_DB -e PGPASSWORD \
+            -e PGHOST -e PGPORT \
+            postgres:17 psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
               -v ON_ERROR_STOP=1 -f /workspace/tests/test_catalog_ddl.sql

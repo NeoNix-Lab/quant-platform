@@ -3,6 +3,8 @@
 set -euo pipefail
 
 EXPECTED_ROOT="${QUANT_PLATFORM_REPO:-/opt/market-platform}"
+EXPECTED_ORIGIN="${QUANT_PLATFORM_ORIGIN:-https://github.com/NeoNix-Lab/quant-platform.git}"
+DEFAULT_SSH_ORIGIN="git@github.com:NeoNix-Lab/quant-platform.git"
 INSPECT_ONLY=0
 if [[ "${1:-}" == "--inspect-only" && "$#" -eq 1 ]]; then
   INSPECT_ONLY=1
@@ -15,7 +17,16 @@ fail() { echo "promote-main: FATAL: $*" >&2; exit 1; }
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || fail "not inside a Git repository"
 [[ "$ROOT" == "$EXPECTED_ROOT" ]] || fail "repository is $ROOT, expected $EXPECTED_ROOT"
-git remote get-url origin >/dev/null 2>&1 || fail "remote origin is missing"
+origin=$(git remote get-url origin 2>/dev/null) || fail "remote origin is missing"
+echo "origin=$origin"
+echo "expected_origin=$EXPECTED_ORIGIN"
+if [[ "${QUANT_PLATFORM_ORIGIN:-}" == "" ]]; then
+  [[ "$origin" == "$EXPECTED_ORIGIN" || "$origin" == "$DEFAULT_SSH_ORIGIN" ]] || \
+    fail "origin does not match the expected Quant Platform repository"
+else
+  [[ "$origin" == "$EXPECTED_ORIGIN" ]] || \
+    fail "origin does not match QUANT_PLATFORM_ORIGIN"
+fi
 
 branch=$(git symbolic-ref --short -q HEAD || printf 'DETACHED')
 sha=$(git rev-parse HEAD)
@@ -35,9 +46,23 @@ git fetch origin
 target=$(git rev-parse origin/main)
 echo "target_sha=$target"
 git merge-base --is-ancestor "$sha" "$target" || fail "origin/main is not a fast-forward target"
+incoming=$(git log --oneline --decorate "$sha..$target")
+if [[ -n "$incoming" ]]; then
+  echo "incoming_commits:"
+  printf '%s\n' "$incoming"
+else
+  echo "incoming_commits: none"
+fi
 git merge --ff-only origin/main
 
-final_sha=$(git rev-parse HEAD)
-echo "final_sha=$final_sha"
-[[ -z "$(git status --porcelain)" ]] || fail "promotion left a dirty working tree"
-echo "state=clean"
+if ! python3 tools/run_tests.py; then
+  echo "promote-main: repository promoted but validation failed; inspect manually; no rollback was attempted" >&2
+  python3 tools/repo_identity.py || true
+  exit 1
+fi
+
+echo "post_promotion_identity:"
+python3 tools/repo_identity.py || {
+  echo "promote-main: repository promoted but identity reporting failed; inspect manually" >&2
+  exit 1
+}
