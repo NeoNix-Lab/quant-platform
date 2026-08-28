@@ -100,6 +100,8 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_DB: market_catalog
+          PGUSER: postgres
+          PGDATABASE: market_catalog
           PGPASSWORD: ci-postgres-password
           PGHOST: 127.0.0.1
           PGPORT: '5432'
