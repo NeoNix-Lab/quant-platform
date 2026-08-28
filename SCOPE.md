@@ -1,27 +1,32 @@
-# Scope: Repository Foundation v1
+# Scope: Data Access Foundation — DataGateway Contract v1
 
 ## Goal
 
-Turn the server-born repository and reviewed bootstrap architecture into the version-controlled canonical foundation of Quant Platform.
+Freeze the logical market-data read boundary between the canonical data plane and higher quantitative layers, without implementing DataGateway.
 
 ## In scope
 
-Documentation reorganization; README; proprietary LICENSE; agent governance; corrected capability map; roadmap; open decisions; ADR indexing; ADR-0016 through ADR-0018; legacy adoption records; `.gitignore` hardening; and documentation indexes.
+DataGateway logical request/result contracts; UTC half-open temporal semantics; partition-state and schema rules; provenance requirements; physical-path isolation; historical/live boundary; first implementation slice; ADR-0019; and the minimum scope/capability/open-decision updates needed to govern implementation.
 
 ## Out of scope
 
-DataGateway, candle code, Feature Engine code, schema-v2 implementation, new L1/L2/L3 schemas, execution code, ML/RL migration, API/client implementation and live implementation.
+DataGateway implementation or package code; candles; features; research; labels; API/client; live/stream transport; schema-v2; new L1/L2/L3 schemas; caching/distribution; and execution or ML/RL migration.
 
 ## Exit criteria
 
-- Canonical documentation is version-controlled and the temporary bootstrap nesting is gone.
-- ADRs, capability map, roadmap, open decisions and scope are indexed.
-- Root README, LICENSE and AGENTS exist.
-- Frozen data-plane contracts, fixtures and import semantics are unchanged.
+- The DataGateway v1 contract is documented and its ownership is explicit.
+- Request identity, `[start, end)` UTC semantics, deterministic ordering,
+  partition states and schema identity are explicit.
+- Physical paths and storage-root locations are forbidden from upper-layer
+  contracts, and the minimum provenance chain is identified.
+- The first catalog-backed implementation slice is specified without being
+  implemented.
+- Unresolved choices are isolated in `OPEN_DECISIONS.md` and the contract is
+  independently reviewed before implementation.
 - All locally runnable canonical Python script tests pass through
   `python tools/run_tests.py`; environment-dependent database/integration
   tests are explicitly reported and remain unchanged.
 
 ## Next cycle
 
-Data Access Foundation / DataGateway design.
+DataGateway v1 implementation, after independent contract review.

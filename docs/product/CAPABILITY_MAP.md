@@ -9,7 +9,7 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | Data | PostgreSQL catalog, lineage, storage roots | READY | NONE | Data Plane | DDL and provisioning exist. |
 | Data | Historical Bybit import | PARTIAL | NONE | Data Plane | Importer and tests exist. |
 | Data | L1/L2/L3 contracts | MISSING | WEAK | Data Plane | Must follow ADR-0018. |
-| Access | DataGateway | MISSING | PARTIAL | Application/Data | No canonical implementation. |
+| Access | DataGateway | MISSING | PARTIAL | Application/Data | Contract v1 defined; implementation next. |
 | Representation | CandleDefinition/runtime | MISSING | PARTIAL | Representations | ADR-0017 distinguishes PARTIAL/CLOSED. |
 | Features | FeatureDefinition | MISSING | STRONG | Feature Engine | Legacy registry is evidence only. |
 | Features | FeatureSetDefinition catalog | PARTIAL | PARTIAL | Data/Feature Engine | Existing catalog foundation retained. |

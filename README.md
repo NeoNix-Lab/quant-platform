@@ -37,6 +37,7 @@ Clients will consume the canonical API; quantitative business logic belongs in d
 - [Roadmap](docs/product/ROADMAP.md)
 - [Architecture](docs/architecture/TARGET_ARCHITECTURE.md)
 - [Core contracts](docs/contracts/CORE_CONTRACTS.md)
+- [DataGateway contract](docs/contracts/DATA_GATEWAY.md)
 - [Architecture decisions](docs/decisions/README.md)
 - [Current scope](SCOPE.md)
 

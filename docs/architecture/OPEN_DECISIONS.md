@@ -4,9 +4,18 @@
 
 ### DataGateway and representations
 
-- exact DataGateway API boundary;
 - precise candle materialization identity;
 - required dataset-manifest evolution path.
+
+DataGateway logical boundary and first implementation slice are resolved by
+ADR-0019 and `docs/contracts/DATA_GATEWAY.md`. The following remain open for
+the relevant implementation work:
+
+- whether to expose `DatasetSnapshot` using immutable partition-set reference,
+  catalog query replay, or a copied/materialized result;
+- the concrete logical row/columnar batch return representation;
+- the live stream interface and identity/cursor semantics;
+- schema-v2 compatibility and evolution policy.
 
 ### Execution
 
