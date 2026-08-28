@@ -35,7 +35,7 @@ def write_fixture(root: Path, rel_path: str) -> Path:
             "instrument": ["BTCUSDT", "BTCUSDT"],
             "exchange_ts": pa.array(
                 [datetime(2024, 1, 15, 0, 0, 0, tzinfo=timezone.utc),
-                 datetime(2024, 1, 15, 0, 0, 1, tzinfo=timezone.utc)],
+                 datetime(2024, 1, 15, 0, 0, 0, tzinfo=timezone.utc)],
                 type=pa.timestamp("ns", tz="UTC"),
             ),
             "price": ["100.0", "101.0"],

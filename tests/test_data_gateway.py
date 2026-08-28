@@ -27,7 +27,10 @@ from quant_platform.data.models import (  # noqa: E402
     LifecyclePolicy,
     NaturalPartitionIdentity,
     NoCoverage,
+    SchemaMismatch,
     StorageResolutionError,
+    UnsupportedDatasetKind,
+    UnsupportedSchema,
 )
 from quant_platform.data.parquet import read_trade_v1, resolve_partition_path  # noqa: E402
 
@@ -216,11 +219,30 @@ class DataGatewayTests(unittest.TestCase):
             self.gateway([left, overlap]).read(request("2024-01-01T00:00:00Z", "2024-01-01T02:00:00Z"))
 
     def test_lifecycle_filtering_and_opt_in(self):
-        closed = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=1, state="closed", times=["2024-01-01T00:30:00Z"])
+        interval = ("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z")
+        closed = partition(self.root, *interval, "dt=2024-01-01", rows=1, state="closed", times=["2024-01-01T00:30:00Z"])
+        degraded = partition(self.root, *interval, "dt=2024-01-02", rows=1, state="degraded", partition_id="partition-b", times=["2024-01-01T00:30:00Z"])
+        for state, partition_id in (("writing", "partition-c"), ("invalid", "partition-d"), ("superseded", "partition-e")):
+            excluded = partition(self.root, *interval, f"dt={state}", rows=1, state=state, partition_id=partition_id, times=["2024-01-01T00:30:00Z"])
+            with self.assertRaises(NoCoverage):
+                self.gateway([excluded]).read(request(*interval))
         with self.assertRaises(NoCoverage):
-            self.gateway([closed]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
-        result = self.gateway([closed]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", policy=LifecyclePolicy.VALID_AND_CLOSED))
+            self.gateway([closed]).read(request(*interval))
+        with self.assertRaises(NoCoverage):
+            self.gateway([degraded]).read(request(*interval, policy=LifecyclePolicy.VALID_AND_CLOSED))
+        result = self.gateway([degraded]).read(request(*interval, policy=LifecyclePolicy.VALID_CLOSED_AND_DEGRADED))
         self.assertEqual(len(result.records), 1)
+        self.assertEqual(result.metadata.lifecycle_policy, LifecyclePolicy.VALID_CLOSED_AND_DEGRADED)
+        self.assertNotEqual(request(*interval).request_identity, request(*interval, policy=LifecyclePolicy.VALID_CLOSED_AND_DEGRADED).request_identity)
+
+    def test_schema_and_dataset_kind_regressions(self):
+        with self.assertRaises(UnsupportedDatasetKind):
+            self.gateway([]).read(DataRequest(DatasetIdentity("canonical", "l2", "bybit", "BTCUSDT", "trade-v1"), *["2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"]))
+        with self.assertRaises(UnsupportedSchema):
+            self.gateway([]).read(DataRequest(DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v2"), *["2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"]))
+        stored_v2 = CatalogDataset(DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v2"), "dataset-v2", REL_ROOT, "b" * 64, 2, "e" * 64)
+        with self.assertRaises(SchemaMismatch):
+            DataGateway(FakeCatalog(stored_v2, [])).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
 
     def test_deterministic_ordering_and_identity_ignores_uuid_and_path(self):
         p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=2, times=["2024-01-01T00:00:00Z"] * 2, ids=["20", "10"])
@@ -235,11 +257,30 @@ class DataGatewayTests(unittest.TestCase):
         self.assertNotEqual(first.metadata.catalog_partition_ids, second.metadata.catalog_partition_ids)
         self.assertNotEqual(first.metadata.rel_paths, (str(relocated_path),))
 
+    def test_same_exchange_timestamp_uses_opaque_string_trade_id_ordering(self):
+        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=3, times=["2024-01-01T00:00:00Z"] * 3, ids=["9", "100", "20"])
+        result = self.gateway([p]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
+        self.assertEqual([record.trade_id for record in result], ["100", "20", "9"])
+
+    def test_dataset_catalog_rebuild_changes_locator_not_stable_result_identity(self):
+        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=1, times=["2024-01-01T00:30:00Z"])
+        first = self.gateway([p]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
+        rebuilt_root = Path(self.temp.name) / "rebuild"
+        write_parquet(rebuilt_root, p.rel_path, ["2024-01-01T00:30:00Z"], ids=["1"])
+        rebuilt_dataset = CatalogDataset(IDENTITY, "dataset-rebuilt", REL_ROOT, DATASET.manifest_sha256, DATASET.schema_version, DATASET.schema_hash)
+        rebuilt_partition = CatalogPartition(p.natural_identity, "partition-rebuilt", "cold", str(rebuilt_root), REL_ROOT, p.rel_path, p.ts_start, p.ts_end, p.row_count, p.content_sha256, p.manifest_sha256, p.state, p.producer, p.code_ref)
+        second = DataGateway(FakeCatalog(rebuilt_dataset, [rebuilt_partition])).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
+        self.assertEqual(first.metadata.request_identity, second.metadata.request_identity)
+        self.assertEqual(first.metadata.result_identity, second.metadata.result_identity)
+        self.assertNotEqual(first.metadata.catalog_dataset_id, second.metadata.catalog_dataset_id)
+
     def test_path_safety(self):
         with self.assertRaises(StorageResolutionError):
             resolve_partition_path(str(self.root), REL_ROOT, "../escape.parquet")
         with self.assertRaises(StorageResolutionError):
             resolve_partition_path(str(self.root), REL_ROOT, "dt=2024-01-01/part.txt")
+        with self.assertRaises(StorageResolutionError):
+            resolve_partition_path(str(self.root), REL_ROOT, str(self.root / "outside.parquet"))
 
     def test_catalog_resolver_and_sql_pruning(self):
         row = ("dataset-a", "canonical", "trades", "bybit", "BTCUSDT", None, "trade-v1", REL_ROOT, "b" * 64, 1, SCHEMA_HASH)
