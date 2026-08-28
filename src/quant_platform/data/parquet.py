@@ -1,0 +1,176 @@
+"""Safe physical resolution and canonical ``trade-v1`` Parquet reads."""
+
+from __future__ import annotations
+
+from pathlib import Path
+import re
+from typing import Any
+from decimal import Decimal
+
+from .models import DataIntegrityError, Instant, InvalidRequest, StorageResolutionError, TradeRecord
+
+_SAFE_RELATIVE = re.compile(r"^[A-Za-z0-9._=%-]+(?:/[A-Za-z0-9._=%-]+)*$")
+_REQUIRED = ("venue", "instrument", "exchange_ts", "price", "size", "aggressor_side")
+_OPTIONAL = ("receive_ts", "trade_id", "sequence")
+_COLUMNS = _REQUIRED + _OPTIONAL
+_POSITIVE_DECIMAL = re.compile(r"^([1-9][0-9]*(\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$")
+_DIGITS = re.compile(r"^(0|[1-9][0-9]*)$")
+
+
+def resolve_partition_path(storage_root: str, dataset_rel_root: str, rel_path: str) -> Path:
+    """Resolve catalog path components and reject traversal/absolute input."""
+    root = Path(storage_root)
+    if not root.is_absolute():
+        raise StorageResolutionError("catalog storage root is not absolute")
+    _validate_relative(dataset_rel_root, "dataset rel_root", allow_percent=True)
+    _validate_relative(rel_path, "partition rel_path", allow_percent=False)
+    root = root.resolve()
+    candidate = (root / Path(*dataset_rel_root.split("/")) / Path(*rel_path.split("/"))).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise StorageResolutionError("resolved partition path escapes storage root") from exc
+    if candidate.suffix.lower() != ".parquet":
+        raise StorageResolutionError("DataGateway v1 requires a Parquet partition")
+    if not candidate.is_file():
+        raise StorageResolutionError(f"catalogued partition file is not readable: {candidate}")
+    return candidate
+
+
+def read_trade_v1(
+    path: str | Path,
+    start: Instant,
+    end: Instant,
+) -> list[TradeRecord]:
+    """Read one canonical trade-v1 file with temporal filtering.
+
+    Arrow's scanner is used when the Parquet timestamp is typed, allowing
+    row-group statistics to prune.  Python filtering remains authoritative for
+    the contract's parsed-timestamp comparison and half-open boundary.
+    """
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise StorageResolutionError("Parquet file does not exist")
+    try:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        import pyarrow.dataset as ds
+    except ImportError as exc:  # pragma: no cover - environment-specific
+        raise RuntimeError("pyarrow is required for trade-v1 reads") from exc
+    try:
+        dataset = ds.dataset(str(file_path), format="parquet")
+        names = set(dataset.schema.names)
+        if any(column not in names for column in _REQUIRED):
+            missing = sorted(set(_REQUIRED) - names)
+            raise DataIntegrityError(f"trade-v1 Parquet is missing columns: {missing}")
+        if any(column not in _COLUMNS for column in names):
+            extra = sorted(names - set(_COLUMNS))
+            raise DataIntegrityError(f"trade-v1 Parquet has unsupported columns: {extra}")
+
+        columns = [column for column in _COLUMNS if column in names]
+        filter_expression = None
+        field = dataset.schema.field("exchange_ts")
+        if pa.types.is_timestamp(field.type) and _arrow_boundary_safe(start, end, field.type, pa):
+            arrow_start = pa.scalar(start.to_datetime(), type=field.type)
+            arrow_end = pa.scalar(end.to_datetime(), type=field.type)
+            filter_expression = (ds.field("exchange_ts") >= arrow_start) & (ds.field("exchange_ts") < arrow_end)
+        scanner = dataset.scanner(columns=columns, filter=filter_expression, batch_size=65_536)
+        table = scanner.to_table()
+        timestamp_ns = _timestamp_values(table["exchange_ts"], field.type, pa, pc)
+        receive_values = table["receive_ts"].to_pylist() if "receive_ts" in names else [None] * table.num_rows
+        values = {column: table[column].to_pylist() if column in names else [None] * table.num_rows for column in _COLUMNS}
+    except DataIntegrityError:
+        raise
+    except Exception as exc:
+        raise DataIntegrityError(f"cannot read trade-v1 Parquet: {file_path.name}") from exc
+
+    records: list[TradeRecord] = []
+    for index in range(table.num_rows):
+        exchange = Instant(timestamp_ns[index])
+        if not (start <= exchange < end):
+            continue
+        try:
+            receive = None if receive_values[index] is None else Instant.parse(receive_values[index])
+            aggressor_side = _required_text(values["aggressor_side"][index], "aggressor_side")
+            if aggressor_side not in {"buy", "sell", "unknown"}:
+                raise DataIntegrityError("trade-v1 aggressor_side is outside its enum")
+            sequence = _optional_text(values["sequence"][index])
+            if sequence is not None and not _DIGITS.fullmatch(sequence):
+                raise DataIntegrityError("trade-v1 sequence is not canonical digits")
+            records.append(
+                TradeRecord(
+                    venue=_required_text(values["venue"][index], "venue"),
+                    instrument=_required_text(values["instrument"][index], "instrument"),
+                    exchange_ts=exchange,
+                    price=_decimal_text(values["price"][index], "price"),
+                    size=_decimal_text(values["size"][index], "size"),
+                    aggressor_side=aggressor_side,
+                    receive_ts=receive,
+                    trade_id=_optional_text(values["trade_id"][index]),
+                    sequence=sequence,
+                )
+            )
+        except InvalidRequest as exc:
+            raise DataIntegrityError("trade-v1 timestamp is invalid") from exc
+    return records
+
+
+def _validate_relative(value: str, label: str, *, allow_percent: bool = True) -> None:
+    if not isinstance(value, str) or not _SAFE_RELATIVE.fullmatch(value):
+        raise StorageResolutionError(f"{label} must be a safe relative path")
+    if any(component in {".", ".."} for component in value.split("/")):
+        raise StorageResolutionError(f"{label} contains traversal")
+    if "%2E" in value.upper():
+        raise StorageResolutionError(f"{label} contains encoded traversal")
+    if re.search(r"%(?![0-9A-F]{2})", value):
+        raise StorageResolutionError(f"{label} contains a non-canonical escape")
+    if not allow_percent and "%" in value:
+        raise StorageResolutionError(f"{label} must not contain percent escapes")
+
+
+def _timestamp_values(array: Any, data_type: Any, pa: Any, pc: Any) -> list[int]:
+    if pa.types.is_timestamp(data_type):
+        unit = data_type.unit
+        raw = pc.cast(array, pa.int64()).to_pylist()
+        factor = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}[unit]
+        if any(value is None for value in raw):
+            raise DataIntegrityError("trade-v1 exchange_ts is null")
+        return [int(value) * factor for value in raw]
+    return [Instant.parse(value).epoch_ns for value in array.to_pylist()]
+
+
+def _arrow_boundary_safe(start: Instant, end: Instant, data_type: Any, pa: Any) -> bool:
+    unit = data_type.unit
+    factor = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}[unit]
+    # Arrow pushdown must not round a nanosecond boundary inward: Python
+    # filtering below is authoritative, so an unsafe pushdown could hide rows
+    # before they can be checked.
+    return start.epoch_ns % factor == 0 and end.epoch_ns % factor == 0
+
+
+def _required_text(value: Any, field: str) -> str:
+    if value is None or not isinstance(value, str) or not value:
+        raise DataIntegrityError(f"trade-v1 {field} is null or not a string")
+    return value
+
+
+def _decimal_text(value: Any, field: str) -> str:
+    if value is None or not isinstance(value, (str, Decimal)):
+        raise DataIntegrityError(f"trade-v1 {field} is null")
+    text = str(value)
+    if not _POSITIVE_DECIMAL.fullmatch(text):
+        raise DataIntegrityError(f"trade-v1 {field} is not a canonical positive decimal")
+    return text
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise DataIntegrityError("trade-v1 optional identifier is not a string")
+    if value == "":
+        raise DataIntegrityError("trade-v1 optional identifier is empty")
+    return value
+
+
+__all__ = ["read_trade_v1", "resolve_partition_path"]
