@@ -38,12 +38,13 @@ Clients will consume the canonical API; quantitative business logic belongs in d
 - [Architecture](docs/architecture/TARGET_ARCHITECTURE.md)
 - [Core contracts](docs/contracts/CORE_CONTRACTS.md)
 - [DataGateway contract](docs/contracts/DATA_GATEWAY.md)
+- [Repository synchronization](docs/engineering/REPOSITORY_SYNC.md)
 - [Architecture decisions](docs/decisions/README.md)
 - [Current scope](SCOPE.md)
 
 ## Development and tests
 
-The local Python test suite is made of executable script-style tests. Install `tests/requirements.txt` in an isolated environment, then run the repository-owned gate with `python tools/run_tests.py`. It discovers and runs every `tests/test_*.py` script using the same interpreter. `tests/test_catalog_ddl.sql` and `tests/integration_bybit_trades_2024_01_15.py` are separate database/real-data integration tests and require the infrastructure described in their files; they are not part of the local runner.
+The local Python test suite is made of executable script-style tests. Install `tests/requirements.txt` in an isolated environment, then run the repository-owned gate with `python tools/run_tests.py`. It discovers and runs every `tests/test_*.py` script using the same interpreter. `python tools/check_markdown_links.py` validates local Markdown links. `tests/test_catalog_ddl.sql` and `tests/integration_bybit_trades_2024_01_15.py` are separate database/real-data integration tests and require the infrastructure described in their files; they are not part of the local Python runner.
 
 ## Legacy relationship
 

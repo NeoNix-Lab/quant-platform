@@ -12,3 +12,4 @@
 | How does server data integrate? | [Integration](integration/MARKET_PLATFORM_INTEGRATION.md) |
 | What legacy may be reused? | [Adoption ledger](legacy/ADOPTION_LEDGER.md) |
 | What does done mean? | [Definition of Done](engineering/DEFINITION_OF_DONE.md) |
+| How is code synchronized safely? | [Repository Synchronization](engineering/REPOSITORY_SYNC.md) |

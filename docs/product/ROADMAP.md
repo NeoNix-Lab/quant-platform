@@ -22,3 +22,7 @@ The roadmap expresses dependency direction, not day estimates. Exact scope may e
 Provenance and identity primitives are required as soon as their entities are
 implemented; they do not wait for Phase 8. Research may continue across
 phases. Each phase starts only through an explicit scope.
+
+Repository Synchronization & Integrity Foundation v1 is the infrastructure
+gate between the reviewed DataGateway Contract v1 and DataGateway runtime
+implementation. It does not add a product capability or renumber the phases.
