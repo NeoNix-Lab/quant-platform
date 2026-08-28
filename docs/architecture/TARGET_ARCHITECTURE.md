@@ -39,7 +39,13 @@ No backward compatibility requirement is assumed unless a future ADR explicitly 
                            DataGateway
                                 │
                                 ▼
-                         Feature Engine
+                    Representations / Candles
+                                │
+                                ▼
+                  FeatureDefinition / Feature Engine
+                                │
+                                ▼
+                     Primitive derived features
       ┌──────────┬──────────┬───────────┬──────────┬──────────┐
       ▼          ▼          ▼           ▼          ▼          ▼
    Trades       L1      Footprint       L2         L3     Tech/Context
@@ -160,6 +166,10 @@ Provider families:
 - Custom.
 
 The provider family describes input semantics, not a separate architecture.
+
+The canonical flow is market data through the DataGateway, then
+representations/candles, then FeatureDefinition and the Feature Engine, which
+produce primitive derived features for the research and outcome layers.
 
 The Feature Engine owns:
 

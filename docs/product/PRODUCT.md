@@ -144,7 +144,7 @@ Examples:
 - delta;
 - imbalance;
 - intensity;
-- L1 summary features;
+- L1-derived summary features;
 - footprint features;
 - L2/L3 summary features when valid for the source data.
 
