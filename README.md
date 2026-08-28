@@ -6,7 +6,7 @@ Quant Platform is a historical-first, live-targeted quantitative research and tr
 
 ## Current status
 
-The canonical data-plane foundation is real and implemented: `trade-v1`, dataset and partition manifests, PostgreSQL catalog DDL, lineage, storage roots, Bybit historical import, semantic fixtures and tests. DataGateway, representations, features, research, execution, learning, API and clients are target layers, not yet implemented here.
+The canonical data-plane foundation is real and implemented: `trade-v1`, dataset and partition manifests, PostgreSQL catalog DDL, lineage, storage roots, Bybit historical import, semantic fixtures and tests. A narrow catalog-backed DataGateway v1 implementation is present; representations, features, research, execution, learning, API and clients remain target layers.
 
 ## Architecture
 
@@ -38,6 +38,9 @@ Clients will consume the canonical API; quantitative business logic belongs in d
 - [Architecture](docs/architecture/TARGET_ARCHITECTURE.md)
 - [Core contracts](docs/contracts/CORE_CONTRACTS.md)
 - [DataGateway contract](docs/contracts/DATA_GATEWAY.md)
+- [Market Data Ingest architecture](docs/architecture/MARKET_DATA_INGEST.md)
+- [Market Data Ingest contracts](docs/contracts/MARKET_DATA_INGEST_CONTRACTS.md)
+- [Storage Lifecycle](docs/architecture/STORAGE_LIFECYCLE.md)
 - [Repository synchronization](docs/engineering/REPOSITORY_SYNC.md)
 - [Architecture decisions](docs/decisions/README.md)
 - [Current scope](SCOPE.md)

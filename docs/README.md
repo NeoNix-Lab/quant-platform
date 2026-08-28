@@ -13,3 +13,6 @@
 | What legacy may be reused? | [Adoption ledger](legacy/ADOPTION_LEDGER.md) |
 | What does done mean? | [Definition of Done](engineering/DEFINITION_OF_DONE.md) |
 | How is code synchronized safely? | [Repository Synchronization](engineering/REPOSITORY_SYNC.md) |
+| How is market data produced? | [Market Data Ingest](architecture/MARKET_DATA_INGEST.md) |
+| What are ingest obligations? | [Market Data Ingest Contracts](contracts/MARKET_DATA_INGEST_CONTRACTS.md) |
+| How is storage protected? | [Storage Lifecycle](architecture/STORAGE_LIFECYCLE.md) |

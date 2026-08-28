@@ -1,6 +1,6 @@
 # DataGateway Contract v1
 
-**Status:** Contract v1 — implementation not present
+**Status:** Contract v1 — narrow catalog-backed implementation present
 
 **Scope:** historical, catalog-backed access to canonical market datasets
 

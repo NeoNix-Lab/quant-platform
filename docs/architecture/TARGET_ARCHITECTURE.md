@@ -117,6 +117,13 @@ Owns:
 - data quality metadata;
 - historical/live source registration.
 
+The producer-side Data Plane is elaborated by
+[MARKET_DATA_INGEST.md](MARKET_DATA_INGEST.md). Market Data Ingest covers
+source/venue adapters, historical and backfill acquisition, live collection,
+canonicalization, quality/reconciliation, and partition publication. Storage
+Lifecycle covers physical placement, protection, capacity, and health without
+creating a second logical data layer or identity system.
+
 It does not own research hypotheses, trading rules or UI semantics.
 
 ### 3.2 DataGateway

@@ -19,6 +19,40 @@ the relevant implementation work:
 - the live stream interface and identity/cursor semantics;
 - schema-v2 compatibility and evolution policy.
 
+### Market Data Ingest
+
+The producer-side capability is inside the Data Plane; it does not replace the
+DataGateway consumer boundary. The following remain open for implementation:
+
+- the exact population rule for declared partition coverage versus observed
+  first/last event bounds;
+- crash-safe sealing, manifest publication, catalog reconciliation, and
+  idempotent retry details;
+- the mapping from quality reports to `valid`, `degraded`, and `invalid`;
+- live/backfill overlap, source precedence, repair triggering, and duplicate
+  resolution;
+- deduplication when the source provides no native identity;
+- deterministic ordering integration for a second venue;
+- future live consumer stream, cursor, and identity semantics;
+- versioned L1, L2, and L3/MBO contracts.
+
+See [Market Data Ingest](MARKET_DATA_INGEST.md) and
+[Market Data Ingest Contracts](../contracts/MARKET_DATA_INGEST_CONTRACTS.md).
+
+### Storage Lifecycle
+
+Storage roots, placement, tiering, data protection, backups, capacity, health,
+and storage-pressure behavior are operational Data Plane concerns. Their
+implementation remains open:
+
+- hot/cold/deep-cold migration thresholds and relocation protocol;
+- retention and deletion authority;
+- backup destination, topology, frequency, and restore validation;
+- capacity thresholds, time-to-full estimation, and pressure actions;
+- checkpoint-state protection and monitoring technology.
+
+See [Storage Lifecycle](STORAGE_LIFECYCLE.md).
+
 ### Execution
 
 - Order/Fill lifecycle;
