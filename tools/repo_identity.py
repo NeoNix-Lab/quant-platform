@@ -18,9 +18,30 @@ def git(*args: str) -> str:
     return result.stdout.strip()
 
 
+def branch_name() -> str:
+    """Return the branch name, treating detached HEAD as a valid state."""
+    result = subprocess.run(
+        ["git", "symbolic-ref", "--short", "-q", "HEAD"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    if result.returncode == 1 and not result.stderr:
+        return "DETACHED"
+    raise subprocess.CalledProcessError(
+        result.returncode,
+        result.args,
+        output=result.stdout,
+        stderr=result.stderr,
+    )
+
+
 def main() -> int:
     try:
-        branch = git("symbolic-ref", "--short", "-q", "HEAD") or "DETACHED"
+        branch = branch_name()
         sha = git("rev-parse", "HEAD")
         exact_tags = git("tag", "--points-at", "HEAD").splitlines()
         nearest = git("describe", "--tags", "--always", "HEAD")
