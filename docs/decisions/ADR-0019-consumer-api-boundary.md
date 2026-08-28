@@ -1,13 +1,14 @@
-# ADR-0020 — Consumer API semantic boundary
+# ADR-0019 — Consumer API semantic boundary
 
-**Status:** ACCEPTED
+**Status:** PROPOSED — pending independent re-review
 
 **Date:** 2026-08-28
 
 ## Context
 
-ADR-0002 establishes API-first application architecture, and ADR-0019
-establishes the logical DataGateway boundary below the quantitative layers.
+ADR-0002 establishes API-first application architecture. The frozen
+[DataGateway Contract v1](../contracts/DATA_GATEWAY.md) establishes
+the logical data access boundary below the quantitative layers.
 The platform now needs one consumer-facing contract that can serve App UI,
 TUI, CLI and future automation without turning the first Bybit `trade-v1`
 read into the general market-data model or exposing physical data-plane
@@ -23,8 +24,10 @@ does not advance runtime implementation or reorder the roadmap.
 1. App UI, TUI, CLI and future external consumers use one canonical semantic
    API boundary. They do not invoke DataGateway, storage, domain engines or
    physical data sources directly.
-2. Consumer market-data requests express a semantic selector, an explicit UTC
-   `[start, end)` interval and a versioned `RepresentationDefinition`.
+2. Consumer market-data requests express a minimal semantic selector
+   (`venue`, `instrument`), an explicit UTC `[start, end)` interval and a
+   versioned `RepresentationDefinition`. Future selector dimensions require
+   an explicit versioned extension.
 3. `RepresentationDefinition`, consumer query/request identity and internal
    `DatasetIdentity` remain separate concepts. A service may resolve one to
    another internally, but DatasetIdentity is not the ordinary consumer query
@@ -35,16 +38,19 @@ does not advance runtime implementation or reorder the roadmap.
    vertical slice only. Representation materialization may later be computed,
    cached, materialized or reconstructed without changing the consumer
    boundary when semantics and provenance remain stable.
-6. API results preserve meaningful coverage, temporal, deterministic-ordering
-   and provenance semantics. Stable API errors preserve distinctions such as
-   dataset-not-found, no-coverage, schema-mismatch, unsupported-representation
-   and integrity failure without exposing raw implementation exceptions or
-   physical paths.
+6. API results preserve representation/application-level coverage, temporal,
+   deterministic-ordering and provenance semantics. Stable API errors preserve
+   distinctions such as source-not-found, no-coverage, schema incompatibility,
+   unsupported-representation and integrity failure without exposing raw
+   implementation exceptions or physical paths. Detailed DataGateway causes
+   remain internal diagnostics.
 7. Cheap bounded reads may be synchronous. Long-running computation and
    materialization use a future asynchronous Job contract; this ADR does not
    implement that runtime.
-8. API and representation semantic changes require explicit versioning or a
-   new accepted ADR. No legacy API compatibility is promised.
+8. A semantic change to a frozen API or representation contract requires an
+   explicit new API or representation version. An ADR may document or
+   authorize the evolution but cannot mutate frozen meaning in place. No legacy
+   API compatibility is promised.
 
 ## Consequences
 

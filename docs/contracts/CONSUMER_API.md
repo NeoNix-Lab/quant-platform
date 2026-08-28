@@ -1,6 +1,6 @@
 # Consumer API Boundary Contract v1
 
-**Status:** Contract v1 — semantic boundary frozen; transport/runtime not implemented
+**Status:** Contract v1 — remediation applied; pending independent re-review; transport/runtime not implemented
 
 **Scope:** the canonical application boundary for App UI, TUI, CLI, notebooks,
 automation and other external consumers.
@@ -109,7 +109,6 @@ ConsumerMarketDataQuery v1
   selector
     venue: semantic venue identifier
     instrument: venue-native instrument identifier
-    market_type: optional, only where the domain requires disambiguation
   interval
     start: UTC instant
     end: UTC instant
@@ -122,11 +121,15 @@ ConsumerMarketDataQuery v1
     optional, capability-owned and versioned
 ```
 
-The selector identifies what the consumer means. It is not a physical dataset
-selector, file name, path, catalog UUID or execution instruction. `start == end`
-is a valid empty interval; `start > end` is invalid. The interval is UTC and
-uses half-open semantics wherever the requested capability returns a finite
-historical slice.
+The v1 selector is deliberately minimal: `venue` and `instrument`. It
+identifies what the consumer means, not a physical dataset, file name, path,
+catalog UUID or execution instruction. `start == end` is a valid empty
+interval; `start > end` is invalid. The interval is UTC and uses half-open
+semantics wherever the requested capability returns a finite historical slice.
+
+Future selector dimensions such as market type, venue sets or cross-venue
+selection require an explicit versioned selector extension. Their semantics
+are not frozen by this contract.
 
 The v1 reference representation is:
 
@@ -176,7 +179,8 @@ approved canonical source. That choice is not part of consumer semantics.
 ### 3.3 Dataset identity
 
 `DatasetIdentity` identifies available canonical or derived materialized data
-inside the platform. DataGateway v1 defines the natural identity as:
+inside the platform. The frozen [DataGateway Contract v1](DATA_GATEWAY.md)
+defines the natural identity as:
 
 ```text
 (layer, dataset_kind, venue, instrument, record_schema_id)
@@ -257,30 +261,43 @@ ConsumerMarketDataResult
     requested_interval: [start, end)
     returned_record_bounds: first/last event time, or null when empty
   coverage
-    eligible_coverage
-    coverage_gaps
-    coverage_complete
+    covered_intervals
+    gaps
+    completeness
   provenance
     source semantic identity and schema/version information
     stable source references where needed for reproducibility
+    source/DataGateway coverage diagnostics, when useful
     implementation identity when computation or normalization occurred
   statistics
     row_count where meaningful
 ```
 
-Coverage is based on authoritative eligible coverage metadata, not inferred
-only from returned rows. Under the frozen DataGateway v1 strict policy:
+Coverage at the consumer boundary is representation/application-level
+coverage. `covered_intervals` describes where the requested representation is
+available under that representation's semantics; `gaps` and `completeness`
+describe the requested interval. A derived representation may have different
+coverage from its source because of its own definition, warmup, late-event or
+partial-result rules. Coverage is not a universal exposure of DataGateway
+`eligible_coverage`.
+
+The application service may retain source/DataGateway coverage diagnostics in
+provenance. Those diagnostics are explanatory source evidence, not the stable
+consumer coverage abstraction. For the current `trades@1` reference, the
+service preserves the frozen DataGateway v1 strict behavior when determining
+whether a semantic result can be produced:
 
 ```text
-full declared coverage + zero records -> success, complete=true, bounds=null
-zero eligible coverage               -> NoCoverage
-partial coverage or internal gap     -> NoCoverage
+full representation coverage + zero records -> success, complete=true, bounds=null
+no representation coverage             -> no_coverage
+representation gap under strict policy -> no_coverage
 ```
 
-The API may translate these into stable API error codes, but it must preserve
-the distinction. It must also preserve deterministic ordering and the
-representation's temporal availability semantics. It must not fabricate,
-interpolate or silently truncate uncovered data.
+The API may translate source outcomes into stable API error codes, but it must
+preserve the distinction between a complete empty result and unavailable or
+incomplete representation coverage. It must also preserve deterministic
+ordering and the representation's temporal availability semantics. It must not
+fabricate, interpolate or silently truncate uncovered data.
 
 Provenance exposed at this boundary is semantic and diagnostic: source venue,
 instrument, representation/schema versions, coverage and stable source
@@ -315,17 +332,21 @@ The minimum market-data error vocabulary is:
 |---|---|
 | `invalid_request` | Malformed interval, selector, unsupported option shape or contradictory request |
 | `unsupported_representation` | The requested representation kind/version is not implemented or available |
-| `dataset_not_found` | No approved canonical source matches the resolved semantic request |
-| `no_coverage` | No eligible coverage, an internal gap or incomplete coverage under strict policy |
-| `schema_mismatch` | The resolved source schema is incompatible with the required semantics |
-| `invalid_partition_state` | A source state is not readable under the selected application policy |
-| `catalog_conflict` | Catalog/manifests disagree or source identity is ambiguous |
-| `corrupt_content` | Content, hash or schema validation fails |
-| `internal_integrity_failure` | An unexpected integrity failure not safely classifiable for the consumer |
+| `source_not_found` | No approved source/dataset can satisfy the semantic request |
+| `no_coverage` | The requested representation has no covered interval or has an incomplete gap under its policy |
+| `schema_incompatible` | Available source/representation schema cannot satisfy the requested semantics |
+| `integrity_failure` | The platform cannot safely produce a trustworthy result |
 
-`full coverage + zero records` is a successful empty result, not
-`no_coverage`. The API may add capability-specific errors later, but it may
-not collapse these distinctions into a generic not-found or empty response.
+`full representation coverage + zero records` is a successful empty result,
+not `no_coverage`. The API may add capability-specific errors later, but it
+may not collapse these distinctions into a generic not-found or empty response.
+
+Internal causes such as an unreadable partition state, catalog/manifests
+conflict or corrupt content remain diagnosable through safe internal details,
+tracing and operational logs. They are not frozen as consumer API error codes;
+the application service maps them to `source_not_found` or
+`integrity_failure` according to whether the consumer can act on source
+absence or only on platform failure.
 
 ## 8. Synchronous reads and asynchronous jobs
 
@@ -360,12 +381,13 @@ The following version domains remain distinct:
 - **runtime identity:** catalog UUIDs, paths and process metadata, never a
   semantic compatibility key.
 
-Within a frozen API version, semantic changes require an explicit version or
-an accepted ADR. A representation may evolve independently only when its
-versioned definition makes the change explicit. A source materialization can
-change from computed to cached or persisted without a consumer contract
-change if the representation semantics, provenance and result guarantees are
-unchanged.
+Semantic change to a frozen API contract requires an explicit new API version.
+Semantic change to a frozen representation requires an explicit new
+representation version. An ADR may authorize or document the migration,
+compatibility plan and version introduction, but an ADR alone cannot mutate
+frozen semantics in place. A source materialization can change from computed
+to cached or persisted without a consumer contract change if the
+representation semantics, provenance and result guarantees are unchanged.
 
 No legacy API compatibility is promised. Existing `ml_core` behavior is
 read-only evidence and does not constrain this boundary. Compatibility with
