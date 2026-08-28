@@ -21,7 +21,9 @@ The following remain authoritative:
 - [ADR-0004](../decisions/ADR-0004-market-data-levels.md) for L1/L2/L3 terms;
 - [ADR-0018](../decisions/ADR-0018-frozen-market-data-contract-evolution.md)
   for future contract versions;
-- `db/init/001_catalog.sql` for the concrete catalog and storage-root model.
+- `db/init/001_catalog.sql` as the current concrete runtime catalog/storage-root
+  implementation baseline that must be reused; it is not, by itself, an
+  immutable freeze of every current DDL detail.
 
 No section below changes those authorities.
 
@@ -34,7 +36,8 @@ Market Data Ingest must produce a partition that is:
 - traceable through manifest, content, lineage, producer, and code provenance;
 - classified with existing lifecycle vocabulary;
 - reconciled against known source and temporal evidence;
-- safe for DataGateway eligibility under the requested lifecycle policy.
+- accompanied by quality and provenance evidence; DataGateway, not the
+  producer, applies its own read-eligibility policy.
 
 The producer must fail visibly on contradictory identity, invalid schema,
 unresolved source conflict, or fabricated source fact.
@@ -143,21 +146,15 @@ observed-bound fields must remain truthful.
 The semantic publication sequence is:
 
 ```text
-write staged data
+`writing`
       ↓
-durably finalize artifact
+sealed / `closed`
       ↓
-compute content hash and size
+manifest and catalog reconciliation
       ↓
-create and validate dataset/partition manifests
+quality and certification evidence
       ↓
-register or reconcile catalog metadata
-      ↓
-apply lifecycle state
-      ↓
-record quality evidence
-      ↓
-valid / degraded / invalid
+`valid` / `degraded` / `invalid`
 ```
 
 The invariant is that a consumer must not observe a partially materialized
@@ -165,8 +162,11 @@ partition. This does not require an impossible transaction spanning a
 filesystem and PostgreSQL. It requires crash-safe staging, idempotent retry,
 natural-identity-keyed reconciliation, and recovery after interruption.
 
-`writing` is not default-eligible. `closed` is sealed but not certified.
-`valid` is default-eligible. `degraded` requires explicit policy. `invalid` and
+The producer emits the lifecycle classification and supporting evidence; it
+does not evaluate a caller's DataGateway lifecycle policy. DataGateway
+independently applies its own read-eligibility policy. `writing` is not
+default-eligible. `closed` is sealed but not certified. `valid` is
+default-eligible. `degraded` requires explicit policy. `invalid` and
 `superseded` are excluded. “Published” should be used only with a stated
 meaning such as catalog-registered or default-eligible.
 
