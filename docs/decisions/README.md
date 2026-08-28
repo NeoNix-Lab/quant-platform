@@ -8,5 +8,7 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0016 | FeatureDefinition and FeatureSetDefinition are distinct identities | Accepted |
 | 0017 | Candle runtime and materialization model | Accepted |
 | 0018 | Frozen market-data contract evolution policy | Accepted |
+| 0019 | DataGateway logical boundary | Accepted |
+| 0020 | Consumer API semantic boundary | Accepted |
 
 See the individual ADR files for context and consequences.

@@ -323,6 +323,8 @@ It persists identities, provenance, configuration, metrics and artifact referenc
 The API is the canonical product boundary for interactive clients and automation.
 
 App UI, TUI and CLI consume the API rather than invoking domain engines independently.
+The semantic boundary, identity separation, error policy and future job path are
+defined by [Consumer API Boundary Contract v1](../contracts/CONSUMER_API.md).
 
 ### 3.17 App UI
 

@@ -1,33 +1,56 @@
-# Scope: Repository Synchronization & Integrity Foundation v1
+# Scope: Consumer API Boundary Contract v1
 
 ## Goal
 
-Freeze and establish safe Git/GitHub/server synchronization, deterministic repository integrity checks and lightweight CI before DataGateway runtime implementation.
+Freeze the semantic consumer-facing boundary of Quant Platform after the
+DataGateway implementation slice, without implementing API transport, clients
+or downstream quantitative engines.
+
+## Roadmap position
+
+The authoritative roadmap remains unchanged. The DataGateway implementation
+milestone is complete at the base of this branch. The next product capability
+in dependency order remains Representation foundation; the later Canonical
+API and job runtime phase remains later. This scope is a contract-preparation
+milestone and does not renumber or reorder those phases.
 
 ## In scope
 
-Authority model; branch and promotion policy; review-ready branch pushes; guarded server updates; fast-forward-only promotion; GitHub CI; disposable PostgreSQL validation; repository/document integrity checks; exact Git deployment identity reporting; server integration-test conventions; heavy-test conventions; and governance updates.
+- semantic Consumer API boundary for App UI, TUI, CLI and future consumers;
+- distinction between consumer query, RepresentationDefinition and
+  DatasetIdentity;
+- consumer-visible coverage, deterministic result and provenance guarantees;
+- stable API error translation policy;
+- synchronous bounded reads versus future asynchronous Job semantics;
+- versioning/evolution policy;
+- `trades@1` backed by canonical Bybit `trade-v1` as a reference slice;
+- documentation index, capability-map and ADR updates.
 
 ## Out of scope
 
-DataGateway implementation; API/client; automatic deployment; Docker/Kubernetes migration; generic configuration management; data replication; backup system; live-trading deployment; remote secret management; CI requiring private or bulk historical datasets; candles; features; research; labels; schema-v2; new L1/L2/L3 schemas; and execution or ML/RL migration.
+- FastAPI, HTTP endpoints, DTOs, handlers or transport serialization;
+- React, TUI, CLI commands or other client runtime code;
+- candle, footprint, L1, L2, L3 or book builders;
+- Feature, Research, Outcome, Label, Validation, Strategy or Execution
+  runtimes;
+- Job Runtime, authentication, deployment, pagination or streaming;
+- DataGateway Contract v1, canonical schemas/DDL or physical storage changes;
+- legacy CoreApp/API porting or compatibility promises.
 
 ## Exit criteria
 
-- Authority model is documented: GitHub owns versioned code/history, the
-  server owns operational data/runtime state, and desktop is the primary
-  development environment.
-- Server promotion is explicit, clean-tree guarded and fast-forward-only; no
-  repository file-copy mirroring or automatic pull/deploy exists.
-- CI runs suitable deterministic tests, documentation integrity checks and the
-  disposable PostgreSQL catalog test.
-- Heavy and real-data tests are explicitly separated from lightweight CI.
-- Exact Git revision, branch, tag and dirty/clean state can be reported.
-- `main` is green and suitable for controlled server integration, without
-  implying live-trading certification.
-- Independent review is completed before DataGateway implementation.
+- the semantic API boundary and client dependency direction are documented;
+- consumer query, representation definition and dataset identity are
+  explicitly separate;
+- `trade-v1` is documented as a reference implementation, not the general
+  market-data model;
+- coverage, provenance, temporal semantics and error distinctions are
+  preserved at the boundary;
+- future representation and job extension points are explicit without
+  claiming unsupported implementations;
+- no runtime or client code is changed.
 
 ## Next cycle
 
-DataGateway Implementation v1, after this synchronization foundation is
-independently reviewed.
+Representation Foundation: CandleDefinition identity, closed/partial
+semantics and equivalence tests, under the existing roadmap order.
