@@ -11,8 +11,10 @@ DataGateway logical boundary and first implementation slice are resolved by
 ADR-0019 and `docs/contracts/DATA_GATEWAY.md`. The following remain open for
 the relevant implementation work:
 
-- whether to expose `DatasetSnapshot` using immutable partition-set reference,
-  catalog query replay, or a copied/materialized result;
+- whether `DatasetSnapshot` should become a first-class public contract; if so,
+  whether it should use an immutable partition/content reference or an
+  independently materialized snapshot artifact. Catalog-query replay alone is
+  explicitly insufficient for durable reproducibility;
 - the concrete logical row/columnar batch return representation;
 - the live stream interface and identity/cursor semantics;
 - schema-v2 compatibility and evolution policy.
