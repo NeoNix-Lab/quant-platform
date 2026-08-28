@@ -59,7 +59,8 @@ def main() -> int:
         rel_path = "dt=2024-01-15/part-000.parquet"
         data_file = write_fixture(root, rel_path)
         digest = hashlib.sha256(data_file.read_bytes()).hexdigest()
-        with psycopg.connect(dsn) as connection:
+        connection = psycopg.connect(dsn) if dsn else psycopg.connect()
+        with connection:
             with connection.cursor() as cursor:
                 cursor.execute("UPDATE catalog.storage_roots SET abs_path = %s WHERE storage_root_id = 'hot'", (str(root),))
                 cursor.execute(
