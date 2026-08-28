@@ -11,6 +11,13 @@ The `quant-platform` repository is the authoritative product codebase. Before ar
 - Keep quantitative business logic out of App UI, TUI and CLI clients.
 - Upper layers must not bypass the future DataGateway to open canonical storage directly.
 - Do not add bulk market data, databases, experiment artifacts or secrets to Git.
+- GitHub `origin` is the authority for versioned code, contracts, schemas,
+  fixtures and reviewed history. Server state is operational data/runtime
+  state, not a competing source repository.
+- Move code between machines through Git history only; do not mirror the
+  repository with rsync, SMB/network copies, zips or arbitrary overwrites.
+- Server promotion is explicit, clean-tree guarded and fast-forward-only. Do
+  not automate stash, reset, clean, pull-on-push or deployment.
 - Do not use `git add .` or `git add -A`; stage explicit paths only.
 - If code conflicts with an accepted ADR or contract, stop and report the conflict.
 

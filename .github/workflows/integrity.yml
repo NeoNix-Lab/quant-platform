@@ -1,0 +1,81 @@
+name: Quant Platform integrity
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lightweight:
+    name: Lightweight deterministic checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -r tests/requirements.txt
+      - name: Run local Python suite
+        run: python tools/run_tests.py
+      - name: Validate Markdown links
+        run: python tools/check_markdown_links.py
+      - name: Report repository identity
+        run: python tools/repo_identity.py
+
+  catalog-ddl:
+    name: Disposable PostgreSQL 17 catalog test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-postgres-password
+          POSTGRES_DB: market_catalog
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d market_catalog"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize catalog schema
+        env:
+          PGPASSWORD: ci-postgres-password
+        run: |
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -e PGPASSWORD \
+            postgres:17 psql -h 127.0.0.1 -U postgres -d market_catalog \
+              -v ON_ERROR_STOP=1 -f /workspace/db/init/001_catalog.sql
+      - name: Initialize catalog roles
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: market_catalog
+          CATALOG_ADMIN_PASSWORD: ci-admin-password
+          CATALOG_WRITER_PASSWORD: ci-writer-password
+          CATALOG_READER_PASSWORD: ci-reader-password
+          PGPASSWORD: ci-postgres-password
+        run: |
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -e POSTGRES_USER -e POSTGRES_DB -e PGPASSWORD \
+            -e CATALOG_ADMIN_PASSWORD -e CATALOG_WRITER_PASSWORD \
+            -e CATALOG_READER_PASSWORD \
+            postgres:17 bash /workspace/db/init/002_roles.sh
+      - name: Run disposable catalog DDL test
+        env:
+          PGPASSWORD: ci-postgres-password
+        run: |
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -e PGPASSWORD \
+            postgres:17 psql -h 127.0.0.1 -U postgres -d market_catalog \
+              -v ON_ERROR_STOP=1 -f /workspace/tests/test_catalog_ddl.sql

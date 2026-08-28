@@ -232,3 +232,22 @@ A capability may be marked `FROZEN` when:
 - representative real-data integration passes;
 - backward-incompatible semantic change requires a new version;
 - capability map and ADR state are updated.
+
+---
+
+## 12. Repository integrity and promotion
+
+Repository changes are complete for controlled server integration only when:
+
+- the change is in reviewed GitHub history;
+- the repository-owned deterministic checks and applicable CI pass;
+- local Markdown links and referenced repository paths resolve;
+- the exact branch, SHA, tag and dirty/clean state are reportable;
+- server promotion uses a clean-tree, explicit fetch and fast-forward-only
+  update;
+- code synchronization uses Git history, never repository file-copy mirroring;
+- bulk canonical data, runtime databases, caches and large artifacts remain out
+  of Git.
+
+This does not certify live trading or replace server integration and heavy
+certification tiers.
