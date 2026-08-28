@@ -13,3 +13,15 @@ venv/
 .env
 *.env
 !env.example
+
+# Bulk market data and generated research artifacts. Small fixtures remain
+# explicitly tracked under fixtures/.
+*.parquet
+*.db
+*.sqlite
+*.sqlite3
+*.arrow
+*.feather
+data/
+artifacts/
+cache/

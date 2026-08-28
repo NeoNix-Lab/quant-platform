@@ -1,0 +1,24 @@
+# Quant Platform Roadmap
+
+The roadmap expresses dependency direction, not day estimates. Exact scope may evolve through ADRs and `SCOPE.md`; product completeness remains the target.
+
+0. Repository and governance foundation
+1. Data access and identity foundation: DataGateway, catalog-backed reads and provenance
+2. Representation foundation: CandleDefinition identity, closed/partial semantics and equivalence tests
+3. Feature foundation: FeatureDefinition, FeatureSetDefinition and FeatureArtifact identity, source dataset/partition provenance, implementation identity, providers and materialization
+4. Research and outcome foundation: Hypothesis/Event/Outcome identity, reproducibility, event studies and sweeps
+5. Validation and labeling: warmup, walk-forward, purge, embargo, lockbox and censoring
+6. Strategy and decision foundation: StrategySpec, policies, DecisionIntent, risk and sizing
+7. Execution, replay and portfolio: orders, fills, positions, accounting and deterministic replay
+8. Unified Experiment Orchestration and Persistence: Study, Trial, Run, Artifact cross-referencing, comparison, reproduction and canonical experiment persistence
+9. Canonical API and job runtime
+10. Supervised ML
+11. Strategic RL
+12. Execution RL
+13. Clients: CLI, TUI and App UI
+14. Paper and shadow operation
+15. Live operation
+
+Provenance and identity primitives are required as soon as their entities are
+implemented; they do not wait for Phase 8. Research may continue across
+phases. Each phase starts only through an explicit scope.
