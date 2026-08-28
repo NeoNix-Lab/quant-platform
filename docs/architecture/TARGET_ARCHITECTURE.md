@@ -37,22 +37,20 @@ No backward compatibility requirement is assumed unless a future ADR explicitly 
                                 │
                                 ▼
                            DataGateway
-                                │
-                                ▼
-                    Representations / Candles
-                                │
-                                ▼
-                  FeatureDefinition / Feature Engine
-                                │
-                                ▼
-                     Primitive derived features
-      ┌──────────┬──────────┬───────────┬──────────┬──────────┐
-      ▼          ▼          ▼           ▼          ▼          ▼
-   Trades       L1      Footprint       L2         L3     Tech/Context
-      └──────────┴──────────┴───────────┴──────────┴──────────┘
-                                │
-                                ▼
-                         Research Engine
+             ┌──────────────────┴──────────────────┐
+             ▼                                     ▼
+   Representations / Candles             FeatureDefinition /
+             │                          Feature Engine
+             └──────────────┐           (canonical data and/or
+                            └─────────── representations)
+                                              │
+                                              ▼
+                                      Derived Features
+                                      - primitive/base
+                                      - higher-level where defined
+                                              │
+                                              ▼
+                                       Research Engine
                     hypotheses / recipes / events
                                 │
                                 ▼
@@ -167,9 +165,13 @@ Provider families:
 
 The provider family describes input semantics, not a separate architecture.
 
-The canonical flow is market data through the DataGateway, then
-representations/candles, then FeatureDefinition and the Feature Engine, which
-produce primitive derived features for the research and outcome layers.
+The DataGateway is the canonical read boundary for market data. Representations
+and candles are first-class reproducible derived representations, but are not
+mandatory intermediaries for feature computation. A FeatureDefinition and the
+Feature Engine may consume canonical market data directly, representations,
+or both, according to explicit input requirements and grain. Feature Engine
+outputs include primitive/base derived features and higher-level features where
+defined; primitive features are not the universal name for every output.
 
 The Feature Engine owns:
 
