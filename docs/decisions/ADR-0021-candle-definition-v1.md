@@ -32,22 +32,28 @@ independent review, with these central decisions:
    arithmetic; binary float and implicit rounding are forbidden.
 4. Fully covered zero-trade buckets are omitted, not filled or treated as
    coverage gaps.
-5. Query intervals select full aligned buckets by `bucket_start`; required
-   bucket support is tracked separately from the consumer interval and
-   returned records.
+5. Query intervals select full aligned buckets whose intervals intersect the
+   query; required bucket support is tracked separately from the consumer
+   interval and returned records. Review remediation changes selection from
+   `bucket_start` filtering to bucket intersection so Consumer API coverage
+   projects over every requested interval, including non-aligned intervals.
 6. `PARTIAL` is mutable and unsealed. `CLOSED` requires source finalization,
    complete support and stable source revision/content evidence, and is
    immutable. Corrections require a revised source and rebuilt result, never
    silent in-place mutation.
 7. Historical data without observed receive/finalization time does not receive
-   a fabricated timestamp. The causal floor for final closed values is
-   `bucket_end`, while actual availability remains unknown unless evidenced.
+   a fabricated timestamp. The `causal_floor` for final closed values is
+   `bucket_end`; `observed_available_at` is nullable/unknown unless evidenced
+   and is never implied to equal the causal floor.
 8. On-demand and materialized CLOSED results are equivalent only when their
    definition, source revision/evidence, support/coverage and canonical
    records are equivalent; physical placement is not semantic identity.
 
 The proposed closed-record schema is `schemas/candle-v1.json`. State and
 provenance remain in an envelope/materialization metadata, not in the row.
+The canonical five-minute definition payload, serialization and hash are
+protected by `fixtures/candle-definition-v1/golden-5m.json` and its focused
+contract test.
 
 ## Consequences
 

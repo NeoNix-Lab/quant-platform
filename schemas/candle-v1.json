@@ -54,7 +54,7 @@
       "description": "UTC RFC 3339 instant with Z suffix and up to nine fractional digits. Canonical output omits a zero fraction and trims trailing fractional zeroes.",
       "type": "string",
       "format": "date-time",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{0,8}[1-9])?Z$"
     },
     "positive_digit_string": {
       "description": "A positive integer in canonical decimal spelling, with no leading zeroes.",

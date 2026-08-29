@@ -99,7 +99,7 @@ fields and no aliases with different spellings or meanings.
 The canonical payload for a five-minute definition is structurally:
 
 ```json
-{"aggregation":{"close":"last_by_source_order","high":"max_exact_decimal_price","low":"min_exact_decimal_price","open":"first_by_source_order","trade_count":"count_source_trades","volume":"sum_exact_decimal_size"},"alignment":{"kind":"utc_epoch","offset_ns":"0"},"availability":{"closed_causal_floor":"bucket_end","historical_observation_time":"unknown_without_observed_receive_time","partial_consumption":"forbidden"},"boundary":{"bucket":"[start,end)","query_selection":"bucket_start_in_[query_start,query_end)","timestamp_coordinate":"bucket_start"},"closure":{"closed_state":"CLOSED","evidence":"source_finalization_required","partial_state":"PARTIAL"},"definition_version":1,"duration_ns":"300000000000","empty_bucket_policy":"omit","late_event_policy":"revisioned_rebuild","numerical_semantics":"exact_decimal_no_rounding_v1","output_record_schema":"candle-v1","representation_kind":"candle","source":{"event_time_field":"exchange_ts","ordering_policy":"trades@1-canonical-total-order-v1","record_schema":"trade-v1","representation":"trades@1"}}
+{"aggregation":{"close":"last_by_source_order","high":"max_exact_decimal_price","low":"min_exact_decimal_price","open":"first_by_source_order","trade_count":"count_source_trades","volume":"sum_exact_decimal_size"},"alignment":{"kind":"utc_epoch","offset_ns":"0"},"availability":{"causal_floor":"bucket_end","observed_available_at":"nullable_observed_source_finalization_time","partial_consumption":"forbidden"},"boundary":{"bucket":"[start,end)","query_selection":"bucket_intersects_[query_start,query_end)","timestamp_coordinate":"bucket_start"},"closure":{"closed_state":"CLOSED","evidence":"source_finalization_required","partial_state":"PARTIAL"},"definition_version":1,"duration_ns":"300000000000","empty_bucket_policy":"omit","late_event_policy":"revisioned_rebuild","numerical_semantics":"exact_decimal_no_rounding_v1","output_record_schema":"candle-v1","representation_kind":"candle","source":{"event_time_field":"exchange_ts","ordering_policy":"trades@1-canonical-total-order-v1","record_schema":"trade-v1","representation":"trades@1"}}
 ```
 
 The one-line form above is illustrative of the bytes, not a permission to
@@ -244,29 +244,34 @@ reproducible OHLC record to serialize.
 ## 7. Query interval, bucket support and returned records
 
 The consumer query interval remains `[query_start, query_end)`. For a candle
-representation, it selects candle records by their canonical `bucket_start`:
+representation, a candidate bucket is selected when its full interval
+intersects the requested interval:
 
 ```text
-candidate buckets = { [s, s + D) | s is UTC-epoch aligned
-                      and query_start <= s < query_end }
+candidate bucket iff:
+    bucket_start < query_end
+    AND
+    bucket_end > query_start
 ```
 
-Only candidate buckets are constructed. Only non-empty candidate buckets are
-returned. There are no silently truncated boundary candles.
+Only complete candidate buckets are constructed. Only non-empty candidate
+buckets are returned. The returned candle is never truncated to the query
+edge; its full `[bucket_start,bucket_end)` remains explicit.
 
 For example, with `D = 5 minutes` and request `[10:02, 10:07)`:
 
 ```text
-constructed bucket: [10:05, 10:10)
-returned coordinate: 10:05, if the bucket is non-empty
-source-support interval: [10:05, 10:10)
+constructed buckets: [10:00, 10:05), [10:05, 10:10)
+returned coordinates: 10:00 and 10:05, for non-empty buckets
+source-support interval: [10:00, 10:10)
 ```
 
-The `[10:00,10:05)` bucket is not selected because its `bucket_start` is
-before the request. The last selected bucket may require source support after
-`query_end`; this is an explicit representation-support rule, not hidden
-lookahead or feature warmup. A query shorter than the distance to the next
-aligned bucket may validly select no buckets.
+Both boundary buckets are selected because they intersect the request. The
+first selected bucket requires support before `query_start` and the last can
+require support after `query_end`; these are explicit representation-support
+rules, not hidden lookahead or feature warmup. Any non-empty query therefore
+has at least one candidate aligned bucket. A zero-length query has no
+candidates.
 
 `required_bucket_support` is the union of complete `[bucket_start,bucket_end)`
 intervals for all candidate buckets. It is the interval(s) the source must
@@ -274,8 +279,8 @@ cover to construct the requested representation. It is distinct from both the
 consumer query interval and the returned record coordinates.
 
 The same rule applies to on-demand and materialized reads. A materialization
-may store a larger support range, but the consumer still receives only records
-whose `bucket_start` satisfies the query interval.
+may store a larger support range, but the consumer still receives only
+candidate records whose bucket intervals intersect the query interval.
 
 ## 8. Coverage and precise terminology
 
@@ -298,6 +303,22 @@ Full source support plus zero events is still complete coverage. Observed
 `first_exchange_ts`/`last_exchange_ts` bounds are not declared support and
 cannot be substituted for it. Incomplete first/last source support does not
 become a partial candle; the bucket is not `CLOSED`.
+
+To compose with the frozen Consumer API coverage envelope, project each
+candidate bucket interval onto the requested interval. A fully supported and
+finalizable bucket contributes its intersection with the request to
+`coverage.covered_intervals`; an incomplete candidate contributes that same
+intersection to `coverage.gaps`. The union is normalized using the same UTC
+half-open rules as the Consumer API. `coverage.complete` is true exactly when
+the projected gaps are empty. For `[10:02,10:07)`, complete support for both
+candidate buckets reports covered `[10:02,10:07)` even though source support is
+`[10:00,10:10)`. If `[10:05,10:10)` lacks source support, the requested gap is
+`[10:05,10:07)` and strict v1 returns `NoCoverage`; it does not return the
+other bucket as a silently partial series. For `[10:02,10:03)`, the
+intersecting `[10:00,10:05)` bucket projects to covered `[10:02,10:03)`;
+there is no requirement for an aligned `bucket_start` inside the query. A
+fully supported empty bucket contributes coverage even though it contributes
+no record.
 
 There is no indicator warmup in CandleDefinition v1. The source interval
 needed to complete aligned buckets is called **required bucket support** or
@@ -378,21 +399,27 @@ The relevant times are distinct:
 | trade `exchange_ts` | venue event time used for bucket membership |
 | `bucket_start` / `bucket_end` | representation interval boundaries |
 | `record_time` | canonical candle coordinate, equal to `bucket_start` |
-| `availability_time` | earliest real time the CLOSED result is semantically consumable, when observed |
+| `causal_floor` | deterministic minimum logical time before which the final CLOSED result may not be consumed; v1 is `bucket_end` |
+| `observed_available_at` | actual observed source/finalization availability time when evidence exists; nullable/unknown otherwise |
 
-For every CLOSED candle, `availability_time` must be no earlier than
-`bucket_end` and no earlier than the real source finalization evidence. A
-Feature/Research/Strategy consumer must not consume the final CLOSED values
-before that availability constraint.
+For every CLOSED candle, `causal_floor` is exactly `bucket_end`. If
+`observed_available_at` is present, it must be no earlier than that floor and
+must represent actual observed source/finalization availability. A
+Feature/Research/Strategy consumer must not consume final CLOSED values before
+the applicable causal floor or observed availability constraint. `CLOSED`
+does not imply `observed_available_at == bucket_end`.
 
 Historical `trade-v1` imports generally have no real `receive_ts`. They
 therefore cannot establish the wall-clock time at which a live observer could
-have known the result. The contract records that observation time as unknown;
-it never manufactures one from exchange time, file/import time or row order.
-For historical causal replay, `bucket_end` is the minimum logical causal
-floor, not a claim that the data was actually available then. When an actual
-source finalization/observation time exists, it must be retained in provenance
-and the later real time governs.
+have known the result. `observed_available_at` is consequently nullable/unknown
+unless adequate observed source/finalization evidence exists; the contract
+never manufactures it from exchange time, file/import time or row order. For
+historical causal replay, `bucket_end` is the deterministic logical causal
+floor, not a claim that the data was actually available then. A future replay
+may explicitly adopt an exchange-time-only availability assumption, but that
+assumption must not be presented as observed live availability or
+latency-faithful replay. When actual source finalization/observation evidence
+exists, it must remain in provenance and the later real time governs.
 
 `PARTIAL` has no final-candle availability and is not a closed-candle input.
 `bucket_start` must never be used as a proxy for final value availability.

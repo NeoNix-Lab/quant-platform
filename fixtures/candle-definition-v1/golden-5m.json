@@ -1,0 +1,52 @@
+{
+  "canonical_payload": {
+    "aggregation": {
+      "close": "last_by_source_order",
+      "high": "max_exact_decimal_price",
+      "low": "min_exact_decimal_price",
+      "open": "first_by_source_order",
+      "trade_count": "count_source_trades",
+      "volume": "sum_exact_decimal_size"
+    },
+    "alignment": {
+      "kind": "utc_epoch",
+      "offset_ns": "0"
+    },
+    "availability": {
+      "causal_floor": "bucket_end",
+      "observed_available_at": "nullable_observed_source_finalization_time",
+      "partial_consumption": "forbidden"
+    },
+    "boundary": {
+      "bucket": "[start,end)",
+      "query_selection": "bucket_intersects_[query_start,query_end)",
+      "timestamp_coordinate": "bucket_start"
+    },
+    "closure": {
+      "closed_state": "CLOSED",
+      "evidence": "source_finalization_required",
+      "partial_state": "PARTIAL"
+    },
+    "definition_version": 1,
+    "duration_ns": "300000000000",
+    "empty_bucket_policy": "omit",
+    "late_event_policy": "revisioned_rebuild",
+    "numerical_semantics": "exact_decimal_no_rounding_v1",
+    "output_record_schema": "candle-v1",
+    "representation_kind": "candle",
+    "source": {
+      "event_time_field": "exchange_ts",
+      "ordering_policy": "trades@1-canonical-total-order-v1",
+      "record_schema": "trade-v1",
+      "representation": "trades@1"
+    }
+  },
+  "canonical_utf8_serialization": "{\"aggregation\":{\"close\":\"last_by_source_order\",\"high\":\"max_exact_decimal_price\",\"low\":\"min_exact_decimal_price\",\"open\":\"first_by_source_order\",\"trade_count\":\"count_source_trades\",\"volume\":\"sum_exact_decimal_size\"},\"alignment\":{\"kind\":\"utc_epoch\",\"offset_ns\":\"0\"},\"availability\":{\"causal_floor\":\"bucket_end\",\"observed_available_at\":\"nullable_observed_source_finalization_time\",\"partial_consumption\":\"forbidden\"},\"boundary\":{\"bucket\":\"[start,end)\",\"query_selection\":\"bucket_intersects_[query_start,query_end)\",\"timestamp_coordinate\":\"bucket_start\"},\"closure\":{\"closed_state\":\"CLOSED\",\"evidence\":\"source_finalization_required\",\"partial_state\":\"PARTIAL\"},\"definition_version\":1,\"duration_ns\":\"300000000000\",\"empty_bucket_policy\":\"omit\",\"late_event_policy\":\"revisioned_rebuild\",\"numerical_semantics\":\"exact_decimal_no_rounding_v1\",\"output_record_schema\":\"candle-v1\",\"representation_kind\":\"candle\",\"source\":{\"event_time_field\":\"exchange_ts\",\"ordering_policy\":\"trades@1-canonical-total-order-v1\",\"record_schema\":\"trade-v1\",\"representation\":\"trades@1\"}}",
+  "expected_sha256": "20dc1c641768e98d05d75db0a2e57c1a948156bb5f2302bd0c0c321c735c2d0e",
+  "expected_definition_identity": "candle-definition-v1:sha256:20dc1c641768e98d05d75db0a2e57c1a948156bb5f2302bd0c0c321c735c2d0e",
+  "duration_equivalence": {
+    "5m": "300000000000",
+    "300s": "300000000000",
+    "00:05:00": "300000000000"
+  }
+}

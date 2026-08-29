@@ -9,6 +9,7 @@ contract is pending independent review.
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import sys
 import unittest
@@ -21,6 +22,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT / "schemas" / "candle-v1.json"
+GOLDEN_PATH = ROOT / "fixtures" / "candle-definition-v1" / "golden-5m.json"
 
 
 def load_schema():
@@ -55,6 +57,37 @@ class CandleDefinitionV1Tests(unittest.TestCase):
                 "trade_count": "3",
             }
         )
+
+    def test_canonical_timestamp_spellings(self):
+        base = {
+            "bucket_start": "2024-01-01T00:00:00Z",
+            "bucket_end": "2024-01-01T00:05:00Z",
+            "open": "100",
+            "high": "100",
+            "low": "100",
+            "close": "100",
+            "volume": "1",
+            "trade_count": "1",
+        }
+        for start in (
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00.1Z",
+            "2024-01-01T00:00:00.123456789Z",
+        ):
+            with self.subTest(start=start):
+                valid = dict(base)
+                valid["bucket_start"] = start
+                self.assert_valid(valid)
+
+        for start in (
+            "2024-01-01T00:00:00.0Z",
+            "2024-01-01T00:00:00.1000Z",
+            "2024-01-01T00:00:00+00:00",
+        ):
+            with self.subTest(start=start):
+                invalid = dict(base)
+                invalid["bucket_start"] = start
+                self.assert_invalid(invalid)
 
     def test_partial_state_is_envelope_semantics_not_a_record_field(self):
         record = {
@@ -103,6 +136,28 @@ class CandleDefinitionV1Tests(unittest.TestCase):
                 invalid = dict(base)
                 invalid[field] = value
                 self.assert_invalid(invalid)
+
+    def test_golden_definition_identity_fixture(self):
+        with GOLDEN_PATH.open(encoding="utf-8") as handle:
+            fixture = json.load(handle)
+
+        self.assertEqual(
+            json.loads(fixture["canonical_utf8_serialization"]),
+            fixture["canonical_payload"],
+        )
+        digest = hashlib.sha256(
+            fixture["canonical_utf8_serialization"].encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(digest, fixture["expected_sha256"])
+        self.assertEqual(
+            fixture["expected_definition_identity"],
+            f"candle-definition-v1:sha256:{digest}",
+        )
+        self.assertEqual(fixture["canonical_payload"]["duration_ns"], "300000000000")
+        self.assertEqual(
+            fixture["duration_equivalence"],
+            {"5m": "300000000000", "300s": "300000000000", "00:05:00": "300000000000"},
+        )
 
 
 if __name__ == "__main__":
