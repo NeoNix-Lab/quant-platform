@@ -1,6 +1,6 @@
 # ADR-0020 — Consumer API semantic boundary
 
-**Status:** PROPOSED — pending independent re-review
+**Status:** ACCEPTED
 
 **Date:** 2026-08-28
 

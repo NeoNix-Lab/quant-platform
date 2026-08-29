@@ -46,7 +46,7 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | ML | Supervised learning/evaluation | MISSING | STRONG | Learning/Supervised | Bind to canonical provenance. |
 | RL | Strategic and execution RL | MISSING | MULTIPLE/REVIEW | Learning/RL | Legacy runtimes are mixed. |
 | Experiments | Study/Trial/Run/Artifact | MISSING | MULTIPLE | Experiment System | Avoid competing persistence. |
-| Interfaces | API/App/TUI/CLI | MISSING | PARTIAL | API/Clients | Consumer API boundary v1 is documented and pending independent re-review; runtime and clients remain roadmap work. Clients cannot own quant logic. |
+| Interfaces | API/App/TUI/CLI | MISSING | PARTIAL | API/Clients | Consumer API Boundary v1 is frozen; API runtime and clients remain roadmap work. Clients cannot own quant logic. |
 | Operations | Provisioning, fixtures, semantic tests | READY | NONE | Engineering/Infrastructure | CI and backup certification missing. |
 
 ## Evidence vocabulary

@@ -1,6 +1,6 @@
 # Consumer API Boundary Contract v1
 
-**Status:** Contract v1 — pending independent re-review; transport/runtime not implemented
+**Status:** Contract v1 — semantic boundary frozen; transport/runtime not implemented
 
 **Decision:** [ADR-0020 — Consumer API semantic boundary](../decisions/ADR-0020-consumer-api-boundary.md)
 
