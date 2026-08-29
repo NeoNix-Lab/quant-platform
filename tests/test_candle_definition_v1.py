@@ -8,8 +8,8 @@ contract is pending independent review.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -141,6 +141,16 @@ class CandleDefinitionV1Tests(unittest.TestCase):
         with GOLDEN_PATH.open(encoding="utf-8") as handle:
             fixture = json.load(handle)
 
+        # This serializer protects only this ASCII-safe golden fixture. It is
+        # not the runtime RFC 8785/JCS canonicalizer implementation.
+        fixture_serialization = json.dumps(
+            fixture["canonical_payload"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self.assertTrue(all(ord(character) < 128 for character in fixture_serialization))
+        self.assertEqual(fixture_serialization, fixture["canonical_utf8_serialization"])
         self.assertEqual(
             json.loads(fixture["canonical_utf8_serialization"]),
             fixture["canonical_payload"],

@@ -248,11 +248,21 @@ representation, a candidate bucket is selected when its full interval
 intersects the requested interval:
 
 ```text
-candidate bucket iff:
-    bucket_start < query_end
-    AND
-    bucket_end > query_start
+if query_start == query_end:
+    candidate_buckets = empty
+    required_bucket_support = empty
+    returned records = empty
+    representation coverage is complete over the empty requested interval
+else:
+    candidate bucket iff:
+        bucket_start < query_end
+        AND
+        bucket_end > query_start
 ```
+
+`query_start > query_end` is invalid under the frozen Consumer API contract.
+The equality case is an explicit exception to the overlap predicate above;
+it is not evaluated as an ordinary non-empty interval.
 
 Only complete candidate buckets are constructed. Only non-empty candidate
 buckets are returned. The returned candle is never truncated to the query
@@ -271,7 +281,9 @@ first selected bucket requires support before `query_start` and the last can
 require support after `query_end`; these are explicit representation-support
 rules, not hidden lookahead or feature warmup. Any non-empty query therefore
 has at least one candidate aligned bucket. A zero-length query has no
-candidates.
+candidates, including both `[10:02,10:02)` and `[10:00,10:00)`; each has empty
+required support, empty returned records and complete representation coverage
+over its empty requested interval.
 
 `required_bucket_support` is the union of complete `[bucket_start,bucket_end)`
 intervals for all candidate buckets. It is the interval(s) the source must
@@ -323,9 +335,9 @@ no record.
 There is no indicator warmup in CandleDefinition v1. The source interval
 needed to complete aligned buckets is called **required bucket support** or
 **support extension**, never feature warmup. A support extension can be on
-either side of a query in future representation contracts; v1's bucket-start
-selection can extend support to the right of a non-aligned query end as shown
-above.
+both sides of a non-aligned non-empty query in v1 because full intersecting
+buckets are required. For `[10:02,10:07)`, support extends left to `10:00` and
+right to `10:10`.
 
 ## 9. PARTIAL and CLOSED state model
 
