@@ -1,56 +1,63 @@
-# Scope: Consumer API Boundary Contract v1
+# Scope: Representation Foundation — CandleDefinition Contract v1
 
 ## Goal
 
-Freeze the semantic consumer-facing boundary of Quant Platform after the
-DataGateway implementation slice, without implementing API transport, clients
-or downstream quantitative engines.
+Produce an independently reviewable semantic contract candidate for
+`CandleDefinition v1`, sufficient for a deterministic historical fixed-duration
+candle runtime and compatible with future incremental/live construction.
+
+This scope deliberately stops before the candle aggregation runtime. The
+contract must be reviewed independently before any runtime implementation is
+started.
 
 ## Roadmap position
 
-The authoritative roadmap remains unchanged. The DataGateway implementation
-milestone is complete at the base of this branch. The next product capability
-in dependency order remains Representation foundation; the later Canonical
-API and job runtime phase remains later. This scope is a contract-preparation
-milestone and does not renumber or reorder those phases.
+The authoritative roadmap remains unchanged. DataGateway is the preceding
+foundation and the later Feature, Research, Execution, API and client phases
+remain later. This is the Representation foundation contract milestone; it does
+not claim that the Representation runtime has started or reorder any phase.
 
 ## In scope
 
-- semantic Consumer API boundary for App UI, TUI, CLI and future consumers;
-- distinction between consumer query, RepresentationDefinition and
-  DatasetIdentity;
-- consumer-visible coverage, deterministic result and provenance guarantees;
-- stable API error translation policy;
-- synchronous bounded reads versus future asynchronous Job semantics;
-- versioning/evolution policy;
-- `trades@1` backed by canonical Bybit `trade-v1` as a reference slice;
-- documentation index, capability-map and ADR updates.
+- `CandleDefinition v1` semantic identity and canonical serialization;
+- canonical `trades@1` / `trade-v1` source dependency;
+- fixed-duration UTC epoch alignment and half-open bucket semantics;
+- exact decimal OHLCV and trade-count aggregation semantics;
+- empty-bucket, coverage, support-interval and query-interval rules;
+- `PARTIAL` / `CLOSED`, finalization, correction and late-event obligations;
+- temporal availability and historical/live equivalence invariants;
+- materialization, provenance and closed-record schema semantics;
+- focused contract fixtures/tests that do not implement aggregation runtime;
+- scope, capability-map, documentation-index and ADR updates.
 
 ## Out of scope
 
+- candle aggregation runtime or `src/quant_platform/representations`;
 - FastAPI, HTTP endpoints, DTOs, handlers or transport serialization;
 - React, TUI, CLI commands or other client runtime code;
-- candle, footprint, L1, L2, L3 or book builders;
+- footprint, L1, L2, L3 or book representations;
 - Feature, Research, Outcome, Label, Validation, Strategy or Execution
   runtimes;
 - Job Runtime, authentication, deployment, pagination or streaming;
-- DataGateway Contract v1, canonical schemas/DDL or physical storage changes;
+- DataGateway Contract v1, canonical trade schema/DDL or physical storage changes;
+- DataGateway, producer ingest, catalog migration or storage lifecycle changes;
 - legacy CoreApp/API porting or compatibility promises.
 
 ## Exit criteria
 
-- the semantic API boundary and client dependency direction are documented;
-- consumer query, representation definition and dataset identity are
-  explicitly separate;
-- `trade-v1` is documented as a reference implementation, not the general
-  market-data model;
-- coverage, provenance, temporal semantics and error distinctions are
-  preserved at the boundary;
-- future representation and job extension points are explicit without
-  claiming unsupported implementations;
-- no runtime or client code is changed.
+- `CandleDefinition v1` identity, serialization and hashing are explicit;
+- all mandatory candle semantic questions have a normative answer;
+- source, query, dataset, materialization and runtime identities are separate;
+- closed-record schema semantics are precise enough for independent runtime
+  implementations;
+- deterministic decimal, ordering, coverage, availability and equivalence
+  obligations are testable;
+- the ADR remains `PROPOSED — pending independent review`;
+- no candle runtime, shared tooling or producer work is changed.
 
 ## Next cycle
 
-Representation Foundation: CandleDefinition identity, closed/partial
-semantics and equivalence tests, under the existing roadmap order.
+After independent contract review, a separate mandate may implement the
+historical fixed-duration candle runtime against this contract. That mandate
+must not silently expand v1 or reinterpret unresolved source/data-plane
+semantics.

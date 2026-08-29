@@ -34,7 +34,7 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | Storage | Retention Policy | MISSING | NONE | Operations | No retention or deletion policy. |
 | Data | L1/L2/L3 contracts | MISSING | WEAK | Data Plane | Must follow ADR-0018. |
 | Access | DataGateway | PARTIAL | PARTIAL | Application/Data | Narrow catalog-backed v1 implementation is present; broader live access remains open. |
-| Representation | CandleDefinition/runtime | MISSING | PARTIAL | Representations | ADR-0017 distinguishes PARTIAL/CLOSED. |
+| Representation | CandleDefinition/runtime | MISSING | PARTIAL | Representations | ADR-0017 distinguishes PARTIAL/CLOSED; ADR-0021 proposes the v1 contract candidate. Runtime remains missing. |
 | Features | FeatureDefinition | MISSING | STRONG | Feature Engine | Legacy registry is evidence only. |
 | Features | FeatureSetDefinition catalog | PARTIAL | PARTIAL | Data/Feature Engine | Existing catalog foundation retained. |
 | Features | FeatureArtifact/materialization | MISSING | PARTIAL | Feature Engine/Data Plane | No canonical materializer. |
