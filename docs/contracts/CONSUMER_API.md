@@ -1,6 +1,8 @@
 # Consumer API Boundary Contract v1
 
-**Status:** Contract v1 — remediation applied; pending independent re-review; transport/runtime not implemented
+**Status:** Contract v1 — pending independent re-review; transport/runtime not implemented
+
+**Decision:** [ADR-0020 — Consumer API semantic boundary](../decisions/ADR-0020-consumer-api-boundary.md)
 
 **Scope:** the canonical application boundary for App UI, TUI, CLI, notebooks,
 automation and other external consumers.
@@ -11,7 +13,8 @@ representation engine.
 
 ## 1. Roadmap position
 
-The canonical roadmap places the product capabilities in dependency order:
+The canonical consumer dependency track in [ROADMAP.md](../product/ROADMAP.md)
+places the product capabilities in dependency order:
 
 ```text
 DataGateway
@@ -26,11 +29,16 @@ DataGateway
   -> Clients
 ```
 
-The DataGateway implementation slice is complete at the authoritative base
-for this branch (`datagateway-implementation-v1`). The representation and
-later domain capabilities remain ahead of API runtime implementation. This
-document is therefore a boundary-preparation milestone: it does not reorder
-the roadmap or claim that phase 9 runtime work has started.
+The Data Plane producer track runs in parallel and meets this track through
+the published Data Plane contracts and the DataGateway boundary. It is not a
+second consumer boundary and does not change the ordering above.
+
+A narrow catalog-backed DataGateway read slice is implemented; the DataGateway
+capability itself remains `PARTIAL` in the capability map, and broader access
+remains open. The representation and later domain capabilities remain ahead of
+API runtime implementation. This document is therefore a boundary-preparation
+milestone: it does not reorder the roadmap or claim that phase 9 runtime work
+has started.
 
 The existing representation decisions are intentionally respected:
 
@@ -259,11 +267,12 @@ ConsumerMarketDataResult
     logical records/batches in the representation's defined order
   interval
     requested_interval: [start, end)
-    returned_record_bounds: first/last event time, or null when empty
+    returned_temporal_bounds: first/last record time under the requested
+      representation's defined temporal semantics, or null when empty
   coverage
     covered_intervals
     gaps
-    completeness
+    complete: bool
   provenance
     source semantic identity and schema/version information
     stable source references where needed for reproducibility
@@ -273,13 +282,21 @@ ConsumerMarketDataResult
     row_count where meaningful
 ```
 
+`returned_temporal_bounds` reports the first and last returned record time
+under the requested representation's own defined temporal semantics. Every
+representation contract must define the temporal coordinate needed to
+interpret those bounds. This contract does not define candle, footprint, book
+or L1/L2/L3 timestamp semantics; each representation owns them. For a
+successful empty result the bounds are null.
+
 Coverage at the consumer boundary is representation/application-level
 coverage. `covered_intervals` describes where the requested representation is
-available under that representation's semantics; `gaps` and `completeness`
-describe the requested interval. A derived representation may have different
-coverage from its source because of its own definition, warmup, late-event or
-partial-result rules. Coverage is not a universal exposure of DataGateway
-`eligible_coverage`.
+available under that representation's semantics; `gaps` describes the
+requested portions that are not covered; `complete` is a boolean that is true
+if and only if `gaps` is empty over the requested interval. A derived
+representation may have different coverage from its source because of its own
+definition, warmup, late-event or partial-result rules. Coverage is not a
+universal exposure of DataGateway `eligible_coverage`.
 
 The application service may retain source/DataGateway coverage diagnostics in
 provenance. Those diagnostics are explanatory source evidence, not the stable
@@ -288,9 +305,11 @@ service preserves the frozen DataGateway v1 strict behavior when determining
 whether a semantic result can be produced:
 
 ```text
-full representation coverage + zero records -> success, complete=true, bounds=null
-no representation coverage             -> no_coverage
-representation gap under strict policy -> no_coverage
+full representation coverage + zero records -> success
+                                               complete = true
+                                               returned_temporal_bounds = null
+no representation coverage                  -> no_coverage
+representation gap under strict policy      -> no_coverage
 ```
 
 The API may translate source outcomes into stable API error codes, but it must

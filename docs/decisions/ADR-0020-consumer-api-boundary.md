@@ -1,4 +1,4 @@
-# ADR-0019 — Consumer API semantic boundary
+# ADR-0020 — Consumer API semantic boundary
 
 **Status:** PROPOSED — pending independent re-review
 
@@ -6,9 +6,11 @@
 
 ## Context
 
-ADR-0002 establishes API-first application architecture. The frozen
-[DataGateway Contract v1](../contracts/DATA_GATEWAY.md) establishes
-the logical data access boundary below the quantitative layers.
+ADR-0002 establishes API-first application architecture.
+[ADR-0019](ADR-0019-datagateway-boundary.md) and the frozen
+[DataGateway Contract v1](../contracts/DATA_GATEWAY.md) establish the logical
+data access boundary below the quantitative layers. This decision sits above
+that boundary and does not supersede, replace or reinterpret it.
 The platform now needs one consumer-facing contract that can serve App UI,
 TUI, CLI and future automation without turning the first Bybit `trade-v1`
 read into the general market-data model or exposing physical data-plane

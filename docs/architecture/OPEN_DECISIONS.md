@@ -8,8 +8,8 @@
 - required dataset-manifest evolution path.
 
 DataGateway logical boundary and first implementation slice are resolved by
-`docs/contracts/DATA_GATEWAY.md`. The following remain open for the relevant
-implementation work:
+ADR-0019 and `docs/contracts/DATA_GATEWAY.md`. The following remain open for
+the relevant implementation work:
 
 - whether `DatasetSnapshot` should become a first-class public contract; if so,
   whether it should use an immutable partition/content reference or an
