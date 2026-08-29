@@ -1,6 +1,6 @@
 # ADR-0021 — CandleDefinition v1 semantic contract
 
-**Status:** PROPOSED — pending independent review
+**Status:** ACCEPTED
 
 **Date:** 2026-08-29
 

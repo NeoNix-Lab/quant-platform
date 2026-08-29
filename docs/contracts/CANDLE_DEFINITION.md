@@ -1,6 +1,6 @@
 # CandleDefinition v1 Contract
 
-**Status:** PROPOSED — pending independent review
+**Status:** Contract v1 — semantic contract frozen; historical candle runtime not implemented
 
 **Decision:** [ADR-0021 — CandleDefinition v1 semantic contract](../decisions/ADR-0021-candle-definition-v1.md)
 
