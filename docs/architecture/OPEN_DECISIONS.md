@@ -22,10 +22,18 @@ the relevant implementation work:
 ### Market Data Ingest
 
 The producer-side capability is inside the Data Plane; it does not replace the
-DataGateway consumer boundary. The following remain open for implementation:
+DataGateway consumer boundary.
 
-- the exact population rule for declared partition coverage versus observed
-  first/last event bounds;
+Declared coverage versus observed first/last event bounds is resolved by
+ADR-0022 and `docs/contracts/DECLARED_COVERAGE.md`. The following remain open
+for implementation:
+
+- a catalog coverage relation plus the DataGateway change needed to read
+  non-contiguous partition coverage. Until then such a partition cannot be
+  published at all: `degraded` is not an option, because lifecycle state gates
+  which partitions are read and never narrows their declared span;
+- physical placement of a dataset's `_coverage/` directory when its partitions
+  span hot, cold and deep-cold storage roots;
 - crash-safe sealing, manifest publication, catalog reconciliation, and
   idempotent retry details;
 - the mapping from quality reports to `valid`, `degraded`, and `invalid`;
@@ -36,8 +44,9 @@ DataGateway consumer boundary. The following remain open for implementation:
 - future live consumer stream, cursor, and identity semantics;
 - versioned L1, L2, and L3/MBO contracts.
 
-See [Market Data Ingest](MARKET_DATA_INGEST.md) and
-[Market Data Ingest Contracts](../contracts/MARKET_DATA_INGEST_CONTRACTS.md).
+See [Market Data Ingest](MARKET_DATA_INGEST.md),
+[Market Data Ingest Contracts](../contracts/MARKET_DATA_INGEST_CONTRACTS.md) and
+[Declared Coverage](../contracts/DECLARED_COVERAGE.md).
 
 ### Storage Lifecycle
 

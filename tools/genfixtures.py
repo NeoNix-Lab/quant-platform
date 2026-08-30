@@ -278,7 +278,294 @@ P("schema-version-wrong.json", schema_version="partition-manifest-v2")
 P("unknown-field.json", file_name="part-000.parquet")
 P("strategic-field-delta.json", delta="12.5")
 
+# ====================================================== coverage-manifest
+# La copertura DICHIARATA non deriva ne' dagli event bounds osservati ne' dal
+# partition_key: e' un'asserzione con una base di acquisizione, una semantica
+# sorgente versionata, una mappatura versionata e delle evidenze.
+cv = fresh(ROOT / "fixtures" / "coverage-manifest-v1")
+
+DAY = "2024-01-15"
+NEXT_DAY = "2024-01-16"
+
+
+def part(key, revision=1):
+    return {"partition_key": key, "revision": revision}
+
+
+def ev(kind, detail):
+    return {"kind": kind, "detail": detail}
+
+
+def assertion(assertion_id, start, end, status, partitions, evidence):
+    return {"assertion_id": assertion_id, "start": start, "end": end,
+            "status": status, "partitions": partitions, "evidence": evidence}
+
+
+# CASO 1 e CASO 7: estrazione SQL deterministica dallo SQLite Bybit su una
+# giornata UTC intera. Prova la lettura completa della sorgente LOCALE, non che
+# la sorgente locale contenga tutto quello che la venue ha pubblicato.
+SQLITE_EXTRACT = {
+    "schema_version": "coverage-manifest-v1", **CANON_TRADES,
+    "coverage_id": "bybit-btcusdt-sqlite-extract-2024-01-15",
+    "supersedes": None,
+    "created_at": "2024-03-01T09:12:00Z",
+    "acquisition": {
+        "basis": "source_extract",
+        "intent_start": DAY + "T00:00:00Z",
+        "intent_end": NEXT_DAY + "T00:00:00Z",
+        "source_semantics": "bybit-public-trades-sqlite-v1",
+        "mapping": "bybit-sqlite-day-extract-v1",
+    },
+    "assertions": [
+        assertion("extract-full-day", DAY + "T00:00:00Z", NEXT_DAY + "T00:00:00Z", "complete",
+                  [part("dt=" + DAY)],
+                  [ev("deterministic_source_extract",
+                      "SELECT ... WHERE ts >= 1705276800000 AND ts < 1705363200000 "
+                      "ORDER BY ts, trade_id; 1842776 righe sorgente = 1842776 righe canoniche")]),
+    ],
+    "producer": "bybit-sqlite-importer",
+    "code_ref": "4f1a9c3",
+}
+emit(cv, "valid-source-extract-complete-day.json", SQLITE_EXTRACT)
+
+# CASO 2: copertura COMPLETA con ZERO eventi. La partizione esiste, ha
+# row_count 0 e nessun event bound: la copertura resta completa.
+emit(cv, "valid-zero-events-complete.json", SQLITE_EXTRACT,
+     coverage_id="bybit-btcusdt-quiet-hour-2024-01-15t12",
+     acquisition={"basis": "source_archive",
+                  "intent_start": DAY + "T12:00:00Z",
+                  "intent_end": DAY + "T13:00:00Z",
+                  "source_semantics": "bybit-public-trades-archive-v1",
+                  "mapping": "bybit-archive-hour-v1"},
+     assertions=[
+         assertion("quiet-hour", DAY + "T12:00:00Z", DAY + "T13:00:00Z", "complete",
+                   [part("dt=" + DAY + "/hour=12")],
+                   [ev("archive_completeness",
+                       "archivio orario scaricato e verificato integro; 0 trade nell'ora")]),
+     ],
+     producer="bybit-archive-importer")
+
+# CASO 4: sessione live interrotta. Il buco esiste indipendentemente dal fatto
+# che dei trade fossero attesi in quei quattro secondi.
+emit(cv, "valid-live-session-interrupted.json", SQLITE_EXTRACT,
+     coverage_id="bybit-btcusdt-live-2024-01-15-seg-1",
+     acquisition={"basis": "live_stream",
+                  "intent_start": DAY + "T00:00:00Z",
+                  "intent_end": NEXT_DAY + "T00:00:00Z",
+                  "source_semantics": "bybit-public-trade-ws-v1",
+                  "mapping": "bybit-ws-session-continuity-v1"},
+     assertions=[
+         assertion("live-seg-before-drop", DAY + "T00:00:00Z", DAY + "T12:00:03Z", "complete",
+                   [part("dt=" + DAY)],
+                   [ev("connection_continuity",
+                       "sottoscrizione stabilita 00:00:00.000Z, nessun reconnect fino a 12:00:03Z")]),
+         assertion("live-seg-drop", DAY + "T12:00:03Z", DAY + "T12:00:07Z", "known_gap", [],
+                   [ev("transport_interruption",
+                       "socket chiuso 12:00:03.114Z, riconnesso 12:00:06.902Z; nessun replay disponibile")]),
+         assertion("live-seg-after-drop", DAY + "T12:00:07Z", NEXT_DAY + "T00:00:00Z", "complete",
+                   [part("dt=" + DAY)],
+                   [ev("connection_continuity",
+                       "sottoscrizione ristabilita 12:00:06.902Z, nessun reconnect fino a fine giornata")]),
+     ],
+     producer="bybit-collector")
+
+# CASO 5: discontinuita' di sequence. Evidenza FORTE di eventi sorgente persi,
+# distinta dal semplice silenzio di eventi.
+emit(cv, "valid-sequence-discontinuity.json", SQLITE_EXTRACT,
+     coverage_id="bybit-btcusdt-live-2024-01-15-seq-break",
+     acquisition={"basis": "live_stream",
+                  "intent_start": DAY + "T00:00:00Z",
+                  "intent_end": NEXT_DAY + "T00:00:00Z",
+                  "source_semantics": "bybit-public-trade-ws-v1",
+                  "mapping": "bybit-ws-sequence-continuity-v1"},
+     assertions=[
+         assertion("seq-before-break", DAY + "T00:00:00Z", DAY + "T08:00:00Z", "complete",
+                   [part("dt=" + DAY)],
+                   [ev("sequence_continuity", "sequence 1..4210338 contigua, nessun salto")]),
+         assertion("seq-break", DAY + "T08:00:00Z", DAY + "T08:00:01Z", "known_gap", [],
+                   [ev("sequence_discontinuity",
+                       "ricevute 100, 101, 105: mancano 102, 103, 104")]),
+         assertion("seq-after-break-uncertain", DAY + "T08:00:01Z", NEXT_DAY + "T00:00:00Z", "uncertain", [],
+                   [ev("connection_continuity",
+                       "connessione mantenuta, ma dopo il salto la continuita' della sequence non e' piu' dimostrata")]),
+     ],
+     producer="bybit-collector")
+
+# CASO 6: buco riparato da un backfill che restituisce ZERO eventi. Il
+# documento SUPERSEDE quello live e RISTABILISCE per intero cio' che resta
+# vero: la copertura diventa completa senza aggiungere un solo record.
+emit(cv, "valid-backfill-repairs-gap.json", SQLITE_EXTRACT,
+     coverage_id="bybit-btcusdt-backfill-2024-01-15-repair",
+     supersedes="bybit-btcusdt-live-2024-01-15-seg-1",
+     created_at="2024-01-16T04:30:00Z",
+     acquisition={"basis": "backfill",
+                  "intent_start": DAY + "T00:00:00Z",
+                  "intent_end": NEXT_DAY + "T00:00:00Z",
+                  "source_semantics": "bybit-public-trades-archive-v1",
+                  "mapping": "bybit-archive-interval-v1"},
+     assertions=[
+         assertion("repaired-full-day", DAY + "T00:00:00Z", NEXT_DAY + "T00:00:00Z", "complete",
+                   [part("dt=" + DAY, revision=2)],
+                   [ev("connection_continuity",
+                       "sessione live originaria, salvo [12:00:03Z, 12:00:07Z)"),
+                    ev("archive_completeness",
+                       "archivio autorevole della giornata scaricato e verificato integro"),
+                    ev("reconciliation",
+                       "backfill di [12:00:03Z, 12:00:07Z) completato: 0 trade pubblicati in quell'intervallo")]),
+     ],
+     producer="bybit-backfill")
+
+# Buco NOTO senza alcuna partizione: il collector era fermo, non e' stato
+# materializzato nulla. Rappresentabile proprio perche' la copertura non e'
+# appesa a un file.
+emit(cv, "valid-known-gap-without-partition.json", SQLITE_EXTRACT,
+     coverage_id="bybit-btcusdt-outage-2024-01-14",
+     acquisition={"basis": "source_session",
+                  "intent_start": "2024-01-14T00:00:00Z",
+                  "intent_end": DAY + "T00:00:00Z",
+                  "source_semantics": "bybit-public-trade-ws-v1",
+                  "mapping": "bybit-ws-session-continuity-v1"},
+     assertions=[
+         assertion("outage", "2024-01-14T00:00:00Z", DAY + "T00:00:00Z", "known_gap", [],
+                   [ev("transport_interruption",
+                       "host del collector spento per manutenzione; nessuna partizione materializzata")]),
+     ],
+     producer="bybit-collector")
+
+# Paginazione API finita, chiave di partizione ORARIA: la grammatica di
+# partition_key non implica una giornata UTC.
+emit(cv, "valid-api-pagination-hourly-key.json", SQLITE_EXTRACT,
+     coverage_id="bybit-btcusdt-api-2024-01-15t14",
+     acquisition={"basis": "api_request",
+                  "intent_start": DAY + "T14:00:00Z",
+                  "intent_end": DAY + "T15:00:00Z",
+                  "source_semantics": "bybit-v5-market-recent-trade-v1",
+                  "mapping": "bybit-rest-pagination-v1"},
+     assertions=[
+         assertion("hour-14", DAY + "T14:00:00Z", DAY + "T15:00:00Z", "complete",
+                   [part("dt=" + DAY + "/hour=14")],
+                   [ev("pagination_complete",
+                       "cursore esaurito: l'ultima pagina ha restituito nextPageCursor vuoto")]),
+     ],
+     producer="bybit-rest-importer")
+
+# Layer features: l'identita' del feature set fa parte dell'identita' naturale
+# anche qui.
+emit(cv, "valid-features-layer.json", SQLITE_EXTRACT,
+     layer="features", dataset_kind="trade_microstructure",
+     feature_set_slug="trade_microstructure", feature_set_version=1,
+     record_schema_id="feature-set-v1",
+     coverage_id="bybit-btcusdt-tm-2024-01-15",
+     acquisition={"basis": "reconciliation",
+                  "intent_start": DAY + "T00:00:00Z",
+                  "intent_end": NEXT_DAY + "T00:00:00Z",
+                  "source_semantics": "canonical-trades-upstream-v1",
+                  "mapping": "derive-from-upstream-coverage-v1"},
+     assertions=[
+         assertion("tm-full-day", DAY + "T00:00:00Z", NEXT_DAY + "T00:00:00Z", "complete",
+                   [part("dt=" + DAY)],
+                   [ev("reconciliation",
+                       "copertura ereditata dal dataset canonical padre, gia' dichiarata completa")]),
+     ],
+     producer="trade-microstructure-builder", code_ref="d92aa10")
+
+# copertura dichiarata al limite di precisione ammesso: 6 cifre frazionarie
+# (microsecondo), esattamente cio' che catalog.partitions.ts_start/ts_end
+# (PostgreSQL timestamptz) puo' rappresentare senza troncare. Non basta un
+# confine a zero decimali per dimostrare che il limite e' 6 e non 9: serve un
+# valore che userebbe davvero la settima cifra se fosse ammessa.
+emit(cv, "valid-microsecond-boundary.json", SQLITE_EXTRACT,
+     coverage_id="bybit-btcusdt-microsecond-boundary",
+     acquisition={"basis": "source_archive",
+                  "intent_start": DAY + "T12:00:00.100000Z",
+                  "intent_end": DAY + "T12:00:00.900000Z",
+                  "source_semantics": "bybit-public-trades-archive-v1",
+                  "mapping": "bybit-archive-hour-v1"},
+     assertions=[
+         assertion("microsecond-window",
+                   DAY + "T12:00:00.100000Z", DAY + "T12:00:00.900000Z",
+                   "complete", [part("dt=" + DAY + "/hour=12")],
+                   [ev("archive_completeness",
+                       "finestra di prova al limite di precisione ammesso")]),
+     ],
+     producer="bybit-archive-importer")
+
+ci = fresh(cv / "invalid")
+C = lambda name, **kw: emit(ci, name, SQLITE_EXTRACT, **kw)
+
+ONE = SQLITE_EXTRACT["assertions"][0]
+ACQ = SQLITE_EXTRACT["acquisition"]
+
+C("schema-version-wrong.json", schema_version="coverage-manifest-v2")
+C("unknown-field.json", ts_start=DAY + "T00:00:00Z")
+C("strategic-field-pnl.json", pnl="1240.55")
+C("coverage-id-uppercase.json", coverage_id="Bybit-Extract")
+C("coverage-id-missing.json", coverage_id=DROP)
+# 'supersedes' e' OBBLIGATORIO anche quando e' null: assente significherebbe
+# "non ci ho pensato", null significa "non supersede nulla".
+C("supersedes-missing.json", supersedes=DROP)
+C("supersedes-uppercase.json", supersedes="Bybit-Live-1")
+C("assertions-empty.json", assertions=[])
+C("assertions-missing.json", assertions=DROP)
+C("acquisition-missing.json", acquisition=DROP)
+C("acquisition-unknown-field.json", acquisition=dict(ACQ, requested_by="ops"))
+C("basis-unknown.json", acquisition=dict(ACQ, basis="download"))
+# la semantica sorgente e la mappatura DEVONO essere versionate
+C("source-semantics-unversioned.json",
+  acquisition=dict(ACQ, source_semantics="bybit-public-trades-sqlite"))
+C("mapping-unversioned.json", acquisition=dict(ACQ, mapping="bybit-sqlite-day-extract"))
+C("mapping-version-zero.json", acquisition=dict(ACQ, mapping="bybit-sqlite-day-extract-v0"))
+C("intent-no-timezone.json", acquisition=dict(ACQ, intent_start=DAY + "T00:00:00"))
+C("intent-offset.json", acquisition=dict(ACQ, intent_end="2024-01-16T00:00:00+01:00"))
+C("intent-feb-30.json", acquisition=dict(ACQ, intent_end="2024-02-30T00:00:00Z"))
+C("assertion-status-unknown.json", assertions=[dict(ONE, status="partial")])
+C("assertion-unknown-field.json", assertions=[dict(ONE, row_count=0)])
+C("assertion-partitions-missing.json",
+  assertions=[{k: v for k, v in ONE.items() if k != "partitions"}])
+C("assertion-ts-month-13.json", assertions=[dict(ONE, start="2024-13-15T00:00:00Z")])
+C("assertion-ts-no-timezone.json", assertions=[dict(ONE, end="2024-01-16T00:00:00")])
+# B3: la copertura dichiarata e' capped a MICROSECONDI (6 cifre); il timestamp
+# di evento resta nanosecond-capable altrove, ma non qui.
+C("assertion-start-seven-fractional-digits.json",
+  assertions=[dict(ONE, start="2024-01-15T00:00:00.1234567Z")])
+C("assertion-end-nine-fractional-digits.json",
+  assertions=[dict(ONE, end="2024-01-16T00:00:00.123456789Z")])
+C("intent-start-seven-fractional-digits.json",
+  acquisition=dict(ACQ, intent_start=DAY + "T00:00:00.1234567Z"))
+# I1: assertion_id e' obbligatoria, unica identita' stabile dell'asserzione;
+# la posizione nell'array non lo e'.
+C("assertion-id-missing.json",
+  assertions=[{k: v for k, v in ONE.items() if k != "assertion_id"}])
+C("assertion-id-uppercase.json", assertions=[dict(ONE, assertion_id="Extract-Full-Day")])
+# una copertura completa deve essere materializzata in ESATTAMENTE una partizione
+C("complete-without-partition.json", assertions=[dict(ONE, partitions=[])])
+C("complete-two-partitions.json",
+  assertions=[dict(ONE, partitions=[part("dt=" + DAY), part("dt=" + NEXT_DAY)])])
+C("evidence-empty.json", assertions=[dict(ONE, evidence=[])])
+C("evidence-kind-unknown.json",
+  assertions=[dict(ONE, evidence=[ev("looked_fine", "sembrava a posto")])])
+C("evidence-detail-blank.json",
+  assertions=[dict(ONE, evidence=[ev("archive_completeness", "   ")])])
+C("evidence-unknown-field.json",
+  assertions=[dict(ONE, evidence=[dict(ev("archive_completeness", "ok"), rows=10)])])
+C("partition-key-bare-date.json", assertions=[dict(ONE, partitions=[part(DAY)])])
+C("partition-revision-zero.json",
+  assertions=[dict(ONE, partitions=[part("dt=" + DAY, revision=0)])])
+C("partition-ref-unknown-field.json",
+  assertions=[dict(ONE, partitions=[dict(part("dt=" + DAY), rel_path="x.parquet")])])
+C("venue-uppercase.json", venue="Bybit")
+C("venue-null.json", venue=None)
+C("instrument-blank.json", instrument="   ")
+C("producer-blank.json", producer="  ")
+C("code-ref-missing.json", code_ref=DROP)
+C("features-without-feature-set.json", layer="features",
+  dataset_kind="trade_microstructure")
+C("non-features-with-feature-set.json", feature_set_slug="tm", feature_set_version=1)
+C("kind-not-in-layer.json", dataset_kind="trade_microstructure")
+
 print(f"dataset-manifest : {len(list(dv.glob('valid-*.json')))} valide, "
       f"{len(list(di.glob('*.json')))} negative")
 print(f"partition-manifest: {len(list(pv.glob('valid-*.json')))} valide, "
       f"{len(list(pi.glob('*.json')))} negative")
+print(f"coverage-manifest : {len(list(cv.glob('valid-*.json')))} valide, "
+      f"{len(list(ci.glob('*.json')))} negative")

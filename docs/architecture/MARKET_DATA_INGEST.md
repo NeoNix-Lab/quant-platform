@@ -203,7 +203,10 @@ validated. `valid` is eligible by default. `degraded` requires explicit policy;
 
 The manifest-to-catalog bridge is currently a missing producer capability. It
 must reuse the PostgreSQL market catalog as the runtime index and durable
-manifests as reconstruction and reconciliation evidence.
+manifests as reconstruction and reconciliation evidence. The coverage semantics
+it must assume are frozen in
+[DECLARED_COVERAGE.md](../contracts/DECLARED_COVERAGE.md); the bridge itself is
+still unimplemented.
 
 ## 9. Quality and reconciliation
 
@@ -264,7 +267,11 @@ review and versioned migration where applicable.
 
 ## 14. Open decisions
 
-- declared coverage population and its relationship to observed event bounds;
+Declared coverage and its relationship to observed event bounds are resolved by
+[ADR-0022](../decisions/ADR-0022-declared-coverage-contract.md). Remaining:
+
+- publication of a partition whose declared coverage is not one contiguous
+  complete interval;
 - publication/sealing/reconciliation protocol details;
 - quality-report to lifecycle-state transition;
 - live/backfill overlap, precedence, and repair triggering;

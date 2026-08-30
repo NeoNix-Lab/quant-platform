@@ -27,6 +27,8 @@ Plane producer track is:
 ```text
 Market Data Ingest architecture and contracts
         ↓
+Declared coverage contract
+        ↓
 Historical Trades publication slice
         ↓
 Manifest → catalog publication bridge

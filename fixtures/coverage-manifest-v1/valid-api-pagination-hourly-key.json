@@ -1,0 +1,40 @@
+{
+  "schema_version": "coverage-manifest-v1",
+  "layer": "canonical",
+  "dataset_kind": "trades",
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "record_schema_id": "trade-v1",
+  "coverage_id": "bybit-btcusdt-api-2024-01-15t14",
+  "supersedes": null,
+  "created_at": "2024-03-01T09:12:00Z",
+  "acquisition": {
+    "basis": "api_request",
+    "intent_start": "2024-01-15T14:00:00Z",
+    "intent_end": "2024-01-15T15:00:00Z",
+    "source_semantics": "bybit-v5-market-recent-trade-v1",
+    "mapping": "bybit-rest-pagination-v1"
+  },
+  "assertions": [
+    {
+      "assertion_id": "hour-14",
+      "start": "2024-01-15T14:00:00Z",
+      "end": "2024-01-15T15:00:00Z",
+      "status": "complete",
+      "partitions": [
+        {
+          "partition_key": "dt=2024-01-15/hour=14",
+          "revision": 1
+        }
+      ],
+      "evidence": [
+        {
+          "kind": "pagination_complete",
+          "detail": "cursore esaurito: l'ultima pagina ha restituito nextPageCursor vuoto"
+        }
+      ]
+    }
+  ],
+  "producer": "bybit-rest-importer",
+  "code_ref": "4f1a9c3"
+}

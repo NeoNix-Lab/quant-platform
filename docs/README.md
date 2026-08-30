@@ -17,4 +17,5 @@
 | How is code synchronized safely? | [Repository Synchronization](engineering/REPOSITORY_SYNC.md) |
 | How is market data produced? | [Market Data Ingest](architecture/MARKET_DATA_INGEST.md) |
 | What are ingest obligations? | [Market Data Ingest Contracts](contracts/MARKET_DATA_INGEST_CONTRACTS.md) |
+| What does a dataset cover? | [Declared Coverage](contracts/DECLARED_COVERAGE.md) |
 | How is storage protected? | [Storage Lifecycle](architecture/STORAGE_LIFECYCLE.md) |
