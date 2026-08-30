@@ -21,6 +21,7 @@ from quant_platform.data.models import (  # noqa: E402
     CatalogDataset,
     CatalogPartition,
     CatalogConflict,
+    DataIntegrityError,
     DataRequest,
     DatasetIdentity,
     Instant,
@@ -33,6 +34,10 @@ from quant_platform.data.models import (  # noqa: E402
     UnsupportedSchema,
 )
 from quant_platform.data.parquet import read_trade_v1, resolve_partition_path  # noqa: E402
+from quant_platform.source_adapters.bybit import (  # noqa: E402
+    BYBIT_ORDERING_PROVIDER,
+    BYBIT_TRADE_V1_ORDERING_POLICY,
+)
 
 
 IDENTITY = DatasetIdentity("canonical", "trades", "Bybit", "BTCUSDT", "trade-v1")
@@ -46,7 +51,13 @@ def instant(text: str) -> Instant:
 
 
 def request(start: str, end: str, *, policy: LifecyclePolicy = LifecyclePolicy.VALID_ONLY) -> DataRequest:
-    return DataRequest(IDENTITY, start, end, lifecycle_policy=policy)
+    return DataRequest(
+        IDENTITY,
+        start,
+        end,
+        lifecycle_policy=policy,
+        ordering_policy=BYBIT_TRADE_V1_ORDERING_POLICY,
+    )
 
 
 def write_parquet(root: Path, filename: str, times: list[str], *, ids: list[str] | None = None) -> Path:
@@ -168,7 +179,10 @@ class DataGatewayTests(unittest.TestCase):
         self.temp.cleanup()
 
     def gateway(self, partitions):
-        return DataGateway(FakeCatalog(DATASET, partitions))
+        return DataGateway(
+            FakeCatalog(DATASET, partitions),
+            ordering_providers=(BYBIT_ORDERING_PROVIDER,),
+        )
 
     def test_identity_normalization_and_equality(self):
         self.assertEqual(IDENTITY, DatasetIdentity("CANONICAL", "TRADES", "bybit", "BTCUSDT", "TRADE-V1"))
@@ -237,12 +251,23 @@ class DataGatewayTests(unittest.TestCase):
 
     def test_schema_and_dataset_kind_regressions(self):
         with self.assertRaises(UnsupportedDatasetKind):
-            self.gateway([]).read(DataRequest(DatasetIdentity("canonical", "l2", "bybit", "BTCUSDT", "trade-v1"), *["2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"]))
+            self.gateway([]).read(DataRequest(
+                DatasetIdentity("canonical", "l2", "bybit", "BTCUSDT", "trade-v1"),
+                *["2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"],
+                ordering_policy=BYBIT_TRADE_V1_ORDERING_POLICY,
+            ))
         with self.assertRaises(UnsupportedSchema):
-            self.gateway([]).read(DataRequest(DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v2"), *["2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"]))
+            self.gateway([]).read(DataRequest(
+                DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v2"),
+                *["2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"],
+                ordering_policy=BYBIT_TRADE_V1_ORDERING_POLICY,
+            ))
         stored_v2 = CatalogDataset(DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v2"), "dataset-v2", REL_ROOT, "b" * 64, 2, "e" * 64)
         with self.assertRaises(SchemaMismatch):
-            DataGateway(FakeCatalog(stored_v2, [])).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
+            DataGateway(
+                FakeCatalog(stored_v2, []),
+                ordering_providers=(BYBIT_ORDERING_PROVIDER,),
+            ).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
 
     def test_deterministic_ordering_and_identity_ignores_uuid_and_path(self):
         p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=2, times=["2024-01-01T00:00:00Z"] * 2, ids=["20", "10"])
@@ -262,6 +287,19 @@ class DataGatewayTests(unittest.TestCase):
         result = self.gateway([p]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
         self.assertEqual([record.trade_id for record in result], ["100", "20", "9"])
 
+    def test_duplicate_canonical_ordering_key_fails_through_gateway(self):
+        p = partition(
+            self.root,
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T01:00:00Z",
+            "dt=2024-01-01",
+            rows=2,
+            times=["2024-01-01T00:00:00Z"] * 2,
+            ids=["10", "10"],
+        )
+        with self.assertRaisesRegex(DataIntegrityError, "duplicate canonical ordering key"):
+            self.gateway([p]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
+
     def test_dataset_catalog_rebuild_changes_locator_not_stable_result_identity(self):
         p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=1, times=["2024-01-01T00:30:00Z"])
         first = self.gateway([p]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
@@ -269,7 +307,10 @@ class DataGatewayTests(unittest.TestCase):
         write_parquet(rebuilt_root, p.rel_path, ["2024-01-01T00:30:00Z"], ids=["1"])
         rebuilt_dataset = CatalogDataset(IDENTITY, "dataset-rebuilt", REL_ROOT, DATASET.manifest_sha256, DATASET.schema_version, DATASET.schema_hash)
         rebuilt_partition = CatalogPartition(p.natural_identity, "partition-rebuilt", "cold", str(rebuilt_root), REL_ROOT, p.rel_path, p.ts_start, p.ts_end, p.row_count, p.content_sha256, p.manifest_sha256, p.state, p.producer, p.code_ref)
-        second = DataGateway(FakeCatalog(rebuilt_dataset, [rebuilt_partition])).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
+        second = DataGateway(
+            FakeCatalog(rebuilt_dataset, [rebuilt_partition]),
+            ordering_providers=(BYBIT_ORDERING_PROVIDER,),
+        ).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
         self.assertEqual(first.metadata.request_identity, second.metadata.request_identity)
         self.assertEqual(first.metadata.result_identity, second.metadata.result_identity)
         self.assertNotEqual(first.metadata.catalog_dataset_id, second.metadata.catalog_dataset_id)

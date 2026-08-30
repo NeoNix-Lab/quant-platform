@@ -249,9 +249,9 @@ class BybitEligibilityProfileIsDistinctFromGenericSchema(unittest.TestCase):
 class OrderingIdentityCompatibilityIsFrozenAndConsistent(unittest.TestCase):
     """Resolves B8: DataGateway and CandleDefinition ordering identities."""
 
-    def test_datagateway_default_matches_frozen_identity(self):
+    def test_datagateway_ordering_policy_is_explicitly_required(self):
         field = DataRequest.__dataclass_fields__["ordering_policy"]
-        self.assertEqual(field.default, DATAGATEWAY_ORDERING_IDENTITY)
+        self.assertIsNone(field.default)
 
     def test_candle_golden_fixture_matches_frozen_identity(self):
         golden_path = ROOT / "fixtures" / "candle-definition-v1" / "golden-5m.json"
