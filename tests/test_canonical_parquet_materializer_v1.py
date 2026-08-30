@@ -11,6 +11,7 @@ import unittest
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pyarrow.lib import ArrowException
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -159,6 +160,81 @@ class CanonicalParquetMaterializerV1Tests(unittest.TestCase):
         self.assertEqual(returned[0].price, "100.00")
         self.assertEqual(returned[0].size, "0.5000")
 
+    def test_typed_nanosecond_receive_time_survives_reader(self):
+        path = self.root / "typed-receive.parquet"
+        record = trade(
+            "2024-01-15T00:00:00.123456789Z",
+            "1",
+            receive_ts="2024-01-15T00:00:00.987654321Z",
+        )
+        table = pa.table(
+            {
+                "venue": pa.array([record.venue], type=pa.string()),
+                "instrument": pa.array([record.instrument], type=pa.string()),
+                "exchange_ts": pa.array([record.exchange_ts.epoch_ns], type=pa.timestamp("ns", tz="UTC")),
+                "price": pa.array([record.price], type=pa.string()),
+                "size": pa.array([record.size], type=pa.string()),
+                "aggressor_side": pa.array([record.aggressor_side], type=pa.string()),
+                "receive_ts": pa.array([record.receive_ts.epoch_ns], type=pa.timestamp("ns", tz="UTC")),
+                "trade_id": pa.array([record.trade_id], type=pa.string()),
+                "sequence": pa.array([record.sequence], type=pa.string()),
+            }
+        )
+        pq.write_table(table, path, version="2.6", coerce_timestamps=None)
+        self.assertEqual(read_trade_v1(path, START, END), [record])
+
+    def test_typed_null_receive_time_survives_reader(self):
+        path = self.root / "typed-null-receive.parquet"
+        record = trade("2024-01-15T00:00:00.123456789Z", "1")
+        table = pa.table(
+            {
+                "venue": [record.venue],
+                "instrument": [record.instrument],
+                "exchange_ts": pa.array([record.exchange_ts.epoch_ns], type=pa.timestamp("ns", tz="UTC")),
+                "price": [record.price],
+                "size": [record.size],
+                "aggressor_side": [record.aggressor_side],
+                "receive_ts": pa.array([None], type=pa.timestamp("ns", tz="UTC")),
+                "trade_id": [record.trade_id],
+                "sequence": [record.sequence],
+            }
+        )
+        pq.write_table(table, path, version="2.6", coerce_timestamps=None)
+        self.assertEqual(read_trade_v1(path, START, END), [record])
+
+    def test_submicrosecond_filter_boundaries_do_not_hide_nanosecond_rows(self):
+        path = self.root / "submicro-boundary.parquet"
+        record = trade("2024-01-15T00:00:00.123456789Z", "1")
+        materialize_bybit_trade_v1(path, [record], dataset_identity=IDENTITY)
+        self.assertEqual(
+            read_trade_v1(
+                path,
+                Instant.parse("2024-01-15T00:00:00.123456789Z"),
+                Instant.parse("2024-01-15T00:00:00.123456999Z"),
+            ),
+            [record],
+        )
+
+    def test_extra_physical_column_is_rejected(self):
+        path = self.root / "extra-column.parquet"
+        table = pa.table(
+            {
+                "venue": ["bybit"],
+                "instrument": ["BTCUSDT"],
+                "exchange_ts": pa.array([0], type=pa.timestamp("ns", tz="UTC")),
+                "price": ["100.00"],
+                "size": ["0.5000"],
+                "aggressor_side": ["buy"],
+                "receive_ts": [None],
+                "trade_id": ["1"],
+                "sequence": [None],
+                "unsupported": ["must-reject"],
+            }
+        )
+        pq.write_table(table, path)
+        with self.assertRaisesRegex(DataIntegrityError, "unsupported columns"):
+            read_trade_v1(path, Instant.parse("1970-01-01T00:00:00Z"), Instant.parse("1970-01-01T00:00:01Z"))
+
     def test_physical_layout_variation_changes_physical_hash_not_semantic_hash(self):
         records = [
             trade("2024-01-15T00:00:00.1Z", "1"),
@@ -231,6 +307,16 @@ class CanonicalParquetMaterializerV1Tests(unittest.TestCase):
             )
         self.assertFalse(path.exists())
 
+    def test_empty_trade_id_is_profile_ineligible(self):
+        path = self.root / "empty-trade-id.parquet"
+        with self.assertRaisesRegex(DataIntegrityError, "trade_id"):
+            materialize_bybit_trade_v1(
+                path,
+                [trade("2024-01-15T00:00:00Z", "")],
+                dataset_identity=IDENTITY,
+            )
+        self.assertFalse(path.exists())
+
     def test_record_dataset_identity_mismatch_is_rejected_before_write(self):
         path = self.root / "wrong-identity.parquet"
         with self.assertRaisesRegex(DataIntegrityError, "does not match"):
@@ -283,6 +369,17 @@ class CanonicalParquetMaterializerV1Tests(unittest.TestCase):
                 dataset_identity=IDENTITY,
                 ordering_provider=provider,
             )
+
+    def test_write_failure_does_not_publish_target(self):
+        path = self.root / "write-failure.parquet"
+        with self.assertRaisesRegex(ArrowException, "Unsupported compression"):
+            materialize_bybit_trade_v1(
+                path,
+                [trade("2024-01-15T00:00:00Z", "1")],
+                dataset_identity=IDENTITY,
+                compression="not-a-real-codec",
+            )
+        self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":

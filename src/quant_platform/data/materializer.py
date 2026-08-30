@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+import gc
 import hashlib
 import os
 from pathlib import Path
@@ -116,7 +117,7 @@ def materialize_trade_v1(
         file_size_bytes = temporary.stat().st_size
         os.replace(temporary, target)
     except Exception:
-        temporary.unlink(missing_ok=True)
+        _remove_temporary_file(temporary)
         raise
 
     return ParquetMaterialization(
@@ -141,6 +142,22 @@ def physical_artifact_sha256(path: str | Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _remove_temporary_file(path: Path) -> None:
+    """Remove a failed-write temporary, including pyarrow's Windows handle lag."""
+
+    try:
+        path.unlink(missing_ok=True)
+    except PermissionError:
+        # Some pyarrow write failures release their native file handle only
+        # when the failed writer is collected on Windows.  Cleanup must not
+        # replace the original write exception with a misleading unlink error.
+        gc.collect()
+        try:
+            path.unlink(missing_ok=True)
+        except PermissionError:
+            pass
 
 
 def _validate_identity(identity: DatasetIdentity) -> None:
