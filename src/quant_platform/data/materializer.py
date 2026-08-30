@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 from typing import Any
 
 from ..ordering import OrderingProvider, TRADES_CANONICAL_TOTAL_ORDER_V1
@@ -26,6 +27,8 @@ from .parquet import _COLUMNS, _DIGITS, _OPTIONAL, _POSITIVE_DECIMAL
 
 _VENUE = re.compile(r"^[a-z0-9]+(?:[_-][a-z0-9]+)*$")
 EligibilityValidator = Callable[[DatasetIdentity, tuple[TradeRecord, ...]], None]
+_TEMPORARY_CLEANUP_RETRIES = 10
+_TEMPORARY_CLEANUP_DELAY_SECONDS = 0.01
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +95,7 @@ def materialize_trade_v1(
 
     semantic_hash = canonical_content_hash_v1(ordered)
     table = _table(ordered)
+    _validate_compression(table, compression)
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
@@ -145,19 +149,49 @@ def physical_artifact_sha256(path: str | Path) -> str:
 
 
 def _remove_temporary_file(path: Path) -> None:
-    """Remove a failed-write temporary, including pyarrow's Windows handle lag."""
+    """Best-effort bounded cleanup for a failed write temporary."""
 
-    try:
-        path.unlink(missing_ok=True)
-    except PermissionError:
-        # Some pyarrow write failures release their native file handle only
-        # when the failed writer is collected on Windows.  Cleanup must not
-        # replace the original write exception with a misleading unlink error.
-        gc.collect()
+    for attempt in range(_TEMPORARY_CLEANUP_RETRIES + 1):
         try:
             path.unlink(missing_ok=True)
-        except PermissionError:
-            pass
+            return
+        except OSError:
+            # Pyarrow can release its native handle slightly after raising,
+            # especially on Windows.  A bounded retry window lets that handle
+            # close without ever replacing the original materialization error.
+            gc.collect()
+            if attempt == _TEMPORARY_CLEANUP_RETRIES:
+                return
+            time.sleep(_TEMPORARY_CLEANUP_DELAY_SECONDS)
+
+
+def _validate_compression(table: Any, compression: str | None) -> None:
+    """Reject unsupported codecs before creating a temporary artifact."""
+
+    if compression is None:
+        return
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    # ParquetWriter otherwise creates the target-side temporary file before
+    # rejecting an unsupported codec.  Preflight keeps that known failure from
+    # leaking a native file handle on Windows, while retaining ParquetWriter's
+    # original exception type and message.
+    sink = pa.BufferOutputStream()
+    writer = None
+    try:
+        writer = pq.ParquetWriter(
+            sink,
+            table.schema,
+            compression=compression,
+            version="2.6",
+            use_dictionary=True,
+            write_statistics=True,
+            use_deprecated_int96_timestamps=False,
+        )
+    finally:
+        if writer is not None:
+            writer.close()
 
 
 def _validate_identity(identity: DatasetIdentity) -> None:

@@ -22,7 +22,6 @@ from quant_platform.data.models import (  # noqa: E402
     Instant,
     InvalidRequest,
     TradeRecord,
-    canonical_content_hash_v1,
 )
 from quant_platform.data.materializer import (  # noqa: E402
     materialize_trade_v1,
@@ -110,7 +109,7 @@ class CanonicalParquetMaterializerV1Tests(unittest.TestCase):
         self.assertEqual(artifact.last_exchange_ts, expected[-1].exchange_ts)
         self.assertEqual(
             artifact.canonical_content_hash_v1,
-            canonical_content_hash_v1(expected),
+            "canonical-content-hash-v1:sha256:0d5f811ea341c50a24b08632116367f02e45e46fad02409c57380bccca1df55e",
         )
         self.assertEqual(artifact.sha256, physical_artifact_sha256(path))
         self.assertEqual(artifact.content_sha256, artifact.sha256)
@@ -372,6 +371,8 @@ class CanonicalParquetMaterializerV1Tests(unittest.TestCase):
 
     def test_write_failure_does_not_publish_target(self):
         path = self.root / "write-failure.parquet"
+        original_target = b"pre-existing artifact must remain unchanged"
+        path.write_bytes(original_target)
         with self.assertRaisesRegex(ArrowException, "Unsupported compression"):
             materialize_bybit_trade_v1(
                 path,
@@ -379,7 +380,8 @@ class CanonicalParquetMaterializerV1Tests(unittest.TestCase):
                 dataset_identity=IDENTITY,
                 compression="not-a-real-codec",
             )
-        self.assertFalse(path.exists())
+        self.assertEqual(path.read_bytes(), original_target)
+        self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
 
 
 if __name__ == "__main__":
