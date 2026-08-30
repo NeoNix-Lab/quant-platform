@@ -33,7 +33,7 @@ from quant_platform.data.models import (  # noqa: E402
     UnsupportedDatasetKind,
     UnsupportedSchema,
 )
-from quant_platform.data.parquet import read_trade_v1, resolve_partition_path  # noqa: E402
+from quant_platform.data.parquet import read_trade_v1, resolve_partition_path, scan_trade_v1  # noqa: E402
 from quant_platform.source_adapters.bybit import (  # noqa: E402
     BYBIT_ORDERING_PROVIDER,
     BYBIT_TRADE_V1_ORDERING_POLICY,
@@ -199,6 +199,35 @@ class DataGatewayTests(unittest.TestCase):
             "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"
         ])
         self.assertEqual(len(read_trade_v1(resolve_partition_path(str(self.root), REL_ROOT, p.rel_path), request("2024-01-01T00:00:00Z", "2024-01-01T04:00:00Z").start, request("2024-01-01T00:00:00Z", "2024-01-01T04:00:00Z").end)), 4)
+
+    def test_parquet_reader_preserves_nanoseconds_at_unsafe_datetime_boundary(self):
+        target = self.root / REL_ROOT / "dt=1970-01-01" / "part-000.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.table(
+            {
+                "venue": pa.array(["bybit"]),
+                "instrument": pa.array(["BTCUSDT"]),
+                "exchange_ts": pa.array([123_456_500], type=pa.timestamp("ns", tz="UTC")),
+                "price": pa.array(["100.0"]),
+                "size": pa.array(["0.1"]),
+                "aggressor_side": pa.array(["buy"]),
+                "receive_ts": pa.array([123_456_750], type=pa.timestamp("ns", tz="UTC")),
+                "trade_id": pa.array(["1"]),
+            }
+        )
+        pq.write_table(table, target)
+
+        rows = list(
+            scan_trade_v1(
+                target,
+                instant("1970-01-01T00:00:00Z"),
+                instant("1970-01-01T00:00:00.123456789Z"),
+                batch_size=1,
+            )
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0].exchange_ts, instant("1970-01-01T00:00:00.1234565Z"))
+        self.assertEqual(rows[0][0].receive_ts, instant("1970-01-01T00:00:00.12345675Z"))
 
     def test_partition_pruning_reads_only_temporal_candidates(self):
         early = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=1, times=["2024-01-01T00:30:00Z"])

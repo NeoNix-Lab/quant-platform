@@ -36,6 +36,7 @@ from .parquet import resolve_partition_path, scan_trade_v1
 
 
 BatchReader = Callable[[str, Instant, Instant, int], Iterable[tuple[Any, ...]]]
+LegacyReader = Callable[[str, Instant, Instant], Iterable[Any]]
 CompletionBuilder = Callable[[RecordTimeBounds | None, int], DataSliceMetadata]
 
 
@@ -239,12 +240,30 @@ class DataGateway:
         self,
         catalog: Catalog,
         *,
-        batch_reader: BatchReader = scan_trade_v1,
+        batch_reader: BatchReader | None = None,
+        reader: LegacyReader | None = None,
         path_resolver: Callable[[str, str, str], Any] = resolve_partition_path,
         ordering_providers: tuple[OrderingProvider, ...] = (),
     ):
+        if batch_reader is not None and reader is not None:
+            raise ValueError("batch_reader and reader are mutually exclusive")
         self.catalog = catalog
-        self._batch_reader = batch_reader
+        if reader is not None:
+            # Preserve the pre-scan injection seam for existing small-read
+            # callers.  The compatibility adapter is intentionally not the
+            # default path: a legacy reader may materialize its own result,
+            # while the default scan_trade_v1 reader is genuinely incremental.
+            def legacy_batch_reader(
+                path: str,
+                start: Instant,
+                end: Instant,
+                _batch_size: int,
+            ) -> Iterable[tuple[Any, ...]]:
+                yield tuple(reader(path, start, end))
+
+            self._batch_reader = legacy_batch_reader
+        else:
+            self._batch_reader = batch_reader or scan_trade_v1
         self._path_resolver = path_resolver
         self._ordering_providers = tuple(ordering_providers)
 

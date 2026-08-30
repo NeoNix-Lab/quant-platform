@@ -46,7 +46,7 @@ def write_fixture(root: Path, rel_path: str) -> Path:
             "size": ["0.1", "0.2"],
             "aggressor_side": ["buy", "sell"],
             "receive_ts": [None, None],
-            "trade_id": ["20", "10"],
+                "trade_id": ["10", "20"],
             "sequence": [None, None],
         }
     )

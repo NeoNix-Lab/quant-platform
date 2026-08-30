@@ -136,8 +136,9 @@ def _trade_records_from_batch(
 ) -> tuple[TradeRecord, ...]:
     timestamp_ns = _timestamp_values(_batch_column(batch, "exchange_ts"), exchange_type, pa, pc)
     values = {
-        column: _batch_column(batch, column).to_pylist() if column in names else [None] * batch.num_rows
+        column: _column_values(batch, column, names=names, pa=pa, pc=pc)
         for column in _COLUMNS
+        if column != "exchange_ts"
     }
     receive_values = values["receive_ts"]
 
@@ -179,6 +180,18 @@ def _batch_column(batch: Any, name: str) -> Any:
     return batch.column(index)
 
 
+def _column_values(batch: Any, name: str, *, names: set[str], pa: Any, pc: Any) -> list[Any]:
+    if name not in names:
+        return [None] * batch.num_rows
+    column = _batch_column(batch, name)
+    if name == "receive_ts" and pa.types.is_timestamp(column.type):
+        return [Instant(value).isoformat() for value in _timestamp_values(column, column.type, pa, pc)]
+    # exchange_ts is handled through _timestamp_values above.  Avoiding
+    # Array.to_pylist() for it is essential for nanosecond Arrow timestamps,
+    # which PyArrow cannot always convert to Python datetime values.
+    return column.to_pylist()
+
+
 def _validate_relative(value: str, label: str, *, allow_percent: bool = True) -> None:
     if not isinstance(value, str) or not _SAFE_RELATIVE.fullmatch(value):
         raise StorageResolutionError(f"{label} must be a safe relative path")
@@ -208,8 +221,11 @@ def _arrow_boundary_safe(start: Instant, end: Instant, data_type: Any, pa: Any) 
     factor = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}[unit]
     # Arrow pushdown must not round a nanosecond boundary inward: Python
     # filtering below is authoritative, so an unsafe pushdown could hide rows
-    # before they can be checked.
-    return start.epoch_ns % factor == 0 and end.epoch_ns % factor == 0
+    # before they can be checked.  Instant.to_datetime() is microsecond-
+    # precision, so even a nanosecond Parquet field needs microsecond-aligned
+    # boundaries before it can safely be converted to an Arrow scalar here.
+    safe_factor = max(factor, 1_000)
+    return start.epoch_ns % safe_factor == 0 and end.epoch_ns % safe_factor == 0
 
 
 def _required_text(value: Any, field: str) -> str:
