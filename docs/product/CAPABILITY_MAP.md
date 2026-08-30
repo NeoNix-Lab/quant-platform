@@ -22,6 +22,14 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | Data | Quality / Reconciliation | PARTIAL | NONE | Data Plane | Lifecycle and quality-report primitives exist. |
 | Data | Declared Coverage Contract | FROZEN | NONE | Data Plane | ADR-0022; schema, fixtures and semantic tests exist. |
 | Data | Canonical Partition Publication | PARTIAL | NONE | Data Plane | Manifests/catalog and coverage semantics exist; producer bridge is missing. |
+| Gate | Producer–Consumer Conformity Gate — Contract Freeze Gate | PARTIAL | NONE | Data Plane/Application | ADR-0023 and `PRODUCER_CONSUMER_CONFORMITY.md` freeze the seam contract; not yet independently reviewed/accepted. Documentation-level only; passing it does not by itself unlock runtime. |
+| Gate | Producer–Consumer Conformity Gate — Conformity Implementation Gate | MISSING | NONE | Data Plane/Application | Runtime-level gate; requires the conformity slices below to be implemented and pass their tests, including the golden Bybit BTCUSDT vertical. Cannot start before Contract Freeze Gate PASS. |
+| Data | Bybit First-Vertical Eligibility Profile | MISSING | NONE | Data Plane | No certifier exists to enforce it yet. Profile (non-null, unique `trade_id`) is frozen (`PRODUCER_CONSUMER_CONFORMITY.md` §10), explicitly distinct from generic `trade-v1` nullability, which is unchanged. |
+| Access | Bounded Historical DataGateway Read | MISSING | NONE | Application/Data | `DataGateway.read()` buffers the full requested row set and performs one global sort (O(total rows) memory); bounded `scan()` contract is frozen (`PRODUCER_CONSUMER_CONFORMITY.md` §5) but unimplemented. |
+| Data | Canonical trade-v1 Parquet Materialization | MISSING | NONE | Data Plane | `tools/import_bybit_trades.py` writes canonical JSONL only; no Parquet writer exists. Physical contract is frozen (`PRODUCER_CONSUMER_CONFORMITY.md` §9). |
+| Data | CanonicalContentHashV1 | MISSING | NONE | Data Plane/Application | No implementation exists. Byte-exact algorithm (domain separation, field order, framing, hash) is frozen (`PRODUCER_CONSUMER_CONFORMITY.md` §11). |
+| Data | Canonical Publication Bridge | MISSING | NONE | Data Plane | No manifest+coverage-to-catalog bridge exists in `src/` or `tools/`. Mapping and semantic rebuild equality are frozen (`PRODUCER_CONSUMER_CONFORMITY.md` §14). |
+| Data | Publication Certification | MISSING | NONE | Data Plane | No certifier exists; `state=valid` evidence rule, durable evidence model (`quality_reports`) and publication sequencing are frozen (`PRODUCER_CONSUMER_CONFORMITY.md` §13). |
 | Data | Multi-Venue Capability Model | MISSING | NONE | Data Plane | Capability dimensions documented; no venue matrix. |
 | Storage | Storage Root Foundation | READY | NONE | Data Plane/Infrastructure | Hot, cold, and deep-cold roots are provisioned. |
 | Storage | Storage Tiering | MISSING | NONE | Data Plane/Operations | No relocation runtime. |

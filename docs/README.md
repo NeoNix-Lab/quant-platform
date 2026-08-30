@@ -19,3 +19,4 @@
 | What are ingest obligations? | [Market Data Ingest Contracts](contracts/MARKET_DATA_INGEST_CONTRACTS.md) |
 | What does a dataset cover? | [Declared Coverage](contracts/DECLARED_COVERAGE.md) |
 | How is storage protected? | [Storage Lifecycle](architecture/STORAGE_LIFECYCLE.md) |
+| What must hold before producer/consumer expand again? | [Producer–Consumer Conformity](contracts/PRODUCER_CONSUMER_CONFORMITY.md) |

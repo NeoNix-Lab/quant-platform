@@ -3,6 +3,14 @@
 **Status:** Architecture v1 — documentation foundation
 **Owner:** Data Plane / producer side
 
+**Related:** implementing the Historical Trades publication slice and
+manifest → catalog bridge described here requires the Contract Freeze Gate to
+pass first
+([ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md));
+broader producer vertical expansion beyond these conformity slices remains
+suspended until the Conformity Implementation Gate passes; see
+[PRODUCER_CONSUMER_CONFORMITY.md](../contracts/PRODUCER_CONSUMER_CONFORMITY.md).
+
 This document elaborates the producer side of the existing Data Plane. It does
 not create a new top-level layer, replace the DataGateway boundary, or define
 new record schemas.

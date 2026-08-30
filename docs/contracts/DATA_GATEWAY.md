@@ -2,6 +2,18 @@
 
 **Status:** Contract v1 — narrow catalog-backed implementation present
 
+**Related:** [Producer–Consumer Conformity Contract](PRODUCER_CONSUMER_CONFORMITY.md)
+freezes, additively and without changing any rule below: the bounded-read
+property the current `read()` implementation does not yet satisfy (§5), a
+dedicated `RecordTimeBounds` type distinct from `CoverageInterval` for
+`returned_record_bounds` (§6), the producer ordering obligations this
+contract's determinism currently depends on (§7), the compatibility mapping
+between this contract's `ordering_policy` identity and CandleDefinition's
+source-ordering identity (§8), the Bybit first-vertical eligibility profile
+that this contract's `trade_id`-dependent ordering requires (§10), and an
+additive `CanonicalContentHashV1` field alongside the unchanged
+`result_identity` (§11–§12).
+
 **Scope:** historical, catalog-backed access to canonical market datasets
 
 ## 1. Purpose and boundary
