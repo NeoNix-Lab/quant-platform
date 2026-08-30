@@ -1,0 +1,42 @@
+{
+  "schema_version": "coverage-manifest-v1",
+  "layer": "features",
+  "dataset_kind": "trade_microstructure",
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "record_schema_id": "feature-set-v1",
+  "coverage_id": "bybit-btcusdt-tm-2024-01-15",
+  "supersedes": null,
+  "created_at": "2024-03-01T09:12:00Z",
+  "acquisition": {
+    "basis": "reconciliation",
+    "intent_start": "2024-01-15T00:00:00Z",
+    "intent_end": "2024-01-16T00:00:00Z",
+    "source_semantics": "canonical-trades-upstream-v1",
+    "mapping": "derive-from-upstream-coverage-v1"
+  },
+  "assertions": [
+    {
+      "assertion_id": "tm-full-day",
+      "start": "2024-01-15T00:00:00Z",
+      "end": "2024-01-16T00:00:00Z",
+      "status": "complete",
+      "partitions": [
+        {
+          "partition_key": "dt=2024-01-15",
+          "revision": 1
+        }
+      ],
+      "evidence": [
+        {
+          "kind": "reconciliation",
+          "detail": "copertura ereditata dal dataset canonical padre, gia' dichiarata completa"
+        }
+      ]
+    }
+  ],
+  "producer": "trade-microstructure-builder",
+  "code_ref": "d92aa10",
+  "feature_set_slug": "trade_microstructure",
+  "feature_set_version": 1
+}

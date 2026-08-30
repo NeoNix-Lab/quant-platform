@@ -20,7 +20,8 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | Data | L3/MBO Acquisition | MISSING | WEAK | Data Plane | No schema or runtime; ADR-0018 applies. |
 | Data | Checkpoint / Recovery | MISSING | NONE | Data Plane/Operations | No general implementation. |
 | Data | Quality / Reconciliation | PARTIAL | NONE | Data Plane | Lifecycle and quality-report primitives exist. |
-| Data | Canonical Partition Publication | PARTIAL | NONE | Data Plane | Manifests/catalog exist; producer bridge is missing. |
+| Data | Declared Coverage Contract | FROZEN | NONE | Data Plane | ADR-0022; schema, fixtures and semantic tests exist. |
+| Data | Canonical Partition Publication | PARTIAL | NONE | Data Plane | Manifests/catalog and coverage semantics exist; producer bridge is missing. |
 | Data | Multi-Venue Capability Model | MISSING | NONE | Data Plane | Capability dimensions documented; no venue matrix. |
 | Storage | Storage Root Foundation | READY | NONE | Data Plane/Infrastructure | Hot, cold, and deep-cold roots are provisioned. |
 | Storage | Storage Tiering | MISSING | NONE | Data Plane/Operations | No relocation runtime. |

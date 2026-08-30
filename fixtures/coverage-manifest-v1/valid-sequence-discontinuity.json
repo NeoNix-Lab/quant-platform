@@ -1,0 +1,66 @@
+{
+  "schema_version": "coverage-manifest-v1",
+  "layer": "canonical",
+  "dataset_kind": "trades",
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "record_schema_id": "trade-v1",
+  "coverage_id": "bybit-btcusdt-live-2024-01-15-seq-break",
+  "supersedes": null,
+  "created_at": "2024-03-01T09:12:00Z",
+  "acquisition": {
+    "basis": "live_stream",
+    "intent_start": "2024-01-15T00:00:00Z",
+    "intent_end": "2024-01-16T00:00:00Z",
+    "source_semantics": "bybit-public-trade-ws-v1",
+    "mapping": "bybit-ws-sequence-continuity-v1"
+  },
+  "assertions": [
+    {
+      "assertion_id": "seq-before-break",
+      "start": "2024-01-15T00:00:00Z",
+      "end": "2024-01-15T08:00:00Z",
+      "status": "complete",
+      "partitions": [
+        {
+          "partition_key": "dt=2024-01-15",
+          "revision": 1
+        }
+      ],
+      "evidence": [
+        {
+          "kind": "sequence_continuity",
+          "detail": "sequence 1..4210338 contigua, nessun salto"
+        }
+      ]
+    },
+    {
+      "assertion_id": "seq-break",
+      "start": "2024-01-15T08:00:00Z",
+      "end": "2024-01-15T08:00:01Z",
+      "status": "known_gap",
+      "partitions": [],
+      "evidence": [
+        {
+          "kind": "sequence_discontinuity",
+          "detail": "ricevute 100, 101, 105: mancano 102, 103, 104"
+        }
+      ]
+    },
+    {
+      "assertion_id": "seq-after-break-uncertain",
+      "start": "2024-01-15T08:00:01Z",
+      "end": "2024-01-16T00:00:00Z",
+      "status": "uncertain",
+      "partitions": [],
+      "evidence": [
+        {
+          "kind": "connection_continuity",
+          "detail": "connessione mantenuta, ma dopo il salto la continuita' della sequence non e' piu' dimostrata"
+        }
+      ]
+    }
+  ],
+  "producer": "bybit-collector",
+  "code_ref": "4f1a9c3"
+}

@@ -1,0 +1,71 @@
+{
+  "schema_version": "coverage-manifest-v1",
+  "layer": "canonical",
+  "dataset_kind": "trades",
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "record_schema_id": "trade-v1",
+  "coverage_id": "bybit-btcusdt-live-2024-01-15-seg-1",
+  "supersedes": null,
+  "created_at": "2024-03-01T09:12:00Z",
+  "acquisition": {
+    "basis": "live_stream",
+    "intent_start": "2024-01-15T00:00:00Z",
+    "intent_end": "2024-01-16T00:00:00Z",
+    "source_semantics": "bybit-public-trade-ws-v1",
+    "mapping": "bybit-ws-session-continuity-v1"
+  },
+  "assertions": [
+    {
+      "assertion_id": "live-seg-before-drop",
+      "start": "2024-01-15T00:00:00Z",
+      "end": "2024-01-15T12:00:03Z",
+      "status": "complete",
+      "partitions": [
+        {
+          "partition_key": "dt=2024-01-15",
+          "revision": 1
+        }
+      ],
+      "evidence": [
+        {
+          "kind": "connection_continuity",
+          "detail": "sottoscrizione stabilita 00:00:00.000Z, nessun reconnect fino a 12:00:03Z"
+        }
+      ]
+    },
+    {
+      "assertion_id": "live-seg-drop",
+      "start": "2024-01-15T12:00:03Z",
+      "end": "2024-01-15T12:00:07Z",
+      "status": "known_gap",
+      "partitions": [],
+      "evidence": [
+        {
+          "kind": "transport_interruption",
+          "detail": "socket chiuso 12:00:03.114Z, riconnesso 12:00:06.902Z; nessun replay disponibile"
+        }
+      ]
+    },
+    {
+      "assertion_id": "live-seg-after-drop",
+      "start": "2024-01-15T12:00:07Z",
+      "end": "2024-01-16T00:00:00Z",
+      "status": "complete",
+      "partitions": [
+        {
+          "partition_key": "dt=2024-01-15",
+          "revision": 1
+        }
+      ],
+      "evidence": [
+        {
+          "kind": "connection_continuity",
+          "detail": "sottoscrizione ristabilita 12:00:06.902Z, nessun reconnect fino a fine giornata"
+        }
+      ]
+    }
+  ],
+  "producer": "bybit-collector",
+  "code_ref": "4f1a9c3"
+}

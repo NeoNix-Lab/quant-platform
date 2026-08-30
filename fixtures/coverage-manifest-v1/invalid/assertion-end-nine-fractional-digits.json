@@ -1,0 +1,40 @@
+{
+  "schema_version": "coverage-manifest-v1",
+  "layer": "canonical",
+  "dataset_kind": "trades",
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "record_schema_id": "trade-v1",
+  "coverage_id": "bybit-btcusdt-sqlite-extract-2024-01-15",
+  "supersedes": null,
+  "created_at": "2024-03-01T09:12:00Z",
+  "acquisition": {
+    "basis": "source_extract",
+    "intent_start": "2024-01-15T00:00:00Z",
+    "intent_end": "2024-01-16T00:00:00Z",
+    "source_semantics": "bybit-public-trades-sqlite-v1",
+    "mapping": "bybit-sqlite-day-extract-v1"
+  },
+  "assertions": [
+    {
+      "assertion_id": "extract-full-day",
+      "start": "2024-01-15T00:00:00Z",
+      "end": "2024-01-16T00:00:00.123456789Z",
+      "status": "complete",
+      "partitions": [
+        {
+          "partition_key": "dt=2024-01-15",
+          "revision": 1
+        }
+      ],
+      "evidence": [
+        {
+          "kind": "deterministic_source_extract",
+          "detail": "SELECT ... WHERE ts >= 1705276800000 AND ts < 1705363200000 ORDER BY ts, trade_id; 1842776 righe sorgente = 1842776 righe canoniche"
+        }
+      ]
+    }
+  ],
+  "producer": "bybit-sqlite-importer",
+  "code_ref": "4f1a9c3"
+}

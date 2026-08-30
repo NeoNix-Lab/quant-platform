@@ -1,0 +1,396 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:market-platform:schema:coverage-manifest-v1",
+  "title": "coverage-manifest-v1",
+  "description": "Durable record of ONE acquisition or reconciliation operation and the DECLARED COVERAGE it asserts for a dataset. This is the reconstructible source of catalog.partitions.ts_start / ts_end, which partition-manifest-v1 does not carry: first_exchange_ts / last_exchange_ts are OBSERVED EVENT BOUNDS and can never produce declared coverage. The document is keyed to the natural dataset identity rather than to a file, because coverage is asserted over intervals: an interval may contain zero events, an interval may be known-uncovered while no partition exists for it, and coverage may be revised by a later repair without the sealed content changing. Acquisition INTENT and certified coverage are separate concepts: 'acquisition' records what the operation set out to obtain, 'assertions' records what it may legitimately declare. Supersession is wholesale, at document level. NO absolute paths. NOTHING strategic or derived.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layer",
+    "dataset_kind",
+    "venue",
+    "instrument",
+    "record_schema_id",
+    "coverage_id",
+    "supersedes",
+    "created_at",
+    "acquisition",
+    "assertions",
+    "producer",
+    "code_ref"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "coverage-manifest-v1"
+    },
+    "layer": {
+      "description": "Layer of the owning dataset. Part of the natural identity.",
+      "enum": [
+        "raw",
+        "canonical",
+        "features"
+      ]
+    },
+    "dataset_kind": {
+      "description": "Nature of the data. Part of the natural identity.",
+      "enum": [
+        "trades",
+        "l2",
+        "footprint",
+        "trade_microstructure",
+        "footprint_microstructure",
+        "l2_microstructure"
+      ]
+    },
+    "venue": {
+      "description": "Venue of the owning dataset. Mandatory and non-null in every layer, as in partition-manifest-v1.",
+      "$ref": "#/$defs/venue_name"
+    },
+    "instrument": {
+      "description": "Instrument of the owning dataset. Carries the NATIVE venue value: case and punctuation are not normalized.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "feature_set_slug": {
+      "description": "Required if and only if layer is 'features'.",
+      "$ref": "#/$defs/canonical_identifier"
+    },
+    "feature_set_version": {
+      "description": "Required if and only if layer is 'features'.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "record_schema_id": {
+      "description": "Record schema, e.g. 'trade-v1'. Part of the natural dataset identity.",
+      "$ref": "#/$defs/canonical_identifier"
+    },
+    "coverage_id": {
+      "description": "Stable identity of THIS coverage manifest, unique within the dataset. It is what 'supersedes' points at, so it must never be reused after a revision.",
+      "$ref": "#/$defs/canonical_identifier"
+    },
+    "supersedes": {
+      "description": "coverage_id of the document this one replaces, or null. Supersession is WHOLESALE: the superseded document contributes nothing afterwards, so this document must RESTATE every interval it still holds true. Its acquisition interval must therefore contain the superseded document's acquisition interval, otherwise a narrow repair would silently drop coverage outside its own window. The semantic validator enforces that containment.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/canonical_identifier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "description": "Instant at which this coverage manifest was written.",
+      "$ref": "#/$defs/utc_timestamp"
+    },
+    "acquisition": {
+      "description": "What the operation SET OUT to obtain, and under which source semantics. Requesting, downloading or subscribing to an interval does not certify that interval: this block is intent, 'assertions' is what may be declared. The union of the assertions must lie inside this interval.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basis",
+        "intent_start",
+        "intent_end",
+        "source_semantics",
+        "mapping"
+      ],
+      "properties": {
+        "basis": {
+          "description": "How the operation acquired, or attempted to acquire, the interval. 'source_archive': a published archive or dump. 'api_request': a finite request/pagination sequence against a provider API. 'source_extract': a deterministic extraction over an already-held local source, such as SQL over a legacy database. 'source_session': one bounded connected session of a source. 'live_stream': a closed segment of persistent live collection. 'backfill': finite acquisition intended to repair a known gap. 'reconciliation': no new acquisition, a restatement that reconciles evidence already held.",
+          "enum": [
+            "source_archive",
+            "api_request",
+            "source_extract",
+            "source_session",
+            "live_stream",
+            "backfill",
+            "reconciliation"
+          ]
+        },
+        "intent_start": {
+          "description": "Start of the intended acquisition interval, inclusive. Same microsecond ceiling as the assertion boundaries it must contain — see coverage_assertion.start.",
+          "$ref": "#/$defs/coverage_timestamp"
+        },
+        "intent_end": {
+          "description": "End of the intended acquisition interval, EXCLUSIVE. Half-open [intent_start, intent_end), the same convention DataGateway uses. A persistent live collector emits one document per CLOSED segment, so the segment bounds are known when the document is written. Same microsecond ceiling as coverage_assertion.end.",
+          "$ref": "#/$defs/coverage_timestamp"
+        },
+        "source_semantics": {
+          "description": "Versioned identity of the SOURCE-SPECIFIC semantics this operation relied on, for example 'bybit-public-trades-sqlite-v1'. It names what the facts of that source mean; it is not the canonical record schema. Versioned so that a later reinterpretation of the same source becomes a distinct identity instead of silently reinterpreting past evidence.",
+          "$ref": "#/$defs/versioned_identifier"
+        },
+        "mapping": {
+          "description": "Versioned identity of the mapping applied from those source facts to canonical declared coverage, for example 'bybit-sqlite-day-extract-v1'. Venue-specific coverage reasoning lives behind this identity; the canonical representation below stays venue-independent.",
+          "$ref": "#/$defs/versioned_identifier"
+        }
+      }
+    },
+    "assertions": {
+      "description": "What the operation may legitimately declare, interval by interval. Not derived from event timestamps, not derived from partition_key.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/coverage_assertion"
+      }
+    },
+    "producer": {
+      "description": "Process that performed this operation, for example 'bybit-collector'.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "code_ref": {
+      "description": "EXACT Git revision that performed this operation. Same role as partition-manifest-v1.code_ref: implementation identity, not semantic identity.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  },
+  "allOf": [
+    {
+      "description": "layer 'features' <-> feature-set definition identity. Mirrors partition-manifest-v1.",
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "features"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "feature_set_slug",
+          "feature_set_version"
+        ]
+      },
+      "else": {
+        "properties": {
+          "feature_set_slug": false,
+          "feature_set_version": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "raw"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trades",
+              "l2"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "canonical"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trades",
+              "footprint",
+              "l2"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "const": "features"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trade_microstructure",
+              "footprint_microstructure",
+              "l2_microstructure"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "coverage_assertion": {
+      "description": "One declared interval and the evidence supporting it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assertion_id",
+        "start",
+        "end",
+        "status",
+        "partitions",
+        "evidence"
+      ],
+      "properties": {
+        "assertion_id": {
+          "description": "Stable identity of THIS assertion. Array position is NOT identity: reordering, inserting or removing a sibling assertion must not change what an existing assertion_id refers to. Unique within this one coverage-manifest document only — it is not a cross-document or global identifier, and carries no runtime, path or catalog UUID.",
+          "$ref": "#/$defs/canonical_identifier"
+        },
+        "start": {
+          "description": "Start of the declared interval, inclusive. Coverage boundaries are capped at MICROSECOND precision — the current PostgreSQL catalog.partitions.ts_start/ts_end columns are timestamptz, which round-trips microseconds exactly and would silently truncate a finer value. Event timestamps (trade-v1 exchange_ts/receive_ts, partition-manifest-v1 first/last_exchange_ts) are unaffected and keep their existing nanosecond-capable precision — this ceiling applies only to declared coverage boundaries.",
+          "$ref": "#/$defs/coverage_timestamp"
+        },
+        "end": {
+          "description": "End of the declared interval, EXCLUSIVE. Half-open [start, end), so adjacency where A.end == B.start is contiguous without overlap. A degenerate start == end is rejected by the semantic validator: an empty declaration asserts nothing. Same microsecond ceiling as `start`.",
+          "$ref": "#/$defs/coverage_timestamp"
+        },
+        "status": {
+          "description": "'complete': the canonical records for this interval are materialized and the evidence supports that nothing is missing; ZERO events is a legitimate complete interval. 'uncertain': the producer lacks sufficient evidence either way. 'known_gap': the producer positively knows the interval is not covered, either because it was not observing (transport interruption) or because source events are known to be missing (sequence discontinuity); those two are distinguished by the evidence kind, not by a fourth status. ONLY 'complete' contributes to catalog.partitions.ts_start / ts_end.",
+          "enum": [
+            "complete",
+            "uncertain",
+            "known_gap"
+          ]
+        },
+        "partitions": {
+          "description": "Natural partition identities this assertion attributes coverage to. A 'complete' assertion attributes to EXACTLY ONE partition, so per-partition declared coverage is determined without circularity: an archive spanning three partitions emits three complete assertions inside one document, rather than one assertion naming three partitions. 'uncertain' and 'known_gap' may name zero partitions, which is how a gap stays representable when nothing was ever materialized for it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/natural_partition_ref"
+          }
+        },
+        "evidence": {
+          "description": "Source-specific facts supporting the status. At least one. The venue-specific reasoning behind them is named by acquisition.source_semantics and acquisition.mapping.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/evidence_item"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "description": "A complete interval must be materialized somewhere, in exactly one partition. Zero events still requires a zero-row partition to exist, otherwise DataGateway would hold coverage with nothing to read.",
+          "if": {
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "partitions": {
+                "minItems": 1,
+                "maxItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "natural_partition_ref": {
+      "description": "Natural partition identity within this dataset: partition_key plus revision. NOT the catalog partition UUID, which is a runtime locator and does not survive a catalog rebuild.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partition_key",
+        "revision"
+      ],
+      "properties": {
+        "partition_key": {
+          "description": "Same grammar frozen in partition-manifest-v1. It identifies the partition; it does NOT define the declared interval.",
+          "type": "string",
+          "pattern": "^[a-z_]+=[A-Za-z0-9._-]+(/[a-z_]+=[A-Za-z0-9._-]+)*$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "evidence_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Venue-independent classification of the supporting fact. 'archive_completeness': a published archive was retrieved and verified whole. 'pagination_complete': a finite request sequence reached its documented terminal condition. 'deterministic_source_extract': a deterministic extraction read an already-held local source exhaustively over the interval; this proves the LOCAL source was read completely, never that the local source holds everything the venue originally published. 'connection_continuity': the source connection stayed established across the interval. 'transport_interruption': the connection was lost and observation stopped. 'sequence_continuity': a native source sequence was contiguous across the interval. 'sequence_discontinuity': a native source sequence skipped values, so source events are known to be missing. 'reconciliation': a later authoritative operation confirmed or repaired the interval. This vocabulary is deliberately MINIMAL and covers only the cases the frozen semantics require. L2 snapshot validity and L3/MBO reconstruction continuity are NOT frozen here; adding a kind is additive contract evolution under ADR-0018.",
+          "enum": [
+            "archive_completeness",
+            "pagination_complete",
+            "deterministic_source_extract",
+            "connection_continuity",
+            "transport_interruption",
+            "sequence_continuity",
+            "sequence_discontinuity",
+            "reconciliation"
+          ]
+        },
+        "detail": {
+          "description": "Human- and audit-readable specifics of this fact: the archive name, the terminal pagination cursor, the observed sequence values, the reconnect instants. Free text on purpose, because freezing a per-kind payload now would freeze future L1/L2/L3 evidence formats.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "venue_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+([_-][a-z0-9]+)*$"
+    },
+    "utc_timestamp": {
+      "description": "UTC instant in RFC 3339, mandatory 'Z' suffix, up to 9 decimal digits. Used only for `created_at`, document bookkeeping metadata that never becomes a catalog coverage boundary and does not carry the microsecond ceiling below. ORDERING AND COMPARISON always use the PARSED temporal value, never the string.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "coverage_timestamp": {
+      "description": "UTC instant in RFC 3339, mandatory 'Z' suffix, AT MOST 6 decimal digits. Used for every value that becomes or bounds a declared coverage boundary (acquisition.intent_start/intent_end, coverage_assertion.start/end) so that catalog.partitions.ts_start/ts_end, PostgreSQL timestamptz columns with microsecond resolution, can hold every accepted value exactly. This is a v1 policy ceiling on the DECLARED interval, not a redefinition of trade-v1 or partition-manifest-v1 event-timestamp precision, which remain nanosecond-capable and untouched. ORDERING AND COMPARISON always use the PARSED temporal value, never the string.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$"
+    },
+    "canonical_identifier": {
+      "description": "Path-safe canonical identifier: lowercase, alphanumeric components separated by a single '.', '_' or '-'.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*$"
+    },
+    "versioned_identifier": {
+      "description": "A canonical identifier that MUST carry an explicit '-v<N>' suffix, so that 'versioned source semantics' is a mechanical property rather than an intention.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*-v[1-9][0-9]*$"
+    }
+  }
+}

@@ -11,5 +11,6 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0019 | DataGateway logical boundary | Accepted |
 | 0020 | Consumer API semantic boundary | Accepted |
 | 0021 | CandleDefinition v1 semantic contract | Accepted |
+| 0022 | Declared coverage is a separate durable contract | Accepted |
 
 See the individual ADR files for context and consequences.

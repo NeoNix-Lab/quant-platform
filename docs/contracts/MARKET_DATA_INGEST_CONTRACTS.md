@@ -13,6 +13,9 @@ The following remain authoritative:
 - [CORE_CONTRACTS.md](CORE_CONTRACTS.md) for common identity and domain terms;
 - [DATA_GATEWAY.md](DATA_GATEWAY.md) for consumer request, coverage, and read
   eligibility;
+- [DECLARED_COVERAGE.md](DECLARED_COVERAGE.md) and
+  [coverage-manifest-v1.json](../../schemas/coverage-manifest-v1.json) for
+  declared coverage and its supporting evidence;
 - [trade-v1.json](../../schemas/trade-v1.json) for frozen trade semantics;
 - [dataset-manifest-v1.json](../../schemas/dataset-manifest-v1.json) for dataset
   identity and lineage declaration;
@@ -112,11 +115,14 @@ DataGateway request is covered, including an interval containing no events.
 It must be deterministic, half-open where required by DataGateway semantics,
 and independent from observed event bounds.
 
-The exact population rule for `catalog.partitions.ts_start` and `ts_end` is not
-fully frozen in current documentation. The common `dt=YYYY-MM-DD` to UTC-day
-interval mapping must not be assumed universally until the partition-key
-contract confirms it. This is an open decision, not a reason to modify the
-frozen partition manifest.
+The population rule for `catalog.partitions.ts_start` and `ts_end` is frozen by
+[DECLARED_COVERAGE.md](DECLARED_COVERAGE.md) and
+[ADR-0022](../decisions/ADR-0022-declared-coverage-contract.md): the values come
+from `complete` assertions in `coverage-manifest-v1` and from nothing else. The
+`dt=YYYY-MM-DD` to UTC-day mapping remains something no component may assume;
+`partition_key` identifies a partition and does not carry an interval. The
+frozen partition manifest is unchanged; its stale wording is corrected by the
+errata in [DECLARED_COVERAGE.md](DECLARED_COVERAGE.md) §7.
 
 ## 7. Zero-row semantics
 
@@ -129,7 +135,7 @@ first_exchange_ts = null
 last_exchange_ts = null
 ```
 
-The declared interval must come from the Data Plane’s coverage metadata, not
+The declared interval must come from a `complete` coverage assertion, not from
 synthetic event timestamps. DataGateway must distinguish:
 
 ```text
@@ -138,8 +144,8 @@ no eligible coverage
 complete eligible coverage with zero events
 ```
 
-The implementation of the declared-coverage metadata is open; the frozen
-observed-bound fields must remain truthful.
+The declared-coverage contract is [DECLARED_COVERAGE.md](DECLARED_COVERAGE.md);
+the frozen observed-bound fields remain truthful and are never an input to it.
 
 ## 8. Sealing and publication
 
@@ -181,13 +187,16 @@ The missing producer bridge must reconcile:
 canonical artifact
 + dataset manifest
 + partition manifest
++ coverage manifest
         ↓
 catalog dataset/partition/lineage metadata
 ```
 
 It must reuse natural identity, partition revision, storage roots, hashes,
-lineage, producer, and `code_ref`. It must not introduce a second catalog or
-filesystem-derived consumer identity.
+lineage, producer, and `code_ref`, and it must take `ts_start` / `ts_end` from
+the coverage manifests as specified in
+[DECLARED_COVERAGE.md](DECLARED_COVERAGE.md) §4. It must not introduce a second
+catalog or filesystem-derived consumer identity.
 
 ## 10. Quality and reconciliation
 
@@ -267,7 +276,13 @@ Ingest contracts do not define:
 
 ## 14. Open producer decisions
 
-- declared coverage population rule;
+Declared coverage is resolved by
+[ADR-0022](../decisions/ADR-0022-declared-coverage-contract.md) and
+[DECLARED_COVERAGE.md](DECLARED_COVERAGE.md). The following remain open:
+
+- publication of a partition whose declared coverage is not one contiguous
+  complete interval;
+- physical placement of `_coverage/` when one dataset spans storage tiers;
 - quality-to-lifecycle transition;
 - publication/reconciliation protocol details;
 - live/backfill source precedence and overlap policy;

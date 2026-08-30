@@ -1,0 +1,35 @@
+{
+  "schema_version": "coverage-manifest-v1",
+  "layer": "canonical",
+  "dataset_kind": "trades",
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "record_schema_id": "trade-v1",
+  "coverage_id": "bybit-btcusdt-outage-2024-01-14",
+  "supersedes": null,
+  "created_at": "2024-03-01T09:12:00Z",
+  "acquisition": {
+    "basis": "source_session",
+    "intent_start": "2024-01-14T00:00:00Z",
+    "intent_end": "2024-01-15T00:00:00Z",
+    "source_semantics": "bybit-public-trade-ws-v1",
+    "mapping": "bybit-ws-session-continuity-v1"
+  },
+  "assertions": [
+    {
+      "assertion_id": "outage",
+      "start": "2024-01-14T00:00:00Z",
+      "end": "2024-01-15T00:00:00Z",
+      "status": "known_gap",
+      "partitions": [],
+      "evidence": [
+        {
+          "kind": "transport_interruption",
+          "detail": "host del collector spento per manutenzione; nessuna partizione materializzata"
+        }
+      ]
+    }
+  ],
+  "producer": "bybit-collector",
+  "code_ref": "4f1a9c3"
+}
