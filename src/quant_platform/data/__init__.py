@@ -32,6 +32,13 @@ from .models import (
     UnsupportedSchema,
 )
 from ..ordering import OrderingProvider, TRADES_CANONICAL_TOTAL_ORDER_V1, ordering_policy_satisfies
+from .materializer import (
+    EligibilityValidator,
+    ParquetMaterialization,
+    materialize_trade_v1,
+    physical_artifact_sha256,
+)
+from .parquet import read_trade_v1, resolve_partition_path
 
 __all__ = [
     "CatalogConflict",
@@ -55,19 +62,21 @@ __all__ = [
     "DataSlice",
     "DatasetIdentity",
     "DatasetNotFound",
+    "EligibilityValidator",
     "InvalidRequest",
     "InvalidPartitionState",
     "Instant",
     "LifecyclePolicy",
     "NaturalPartitionIdentity",
     "NoCoverage",
+    "ParquetMaterialization",
     "SchemaMismatch",
     "StorageResolutionError",
     "TradeRecord",
     "UnsupportedDatasetKind",
     "UnsupportedSchema",
+    "materialize_trade_v1",
+    "physical_artifact_sha256",
     "read_trade_v1",
     "resolve_partition_path",
 ]
-
-from .parquet import read_trade_v1, resolve_partition_path
