@@ -7,6 +7,12 @@
 **Scope:** the canonical application boundary for App UI, TUI, CLI, notebooks,
 automation and other external consumers.
 
+**Related:** [PRODUCER_CONSUMER_CONFORMITY.md](PRODUCER_CONSUMER_CONFORMITY.md)
+§16 clarifies, without changing any rule below, how a future bounded/streaming
+DataGateway read path composes with this contract's synchronous-read and
+future job semantics, and how `RecordTimeBounds` composes into
+`returned_temporal_bounds`.
+
 This contract freezes the meaning and ownership of the consumer boundary. It
 does not implement a web framework, endpoint, client, job runtime or
 representation engine.

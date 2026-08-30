@@ -15,6 +15,13 @@ the bridge, a collector, or storage tiering.
 The decision and its alternatives are in
 [ADR-0022](../decisions/ADR-0022-declared-coverage-contract.md).
 
+**Related:** [PRODUCER_CONSUMER_CONFORMITY.md](PRODUCER_CONSUMER_CONFORMITY.md)
+§14 freezes the manifest+coverage-to-catalog bridge's obligations
+(idempotency, natural identity keying, revision, storage-root mapping,
+hashes, fail-closed failure behavior) and semantic catalog-rebuild equality
+that consume this contract's `reconstruct_catalog_coverage()` fold; it does
+not change §4's reconstruction rule or any invariant below.
+
 ## 1. The distinction being frozen
 
 ```text

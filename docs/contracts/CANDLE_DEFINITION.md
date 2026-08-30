@@ -4,6 +4,16 @@
 
 **Decision:** [ADR-0021 — CandleDefinition v1 semantic contract](../decisions/ADR-0021-candle-definition-v1.md)
 
+**Related:** historical candle runtime implementation is postponed until the
+[Producer–Consumer Conformity Gate v1](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md)'s
+Conformity Implementation Gate passes (`docs/product/ROADMAP.md`).
+[PRODUCER_CONSUMER_CONFORMITY.md](PRODUCER_CONSUMER_CONFORMITY.md) freezes,
+without changing any rule below: the compatibility mapping between this
+contract's `source.ordering_policy` and DataGateway's ordering identity (§8,
+including the Bybit eligibility profile in §10 that mapping now depends on),
+and how a future `CanonicalContentHashV1` composes with this contract's
+materialization-equivalence alternative evidence paths (§2, §12).
+
 **Scope:** fixed-duration, UTC epoch-aligned candles built from canonical
 `trades@1` / `trade-v1` records
 

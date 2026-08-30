@@ -1,63 +1,106 @@
-# Scope: Representation Foundation — CandleDefinition Contract v1
+# Scope: Producer–Consumer Conformity Gate v1 — Contract Correction
 
 ## Goal
 
-Produce an independently reviewable semantic contract candidate for
-`CandleDefinition v1`, sufficient for a deterministic historical fixed-duration
-candle runtime and compatible with future incremental/live construction.
-
-This scope deliberately stops before the candle aggregation runtime. The
-contract must be reviewed independently before any runtime implementation is
-started.
+Fix the contract blockers and precision defects an independent review
+(`REQUEST CHANGES`) found in the first Producer–Consumer Conformity Gate v1
+candidate, so the pair (`ADR-0023`,
+`docs/contracts/PRODUCER_CONSUMER_CONFORMITY.md`) is ready for a final
+re-review. This scope deliberately stops before any producer or consumer
+runtime implementation.
 
 ## Roadmap position
 
-The authoritative roadmap remains unchanged. DataGateway is the preceding
-foundation and the later Feature, Research, Execution, API and client phases
-remain later. This is the Representation foundation contract milestone; it does
-not claim that the Representation runtime has started or reorder any phase.
+Unchanged from the prior cycle: this work sits at the **Contract Freeze
+Gate**, the first of the two gates `ADR-0023` now defines, between the
+accepted foundation contracts (DataGateway v1, CandleDefinition v1, Declared
+Coverage v1) and any conformity-slice implementation. It does not reorder any
+roadmap phase.
 
 ## In scope
 
-- `CandleDefinition v1` semantic identity and canonical serialization;
-- canonical `trades@1` / `trade-v1` source dependency;
-- fixed-duration UTC epoch alignment and half-open bucket semantics;
-- exact decimal OHLCV and trade-count aggregation semantics;
-- empty-bucket, coverage, support-interval and query-interval rules;
-- `PARTIAL` / `CLOSED`, finalization, correction and late-event obligations;
-- temporal availability and historical/live equivalence invariants;
-- materialization, provenance and closed-record schema semantics;
-- focused contract fixtures/tests that do not implement aggregation runtime;
-- scope, capability-map, documentation-index and ADR updates.
+- resolving B9 (new): a Bybit BTCUSDT first-vertical eligibility profile
+  requiring non-null, unique `trade_id`, explicitly distinct from generic
+  `trade-v1` record-schema validity (which stays nullable, unchanged);
+- resolving the B2 refinement: semantic catalog-rebuild equality (ignoring
+  generated PostgreSQL UUIDs) and the durable certification-evidence
+  persistence model (`quality_reports`, no schema/DDL change);
+- resolving the B7 refinement: a fully specified, reproducible
+  `CanonicalContentHashV1` byte-exact algorithm (domain separation, field
+  order, canonical framing, hash function, empty-content and scope
+  definition), and an identity matrix distinguishing it from
+  `PhysicalArtifactHash` and the unchanged `result_identity`;
+- removing the gate-lifecycle circularity by splitting the single "gate PASS"
+  concept into two named, non-circular gates: **Contract Freeze Gate**
+  (documentation-level exit, authorizes conformity-slice implementation) and
+  **Conformity Implementation Gate** (runtime-level exit, reopens broader
+  vertical expansion);
+- correcting the ordering-non-overlap proof to attribute cross-partition
+  safety to DataGateway's existing fail-closed `CatalogConflict` check
+  (enforcement), not to declared-coverage contiguity alone (which only
+  guarantees intra-partition contiguity);
+- correcting ADR-0023's incorrect exit-criteria section reference;
+- adding ADR-0021 to the frozen-ADR test guard, which omitted it;
+- revising `docs/product/ROADMAP.md`, `docs/product/CAPABILITY_MAP.md`,
+  `docs/architecture/OPEN_DECISIONS.md` and this file to use the two-gate
+  terminology consistently;
+- revising the contract test suite so it visibly distinguishes
+  contract-consistency checks (executable now) from required future
+  behavioral/runtime tests (enumerated, not implemented).
 
 ## Out of scope
 
-- candle aggregation runtime or `src/quant_platform/representations`;
-- FastAPI, HTTP endpoints, DTOs, handlers or transport serialization;
-- React, TUI, CLI commands or other client runtime code;
-- footprint, L1, L2, L3 or book representations;
-- Feature, Research, Outcome, Label, Validation, Strategy or Execution
-  runtimes;
-- Job Runtime, authentication, deployment, pagination or streaming;
-- DataGateway Contract v1, canonical trade schema/DDL or physical storage changes;
-- DataGateway, producer ingest, catalog migration or storage lifecycle changes;
-- legacy CoreApp/API porting or compatibility promises.
+Unchanged from the prior cycle:
+
+- a canonical `trade-v1` Parquet writer/producer;
+- a DataGateway streaming/bounded-read runtime implementation;
+- a manifest/coverage-to-catalog publication bridge implementation;
+- a producer certifier implementation;
+- a golden ingest run against real source data;
+- a catalog migration or any DDL change to `db/init/001_catalog.sql`;
+- any change to `trade-v1`, `dataset-manifest-v1`, `partition-manifest-v1`,
+  `coverage-manifest-v1`, `candle-v1`, or any accepted ADR's decision text
+  (ADR-0019, ADR-0020, ADR-0021, ADR-0022);
+- candle aggregation runtime, a Parquet writer, a certifier, or a bridge;
+- FastAPI, HTTP endpoints, live collector, cursor or reconnect semantics;
+- React, TUI, CLI commands or other client runtime code.
 
 ## Exit criteria
 
-- `CandleDefinition v1` identity, serialization and hashing are explicit;
-- all mandatory candle semantic questions have a normative answer;
-- source, query, dataset, materialization and runtime identities are separate;
-- closed-record schema semantics are precise enough for independent runtime
-  implementations;
-- deterministic decimal, ordering, coverage, availability and equivalence
-  obligations are testable;
-- the ADR remains `PROPOSED — pending independent review`;
-- no candle runtime, shared tooling or producer work is changed.
+- B9 has an explicit, frozen resolution distinct from generic `trade-v1`
+  nullability, with no `trade-v1.json` change;
+- `CanonicalContentHashV1` is specified precisely enough that two independent
+  implementations would produce byte-identical digests for the same ordered
+  canonical records;
+- the physical/semantic/result identity matrix states behavior under
+  compression/layout variation without any wording implying a contradiction;
+- `ADR-0023` and the conformity contract consistently use **Contract Freeze
+  Gate** / **Conformity Implementation Gate** and never state that one gate's
+  exit criteria require its own runtime;
+- the durable certification-evidence model names its persistence target
+  (`quality_reports`) and its frozen record shape, without a schema/DDL
+  change;
+- the certification/publication sequencing is fail-closed and non-circular
+  (evidence commits before eligibility);
+- catalog rebuild equality is defined field-by-field, excluding generated
+  UUIDs;
+- the ordering non-overlap proof correctly attributes cross-partition safety
+  to the existing `CatalogConflict` enforcement;
+- ADR-0023's section references are internally correct (tested);
+- the frozen-ADR guard covers ADR-0019, ADR-0020, ADR-0021 and ADR-0022;
+- the test suite's module docstring and structure make the
+  contract-consistency-vs-behavioral-test distinction explicit;
+- `python tools/run_tests.py`, `python tools/check_markdown_links.py` and
+  `git diff --check` all pass;
+- `ADR-0023` remains `PROPOSED — pending independent review`;
+- no producer or consumer runtime, shared tooling, catalog migration, schema
+  change or golden ingest is implemented by this cycle.
 
 ## Next cycle
 
-After independent contract review, a separate mandate may implement the
-historical fixed-duration candle runtime against this contract. That mandate
-must not silently expand v1 or reinterpret unresolved source/data-plane
-semantics.
+After a final independent re-review accepts `ADR-0023` (Contract Freeze Gate
+PASS), separate implementation mandates may proceed against
+`PRODUCER_CONSUMER_CONFORMITY.md` §23's dependency-ordered slices. Only after
+those slices are implemented and pass their required tests — Conformity
+Implementation Gate PASS — do producer and consumer vertical development
+resume as independent parallel tracks, as `ROADMAP.md` already intends.

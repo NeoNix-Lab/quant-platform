@@ -1,5 +1,50 @@
 # Open Decisions
 
+## Producer–Consumer Conformity Gate
+
+Two sequential, non-circular gates are defined by
+[ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md):
+the **Contract Freeze Gate** (documentation-level; unlocks implementing the
+conformity slices) and the **Conformity Implementation Gate** (runtime-level;
+unlocks broader producer/consumer vertical expansion and Candle runtime). See
+ADR-0023 for the exact, separate exit criteria of each. Until the Contract
+Freeze Gate passes, no conformity-slice implementation is authorized; until
+the Conformity Implementation Gate passes, only the conformity slices
+themselves may be implemented.
+
+[PRODUCER_CONSUMER_CONFORMITY.md](../contracts/PRODUCER_CONSUMER_CONFORMITY.md)
+freezes the bounded-read property, `RecordTimeBounds`, the ordering contract,
+the DataGateway/CandleDefinition ordering-identity mapping, the Bybit
+first-vertical eligibility profile (non-null, unique `trade_id` — distinct
+from generic `trade-v1` nullability, which is unchanged), the physical
+`trade-v1` Parquet contract, the `CanonicalContentHashV1` algorithm, the
+physical-vs-semantic-vs-result identity matrix, the first-vertical
+certification rule (including the durable evidence model and
+certification/publication sequencing), semantic catalog-rebuild equality, and
+the manifest+coverage-to-catalog mapping. The following remain explicitly
+open even after that freeze, as implementation choices deliberately left
+tunable:
+
+- transport for a bounded historical read (HTTP streaming, gRPC, Arrow
+  Flight, WebSocket, network pagination) — the contract freezes only the
+  memory-bounded property, not a transport;
+- the concrete Python type/method name for the bounded `scan()` capability and
+  for `RecordTimeBounds`;
+- Parquet writer implementation/library, compression, row-group size and
+  page/dictionary settings;
+- the manifest+coverage-to-catalog bridge's SQL/transaction implementation;
+- second-venue ordering-identity integration (the mapping mechanism is frozen
+  in `PRODUCER_CONSUMER_CONFORMITY.md` §8.2 OI2, including that a second venue
+  needs its own eligibility profile analogous to §10; no second venue is added
+  by this pass);
+- the general quality-report-to-lifecycle-state formula beyond the first
+  Bybit `trade-v1` vertical (the first-vertical minimum evidence rule is
+  frozen in `PRODUCER_CONSUMER_CONFORMITY.md` §13; a general formula for
+  other data kinds remains open per `MARKET_DATA_INGEST_CONTRACTS.md` §10);
+- a file-durable `certification-evidence-v1` artifact (§13.3 CE5 explicitly
+  does not design one; certification is instead treated as a reproducible
+  operation, re-run on catalog loss).
+
 ## Must resolve before relevant implementation
 
 ### DataGateway and representations
@@ -35,8 +80,14 @@ for implementation:
 - physical placement of a dataset's `_coverage/` directory when its partitions
   span hot, cold and deep-cold storage roots;
 - crash-safe sealing, manifest publication, catalog reconciliation, and
-  idempotent retry details;
-- the mapping from quality reports to `valid`, `degraded`, and `invalid`;
+  idempotent retry details beyond the bridge invariants (idempotency, natural
+  identity keying, revision handling, storage-root mapping, hash provenance,
+  fail-closed failure behavior) frozen in `PRODUCER_CONSUMER_CONFORMITY.md`
+  §11.3;
+- the mapping from quality reports to `valid`, `degraded`, and `invalid` for
+  data kinds and vertical slices beyond the first Bybit `trade-v1` day (the
+  first-vertical minimum evidence rule is frozen in
+  `PRODUCER_CONSUMER_CONFORMITY.md` §10);
 - live/backfill overlap, source precedence, repair triggering, and duplicate
   resolution;
 - deduplication when the source provides no native identity;

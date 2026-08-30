@@ -12,5 +12,6 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0020 | Consumer API semantic boundary | Accepted |
 | 0021 | CandleDefinition v1 semantic contract | Accepted |
 | 0022 | Declared coverage is a separate durable contract | Accepted |
+| 0023 | Producer–Consumer Conformity Gate v1 | Proposed — pending independent review |
 
 See the individual ADR files for context and consequences.

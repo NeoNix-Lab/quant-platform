@@ -2,6 +2,18 @@
 
 **Status:** Contract foundation v1 — producer-side semantics; no new record schema
 
+**Related:** implementing the Parquet writer, publication bridge and
+certifier described here requires the Contract Freeze Gate to pass first
+([ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md));
+broader producer vertical expansion beyond these conformity slices remains
+suspended until the Conformity Implementation Gate passes.
+[PRODUCER_CONSUMER_CONFORMITY.md](PRODUCER_CONSUMER_CONFORMITY.md) freezes the
+physical `trade-v1` Parquet contract (§9, filling this document's absent
+producer), the manifest+coverage-to-catalog bridge obligations (§14, filling
+§9's "missing producer bridge"), and the first-vertical `valid` certification
+evidence rule (§13, filling §10's open quality-to-lifecycle mapping for the
+Bybit `trade-v1` day).
+
 This document defines obligations at the producer boundary. It reuses the
 existing contracts rather than creating a second identity, provenance, quality,
 catalog, or partition model.
