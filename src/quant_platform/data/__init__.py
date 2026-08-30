@@ -1,7 +1,7 @@
 """Catalog-backed canonical market-data access."""
 
 from .catalog import Catalog
-from .gateway import DataGateway
+from .gateway import DataGateway, DataScan, DataScanOpenMetadata, ScanState
 from .models import (
     CatalogDataset,
     CatalogPartition,
@@ -49,6 +49,9 @@ __all__ = [
     "TRADES_CANONICAL_TOTAL_ORDER_V1",
     "ordering_policy_satisfies",
     "DataGateway",
+    "DataScan",
+    "DataScanOpenMetadata",
+    "ScanState",
     "DataGatewayError",
     "DataIntegrityError",
     "DataRequest",
@@ -68,6 +71,7 @@ __all__ = [
     "UnsupportedSchema",
     "read_trade_v1",
     "resolve_partition_path",
+    "scan_trade_v1",
 ]
 
-from .parquet import read_trade_v1, resolve_partition_path
+from .parquet import read_trade_v1, resolve_partition_path, scan_trade_v1

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 import re
-from typing import Any
-from decimal import Decimal
+from typing import Any, Iterator
 
 from .models import DataIntegrityError, Instant, InvalidRequest, StorageResolutionError, TradeRecord
 
@@ -37,17 +37,23 @@ def resolve_partition_path(storage_root: str, dataset_rel_root: str, rel_path: s
     return candidate
 
 
-def read_trade_v1(
+def scan_trade_v1(
     path: str | Path,
     start: Instant,
     end: Instant,
-) -> list[TradeRecord]:
-    """Read one canonical trade-v1 file with temporal filtering.
+    batch_size: int = 65_536,
+) -> Iterator[tuple[TradeRecord, ...]]:
+    """Stream one canonical trade-v1 file as bounded logical record batches.
 
-    Arrow's scanner is used when the Parquet timestamp is typed, allowing
-    row-group statistics to prune.  Python filtering remains authoritative for
-    the contract's parsed-timestamp comparison and half-open boundary.
+    Arrow row batches are consumed incrementally; the whole Parquet file is
+    never converted to one in-memory table.  Python filtering remains
+    authoritative for parsed timestamp comparison and half-open boundaries.
+    Physical ordering is preserved exactly as stored and validated by the
+    DataGateway scan path rather than repaired with a global sort.
     """
+
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
     file_path = Path(path)
     if not file_path.is_file():
         raise StorageResolutionError("Parquet file does not exist")
@@ -57,6 +63,7 @@ def read_trade_v1(
         import pyarrow.dataset as ds
     except ImportError as exc:  # pragma: no cover - environment-specific
         raise RuntimeError("pyarrow is required for trade-v1 reads") from exc
+
     try:
         dataset = ds.dataset(str(file_path), format="parquet")
         names = set(dataset.schema.names)
@@ -74,18 +81,68 @@ def read_trade_v1(
             arrow_start = pa.scalar(start.to_datetime(), type=field.type)
             arrow_end = pa.scalar(end.to_datetime(), type=field.type)
             filter_expression = (ds.field("exchange_ts") >= arrow_start) & (ds.field("exchange_ts") < arrow_end)
-        scanner = dataset.scanner(columns=columns, filter=filter_expression, batch_size=65_536)
-        table = scanner.to_table()
-        timestamp_ns = _timestamp_values(table["exchange_ts"], field.type, pa, pc)
-        receive_values = table["receive_ts"].to_pylist() if "receive_ts" in names else [None] * table.num_rows
-        values = {column: table[column].to_pylist() if column in names else [None] * table.num_rows for column in _COLUMNS}
+        # The bounded read contract consumes the producer's physical order.
+        # Keep this one-file scan sequential and cap Arrow read-ahead so
+        # parallel scheduling cannot become an incidental ordering source or
+        # multiply the caller-selected batch memory bound.
+        scanner = dataset.scanner(
+            columns=columns,
+            filter=filter_expression,
+            batch_size=batch_size,
+            batch_readahead=1,
+            fragment_readahead=1,
+            use_threads=False,
+        )
+        for arrow_batch in scanner.to_batches():
+            records = _trade_records_from_batch(
+                arrow_batch,
+                names=names,
+                exchange_type=field.type,
+                start=start,
+                end=end,
+                pa=pa,
+                pc=pc,
+            )
+            if records:
+                yield records
     except DataIntegrityError:
         raise
     except Exception as exc:
         raise DataIntegrityError(f"cannot read trade-v1 Parquet: {file_path.name}") from exc
 
+
+def read_trade_v1(
+    path: str | Path,
+    start: Instant,
+    end: Instant,
+) -> list[TradeRecord]:
+    """Materialize one trade-v1 file by draining :func:`scan_trade_v1`."""
+
     records: list[TradeRecord] = []
-    for index in range(table.num_rows):
+    for batch in scan_trade_v1(path, start, end):
+        records.extend(batch)
+    return records
+
+
+def _trade_records_from_batch(
+    batch: Any,
+    *,
+    names: set[str],
+    exchange_type: Any,
+    start: Instant,
+    end: Instant,
+    pa: Any,
+    pc: Any,
+) -> tuple[TradeRecord, ...]:
+    timestamp_ns = _timestamp_values(_batch_column(batch, "exchange_ts"), exchange_type, pa, pc)
+    values = {
+        column: _batch_column(batch, column).to_pylist() if column in names else [None] * batch.num_rows
+        for column in _COLUMNS
+    }
+    receive_values = values["receive_ts"]
+
+    records: list[TradeRecord] = []
+    for index in range(batch.num_rows):
         exchange = Instant(timestamp_ns[index])
         if not (start <= exchange < end):
             continue
@@ -112,7 +169,14 @@ def read_trade_v1(
             )
         except InvalidRequest as exc:
             raise DataIntegrityError("trade-v1 timestamp is invalid") from exc
-    return records
+    return tuple(records)
+
+
+def _batch_column(batch: Any, name: str) -> Any:
+    index = batch.schema.get_field_index(name)
+    if index < 0:
+        raise DataIntegrityError(f"trade-v1 Parquet batch is missing column: {name}")
+    return batch.column(index)
 
 
 def _validate_relative(value: str, label: str, *, allow_percent: bool = True) -> None:
@@ -173,4 +237,4 @@ def _optional_text(value: Any) -> str | None:
     return value
 
 
-__all__ = ["read_trade_v1", "resolve_partition_path"]
+__all__ = ["read_trade_v1", "resolve_partition_path", "scan_trade_v1"]

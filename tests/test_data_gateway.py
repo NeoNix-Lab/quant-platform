@@ -270,10 +270,10 @@ class DataGatewayTests(unittest.TestCase):
             ).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
 
     def test_deterministic_ordering_and_identity_ignores_uuid_and_path(self):
-        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=2, times=["2024-01-01T00:00:00Z"] * 2, ids=["20", "10"])
+        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=2, times=["2024-01-01T00:00:00Z"] * 2, ids=["10", "20"])
         first = self.gateway([p]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
         other_root = Path(self.temp.name) / "relocated"
-        relocated_path = write_parquet(other_root, p.rel_path, ["2024-01-01T00:00:00Z"] * 2, ids=["20", "10"])
+        relocated_path = write_parquet(other_root, p.rel_path, ["2024-01-01T00:00:00Z"] * 2, ids=["10", "20"])
         relocated = CatalogPartition(p.natural_identity, "different-uuid", "cold", str(other_root), REL_ROOT, p.rel_path, p.ts_start, p.ts_end, 2, p.content_sha256, p.manifest_sha256, "valid", p.producer, p.code_ref)
         second = self.gateway([relocated]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
         self.assertEqual([r.trade_id for r in first], ["10", "20"])
@@ -283,7 +283,7 @@ class DataGatewayTests(unittest.TestCase):
         self.assertNotEqual(first.metadata.rel_paths, (str(relocated_path),))
 
     def test_same_exchange_timestamp_uses_opaque_string_trade_id_ordering(self):
-        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=3, times=["2024-01-01T00:00:00Z"] * 3, ids=["9", "100", "20"])
+        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=3, times=["2024-01-01T00:00:00Z"] * 3, ids=["100", "20", "9"])
         result = self.gateway([p]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
         self.assertEqual([record.trade_id for record in result], ["100", "20", "9"])
 
