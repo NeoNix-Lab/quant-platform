@@ -232,11 +232,15 @@ class DataRequest:
     schema_requirement: str | None = None
     lifecycle_policy: LifecyclePolicy = LifecyclePolicy.VALID_ONLY
     coverage_policy: str = "strict"
-    ordering_policy: str = "bybit-trade-v1-exchange-ts-trade-id-v1"
+    # This is an opaque, frozen request-contract token.  Its implementation
+    # and compatibility claim are supplied by the source adapter, not here.
+    ordering_policy: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.dataset_selector, DatasetIdentity):
             raise InvalidRequest("dataset_selector must be DatasetIdentity")
+        if not isinstance(self.ordering_policy, str) or not self.ordering_policy.strip():
+            raise InvalidRequest("ordering_policy must be a non-empty string")
         start = Instant.parse(self.start)
         end = Instant.parse(self.end)
         if start > end:
@@ -286,6 +290,30 @@ class CoverageInterval:
 
     def stable_dict(self) -> dict[str, str]:
         return {"start": self.start.isoformat(), "end": self.end.isoformat()}
+
+
+@dataclass(frozen=True, slots=True)
+class RecordTimeBounds:
+    """Observed temporal extent of records returned by one read.
+
+    This is deliberately separate from ``CoverageInterval``: it is an
+    observation about returned records, not a claim about declared support,
+    availability, or interval responsibility.
+    """
+
+    first: Instant
+    last: Instant
+
+    def __post_init__(self) -> None:
+        first = Instant.parse(self.first)
+        last = Instant.parse(self.last)
+        if first > last:
+            raise InvalidRequest("record time bounds first must not be after last")
+        object.__setattr__(self, "first", first)
+        object.__setattr__(self, "last", last)
+
+    def stable_dict(self) -> dict[str, str]:
+        return {"first": self.first.isoformat(), "last": self.last.isoformat()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,7 +398,7 @@ class DataSliceMetadata:
     eligible_coverage: tuple[CoverageInterval, ...]
     coverage_gaps: tuple[CoverageInterval, ...]
     coverage_complete: bool
-    returned_record_bounds: CoverageInterval | None
+    returned_record_bounds: RecordTimeBounds | None
     row_count: int
     ordering_policy: str
     lifecycle_policy: LifecyclePolicy
@@ -432,3 +460,76 @@ def gaps_for(request: CoverageInterval, covered: Iterable[CoverageInterval]) -> 
 
 def result_fingerprint(payload: dict[str, Any]) -> str:
     return _fingerprint(payload)
+
+
+CANONICAL_CONTENT_HASH_V1_IDENTITY = "canonical-content-hash-v1"
+CANONICAL_CONTENT_HASH_V1_DOMAIN_TAG = (
+    b"quant-platform/canonical-content-hash-v1/trade-v1\x00"
+)
+
+def _canonical_timestamp_text(value: Instant) -> str:
+    instant = Instant.parse(value)
+    seconds, nanos = divmod(instant.epoch_ns, 1_000_000_000)
+    base = datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return f"{base}.{nanos:09d}Z"
+
+
+def _canonical_field_frame(value: Any, field: str, *, timestamp: bool = False) -> bytes:
+    if value is None:
+        return b"\x00"
+    if timestamp:
+        encoded = _canonical_timestamp_text(value).encode("utf-8")
+    elif isinstance(value, str):
+        encoded = value.encode("utf-8")
+    else:
+        raise InvalidRequest(f"{field} must be a canonical string or timestamp")
+    return b"\x01" + len(encoded).to_bytes(8, "big") + encoded
+
+
+def _canonical_trade_record_frame(record: TradeRecord) -> bytes:
+    if not isinstance(record, TradeRecord):
+        raise InvalidRequest("CanonicalContentHashV1 requires TradeRecord values")
+    fields = (
+        _canonical_field_frame(record.venue, "venue"),
+        _canonical_field_frame(record.instrument, "instrument"),
+        _canonical_field_frame(record.exchange_ts, "exchange_ts", timestamp=True),
+        _canonical_field_frame(record.receive_ts, "receive_ts", timestamp=True),
+        _canonical_field_frame(record.price, "price"),
+        _canonical_field_frame(record.size, "size"),
+        _canonical_field_frame(record.aggressor_side, "aggressor_side"),
+        _canonical_field_frame(record.trade_id, "trade_id"),
+        _canonical_field_frame(record.sequence, "sequence"),
+    )
+    return b"".join(fields)
+
+
+def canonical_content_hash_v1(records: Iterable[TradeRecord]) -> str:
+    """Hash ordered canonical ``trade-v1`` logical records.
+
+    The input order is consumed exactly as supplied.  This function never
+    sorts records, because a permutation is a different ordered content
+    identity under the frozen contract.
+    """
+
+    ordered_records = list(records)
+    try:
+        count = len(ordered_records).to_bytes(8, "big", signed=False)
+    except OverflowError as exc:  # pragma: no cover - impossible for memory-sized input
+        raise InvalidRequest("CanonicalContentHashV1 record count exceeds uint64") from exc
+    digest = hashlib.sha256()
+    digest.update(CANONICAL_CONTENT_HASH_V1_DOMAIN_TAG)
+    digest.update(count)
+    for record in ordered_records:
+        digest.update(_canonical_trade_record_frame(record))
+    return f"{CANONICAL_CONTENT_HASH_V1_IDENTITY}:sha256:{digest.hexdigest()}"
+
+
+class CanonicalContentHashV1:
+    """Named facade for the canonical content hash primitive."""
+
+    identity = CANONICAL_CONTENT_HASH_V1_IDENTITY
+    domain_tag = CANONICAL_CONTENT_HASH_V1_DOMAIN_TAG
+
+    @staticmethod
+    def compute(records: Iterable[TradeRecord]) -> str:
+        return canonical_content_hash_v1(records)

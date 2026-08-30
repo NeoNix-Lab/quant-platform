@@ -36,6 +36,10 @@ from quant_platform.data import (  # noqa: E402
     CatalogDataset, CatalogPartition, DataGateway, DataRequest, DatasetIdentity,
     Instant, LifecyclePolicy, NaturalPartitionIdentity, NoCoverage, TradeRecord,
 )
+from quant_platform.source_adapters.bybit import (  # noqa: E402
+    BYBIT_ORDERING_PROVIDER,
+    BYBIT_TRADE_V1_ORDERING_POLICY,
+)
 
 GREEN, RED, DIM, OFF = "\033[32m", "\033[31m", "\033[90m", "\033[0m"
 
@@ -170,6 +174,7 @@ def gateway(partitions, records=()):
         reader=lambda path, start, end: [
             r for r in records if start <= r.exchange_ts < end],
         path_resolver=lambda root, rel_root, rel_path: Path(root) / rel_path,
+        ordering_providers=(BYBIT_ORDERING_PROVIDER,),
     )
 
 
@@ -183,7 +188,7 @@ def read(gw, start, end, policy=LifecyclePolicy.VALID_ONLY):
     return gw.read(DataRequest(
         dataset_selector=IDENTITY, schema_requirement="trade-v1",
         start=start, end=end, lifecycle_policy=policy,
-        ordering_policy="bybit-trade-v1-exchange-ts-trade-id-v1"))
+        ordering_policy=BYBIT_TRADE_V1_ORDERING_POLICY))
 
 
 # ==========================================================================

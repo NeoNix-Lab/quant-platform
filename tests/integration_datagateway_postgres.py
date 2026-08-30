@@ -24,6 +24,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from quant_platform.data.catalog import Catalog  # noqa: E402
 from quant_platform.data.gateway import DataGateway  # noqa: E402
 from quant_platform.data.models import DataRequest, DatasetIdentity  # noqa: E402
+from quant_platform.source_adapters.bybit import (  # noqa: E402
+    BYBIT_ORDERING_PROVIDER,
+    BYBIT_TRADE_V1_ORDERING_POLICY,
+)
 
 
 def write_fixture(root: Path, rel_path: str) -> Path:
@@ -94,8 +98,16 @@ def main() -> int:
                     (dataset_id, rel_path, data_file.stat().st_size, digest, "c" * 64),
                 )
             identity = DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v1")
-            result = DataGateway(Catalog(connection=connection)).read(
-                DataRequest(identity, "2024-01-15T00:00:00Z", "2024-01-16T00:00:00Z")
+            result = DataGateway(
+                Catalog(connection=connection),
+                ordering_providers=(BYBIT_ORDERING_PROVIDER,),
+            ).read(
+                DataRequest(
+                    identity,
+                    "2024-01-15T00:00:00Z",
+                    "2024-01-16T00:00:00Z",
+                    ordering_policy=BYBIT_TRADE_V1_ORDERING_POLICY,
+                )
             )
             assert [record.trade_id for record in result] == ["10", "20"]
             assert result.metadata.coverage_complete

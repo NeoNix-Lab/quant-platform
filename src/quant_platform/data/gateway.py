@@ -11,6 +11,7 @@ from .models import (
     CatalogPartition,
     CatalogConflict,
     CoverageInterval,
+    RecordTimeBounds,
     DataIntegrityError,
     DataRequest,
     DataSlice,
@@ -27,11 +28,12 @@ from .models import (
     merge_intervals,
     result_fingerprint,
 )
+from ..ordering import OrderingProvider, TRADES_CANONICAL_TOTAL_ORDER_V1, provider_for
 from .parquet import read_trade_v1, resolve_partition_path
 
 
 class DataGateway:
-    """Read canonical Bybit ``trade-v1`` data through the PostgreSQL catalog."""
+    """Read canonical ``trade-v1`` data through the PostgreSQL catalog."""
 
     def __init__(
         self,
@@ -39,13 +41,15 @@ class DataGateway:
         *,
         reader: Callable[[str, Instant, Instant], list[Any]] = read_trade_v1,
         path_resolver: Callable[[str, str, str], Any] = resolve_partition_path,
+        ordering_providers: tuple[OrderingProvider, ...] = (),
     ):
         self.catalog = catalog
         self._reader = reader
         self._path_resolver = path_resolver
+        self._ordering_providers = tuple(ordering_providers)
 
     def read(self, request: DataRequest) -> DataSlice:
-        self._validate_support(request)
+        ordering_provider = self._validate_support(request)
         dataset = self.catalog.resolve_dataset(request.dataset_selector)
         if dataset.identity.record_schema_id != request.schema_requirement:
             raise SchemaMismatch(
@@ -89,15 +93,16 @@ class DataGateway:
             )
             records.extend(self._reader(str(path), request.start, request.end))
         self._validate_records(dataset.identity, records)
-        if any(record.trade_id is None for record in records):
-            raise DataIntegrityError("Bybit trade-v1 ordering requires trade_id")
-        records.sort(key=lambda record: (record.exchange_ts.epoch_ns, record.trade_id))
-        if len({(record.exchange_ts.epoch_ns, record.trade_id) for record in records}) != len(records):
-            raise DataIntegrityError("duplicate Bybit trade-v1 ordering key")
+        records.sort(key=ordering_provider.key)
+        if len({ordering_provider.key(record) for record in records}) != len(records):
+            raise DataIntegrityError("duplicate canonical ordering key")
 
         returned_bounds = None
         if records:
-            returned_bounds = CoverageInterval(records[0].exchange_ts, records[-1].exchange_ts)
+            returned_bounds = RecordTimeBounds(
+                first=records[0].exchange_ts,
+                last=records[-1].exchange_ts,
+            )
         metadata = self._metadata(
             request=request,
             dataset=dataset,
@@ -109,12 +114,11 @@ class DataGateway:
         )
         return DataSlice(records=tuple(records), metadata=metadata)
 
-    @staticmethod
-    def _validate_support(request: DataRequest) -> None:
+    def _validate_support(self, request: DataRequest) -> OrderingProvider:
         identity = request.dataset_selector
-        if identity.dataset_kind != "trades" or identity.layer != "canonical" or identity.venue != "bybit":
+        if identity.dataset_kind != "trades" or identity.layer != "canonical":
             raise UnsupportedDatasetKind(
-                "DataGateway v1 supports canonical Bybit trades only",
+                "DataGateway v1 supports canonical trades only",
                 context={"dataset_identity": identity.stable_dict()},
             )
         if identity.record_schema_id != "trade-v1" or request.schema_requirement != "trade-v1":
@@ -122,8 +126,24 @@ class DataGateway:
                 "DataGateway v1 supports trade-v1 only",
                 context={"requested_schema": request.schema_requirement},
             )
-        if request.ordering_policy != "bybit-trade-v1-exchange-ts-trade-id-v1":
-            raise UnsupportedSchema("unsupported ordering policy for trade-v1")
+        ordering_provider = provider_for(
+            request.ordering_policy,
+            self._ordering_providers,
+        )
+        if ordering_provider is None or not ordering_provider.satisfies(TRADES_CANONICAL_TOTAL_ORDER_V1):
+            raise UnsupportedSchema(
+                "requested ordering policy has no compatible provider",
+                context={"ordering_policy": request.ordering_policy},
+            )
+        if not ordering_provider.applies(identity):
+            raise UnsupportedDatasetKind(
+                "ordering provider is not applicable to the requested dataset",
+                context={
+                    "ordering_policy": request.ordering_policy,
+                    "dataset_identity": identity.stable_dict(),
+                },
+            )
+        return ordering_provider
 
     @staticmethod
     def _validate_partition_set(dataset: CatalogDataset, partitions: list[CatalogPartition]) -> None:
@@ -177,7 +197,7 @@ class DataGateway:
         partitions: list[CatalogPartition],
         eligible_coverage: tuple[CoverageInterval, ...],
         coverage_gaps: tuple[CoverageInterval, ...],
-        returned_bounds: CoverageInterval | None,
+        returned_bounds: RecordTimeBounds | None,
         row_count: int,
     ) -> DataSliceMetadata:
         natural_partitions = tuple(partition.natural_identity for partition in partitions)

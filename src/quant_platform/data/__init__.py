@@ -8,6 +8,11 @@ from .models import (
     CatalogConflict,
     CorruptContent,
     CoverageInterval,
+    RecordTimeBounds,
+    CanonicalContentHashV1,
+    CANONICAL_CONTENT_HASH_V1_IDENTITY,
+    CANONICAL_CONTENT_HASH_V1_DOMAIN_TAG,
+    canonical_content_hash_v1,
     DataGatewayError,
     DataIntegrityError,
     DataRequest,
@@ -26,6 +31,7 @@ from .models import (
     UnsupportedDatasetKind,
     UnsupportedSchema,
 )
+from ..ordering import OrderingProvider, TRADES_CANONICAL_TOTAL_ORDER_V1, ordering_policy_satisfies
 
 __all__ = [
     "CatalogConflict",
@@ -34,6 +40,14 @@ __all__ = [
     "CatalogPartition",
     "CorruptContent",
     "CoverageInterval",
+    "RecordTimeBounds",
+    "CanonicalContentHashV1",
+    "CANONICAL_CONTENT_HASH_V1_IDENTITY",
+    "CANONICAL_CONTENT_HASH_V1_DOMAIN_TAG",
+    "canonical_content_hash_v1",
+    "OrderingProvider",
+    "TRADES_CANONICAL_TOTAL_ORDER_V1",
+    "ordering_policy_satisfies",
     "DataGateway",
     "DataGatewayError",
     "DataIntegrityError",
