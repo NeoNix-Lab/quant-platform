@@ -154,6 +154,17 @@ def gateway(
 
 
 class BoundedDataGatewayReadV1Tests(unittest.TestCase):
+    def test_legacy_materializing_reader_cannot_back_a_bounded_scan(self):
+        def legacy_reader(_path, _start, _end):
+            raise AssertionError("legacy reader must not be called")
+
+        with self.assertRaises(TypeError):
+            DataGateway(
+                FakeCatalog([LEFT]),
+                reader=legacy_reader,
+                ordering_providers=(BYBIT_ORDERING_PROVIDER,),
+            )
+
     def test_scan_lifecycle_exposes_open_metadata_then_final_metadata_only_on_exhaustion(self):
         instance, reader = gateway(
             [LEFT, RIGHT],
@@ -206,6 +217,31 @@ class BoundedDataGatewayReadV1Tests(unittest.TestCase):
         self.assertIsNone(scan.completed_metadata)
         with self.assertRaises(StopIteration):
             next(scan)
+
+    def test_completion_failure_aborts_once_without_completed_provenance(self):
+        instance, _ = gateway(
+            [LEFT],
+            {LEFT.rel_path: [(trade("2024-01-01T00:10:00Z", "10"),)]},
+        )
+        scan = instance.scan(request(end="2024-01-01T01:00:00Z"), batch_size=1)
+        failure = RuntimeError("completion failed")
+        calls = 0
+
+        def failing_completion(_bounds, _row_count):
+            nonlocal calls
+            calls += 1
+            raise failure
+
+        scan._completion_builder = failing_completion
+        next(scan)
+        with self.assertRaises(RuntimeError) as caught:
+            next(scan)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(scan.state, ScanState.ABORTED)
+        self.assertIsNone(scan.completed_metadata)
+        with self.assertRaises(StopIteration):
+            next(scan)
+        self.assertEqual(calls, 1)
 
     def test_source_batches_are_consumed_lazily_not_drained_at_open_or_first_yield(self):
         instance, reader = gateway(

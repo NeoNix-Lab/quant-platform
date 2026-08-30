@@ -171,8 +171,8 @@ def gateway(partitions, records=()):
     COPERTURA, non la lettura di un Parquet."""
     return DataGateway(
         FakeCatalog(partitions),
-        reader=lambda path, start, end: [
-            r for r in records if start <= r.exchange_ts < end],
+        batch_reader=lambda path, start, end, _batch_size: [tuple(
+            r for r in records if start <= r.exchange_ts < end)],
         path_resolver=lambda root, rel_root, rel_path: Path(root) / rel_path,
         ordering_providers=(BYBIT_ORDERING_PROVIDER,),
     )
