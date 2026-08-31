@@ -77,8 +77,22 @@ def read_trade_v1(
         scanner = dataset.scanner(columns=columns, filter=filter_expression, batch_size=65_536)
         table = scanner.to_table()
         timestamp_ns = _timestamp_values(table["exchange_ts"], field.type, pa, pc)
-        receive_values = table["receive_ts"].to_pylist() if "receive_ts" in names else [None] * table.num_rows
-        values = {column: table[column].to_pylist() if column in names else [None] * table.num_rows for column in _COLUMNS}
+        receive_field = dataset.schema.field("receive_ts") if "receive_ts" in names else None
+        receive_values = (
+            _timestamp_values(table["receive_ts"], receive_field.type, pa, pc)
+            if receive_field is not None
+            else [None] * table.num_rows
+        )
+        # Arrow cannot safely convert non-microsecond timestamp arrays to
+        # datetime objects through ``to_pylist()``.  Timestamp columns are
+        # decoded above from their integer epoch representation; all other
+        # fields can use the ordinary Python conversion.
+        values = {
+            column: table[column].to_pylist()
+            if column in names and column not in {"exchange_ts", "receive_ts"}
+            else [None] * table.num_rows
+            for column in _COLUMNS
+        }
     except DataIntegrityError:
         raise
     except Exception as exc:
@@ -86,11 +100,14 @@ def read_trade_v1(
 
     records: list[TradeRecord] = []
     for index in range(table.num_rows):
-        exchange = Instant(timestamp_ns[index])
+        exchange_ns = timestamp_ns[index]
+        if exchange_ns is None:
+            raise DataIntegrityError("trade-v1 exchange_ts is null")
+        exchange = Instant(exchange_ns)
         if not (start <= exchange < end):
             continue
         try:
-            receive = None if receive_values[index] is None else Instant.parse(receive_values[index])
+            receive = None if receive_values[index] is None else Instant(receive_values[index])
             aggressor_side = _required_text(values["aggressor_side"][index], "aggressor_side")
             if aggressor_side not in {"buy", "sell", "unknown"}:
                 raise DataIntegrityError("trade-v1 aggressor_side is outside its enum")
@@ -128,15 +145,13 @@ def _validate_relative(value: str, label: str, *, allow_percent: bool = True) ->
         raise StorageResolutionError(f"{label} must not contain percent escapes")
 
 
-def _timestamp_values(array: Any, data_type: Any, pa: Any, pc: Any) -> list[int]:
+def _timestamp_values(array: Any, data_type: Any, pa: Any, pc: Any) -> list[int | None]:
     if pa.types.is_timestamp(data_type):
         unit = data_type.unit
         raw = pc.cast(array, pa.int64()).to_pylist()
         factor = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}[unit]
-        if any(value is None for value in raw):
-            raise DataIntegrityError("trade-v1 exchange_ts is null")
-        return [int(value) * factor for value in raw]
-    return [Instant.parse(value).epoch_ns for value in array.to_pylist()]
+        return [None if value is None else int(value) * factor for value in raw]
+    return [None if value is None else Instant.parse(value).epoch_ns for value in array.to_pylist()]
 
 
 def _arrow_boundary_safe(start: Instant, end: Instant, data_type: Any, pa: Any) -> bool:
@@ -144,8 +159,11 @@ def _arrow_boundary_safe(start: Instant, end: Instant, data_type: Any, pa: Any) 
     factor = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}[unit]
     # Arrow pushdown must not round a nanosecond boundary inward: Python
     # filtering below is authoritative, so an unsafe pushdown could hide rows
-    # before they can be checked.
-    return start.epoch_ns % factor == 0 and end.epoch_ns % factor == 0
+    # before they can be checked.  ``Instant.to_datetime()`` also truncates
+    # sub-microsecond precision, including for an ns-typed Arrow column.
+    datetime_precision = 1_000
+    required_precision = max(factor, datetime_precision)
+    return start.epoch_ns % required_precision == 0 and end.epoch_ns % required_precision == 0
 
 
 def _required_text(value: Any, field: str) -> str:
