@@ -80,7 +80,10 @@ def scan_trade_v1(
         if pa.types.is_timestamp(field.type) and _arrow_boundary_safe(start, end, field.type, pa):
             arrow_start = pa.scalar(start.to_datetime(), type=field.type)
             arrow_end = pa.scalar(end.to_datetime(), type=field.type)
-            filter_expression = (ds.field("exchange_ts") >= arrow_start) & (ds.field("exchange_ts") < arrow_end)
+            exchange_field = ds.field("exchange_ts")
+            filter_expression = (
+                (exchange_field >= arrow_start) & (exchange_field < arrow_end)
+            ) | exchange_field.is_null()
         # The bounded read contract consumes the producer's physical order.
         # Keep this one-file scan sequential and cap Arrow read-ahead so
         # parallel scheduling cannot become an incidental ordering source or
@@ -144,7 +147,11 @@ def _trade_records_from_batch(
 
     records: list[TradeRecord] = []
     for index in range(batch.num_rows):
-        exchange = Instant(timestamp_ns[index])
+        exchange_value = timestamp_ns[index]
+        if exchange_value is None:
+            raise DataIntegrityError("trade-v1 exchange_ts is null")
+        exchange = Instant(exchange_value)
+
         if not (start <= exchange < end):
             continue
         try:
@@ -185,7 +192,10 @@ def _column_values(batch: Any, name: str, *, names: set[str], pa: Any, pc: Any) 
         return [None] * batch.num_rows
     column = _batch_column(batch, name)
     if name == "receive_ts" and pa.types.is_timestamp(column.type):
-        return [Instant(value).isoformat() for value in _timestamp_values(column, column.type, pa, pc)]
+        return [
+            None if value is None else Instant(value).isoformat()
+            for value in _timestamp_values(column, column.type, pa, pc)
+        ]
     # exchange_ts is handled through _timestamp_values above.  Avoiding
     # Array.to_pylist() for it is essential for nanosecond Arrow timestamps,
     # which PyArrow cannot always convert to Python datetime values.
@@ -205,15 +215,13 @@ def _validate_relative(value: str, label: str, *, allow_percent: bool = True) ->
         raise StorageResolutionError(f"{label} must not contain percent escapes")
 
 
-def _timestamp_values(array: Any, data_type: Any, pa: Any, pc: Any) -> list[int]:
+def _timestamp_values(array: Any, data_type: Any, pa: Any, pc: Any) -> list[int | None]:
     if pa.types.is_timestamp(data_type):
         unit = data_type.unit
         raw = pc.cast(array, pa.int64()).to_pylist()
         factor = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}[unit]
-        if any(value is None for value in raw):
-            raise DataIntegrityError("trade-v1 exchange_ts is null")
-        return [int(value) * factor for value in raw]
-    return [Instant.parse(value).epoch_ns for value in array.to_pylist()]
+        return [None if value is None else int(value) * factor for value in raw]
+    return [None if value is None else Instant.parse(value).epoch_ns for value in array.to_pylist()]
 
 
 def _arrow_boundary_safe(start: Instant, end: Instant, data_type: Any, pa: Any) -> bool:

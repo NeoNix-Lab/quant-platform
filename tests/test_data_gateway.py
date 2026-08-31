@@ -229,6 +229,61 @@ class DataGatewayTests(unittest.TestCase):
         self.assertEqual(rows[0][0].exchange_ts, instant("1970-01-01T00:00:00.1234565Z"))
         self.assertEqual(rows[0][0].receive_ts, instant("1970-01-01T00:00:00.12345675Z"))
 
+    def test_parquet_reader_preserves_nullable_typed_receive_timestamp(self):
+        target = self.root / REL_ROOT / "dt=2024-01-01" / "part-000.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.table(
+            {
+                "venue": pa.array(["bybit"]),
+                "instrument": pa.array(["BTCUSDT"]),
+                "exchange_ts": pa.array([123_456_500], type=pa.timestamp("ns", tz="UTC")),
+                "price": pa.array(["100.0"]),
+                "size": pa.array(["0.1"]),
+                "aggressor_side": pa.array(["buy"]),
+                "receive_ts": pa.array([None], type=pa.timestamp("ns", tz="UTC")),
+                "trade_id": pa.array(["1"]),
+            }
+        )
+        pq.write_table(table, target)
+
+        rows = list(
+            scan_trade_v1(
+                target,
+                instant("1970-01-01T00:00:00Z"),
+                instant("1970-01-01T00:00:00.123456789Z"),
+                batch_size=1,
+            )
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0][0].receive_ts)
+
+    def test_parquet_reader_rejects_nullable_typed_exchange_timestamp(self):
+        target = self.root / REL_ROOT / "dt=2024-01-01" / "part-000.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.table(
+            {
+                "venue": pa.array(["bybit"]),
+                "instrument": pa.array(["BTCUSDT"]),
+                "exchange_ts": pa.array([None], type=pa.timestamp("ns", tz="UTC")),
+                "price": pa.array(["100.0"]),
+                "size": pa.array(["0.1"]),
+                "aggressor_side": pa.array(["buy"]),
+                "receive_ts": pa.array([None], type=pa.timestamp("ns", tz="UTC")),
+                "trade_id": pa.array(["1"]),
+            }
+        )
+        pq.write_table(table, target)
+
+        with self.assertRaisesRegex(DataIntegrityError, "trade-v1 exchange_ts is null"):
+            list(
+                scan_trade_v1(
+                    target,
+                    instant("2024-01-01T00:00:00Z"),
+                    instant("2024-01-01T01:00:00Z"),
+                    batch_size=1,
+                )
+            )
+
     def test_partition_pruning_reads_only_temporal_candidates(self):
         early = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=1, times=["2024-01-01T00:30:00Z"])
         late = partition(self.root, "2024-01-02T00:00:00Z", "2024-01-02T01:00:00Z", "dt=2024-01-02", rows=1, times=["2024-01-02T00:30:00Z"], partition_id="partition-b")
