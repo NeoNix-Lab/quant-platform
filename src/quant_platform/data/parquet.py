@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 import re
-from typing import Any
-from decimal import Decimal
+from typing import Any, Iterator
 
 from .models import DataIntegrityError, Instant, InvalidRequest, StorageResolutionError, TradeRecord
 
@@ -37,17 +37,23 @@ def resolve_partition_path(storage_root: str, dataset_rel_root: str, rel_path: s
     return candidate
 
 
-def read_trade_v1(
+def scan_trade_v1(
     path: str | Path,
     start: Instant,
     end: Instant,
-) -> list[TradeRecord]:
-    """Read one canonical trade-v1 file with temporal filtering.
+    batch_size: int = 65_536,
+) -> Iterator[tuple[TradeRecord, ...]]:
+    """Stream one canonical trade-v1 file as bounded logical record batches.
 
-    Arrow's scanner is used when the Parquet timestamp is typed, allowing
-    row-group statistics to prune.  Python filtering remains authoritative for
-    the contract's parsed-timestamp comparison and half-open boundary.
+    Arrow row batches are consumed incrementally; the whole Parquet file is
+    never converted to one in-memory table.  Python filtering remains
+    authoritative for parsed timestamp comparison and half-open boundaries.
+    Physical ordering is preserved exactly as stored and validated by the
+    DataGateway scan path rather than repaired with a global sort.
     """
+
+    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
     file_path = Path(path)
     if not file_path.is_file():
         raise StorageResolutionError("Parquet file does not exist")
@@ -57,6 +63,7 @@ def read_trade_v1(
         import pyarrow.dataset as ds
     except ImportError as exc:  # pragma: no cover - environment-specific
         raise RuntimeError("pyarrow is required for trade-v1 reads") from exc
+
     try:
         dataset = ds.dataset(str(file_path), format="parquet")
         names = set(dataset.schema.names)
@@ -73,41 +80,82 @@ def read_trade_v1(
         if pa.types.is_timestamp(field.type) and _arrow_boundary_safe(start, end, field.type, pa):
             arrow_start = pa.scalar(start.to_datetime(), type=field.type)
             arrow_end = pa.scalar(end.to_datetime(), type=field.type)
-            filter_expression = (ds.field("exchange_ts") >= arrow_start) & (ds.field("exchange_ts") < arrow_end)
-        scanner = dataset.scanner(columns=columns, filter=filter_expression, batch_size=65_536)
-        table = scanner.to_table()
-        timestamp_ns = _timestamp_values(table["exchange_ts"], field.type, pa, pc)
-        receive_field = dataset.schema.field("receive_ts") if "receive_ts" in names else None
-        receive_values = (
-            _timestamp_values(table["receive_ts"], receive_field.type, pa, pc)
-            if receive_field is not None
-            else [None] * table.num_rows
+            exchange_field = ds.field("exchange_ts")
+            filter_expression = (
+                (exchange_field >= arrow_start) & (exchange_field < arrow_end)
+            ) | exchange_field.is_null()
+        # The bounded read contract consumes the producer's physical order.
+        # Keep this one-file scan sequential and cap Arrow read-ahead so
+        # parallel scheduling cannot become an incidental ordering source or
+        # multiply the caller-selected batch memory bound.
+        scanner = dataset.scanner(
+            columns=columns,
+            filter=filter_expression,
+            batch_size=batch_size,
+            batch_readahead=1,
+            fragment_readahead=1,
+            use_threads=False,
         )
-        # Arrow cannot safely convert non-microsecond timestamp arrays to
-        # datetime objects through ``to_pylist()``.  Timestamp columns are
-        # decoded above from their integer epoch representation; all other
-        # fields can use the ordinary Python conversion.
-        values = {
-            column: table[column].to_pylist()
-            if column in names and column not in {"exchange_ts", "receive_ts"}
-            else [None] * table.num_rows
-            for column in _COLUMNS
-        }
+        for arrow_batch in scanner.to_batches():
+            records = _trade_records_from_batch(
+                arrow_batch,
+                names=names,
+                exchange_type=field.type,
+                start=start,
+                end=end,
+                pa=pa,
+                pc=pc,
+            )
+            if records:
+                yield records
     except DataIntegrityError:
         raise
     except Exception as exc:
         raise DataIntegrityError(f"cannot read trade-v1 Parquet: {file_path.name}") from exc
 
+
+def read_trade_v1(
+    path: str | Path,
+    start: Instant,
+    end: Instant,
+) -> list[TradeRecord]:
+    """Materialize one trade-v1 file by draining :func:`scan_trade_v1`."""
+
     records: list[TradeRecord] = []
-    for index in range(table.num_rows):
-        exchange_ns = timestamp_ns[index]
-        if exchange_ns is None:
+    for batch in scan_trade_v1(path, start, end):
+        records.extend(batch)
+    return records
+
+
+def _trade_records_from_batch(
+    batch: Any,
+    *,
+    names: set[str],
+    exchange_type: Any,
+    start: Instant,
+    end: Instant,
+    pa: Any,
+    pc: Any,
+) -> tuple[TradeRecord, ...]:
+    timestamp_ns = _timestamp_values(_batch_column(batch, "exchange_ts"), exchange_type, pa, pc)
+    values = {
+        column: _column_values(batch, column, names=names, pa=pa, pc=pc)
+        for column in _COLUMNS
+        if column != "exchange_ts"
+    }
+    receive_values = values["receive_ts"]
+
+    records: list[TradeRecord] = []
+    for index in range(batch.num_rows):
+        exchange_value = timestamp_ns[index]
+        if exchange_value is None:
             raise DataIntegrityError("trade-v1 exchange_ts is null")
-        exchange = Instant(exchange_ns)
+        exchange = Instant(exchange_value)
+
         if not (start <= exchange < end):
             continue
         try:
-            receive = None if receive_values[index] is None else Instant(receive_values[index])
+            receive = None if receive_values[index] is None else Instant.parse(receive_values[index])
             aggressor_side = _required_text(values["aggressor_side"][index], "aggressor_side")
             if aggressor_side not in {"buy", "sell", "unknown"}:
                 raise DataIntegrityError("trade-v1 aggressor_side is outside its enum")
@@ -129,7 +177,29 @@ def read_trade_v1(
             )
         except InvalidRequest as exc:
             raise DataIntegrityError("trade-v1 timestamp is invalid") from exc
-    return records
+    return tuple(records)
+
+
+def _batch_column(batch: Any, name: str) -> Any:
+    index = batch.schema.get_field_index(name)
+    if index < 0:
+        raise DataIntegrityError(f"trade-v1 Parquet batch is missing column: {name}")
+    return batch.column(index)
+
+
+def _column_values(batch: Any, name: str, *, names: set[str], pa: Any, pc: Any) -> list[Any]:
+    if name not in names:
+        return [None] * batch.num_rows
+    column = _batch_column(batch, name)
+    if name == "receive_ts" and pa.types.is_timestamp(column.type):
+        return [
+            None if value is None else Instant(value).isoformat()
+            for value in _timestamp_values(column, column.type, pa, pc)
+        ]
+    # exchange_ts is handled through _timestamp_values above.  Avoiding
+    # Array.to_pylist() for it is essential for nanosecond Arrow timestamps,
+    # which PyArrow cannot always convert to Python datetime values.
+    return column.to_pylist()
 
 
 def _validate_relative(value: str, label: str, *, allow_percent: bool = True) -> None:
@@ -159,11 +229,11 @@ def _arrow_boundary_safe(start: Instant, end: Instant, data_type: Any, pa: Any) 
     factor = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}[unit]
     # Arrow pushdown must not round a nanosecond boundary inward: Python
     # filtering below is authoritative, so an unsafe pushdown could hide rows
-    # before they can be checked.  ``Instant.to_datetime()`` also truncates
-    # sub-microsecond precision, including for an ns-typed Arrow column.
-    datetime_precision = 1_000
-    required_precision = max(factor, datetime_precision)
-    return start.epoch_ns % required_precision == 0 and end.epoch_ns % required_precision == 0
+    # before they can be checked.  Instant.to_datetime() is microsecond-
+    # precision, so even a nanosecond Parquet field needs microsecond-aligned
+    # boundaries before it can safely be converted to an Arrow scalar here.
+    safe_factor = max(factor, 1_000)
+    return start.epoch_ns % safe_factor == 0 and end.epoch_ns % safe_factor == 0
 
 
 def _required_text(value: Any, field: str) -> str:
@@ -191,4 +261,4 @@ def _optional_text(value: Any) -> str | None:
     return value
 
 
-__all__ = ["read_trade_v1", "resolve_partition_path"]
+__all__ = ["read_trade_v1", "resolve_partition_path", "scan_trade_v1"]

@@ -33,7 +33,7 @@ from quant_platform.data.models import (  # noqa: E402
     UnsupportedDatasetKind,
     UnsupportedSchema,
 )
-from quant_platform.data.parquet import read_trade_v1, resolve_partition_path  # noqa: E402
+from quant_platform.data.parquet import read_trade_v1, resolve_partition_path, scan_trade_v1  # noqa: E402
 from quant_platform.source_adapters.bybit import (  # noqa: E402
     BYBIT_ORDERING_PROVIDER,
     BYBIT_TRADE_V1_ORDERING_POLICY,
@@ -200,6 +200,90 @@ class DataGatewayTests(unittest.TestCase):
         ])
         self.assertEqual(len(read_trade_v1(resolve_partition_path(str(self.root), REL_ROOT, p.rel_path), request("2024-01-01T00:00:00Z", "2024-01-01T04:00:00Z").start, request("2024-01-01T00:00:00Z", "2024-01-01T04:00:00Z").end)), 4)
 
+    def test_parquet_reader_preserves_nanoseconds_at_unsafe_datetime_boundary(self):
+        target = self.root / REL_ROOT / "dt=1970-01-01" / "part-000.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.table(
+            {
+                "venue": pa.array(["bybit"]),
+                "instrument": pa.array(["BTCUSDT"]),
+                "exchange_ts": pa.array([123_456_500], type=pa.timestamp("ns", tz="UTC")),
+                "price": pa.array(["100.0"]),
+                "size": pa.array(["0.1"]),
+                "aggressor_side": pa.array(["buy"]),
+                "receive_ts": pa.array([123_456_750], type=pa.timestamp("ns", tz="UTC")),
+                "trade_id": pa.array(["1"]),
+            }
+        )
+        pq.write_table(table, target)
+
+        rows = list(
+            scan_trade_v1(
+                target,
+                instant("1970-01-01T00:00:00Z"),
+                instant("1970-01-01T00:00:00.123456789Z"),
+                batch_size=1,
+            )
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0].exchange_ts, instant("1970-01-01T00:00:00.1234565Z"))
+        self.assertEqual(rows[0][0].receive_ts, instant("1970-01-01T00:00:00.12345675Z"))
+
+    def test_parquet_reader_preserves_nullable_typed_receive_timestamp(self):
+        target = self.root / REL_ROOT / "dt=2024-01-01" / "part-000.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.table(
+            {
+                "venue": pa.array(["bybit"]),
+                "instrument": pa.array(["BTCUSDT"]),
+                "exchange_ts": pa.array([123_456_500], type=pa.timestamp("ns", tz="UTC")),
+                "price": pa.array(["100.0"]),
+                "size": pa.array(["0.1"]),
+                "aggressor_side": pa.array(["buy"]),
+                "receive_ts": pa.array([None], type=pa.timestamp("ns", tz="UTC")),
+                "trade_id": pa.array(["1"]),
+            }
+        )
+        pq.write_table(table, target)
+
+        rows = list(
+            scan_trade_v1(
+                target,
+                instant("1970-01-01T00:00:00Z"),
+                instant("1970-01-01T00:00:00.123456789Z"),
+                batch_size=1,
+            )
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0][0].receive_ts)
+
+    def test_parquet_reader_rejects_nullable_typed_exchange_timestamp(self):
+        target = self.root / REL_ROOT / "dt=2024-01-01" / "part-000.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.table(
+            {
+                "venue": pa.array(["bybit"]),
+                "instrument": pa.array(["BTCUSDT"]),
+                "exchange_ts": pa.array([None], type=pa.timestamp("ns", tz="UTC")),
+                "price": pa.array(["100.0"]),
+                "size": pa.array(["0.1"]),
+                "aggressor_side": pa.array(["buy"]),
+                "receive_ts": pa.array([None], type=pa.timestamp("ns", tz="UTC")),
+                "trade_id": pa.array(["1"]),
+            }
+        )
+        pq.write_table(table, target)
+
+        with self.assertRaisesRegex(DataIntegrityError, "trade-v1 exchange_ts is null"):
+            list(
+                scan_trade_v1(
+                    target,
+                    instant("2024-01-01T00:00:00Z"),
+                    instant("2024-01-01T01:00:00Z"),
+                    batch_size=1,
+                )
+            )
+
     def test_partition_pruning_reads_only_temporal_candidates(self):
         early = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=1, times=["2024-01-01T00:30:00Z"])
         late = partition(self.root, "2024-01-02T00:00:00Z", "2024-01-02T01:00:00Z", "dt=2024-01-02", rows=1, times=["2024-01-02T00:30:00Z"], partition_id="partition-b")
@@ -270,10 +354,10 @@ class DataGatewayTests(unittest.TestCase):
             ).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
 
     def test_deterministic_ordering_and_identity_ignores_uuid_and_path(self):
-        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=2, times=["2024-01-01T00:00:00Z"] * 2, ids=["20", "10"])
+        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=2, times=["2024-01-01T00:00:00Z"] * 2, ids=["10", "20"])
         first = self.gateway([p]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
         other_root = Path(self.temp.name) / "relocated"
-        relocated_path = write_parquet(other_root, p.rel_path, ["2024-01-01T00:00:00Z"] * 2, ids=["20", "10"])
+        relocated_path = write_parquet(other_root, p.rel_path, ["2024-01-01T00:00:00Z"] * 2, ids=["10", "20"])
         relocated = CatalogPartition(p.natural_identity, "different-uuid", "cold", str(other_root), REL_ROOT, p.rel_path, p.ts_start, p.ts_end, 2, p.content_sha256, p.manifest_sha256, "valid", p.producer, p.code_ref)
         second = self.gateway([relocated]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
         self.assertEqual([r.trade_id for r in first], ["10", "20"])
@@ -283,7 +367,7 @@ class DataGatewayTests(unittest.TestCase):
         self.assertNotEqual(first.metadata.rel_paths, (str(relocated_path),))
 
     def test_same_exchange_timestamp_uses_opaque_string_trade_id_ordering(self):
-        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=3, times=["2024-01-01T00:00:00Z"] * 3, ids=["9", "100", "20"])
+        p = partition(self.root, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "dt=2024-01-01", rows=3, times=["2024-01-01T00:00:00Z"] * 3, ids=["100", "20", "9"])
         result = self.gateway([p]).read(request("2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"))
         self.assertEqual([record.trade_id for record in result], ["100", "20", "9"])
 

@@ -128,7 +128,7 @@ def covered_partition(
 def gateway(records: list[TradeRecord]) -> DataGateway:
     return DataGateway(
         FakeCatalog([covered_partition()]),
-        reader=lambda _path, _start, _end: list(records),
+        batch_reader=lambda _path, _start, _end, _batch_size: [tuple(records)],
         path_resolver=lambda _root, _dataset_root, _rel_path: "ignored.parquet",
         ordering_providers=(BYBIT_ORDERING_PROVIDER,),
     )
@@ -169,13 +169,13 @@ class RecordTimeBoundsTests(unittest.TestCase):
 
     def test_gateway_multi_record_bounds_are_first_and_last(self):
         records = [
-            trade("2024-01-01T00:00:00.200Z", "2"),
             trade("2024-01-01T00:00:00.100Z", "1"),
+            trade("2024-01-01T00:00:00.200Z", "2"),
         ]
         bounds = gateway(records).read(request()).metadata.returned_record_bounds
         self.assertIsInstance(bounds, RecordTimeBounds)
-        self.assertEqual(bounds.first, records[1].exchange_ts)
-        self.assertEqual(bounds.last, records[0].exchange_ts)
+        self.assertEqual(bounds.first, records[0].exchange_ts)
+        self.assertEqual(bounds.last, records[1].exchange_ts)
 
     def test_returned_bounds_are_not_coverage_interval(self):
         bounds = gateway([trade("2024-01-01T00:00:00Z", "1")]).read(request()).metadata.returned_record_bounds
@@ -342,12 +342,12 @@ class OrderingCompatibilityTests(unittest.TestCase):
                     ordering_policy=missing,
                 )
 
-    def test_gateway_does_not_discover_a_provider_from_the_reader(self):
-        reader = lambda _path, _start, _end: []
-        reader.ordering_provider = BYBIT_ORDERING_PROVIDER
+    def test_gateway_does_not_discover_a_provider_from_the_batch_reader(self):
+        batch_reader = lambda _path, _start, _end, _batch_size: [()]
+        batch_reader.ordering_provider = BYBIT_ORDERING_PROVIDER
         gateway_without_injection = DataGateway(
             FakeCatalog([covered_partition()]),
-            reader=reader,
+            batch_reader=batch_reader,
             path_resolver=lambda _root, _dataset_root, _rel_path: "ignored.parquet",
         )
         with self.assertRaises(UnsupportedSchema):
@@ -365,7 +365,7 @@ class OrderingCompatibilityTests(unittest.TestCase):
         )
         gateway_for_other_venue = DataGateway(
             FakeCatalog([covered_partition(identity=other_identity, dataset=other_dataset)], dataset=other_dataset),
-            reader=lambda _path, _start, _end: [],
+            batch_reader=lambda _path, _start, _end, _batch_size: [()],
             path_resolver=lambda _root, _dataset_root, _rel_path: "ignored.parquet",
             ordering_providers=(BYBIT_ORDERING_PROVIDER,),
         )
@@ -402,12 +402,12 @@ class OrderingCompatibilityTests(unittest.TestCase):
             ),
         )
         records = [
-            TradeRecord("kraken", "BTCUSDT", instant("2024-01-01T00:00:00Z"), "1", "1", "buy", sequence="2"),
             TradeRecord("kraken", "BTCUSDT", instant("2024-01-01T00:00:00Z"), "1", "1", "buy", sequence="1"),
+            TradeRecord("kraken", "BTCUSDT", instant("2024-01-01T00:00:00Z"), "1", "1", "buy", sequence="2"),
         ]
         gateway_for_other_venue = DataGateway(
             FakeCatalog([covered_partition(identity=identity, dataset=dataset)], dataset=dataset),
-            reader=lambda _path, _start, _end: list(records),
+            batch_reader=lambda _path, _start, _end, _batch_size: [tuple(records)],
             path_resolver=lambda _root, _dataset_root, _rel_path: "ignored.parquet",
             ordering_providers=(testvenue_provider,),
         )
