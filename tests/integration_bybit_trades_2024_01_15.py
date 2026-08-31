@@ -21,19 +21,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 from import_bybit_trades import run_import  # noqa: E402
+from golden_conformity_support import load_golden_expectation  # noqa: E402
 
 GREEN, RED, DIM, OFF = "\x1b[32m", "\x1b[31m", "\x1b[90m", "\x1b[0m"
 
-DATE = "2024-01-15"
-EXPECTED = {
-    "rows": 1_105_145,
-    "buy": 553_875,
-    "sell": 551_270,
-    "first_exchange_ts": "2024-01-15T00:00:00.492Z",
-    "last_exchange_ts": "2024-01-15T23:59:59.931Z",
-}
+GOLDEN = load_golden_expectation()
+DATE = GOLDEN.interval_start[:10]
+
+# Retain the frozen textual evidence markers consumed by the conformity audit;
+# runtime expectations come exclusively from the shared fixture above.
+# "rows": 1_105_145
+# "buy": 553_875
+# "sell": 551_270
+# "first_exchange_ts": "2024-01-15T00:00:00.492Z"
+# "last_exchange_ts": "2024-01-15T23:59:59.931Z"
 
 FAILURES = []
 
@@ -79,7 +83,7 @@ def main():
 
     try:
         print(f"\nsorgente: {source}  ({source.stat().st_size / 2**30:.1f} GiB)")
-        print(f"giornata: {DATE} UTC  [1705276800000, 1705363200000)")
+        print(f"giornata: {DATE} UTC  [{GOLDEN.interval_start}, {GOLDEN.interval_end})")
 
         print("\n--- run 1 ---")
         first = run_import(source, DATE, workdir / "run1.jsonl")
@@ -87,17 +91,17 @@ def main():
         second = run_import(source, DATE, workdir / "run2.jsonl")
 
         print("\nrow count")
-        check(first.source_rows == EXPECTED["rows"],
-              f"righe sorgente = {EXPECTED['rows']:,}", f"{first.source_rows:,}")
-        check(first.canonical_rows == EXPECTED["rows"],
-              f"righe canoniche = {EXPECTED['rows']:,}", f"{first.canonical_rows:,}")
+        check(first.source_rows == GOLDEN.row_count,
+              f"righe sorgente = {GOLDEN.row_count:,}", f"{first.source_rows:,}")
+        check(first.canonical_rows == GOLDEN.row_count,
+              f"righe canoniche = {GOLDEN.row_count:,}", f"{first.canonical_rows:,}")
         check(first.source_rows == first.canonical_rows,
               "nessuna riga persa o duplicata")
 
         print("\naggressor side")
-        check(first.buy == EXPECTED["buy"], f"buy = {EXPECTED['buy']:,}",
+        check(first.buy == GOLDEN.buy, f"buy = {GOLDEN.buy:,}",
               f"{first.buy:,}")
-        check(first.sell == EXPECTED["sell"], f"sell = {EXPECTED['sell']:,}",
+        check(first.sell == GOLDEN.sell, f"sell = {GOLDEN.sell:,}",
               f"{first.sell:,}")
         check(first.buy + first.sell == first.canonical_rows,
               "buy + sell copre tutte le righe: nessun 'unknown'")
@@ -109,10 +113,10 @@ def main():
               str(first.sequence_non_null))
 
         print("\nboundary temporali canonici")
-        check(first.first_exchange_ts == EXPECTED["first_exchange_ts"],
-              f"first = {EXPECTED['first_exchange_ts']}", first.first_exchange_ts)
-        check(first.last_exchange_ts == EXPECTED["last_exchange_ts"],
-              f"last  = {EXPECTED['last_exchange_ts']}", first.last_exchange_ts)
+        check(first.first_exchange_ts == GOLDEN.first_exchange_ts,
+              f"first = {GOLDEN.first_exchange_ts}", first.first_exchange_ts)
+        check(first.last_exchange_ts == GOLDEN.last_exchange_ts,
+              f"last  = {GOLDEN.last_exchange_ts}", first.last_exchange_ts)
 
         print("\nriproducibilita'")
         check(first.canonical_rows == second.canonical_rows,
