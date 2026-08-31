@@ -21,24 +21,28 @@ The roadmap expresses dependency direction, not day estimates. Exact scope may e
 
 ## Producer–Consumer Conformity Gate
 
-The producer and consumer tracks below no longer expand independently and in
-parallel. [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md)
-freezes **two** sequential, non-circular gates between the foundation
-contracts already accepted (DataGateway v1, CandleDefinition v1, Declared
-Coverage v1) and any further vertical expansion on either side:
+The repository is in **Phase A — Controlled Bidirectional Convergence**. The
+Contract Freeze Gate has passed; the Conformity Implementation Gate remains
+open. Until the implementation gate passes, Producer and Consumer may advance
+concurrently only on work that directly advances the shared conformity seam
+and its evidence.
+
+[ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md)
+freezes two sequential, non-circular gates between the accepted foundation
+contracts (DataGateway v1, CandleDefinition v1, Declared Coverage v1) and
+broader vertical expansion:
 
 ```text
 foundation contracts
         ↓
-CONTRACT FREEZE GATE
-  (documentation-level: docs/contracts/PRODUCER_CONSUMER_CONFORMITY.md
-   independently reviewed and accepted)
+CONTRACT FREEZE GATE — PASSED
+  (documentation-level: ADR-0023 and
+   PRODUCER_CONSUMER_CONFORMITY.md accepted)
         ↓
-  unlocks: implementing the conformity slices (writer, manifest/coverage
-  emission, certifier, bridge, bounded DataGateway read) — NOT broader
-  vertical expansion yet
+  unlocks: implementing the conformity slices — NOT broader
+  vertical expansion
         ↓
-CONFORMITY IMPLEMENTATION GATE
+CONFORMITY IMPLEMENTATION GATE — IN PROGRESS / PARTIAL
   (runtime-level: the conformity slices are implemented and pass the
    required tests, including the golden Bybit BTCUSDT vertical)
         ↓
@@ -49,40 +53,86 @@ vertical      vertical
 development   development
 ```
 
-Before the Contract Freeze Gate passes, no conformity-slice implementation is
-authorized. After it passes but before the Conformity Implementation Gate
-passes, the conformity slices may be implemented, but producer vertical
-expansion and consumer vertical expansion *beyond those slices* remain
-suspended. Only Conformity Implementation Gate PASS reopens both. This is a
-temporary integration gate pair, not a new permanent architecture layer:
-passing both does not add a phase to the dependency order below, it only
-re-opens the parallelism that already existed. See ADR-0023 for the exact
-exit criteria of each gate.
+The completed slices are Shared Semantic Primitives v1, Canonical Parquet
+Materializer v1 and Bounded DataGateway finite read v1. The remaining critical
+path is manifest and coverage emission, publication certification, the
+manifest/coverage/certification-to-catalog bridge, the Golden Bybit E2E,
+adversarial acceptance, Candle ordering compatibility acceptance and the gate
+review. See `SCOPE.md` and `CAPABILITY_MAP.md` for the current ledger.
 
-## Parallel producer track (reopens after Conformity Implementation Gate PASS)
+This is a temporary integration gate pair, not a permanent architecture layer.
+Passing both gates does not add a phase to the dependency order below; it
+reopens the parallelism that already existed.
 
-The consumer dependency track above remains canonical. In parallel, the Data
-Plane producer track is:
+## Phase A — controlled convergence before Conformity Implementation Gate PASS
+
+The following are blocked until the implementation gate passes:
+
+- full Candle runtime;
+- Feature runtime and broader Representation expansion;
+- broader producer verticals;
+- live ingest and multi-venue runtime;
+- L1/L2/L3/MBO runtime;
+- unrelated consumer or producer vertical expansion.
+
+The conformity slices themselves may proceed in their frozen dependency order.
+
+## Phase B — full bidirectional expansion after Conformity Implementation Gate PASS
+
+After the Conformity Implementation Gate passes, the temporary cross-track
+synchronization constraint is removed. Producer and Consumer development may
+resume independently and concurrently, subject to normal ownership, dependency
+direction, frozen contracts, architecture gates and explicit slice scopes.
+The post-gate model is not architecture-unconstrained.
+
+Before that broad expansion begins, the mandatory cross-cutting structural
+checkpoint is **Package Boundary / Modular Monolith Foundation v1**. It does
+not add a product phase or renumber phases 0–15; it establishes bounded package
+ownership and architecture tests inside the existing single-repository,
+single-`src/` modular-monolith default.
+
+```text
+Conformity Implementation Gate PASS
+            ↓
+Package Boundary / Modular Monolith Foundation v1
+            ↓
+Broad independent Producer / Consumer expansion
+```
+
+## Parallel producer track
+
+The consumer dependency track remains canonical. In parallel, the Data Plane
+producer track is:
 
 ```text
 Market Data Ingest architecture and contracts
         ↓
 Declared coverage contract
         ↓
-Contract Freeze Gate  <-- current position
+Contract Freeze Gate — PASSED
         ↓
 Historical Trades publication slice (conformity slice: Parquet materializer,
   Bybit eligibility profile, manifest/coverage emission, certifier)
         ↓
 Manifest → catalog publication bridge (conformity slice)
         ↓
-Conformity Implementation Gate
+Conformity Implementation Gate — IN PROGRESS / PARTIAL
+        ↓
+Package Boundary / Modular Monolith Foundation v1
         ↓
 Capacity monitoring foundation
+        ↓
+Storage health / pressure behavior
+        ↓
+RAW/source protection
         ↓
 Safe storage placement and relocation
         ↓
 Backup / restore foundation
+        ↓
+Backup verification
+        ↓
+Retention/deletion authority
         ↓
 Backfill / repair
         ↓
@@ -98,7 +148,7 @@ Advanced recovery and reconciliation
 The producer and consumer tracks meet through the existing published Data
 Plane contracts and the DataGateway boundary. Storage safety is cross-cutting.
 Persistent high-volume L2/L3/MBO collection is not operationally READY without
-capacity monitoring, pressure behavior, source-data protection, and recovery.
+capacity monitoring, pressure behavior, source-data protection and recovery.
 
 Provenance and identity primitives are required as soon as their entities are
 implemented; they do not wait for Phase 8. Research may continue across
@@ -111,5 +161,8 @@ implementation. It does not add a product capability or renumber the phases.
 Phase 2 (Representation foundation) has its semantic contract frozen and
 accepted (ADR-0021, CandleDefinition v1). Candle runtime implementation is
 explicitly postponed until the Conformity Implementation Gate passes, because
-a historical candle runtime needs a bounded DataGateway read path and a
-conforming publication chain that do not yet exist (ADR-0023).
+the bounded historical DataGateway read is implemented but the conforming
+publication chain remains incomplete: manifest/coverage emission,
+authoritative certification and the publication bridge still require completion
+and proof. Candle runtime remains blocked until the complete seam is proven and
+the Conformity Implementation Gate passes.

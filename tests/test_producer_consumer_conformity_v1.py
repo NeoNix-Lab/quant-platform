@@ -35,6 +35,7 @@ from quant_platform.data.models import DataRequest  # noqa: E402
 from quant_platform.data.parquet import _OPTIONAL, _REQUIRED  # noqa: E402
 
 ADR_PATH = ROOT / "docs" / "decisions" / "ADR-0023-producer-consumer-conformity-gate-v1.md"
+ADR_0024_PATH = ROOT / "docs" / "decisions" / "ADR-0024-package-boundary-modular-monolith-v1.md"
 CONTRACT_PATH = ROOT / "docs" / "contracts" / "PRODUCER_CONSUMER_CONFORMITY.md"
 DECISIONS_INDEX = ROOT / "docs" / "decisions" / "README.md"
 DOCS_INDEX = ROOT / "docs" / "README.md"
@@ -77,11 +78,26 @@ def _normalize(text: str) -> str:
 
 
 class GovernanceDocumentsExistAndAreLinked(unittest.TestCase):
-    def test_adr_0023_exists_with_proposed_status(self):
+    def test_adr_0023_exists_with_accepted_contract_freeze_status(self):
         self.assertTrue(ADR_PATH.is_file(), ADR_PATH)
         text = _read(ADR_PATH)
-        self.assertIn("PROPOSED", text)
-        self.assertIn("independent review", text)
+        status_match = re.search(r"^\*\*Status:\*\*\s*([^\r\n]+)$", text, re.MULTILINE)
+        self.assertIsNotNone(status_match, "ADR-0023 current status line not found")
+        self.assertEqual(status_match.group(1).strip(), "ACCEPTED")
+        self.assertNotIn("PROPOSED", status_match.group(1))
+        self.assertRegex(
+            text,
+            re.compile(r"^\*\*Contract Freeze Gate:\*\*\s*PASSED$", re.MULTILINE),
+        )
+
+    def test_adr_0024_exists_with_accepted_status(self):
+        self.assertTrue(ADR_0024_PATH.is_file(), ADR_0024_PATH)
+        text = _read(ADR_0024_PATH)
+        status_match = re.search(r"^\*\*Status:\*\*\s*([^\r\n]+)$", text, re.MULTILINE)
+        self.assertIsNotNone(status_match, "ADR-0024 current status line not found")
+        self.assertEqual(status_match.group(1).strip(), "ACCEPTED")
+        self.assertIn("APPROVE", text)
+        self.assertIn("BLOCKERS: NONE", text)
 
     def test_conformity_contract_exists(self):
         self.assertTrue(CONTRACT_PATH.is_file(), CONTRACT_PATH)

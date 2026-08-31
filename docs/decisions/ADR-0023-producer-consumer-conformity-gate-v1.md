@@ -1,7 +1,15 @@
 # ADR-0023 — Producer–Consumer Conformity Gate v1
 
-**Status:** PROPOSED — pending independent review; governance and contract
-freeze only, no runtime authorized
+**Status:** ACCEPTED
+
+**Contract Freeze Gate:** PASSED
+
+**Conformity Implementation Gate:** IN PROGRESS / PARTIAL
+
+This ADR records the accepted governance and semantic boundary. Runtime
+implementation progress is tracked by `SCOPE.md`,
+`docs/product/ROADMAP.md` and `docs/product/CAPABILITY_MAP.md`; this ADR does
+not serve as the runtime implementation ledger.
 
 **Date:** 2026-08-30
 
@@ -13,7 +21,7 @@ Representation -> Feature -> ... -> API -> Clients) have so far been
 documented as independent parallel tracks meeting only "through the existing
 published Data Plane contracts and the DataGateway boundary."
 
-An independent audit of the current baseline — [ADR-0019](ADR-0019-datagateway-boundary.md)
+An independent audit of the pre-implementation baseline recorded for this ADR — [ADR-0019](ADR-0019-datagateway-boundary.md)
 / [DATA_GATEWAY.md](../contracts/DATA_GATEWAY.md), [ADR-0021](ADR-0021-candle-definition-v1.md)
 / [CANDLE_DEFINITION.md](../contracts/CANDLE_DEFINITION.md),
 [ADR-0022](ADR-0022-declared-coverage-contract.md) /
@@ -153,7 +161,8 @@ CONTRACT FREEZE GATE                    <- documentation-level; exit = Decision 
   DataGateway read) against this frozen contract
         |
         v
-[implementation work happens here — NOT authorized by this ADR]
+[implementation work happens here — authorized by Decision §8 after Contract
+Freeze Gate PASS]
         |
         v
 CONFORMITY IMPLEMENTATION GATE          <- runtime-level; exit = Decision §7
@@ -287,7 +296,8 @@ broader producer or consumer vertical expansion.
 
 Implementation of the conformity slices — Parquet writer, manifest/coverage
 emission, certifier, catalog bridge, bounded DataGateway read path — is
-authorized against the frozen contract. Producer vertical expansion and
+authorized against the frozen contract, and the first three slices are now
+implemented on `origin/main`. Producer vertical expansion and
 consumer vertical expansion beyond these conformity slices (a second venue,
 L1/L2/L3, live collection, Candle runtime, further representations) remain
 suspended.
@@ -332,16 +342,32 @@ a frozen piece needs to change.
 
 ## Review gate
 
-This ADR must remain `PROPOSED` until an independent reviewer confirms this
-ADR and
+The historical review gate kept this ADR in `PROPOSED` status and kept
 [PRODUCER_CONSUMER_CONFORMITY.md](../contracts/PRODUCER_CONSUMER_CONFORMITY.md)
-— i.e. until the Contract Freeze Gate (Decision §6) passes. A separate
-implementation mandate for the conformity slices may begin only after that
-review, following the same discipline already applied to ADR-0021 and
-ADR-0022; this ADR does not authorize producer or consumer runtime code by
-itself, before or after Contract Freeze Gate PASS — only Decision §8's
-implementation-slice authorization does, and only once §6 is actually
-satisfied. The suspension in Decision §8 is binding on this branch
-immediately and independent of the review outcome; review governs whether the
-*contract content* is accepted as written or remediated again, not whether
-vertical expansion beyond the conformity slices is currently permitted.
+proposed until independent review confirmed the Contract Freeze Gate criteria.
+That review is complete and the Contract Freeze Gate has passed. A separate
+implementation mandate for the conformity slices may proceed against the
+accepted contract; the Conformity Implementation Gate remains open until the
+runtime slices and required evidence satisfy Decision §7. The suspension in
+Decision §8 remains binding for vertical expansion beyond the conformity
+slices, while the accepted Decision §8 authorization covers the conformity
+implementation itself.
+
+## Acceptance provenance
+
+The Contract Freeze Gate acceptance is recorded in merged PR #8,
+`f0d100773f8ce1515c7eca49e67d96ad321eb50d`, which merged the
+Producer–Consumer Conformity documentation after independent contract review.
+The review record states:
+
+- independent audit and multiple read-only re-reviews completed;
+- final review result: **APPROVE**;
+- `BLOCKERS: NONE`;
+- `IMPORTANT: NONE`;
+- Contract Freeze Gate: **PASS**;
+- **READY TO IMPLEMENT CONFORMITY SLICES**.
+
+This is repository provenance for the accepted governance state, not an
+additional semantic or implementation requirement. Runtime completion remains
+governed by the Conformity Implementation Gate and its existing Decision §7
+criteria.

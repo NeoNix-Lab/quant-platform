@@ -1,7 +1,9 @@
 # Producer–Consumer Conformity Contract v1
 
-**Status:** Contract v1 candidate — semantics frozen for independent review;
-no producer or consumer runtime implemented or authorized by this document
+**Status:** Contract v1 accepted — Contract Freeze Gate PASSED; normative
+semantics are frozen. Conformity Implementation Gate: IN PROGRESS / PARTIAL.
+Runtime progress is tracked by `SCOPE.md`, `ROADMAP.md` and `CAPABILITY_MAP.md`;
+this contract remains the semantic authority, not the implementation ledger.
 
 **Decision:** [ADR-0023 — Producer–Consumer Conformity Gate v1](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md)
 
@@ -1265,16 +1267,21 @@ the real SQLite file.
 
 ### 15.2 Required future proof
 
+The contract's original future-proof chain is retained below. This contract
+does not maintain live implementation status; the current state is tracked in
+[`CAPABILITY_MAP.md`](../product/CAPABILITY_MAP.md), with execution order and
+active scope in [`ROADMAP.md`](../product/ROADMAP.md) and `SCOPE.md`.
+
 ```text
 SQLite/source
-  -> canonical trade-v1                    [proved: integration_bybit_trades_2024_01_15.py]
-  -> canonical Parquet                     [needs: §9 producer, not yet built]
-  -> Bybit eligibility profile check       [contract frozen: §10; needs: certifier]
-  -> manifests                             [needs: manifest emission against §9 artifact]
-  -> declared coverage                     [contract frozen: DECLARED_COVERAGE.md; needs: assertion emission]
-  -> certification                         [contract frozen: §13; needs: certifier]
-  -> catalog                               [contract frozen: §14; needs: bridge]
-  -> bounded DataGateway finite read       [contract frozen: §5-§8; needs: streaming read path]
+  -> canonical trade-v1
+  -> canonical Parquet
+  -> Bybit eligibility profile check
+  -> manifests
+  -> declared coverage
+  -> certification
+  -> catalog
+  -> bounded DataGateway finite read
   -> exact semantic equality against §15.1's numbers
 ```
 
@@ -1459,8 +1466,8 @@ already applies to the frozen market-data contracts.
 
 ## 23. Implementation plan (dependency order)
 
-Not authorized by this document; authorized only once the Contract Freeze
-Gate passes (ADR-0023 §6/§8). Revised from the first candidate to put shared
+The Contract Freeze Gate has passed (ADR-0023 §6/§8), so implementation of the
+dependency-ordered slices is authorized. Revised from the first candidate to put shared
 semantic primitives — including `CanonicalContentHashV1`, which any
 certifying/persisting component needs — before anything that consumes them.
 

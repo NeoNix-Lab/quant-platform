@@ -6,11 +6,35 @@ Two sequential, non-circular gates are defined by
 [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md):
 the **Contract Freeze Gate** (documentation-level; unlocks implementing the
 conformity slices) and the **Conformity Implementation Gate** (runtime-level;
-unlocks broader producer/consumer vertical expansion and Candle runtime). See
-ADR-0023 for the exact, separate exit criteria of each. Until the Contract
-Freeze Gate passes, no conformity-slice implementation is authorized; until
-the Conformity Implementation Gate passes, only the conformity slices
-themselves may be implemented.
+unlocks broader producer/consumer vertical expansion and Candle runtime). The
+Contract Freeze Gate has **PASSED**. The Conformity Implementation Gate remains
+**OPEN / IN PROGRESS**: only the conformity slices and their gate evidence may
+advance until it passes. See ADR-0023 for the exact, separate exit criteria of
+each.
+
+## Package Boundary / Modular Monolith Foundation v1
+
+The following direction is resolved for the post-Conformity program order:
+
+- one authoritative repository remains acceptable;
+- one Python source root, `src/`, remains acceptable;
+- the default target is a modular monolith;
+- a mandatory Package Boundary / Modular Monolith Foundation v1 checkpoint
+  occurs immediately after Conformity Implementation Gate PASS and before
+  broad independent Producer/Consumer expansion;
+- bounded ownership and dependency direction must become enforceable through
+  package boundaries and architecture tests.
+
+The following remain intentionally open for that checkpoint:
+
+- exact bounded-context and package names;
+- exact package hierarchy and dependency graph;
+- executable host placement, including any future `apps/` layout;
+- independently installable API, worker or client packages;
+- service/deployment split and process topology;
+- migration mechanics and sequence for current `quant_platform.data` modules.
+
+ADR-0024 records this boundary without freezing the future package tree.
 
 [PRODUCER_CONSUMER_CONFORMITY.md](../contracts/PRODUCER_CONSUMER_CONFORMITY.md)
 freezes the bounded-read property, `RecordTimeBounds`, the ordering contract,
