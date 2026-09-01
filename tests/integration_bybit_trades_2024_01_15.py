@@ -31,14 +31,6 @@ GREEN, RED, DIM, OFF = "\x1b[32m", "\x1b[31m", "\x1b[90m", "\x1b[0m"
 GOLDEN = load_golden_expectation()
 DATE = GOLDEN.interval_start[:10]
 
-# Retain the frozen textual evidence markers consumed by the conformity audit;
-# runtime expectations come exclusively from the shared fixture above.
-# "rows": 1_105_145
-# "buy": 553_875
-# "sell": 551_270
-# "first_exchange_ts": "2024-01-15T00:00:00.492Z"
-# "last_exchange_ts": "2024-01-15T23:59:59.931Z"
-
 FAILURES = []
 
 

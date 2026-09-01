@@ -156,18 +156,48 @@ class GoldenConformitySupportV1Tests(unittest.TestCase):
         self.assertEqual(observation.max_batch_size, 2)
         self.assertIs(observation.completed_metadata, scan.completed_metadata)
 
-    def test_zero_rows_complete_and_aborted_scans_do_not_create_acceptance_summary(self):
+    def test_zero_rows_complete_scan_has_no_record_bounds(self):
         empty = observe_scan(make_scan([]))
         self.assertEqual(empty.final_state, ScanState.COMPLETED)
         self.assertEqual(empty.row_count, 0)
         self.assertIsNone(empty.completed_metadata.returned_record_bounds)
 
-        aborted_scan = make_scan([(record("2024-01-15T00:00:00Z", "1"),)])
-        aborted_scan.close()
-        aborted = observe_scan(aborted_scan)
-        self.assertEqual(aborted.initial_state, ScanState.ABORTED)
-        self.assertEqual(aborted.final_state, ScanState.ABORTED)
-        self.assertIsNone(aborted.completed_metadata)
+    def test_observer_rejects_partially_consumed_scan_without_consuming_tail(self):
+        scan = make_scan(
+            [
+                (
+                    record("2024-01-15T00:00:00Z", "1"),
+                ),
+                (
+                    record("2024-01-15T00:01:00Z", "2"),
+                ),
+            ]
+        )
+        self.assertEqual(scan.state, ScanState.OPEN)
+        self.assertEqual(next(scan)[0].trade_id, "1")
+        self.assertEqual(scan.state, ScanState.READING)
+        samples = []
+        with self.assertRaisesRegex(ValueError, "initially OPEN"):
+            observe_scan(scan, memory_sampler=lambda: samples.append(1) or 100)
+        self.assertEqual(samples, [])
+        self.assertEqual(next(scan)[0].trade_id, "2")
+
+    def test_observer_rejects_already_completed_scan(self):
+        scan = make_scan([])
+        self.assertEqual(list(scan), [])
+        self.assertEqual(scan.state, ScanState.COMPLETED)
+        metadata = scan.completed_metadata
+        with self.assertRaisesRegex(ValueError, "initially OPEN"):
+            observe_scan(scan)
+        self.assertIs(scan.completed_metadata, metadata)
+
+    def test_observer_rejects_already_aborted_scan(self):
+        scan = make_scan([(record("2024-01-15T00:00:00Z", "1"),)])
+        scan.close()
+        self.assertEqual(scan.state, ScanState.ABORTED)
+        with self.assertRaisesRegex(ValueError, "initially OPEN"):
+            observe_scan(scan)
+        self.assertIsNone(scan.completed_metadata)
 
     def test_memory_sampler_keeps_compact_telemetry(self):
         samples = iter([100, 105, 103, 110])

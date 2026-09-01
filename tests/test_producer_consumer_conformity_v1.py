@@ -7,8 +7,8 @@ Every test below is a CONTRACT-CONSISTENCY check: it verifies that ADR-0023,
 docs/contracts/PRODUCER_CONSUMER_CONFORMITY.md, the governance documents and
 the existing narrow DataGateway v1 implementation agree with each other and
 have not silently drifted apart. It does NOT implement, exercise or prove any
-runtime behavior (no Parquet writer, no bridge, no certifier, no streaming
-DataGateway read path exists yet). A passing test here means "the frozen
+runtime behavior (no Parquet writer, no bridge or no certifier is exercised
+here). A passing test here means "the frozen
 documents are internally consistent," never "the described runtime behavior
 has been observed to work." The required future BEHAVIORAL/RUNTIME tests
 (bounded memory growth, CanonicalContentHashV1 reproducibility against a real
@@ -30,9 +30,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 from quant_platform.data.models import DataRequest  # noqa: E402
 from quant_platform.data.parquet import _OPTIONAL, _REQUIRED  # noqa: E402
+from golden_conformity_support import load_golden_expectation  # noqa: E402
 
 ADR_PATH = ROOT / "docs" / "decisions" / "ADR-0023-producer-consumer-conformity-gate-v1.md"
 ADR_0024_PATH = ROOT / "docs" / "decisions" / "ADR-0024-package-boundary-modular-monolith-v1.md"
@@ -49,11 +51,7 @@ TRADE_V1_SCHEMA = ROOT / "schemas" / "trade-v1.json"
 DATAGATEWAY_ORDERING_IDENTITY = "bybit-trade-v1-exchange-ts-trade-id-v1"
 CANDLE_ORDERING_IDENTITY = "trades@1-canonical-total-order-v1"
 
-GOLDEN_ROWS = 1_105_145
-GOLDEN_BUY = 553_875
-GOLDEN_SELL = 551_270
-GOLDEN_FIRST = "2024-01-15T00:00:00.492Z"
-GOLDEN_LAST = "2024-01-15T23:59:59.931Z"
+GOLDEN_FIXTURE = ROOT / "fixtures" / "conformity" / "golden-bybit-btcusdt-2024-01-15.json"
 
 CONTRACT_FREEZE_GATE = "Contract Freeze Gate"
 CONFORMITY_IMPLEMENTATION_GATE = "Conformity Implementation Gate"
@@ -75,6 +73,27 @@ def _normalize(text: str) -> str:
     """Collapse whitespace runs so a multi-word phrase check is not fragile
     against incidental Markdown line-wrapping."""
     return re.sub(r"\s+", " ", text)
+
+
+def _golden_facts_from_contract() -> dict[str, object]:
+    text = _normalize(_read(CONTRACT_PATH))
+    match = re.search(
+        r"declared interval: \[([^,]+), ([^)]+)\) rows = ([\d,]+) buy = ([\d,]+) sell = ([\d,]+) "
+        r"first observed: ([^ ]+) last observed: ([^ ]+)",
+        text,
+    )
+    if match is None:
+        raise AssertionError("frozen Golden facts are missing from the conformity contract")
+    start, end, rows, buy, sell, first, last = match.groups()
+    return {
+        "interval_start": start,
+        "interval_end": end,
+        "row_count": int(rows.replace(",", "")),
+        "buy": int(buy.replace(",", "")),
+        "sell": int(sell.replace(",", "")),
+        "first_exchange_ts": first,
+        "last_exchange_ts": last,
+    }
 
 
 class GovernanceDocumentsExistAndAreLinked(unittest.TestCase):
@@ -607,29 +626,32 @@ class CatalogRebuildEqualityIgnoresGeneratedIdentifiers(unittest.TestCase):
 
 
 class GoldenVerticalNumbersAreConsistentAcrossDocuments(unittest.TestCase):
-    """Resolves the golden conformity acceptance target: the same numbers
-    must appear in the frozen contract and in the existing evidence test,
-    and must be internally consistent."""
+    """The executable fixture must agree with the frozen contract facts."""
 
     def test_buy_plus_sell_equals_rows(self):
-        self.assertEqual(GOLDEN_BUY + GOLDEN_SELL, GOLDEN_ROWS)
+        golden = load_golden_expectation(GOLDEN_FIXTURE)
+        self.assertEqual(golden.buy + golden.sell, golden.row_count)
 
-    def test_conformity_contract_states_the_golden_numbers(self):
-        text = _read(CONTRACT_PATH)
-        self.assertIn("1,105,145", text)
-        self.assertIn("553,875", text)
-        self.assertIn("551,270", text)
-        self.assertIn(GOLDEN_FIRST, text)
-        self.assertIn(GOLDEN_LAST, text)
+    def test_fixture_matches_frozen_contract_facts(self):
+        golden = load_golden_expectation(GOLDEN_FIXTURE)
+        facts = _golden_facts_from_contract()
+        for field in (
+            "interval_start",
+            "interval_end",
+            "row_count",
+            "buy",
+            "sell",
+            "first_exchange_ts",
+            "last_exchange_ts",
+        ):
+            with self.subTest(field=field):
+                self.assertEqual(getattr(golden, field), facts[field])
 
-    def test_existing_integration_evidence_uses_the_same_numbers(self):
+    def test_integration_reuses_shared_fixture_support(self):
         self.assertTrue(GOLDEN_INTEGRATION_TEST.is_file(), GOLDEN_INTEGRATION_TEST)
         text = _read(GOLDEN_INTEGRATION_TEST)
-        self.assertIn('"rows": 1_105_145', text)
-        self.assertIn('"buy": 553_875', text)
-        self.assertIn('"sell": 551_270', text)
-        self.assertIn(GOLDEN_FIRST, text)
-        self.assertIn(GOLDEN_LAST, text)
+        self.assertIn("from golden_conformity_support import load_golden_expectation", text)
+        self.assertIn("GOLDEN = load_golden_expectation()", text)
 
 
 class FrozenContractsAreNotMutatedInPlace(unittest.TestCase):

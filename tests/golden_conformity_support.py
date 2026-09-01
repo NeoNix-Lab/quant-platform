@@ -170,6 +170,8 @@ def observe_scan(
     """
 
     initial_state = scan.state
+    if initial_state is not ScanState.OPEN:
+        raise ValueError("observe_scan requires an initially OPEN DataScan")
     initial_metadata_present = scan.completed_metadata is not None
     first_batch_state: ScanState | None = None
     row_count = 0
@@ -185,32 +187,31 @@ def observe_scan(
     telemetry = _TelemetryCollector(memory_sampler)
     telemetry.sample()
 
-    if initial_state not in {ScanState.ABORTED, ScanState.COMPLETED}:
-        while True:
-            try:
-                batch = next(scan)
-            except StopIteration:
-                break
-            if first_batch_state is None:
-                first_batch_state = scan.state
-            batch_count += 1
-            batch_size = 0
-            for record in batch:
-                batch_size += 1
-                row_count += 1
-                if record.aggressor_side == "buy":
-                    buy += 1
-                elif record.aggressor_side == "sell":
-                    sell += 1
-                else:
-                    other_side += 1
-                if first_exchange_ts is None:
-                    first_exchange_ts = record.exchange_ts
-                    observed_venue = record.venue
-                    observed_instrument = record.instrument
-                last_exchange_ts = record.exchange_ts
-            max_batch_size = max(max_batch_size, batch_size)
-            telemetry.sample()
+    while True:
+        try:
+            batch = next(scan)
+        except StopIteration:
+            break
+        if first_batch_state is None:
+            first_batch_state = scan.state
+        batch_count += 1
+        batch_size = 0
+        for record in batch:
+            batch_size += 1
+            row_count += 1
+            if record.aggressor_side == "buy":
+                buy += 1
+            elif record.aggressor_side == "sell":
+                sell += 1
+            else:
+                other_side += 1
+            if first_exchange_ts is None:
+                first_exchange_ts = record.exchange_ts
+                observed_venue = record.venue
+                observed_instrument = record.instrument
+            last_exchange_ts = record.exchange_ts
+        max_batch_size = max(max_batch_size, batch_size)
+        telemetry.sample()
 
     final_state = scan.state
     completed_metadata = scan.completed_metadata if final_state == ScanState.COMPLETED else None
