@@ -36,6 +36,7 @@ class ParquetMaterialization:
     """Evidence produced when one canonical partition is sealed to Parquet."""
 
     path: Path
+    dataset_identity: DatasetIdentity
     file_size_bytes: int
     row_count: int
     sha256: str
@@ -126,6 +127,7 @@ def materialize_trade_v1(
 
     return ParquetMaterialization(
         path=target,
+        dataset_identity=dataset_identity,
         file_size_bytes=file_size_bytes,
         row_count=len(ordered),
         sha256=artifact_sha256,
