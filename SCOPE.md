@@ -23,17 +23,21 @@ Completed conformity slices on authoritative `origin/main`:
 1. Shared Semantic Primitives v1 — **DONE** (`RecordTimeBounds`,
    `CanonicalContentHashV1`, and provider-supplied ordering compatibility);
 2. Canonical Parquet Materializer v1 — **DONE**;
-3. Bounded DataGateway finite read v1 — **DONE**.
+3. Bounded DataGateway finite read v1 — **DONE**;
+4. Manifest + Coverage Emission v1 — **DONE**;
+5. Golden Conformity Acceptance Support v1 — **DONE** as reusable gate-support
+   infrastructure; it is not the Golden E2E proof and does not imply Gate PASS.
+
+**Next authorized implementation slice:** Publication Certification runtime v1.
 
 Remaining critical path to the Conformity Implementation Gate review:
 
-4. Manifest + Coverage emission;
-5. Publication Certifier;
-6. Manifest/Coverage/Certification → Catalog Publication Bridge;
-7. Human vertical / Golden Bybit E2E;
-8. Adversarial acceptance;
-9. Candle ordering compatibility acceptance;
-10. Conformity Implementation Gate review.
+6. Publication Certification runtime;
+7. Manifest/Coverage/Certification → Catalog Publication Bridge;
+8. Human vertical / Golden Bybit E2E;
+9. Adversarial acceptance;
+10. Candle ordering compatibility acceptance;
+11. Conformity Implementation Gate review.
 
 The post-gate model is **Phase B — Full Bidirectional Expansion**. After the
 Conformity Implementation Gate passes, the temporary Producer–Consumer
@@ -44,7 +48,6 @@ architecture constraint.
 
 ## In scope
 
-- manifest and declared-coverage emission for the canonical Parquet artifact;
 - the first-vertical publication certifier and durable evidence flow;
 - the manifest/coverage/certification-to-catalog publication bridge;
 - the human vertical and Golden Bybit BTCUSDT E2E proof;
@@ -95,6 +98,11 @@ independent Producer/Consumer expansion. This is a temporary cross-cutting
 checkpoint, not a new product phase. Exact package names, hierarchy,
 deployment split and migration mechanics remain open until that audit.
 
+Immediately after that structural checkpoint, run **Legacy Capability Harvest
+Audit v1** before broad bidirectional expansion. Legacy code remains evidence
+only and is classified capability-by-capability as ADOPT / ADAPT / REVIEW /
+REJECT against current canonical semantics.
+
 ## Preserved future roadmap
 
 The following work remains planned and is not deleted or made permanently
@@ -144,13 +152,16 @@ sequential by this scope.
   documentation pass;
 - implementing any remaining runtime slice while synchronizing these files;
 - creating a parallel architecture or a generic framework;
-- commit, push or branch creation/switching.
+- branch creation/switching as part of this documentation synchronization.
 
 ## Completion criteria
 
 - this file describes the active Conformity Implementation scope and current
   gate state;
-- the three completed slices and the remaining critical path are explicit;
+- the five completed slices/support capabilities and the remaining critical
+  path are explicit;
+- Publication Certification runtime v1 is explicit as the next authorized
+  implementation slice;
 - pre-gate controlled convergence and post-gate independent concurrency are
   explicit;
 - blocked broader work and preserved future Producer/Consumer roadmap items

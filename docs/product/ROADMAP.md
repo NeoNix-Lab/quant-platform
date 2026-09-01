@@ -54,11 +54,13 @@ development   development
 ```
 
 The completed slices are Shared Semantic Primitives v1, Canonical Parquet
-Materializer v1 and Bounded DataGateway finite read v1. The remaining critical
-path is manifest and coverage emission, publication certification, the
-manifest/coverage/certification-to-catalog bridge, the Golden Bybit E2E,
-adversarial acceptance, Candle ordering compatibility acceptance and the gate
-review. See `SCOPE.md` and `CAPABILITY_MAP.md` for the current ledger.
+Materializer v1, Manifest + Coverage Emission v1 and Bounded DataGateway finite
+read v1. Golden Conformity Acceptance Support v1 is also READY as reusable gate
+support, but it is not the Golden E2E proof. The remaining critical path is
+Publication Certification, the manifest/coverage/certification-to-catalog
+bridge, the Golden Bybit E2E, adversarial acceptance, Candle ordering
+compatibility acceptance and the gate review. See `SCOPE.md` and
+`CAPABILITY_MAP.md` for the current ledger.
 
 This is a temporary integration gate pair, not a permanent architecture layer.
 Passing both gates does not add a phase to the dependency order below; it
@@ -76,6 +78,7 @@ The following are blocked until the implementation gate passes:
 - unrelated consumer or producer vertical expansion.
 
 The conformity slices themselves may proceed in their frozen dependency order.
+The next authorized Producer slice is **Publication Certification runtime v1**.
 
 ## Phase B — full bidirectional expansion after Conformity Implementation Gate PASS
 
@@ -91,10 +94,17 @@ not add a product phase or renumber phases 0–15; it establishes bounded packag
 ownership and architecture tests inside the existing single-repository,
 single-`src/` modular-monolith default.
 
+Immediately after that checkpoint, run **Legacy Capability Harvest Audit v1**
+before broad bidirectional expansion. The legacy repository is evidence only;
+each target capability is classified ADOPT / ADAPT / REVIEW / REJECT against
+current canonical semantics, temporal correctness and dependency baggage.
+
 ```text
 Conformity Implementation Gate PASS
             ↓
 Package Boundary / Modular Monolith Foundation v1
+            ↓
+Legacy Capability Harvest Audit v1
             ↓
 Broad independent Producer / Consumer expansion
 ```
@@ -111,14 +121,22 @@ Declared coverage contract
         ↓
 Contract Freeze Gate — PASSED
         ↓
-Historical Trades publication slice (conformity slice: Parquet materializer,
-  Bybit eligibility profile, manifest/coverage emission, certifier)
+Historical Trades publication conformity:
+  Canonical Parquet Materializer — COMPLETE
+  Manifest + Coverage Emission — COMPLETE
+  Bybit eligibility profile — PARTIAL until authoritative certification
         ↓
-Manifest → catalog publication bridge (conformity slice)
+Publication Certification — NEXT
+        ↓
+Manifest/Coverage/Certification → Catalog Publication Bridge
+        ↓
+Golden Bybit E2E + adversarial acceptance + Candle ordering proof
         ↓
 Conformity Implementation Gate — IN PROGRESS / PARTIAL
         ↓
 Package Boundary / Modular Monolith Foundation v1
+        ↓
+Legacy Capability Harvest Audit v1
         ↓
 Capacity monitoring foundation
         ↓
@@ -161,8 +179,8 @@ implementation. It does not add a product capability or renumber the phases.
 Phase 2 (Representation foundation) has its semantic contract frozen and
 accepted (ADR-0021, CandleDefinition v1). Candle runtime implementation is
 explicitly postponed until the Conformity Implementation Gate passes, because
-the bounded historical DataGateway read is implemented but the conforming
-publication chain remains incomplete: manifest/coverage emission,
-authoritative certification and the publication bridge still require completion
-and proof. Candle runtime remains blocked until the complete seam is proven and
-the Conformity Implementation Gate passes.
+the bounded historical DataGateway read, Canonical Parquet Materializer and
+Manifest + Coverage Emission are implemented, but authoritative Publication
+Certification and the Publication Bridge still require completion and proof.
+Candle runtime remains blocked until the complete seam is proven and the
+Conformity Implementation Gate passes.
