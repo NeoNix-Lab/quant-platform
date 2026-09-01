@@ -38,6 +38,13 @@ from .materializer import (
     materialize_trade_v1,
     physical_artifact_sha256,
 )
+from .manifests import (
+    ManifestEmission,
+    ManifestValidationError,
+    emit_coverage_manifest,
+    emit_dataset_manifest,
+    emit_partition_manifest,
+)
 from .parquet import read_trade_v1, resolve_partition_path, scan_trade_v1
 
 __all__ = [
@@ -80,6 +87,11 @@ __all__ = [
     "UnsupportedSchema",
     "materialize_trade_v1",
     "physical_artifact_sha256",
+    "ManifestEmission",
+    "ManifestValidationError",
+    "emit_coverage_manifest",
+    "emit_dataset_manifest",
+    "emit_partition_manifest",
     "read_trade_v1",
     "resolve_partition_path",
     "scan_trade_v1",

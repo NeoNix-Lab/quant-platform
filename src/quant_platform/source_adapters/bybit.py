@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from ..data.models import DataIntegrityError, DatasetIdentity, Instant, InvalidRequest, TradeRecord
 from ..data.materializer import ParquetMaterialization, materialize_trade_v1
@@ -94,10 +95,76 @@ def materialize_bybit_trade_v1(
     )
 
 
+def build_bybit_trade_v1_source_extract_coverage(
+    *,
+    dataset_identity: DatasetIdentity,
+    coverage_id: str,
+    intent_start: str,
+    intent_end: str,
+    assertion_id: str,
+    assertion_start: str,
+    assertion_end: str,
+    partition_key: str,
+    revision: int,
+    source_extract_detail: str,
+    created_at: str,
+    producer: str,
+    code_ref: str,
+    supersedes: str | None = None,
+) -> dict[str, Any]:
+    """Translate explicit first-vertical SQLite evidence to generic coverage input.
+
+    The complete status is tied to the caller-provided deterministic extract
+    evidence, never to the presence or count of materialized trades.
+    """
+
+    if not bybit_trade_v1_applies_to(dataset_identity):
+        raise BybitTradeV1EligibilityError(
+            "Bybit source-extract coverage requires canonical/trades/trade-v1 identity"
+        )
+    if not isinstance(source_extract_detail, str) or not source_extract_detail.strip():
+        raise BybitTradeV1EligibilityError(
+            "source extract coverage requires explicit deterministic extract evidence"
+        )
+    return {
+        "source_dataset_identity": dataset_identity,
+        "coverage_id": coverage_id,
+        "supersedes": supersedes,
+        "created_at": created_at,
+        "acquisition": {
+            "basis": "source_extract",
+            "intent_start": intent_start,
+            "intent_end": intent_end,
+            "source_semantics": "bybit-public-trades-sqlite-v1",
+            "mapping": "bybit-sqlite-day-extract-v1",
+        },
+        "assertions": [
+            {
+                "assertion_id": assertion_id,
+                "start": assertion_start,
+                "end": assertion_end,
+                "status": "complete",
+                "partitions": [
+                    {"partition_key": partition_key, "revision": revision}
+                ],
+                "evidence": [
+                    {
+                        "kind": "deterministic_source_extract",
+                        "detail": source_extract_detail,
+                    }
+                ],
+            }
+        ],
+        "producer": producer,
+        "code_ref": code_ref,
+    }
+
+
 __all__ = [
     "BYBIT_ORDERING_PROVIDER",
     "BYBIT_TRADE_V1_ORDERING_POLICY",
     "BybitTradeV1EligibilityError",
+    "build_bybit_trade_v1_source_extract_coverage",
     "bybit_trade_v1_applies_to",
     "bybit_trade_v1_ordering_key",
     "materialize_bybit_trade_v1",
