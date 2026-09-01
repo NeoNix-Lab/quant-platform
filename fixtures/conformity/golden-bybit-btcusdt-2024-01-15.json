@@ -1,0 +1,13 @@
+{
+  "venue": "bybit",
+  "instrument": "BTCUSDT",
+  "interval": {
+    "start": "2024-01-15T00:00:00Z",
+    "end": "2024-01-16T00:00:00Z"
+  },
+  "row_count": 1105145,
+  "buy": 553875,
+  "sell": 551270,
+  "first_exchange_ts": "2024-01-15T00:00:00.492Z",
+  "last_exchange_ts": "2024-01-15T23:59:59.931Z"
+}
