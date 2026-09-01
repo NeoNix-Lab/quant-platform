@@ -31,11 +31,16 @@ class ManifestEmission:
     """Evidence for one atomically persisted manifest document."""
 
     path: Path
-    document: dict[str, Any]
     manifest_sha256: str
     persisted_bytes: bytes
     physical_artifact_hash: str | None = None
     canonical_content_hash_v1: str | None = None
+
+    @property
+    def document(self) -> dict[str, Any]:
+        """Return a fresh document decoded from the immutable persisted bytes."""
+
+        return json.loads(self.persisted_bytes.decode("utf-8"))
 
 _IDENTIFIER = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _VENUE = re.compile(r"^[a-z0-9]+(?:[_-][a-z0-9]+)*$")
@@ -155,6 +160,10 @@ def emit_partition_manifest(
     _nonblank(code_ref, "code_ref")
     if not isinstance(materialization, ParquetMaterialization):
         raise ManifestValidationError("materialization must be ParquetMaterialization")
+    if materialization.dataset_identity != dataset_identity:
+        raise ManifestValidationError(
+            "materialization dataset identity does not match partition identity"
+        )
     _validate_artifact_path(dataset_root, rel_path, materialization)
 
     artifact = Path(materialization.path)
@@ -201,7 +210,6 @@ def emit_partition_manifest(
     emission = _persist_manifest(path, document)
     return ManifestEmission(
         path=emission.path,
-        document=emission.document,
         manifest_sha256=emission.manifest_sha256,
         persisted_bytes=emission.persisted_bytes,
         physical_artifact_hash=actual_hash,
@@ -227,7 +235,8 @@ def emit_coverage_manifest(
 
     A ``complete`` assertion is accepted only when its single natural
     partition reference resolves to exactly one supplied eligible partition
-    manifest, including the observed-bounds containment check.
+    manifest. Final observed-bounds containment belongs to catalog
+    reconstruction across compatible coverage documents.
     """
 
     identity = _identity_document(dataset_identity)
@@ -382,15 +391,6 @@ def _validate_complete_partition_refs(
         partition = matches[0]
         if partition["state"] not in _ELIGIBLE_PARTITION_STATES:
             raise ManifestValidationError("complete assertion references an ineligible partition")
-        start = Instant.parse(assertion["start"])
-        end = Instant.parse(assertion["end"])
-        first = partition["first_exchange_ts"]
-        last = partition["last_exchange_ts"]
-        if partition["row_count"] == 0:
-            if first is not None or last is not None:
-                raise ManifestValidationError("zero-row partition must have null observed bounds")
-        elif Instant.parse(first) < start or Instant.parse(last) >= end:
-            raise ManifestValidationError("observed partition bounds must lie inside declared coverage")
 
 
 def _partition_ref(value: Mapping[str, Any], assertion_index: int, ref_index: int) -> dict[str, Any]:
@@ -715,7 +715,7 @@ def _persist_manifest(path: str | Path, document: dict[str, Any]) -> ManifestEmi
     except Exception:
         _remove_temporary_file(temporary)
         raise
-    return ManifestEmission(target, document, digest, persisted)
+    return ManifestEmission(target, digest, persisted)
 
 
 def _remove_temporary_file(path: Path) -> None:

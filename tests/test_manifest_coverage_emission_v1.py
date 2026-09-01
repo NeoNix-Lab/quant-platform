@@ -19,9 +19,11 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from semantic_validator import (  # noqa: E402
+    _parse_ts,
     check_coverage_manifest,
     check_dataset_manifest,
     check_partition_manifest,
+    reconstruct_catalog_coverage,
 )
 from quant_platform.data import (  # noqa: E402
     DataIntegrityError,
@@ -212,14 +214,64 @@ class ManifestCoverageEmissionV1Tests(unittest.TestCase):
         self.assertEqual(check_coverage_manifest(coverage.document), [])
         self.assertEqual(coverage.document["assertions"][0]["status"], "complete")
 
-    def test_observed_bounds_must_be_inside_half_open_declared_coverage(self):
+    def test_observed_bounds_are_checked_after_catalog_coverage_reconstruction(self):
         _, partition = self.materialized(
-            records=[trade(IDENTITY, "2024-01-15T12:00:00Z")]
+            records=[
+                trade(IDENTITY, "2024-01-15T01:00:00Z", "1"),
+                trade(IDENTITY, "2024-01-15T23:00:00Z", "2"),
+            ]
         )
-        with self.assertRaises(ManifestValidationError):
-            self.emit_coverage(partition, start="2024-01-15T13:00:00Z")
-        with self.assertRaises(ManifestValidationError):
-            self.emit_coverage(partition, end="2024-01-15T12:00:00Z")
+        first = emit_coverage_manifest(
+            self.root / "coverage-a.json",
+            dataset_identity=IDENTITY,
+            source_dataset_identity=IDENTITY,
+            partition_manifests=[partition.document],
+            **source_extract_coverage(
+                coverage_id="coverage-a",
+                start=START,
+                end="2024-01-15T12:00:00Z",
+            ),
+        )
+        second = emit_coverage_manifest(
+            self.root / "coverage-b.json",
+            dataset_identity=IDENTITY,
+            source_dataset_identity=IDENTITY,
+            partition_manifests=[partition.document],
+            **source_extract_coverage(
+                coverage_id="coverage-b",
+                start="2024-01-15T12:00:00Z",
+                end=END,
+            ),
+        )
+        self.assertTrue(first.path.exists())
+        self.assertTrue(second.path.exists())
+        folded, violations = reconstruct_catalog_coverage(
+            [first.document, second.document], [partition.document]
+        )
+        self.assertEqual(violations, [])
+        self.assertEqual(
+            folded[("dt=2024-01-15", 1)],
+            (_parse_ts(START), _parse_ts(END)),
+        )
+
+        partial = emit_coverage_manifest(
+            self.root / "partial-coverage.json",
+            dataset_identity=IDENTITY,
+            source_dataset_identity=IDENTITY,
+            partition_manifests=[partition.document],
+            **source_extract_coverage(
+                coverage_id="partial-coverage",
+                start=START,
+                end="2024-01-15T12:00:00Z",
+            ),
+        )
+        _, partial_violations = reconstruct_catalog_coverage(
+            [partial.document], [partition.document]
+        )
+        self.assertEqual(
+            [violation.code for violation in partial_violations],
+            ["OBSERVED_OUTSIDE_DECLARED"],
+        )
 
     def test_invalid_degenerate_and_submicrosecond_coverage_fails_closed(self):
         _, partition = self.materialized()
@@ -311,6 +363,26 @@ class ManifestCoverageEmissionV1Tests(unittest.TestCase):
         with self.assertRaises(ManifestValidationError):
             self.emit_coverage(partition, partition_manifests=[kraken_partition.document])
 
+    def test_partition_manifest_requires_matching_materialization_identity(self):
+        materialization, _ = self.materialized()
+        self.assertEqual(materialization.dataset_identity, IDENTITY)
+        path = self.root / "bybit-as-kraken-partition.json"
+        with self.assertRaisesRegex(ManifestValidationError, "materialization dataset identity"):
+            emit_partition_manifest(
+                path,
+                materialization,
+                dataset_identity=KRAKEN_IDENTITY,
+                dataset_root=self.root / "bybit",
+                partition_key="dt=2024-01-15",
+                revision=1,
+                rel_path="dt=2024-01-15/part-000.parquet",
+                created_at=CREATED,
+                closed_at=CREATED,
+                producer="test-materializer",
+                code_ref="test-ref",
+            )
+        self.assertFalse(path.exists())
+
     def test_rel_path_must_resolve_to_the_verified_materialization_artifact(self):
         data_path = self.root / "bybit" / "dt=2024-01-15" / "part-actual.parquet"
         materialization = materialize_bybit_trade_v1(
@@ -377,11 +449,27 @@ class ManifestCoverageEmissionV1Tests(unittest.TestCase):
         self.assertEqual(first.manifest_sha256, second.manifest_sha256)
         self.assertEqual(first.persisted_bytes, (self.root / "dataset-a.json").read_bytes())
 
+    def test_manifest_emission_document_is_a_defensive_decoded_copy(self):
+        _, partition = self.materialized()
+        emission = self.emit_coverage(partition)
+        document = emission.document
+        document["venue"] = "kraken"
+        document["assertions"][0]["status"] = "known_gap"
+
+        self.assertEqual(emission.document["venue"], "bybit")
+        self.assertEqual(emission.document["assertions"][0]["status"], "complete")
+        self.assertEqual(emission.persisted_bytes, emission.path.read_bytes())
+        self.assertEqual(
+            emission.manifest_sha256,
+            hashlib.sha256(emission.persisted_bytes).hexdigest(),
+        )
+
     def test_generic_emitter_proves_second_venue_without_venue_branch(self):
-        _, partition = self.materialized(
+        materialization, partition = self.materialized(
             KRAKEN_IDENTITY,
             [trade(KRAKEN_IDENTITY, "2024-01-15T12:00:00Z")],
         )
+        self.assertEqual(materialization.dataset_identity, KRAKEN_IDENTITY)
         values = source_extract_coverage(
             coverage_id="kraken-day",
             evidence="fake Kraken provider explicitly proved its finite source extract",

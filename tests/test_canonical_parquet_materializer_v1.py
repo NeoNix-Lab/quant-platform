@@ -103,6 +103,7 @@ class CanonicalParquetMaterializerV1Tests(unittest.TestCase):
             row_group_size=1,
         )
 
+        self.assertEqual(artifact.dataset_identity, IDENTITY)
         self.assertEqual(read_trade_v1(path, START, END), expected)
         self.assertEqual(artifact.row_count, len(expected))
         self.assertEqual(artifact.first_exchange_ts, expected[0].exchange_ts)
