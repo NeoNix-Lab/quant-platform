@@ -24,7 +24,8 @@ class BybitTradeV1EligibilityError(ValueError):
 
 def bybit_trade_v1_applies_to(identity: DatasetIdentity) -> bool:
     return (
-        identity.venue == "bybit"
+        identity.layer == "canonical"
+        and identity.venue == "bybit"
         and identity.dataset_kind == "trades"
         and identity.instrument == "BTCUSDT"
         and identity.record_schema_id == "trade-v1"

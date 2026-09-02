@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -571,6 +571,58 @@ class PublicationCertificationTests(unittest.TestCase):
             PublicationCertification(writer, NonApplicableProfile()).run(self.evidence())
         self.assertIsNone(writer.partition)
 
+    def test_raw_layer_identity_is_rejected_before_phase_one_seal(self):
+        # B2: the authoritative first-vertical profile must be layer-bound.
+        # canonical/trades/bybit/BTCUSDT/trade-v1 is the only identity it may
+        # certify; raw/trades/bybit/BTCUSDT/trade-v1 must never reach a seal
+        # write, even though a raw partition manifest can otherwise exist
+        # (raw is the dataset canonical derives from, not a materializer
+        # restriction the generic writer enforces on its own).
+        raw_identity = DatasetIdentity("raw", "trades", "bybit", "BTCUSDT", "trade-v1")
+        self.assertFalse(BybitTradeV1CertificationProfile("certifier-ref").applies_to(raw_identity))
+
+        canonical_materialization = materialize_bybit_trade_v1(
+            self.data_path,
+            [trade("2024-01-15T00:00:01Z", "1"), trade("2024-01-15T00:00:02Z", "2")],
+            dataset_identity=IDENTITY,
+        )
+        raw_materialization = replace(canonical_materialization, dataset_identity=raw_identity)
+        raw_dataset_path = self.root / "raw-dataset.json"
+        raw_partition_path = self.root / "raw-partition.json"
+        raw_coverage_path = self.root / "raw-coverage.json"
+        emit_dataset_manifest(
+            raw_dataset_path, dataset_identity=raw_identity, created_at="2026-09-01T10:00:00Z",
+        )
+        partition = emit_partition_manifest(
+            raw_partition_path, raw_materialization, dataset_identity=raw_identity,
+            dataset_root=self.root, partition_key="dt=2024-01-15", revision=1,
+            rel_path="dt=2024-01-15/part-000.parquet",
+            created_at="2026-09-01T10:00:00Z", closed_at="2026-09-01T10:00:01Z",
+            producer="test-materializer", code_ref="producer-ref",
+        )
+        emit_coverage_manifest(
+            raw_coverage_path, dataset_identity=raw_identity, source_dataset_identity=raw_identity,
+            coverage_id="raw-coverage", supersedes=None, created_at="2026-09-01T10:00:02Z",
+            acquisition={
+                "basis": "source_extract", "intent_start": START, "intent_end": END,
+                "source_semantics": "bybit-public-trades-sqlite-v1",
+                "mapping": "bybit-sqlite-day-extract-v1",
+            },
+            assertions=[{
+                "assertion_id": "raw-assertion", "start": START, "end": END, "status": "complete",
+                "partitions": [{"partition_key": "dt=2024-01-15", "revision": 1}],
+                "evidence": [{"kind": "deterministic_source_extract", "detail": "raw source"}],
+            }], producer="test-source", code_ref="source-ref",
+            partition_manifests=[partition.document],
+        )
+        writer = FakeCatalogWriter()
+        evidence = SealedPartitionEvidence(
+            raw_dataset_path, raw_partition_path, (raw_coverage_path,), self.data_path, "hot",
+        )
+        with self.assertRaises(RuntimeError):
+            self.runtime(writer).seal(evidence)
+        self.assertIsNone(writer.partition)
+
     def test_postgres_writer_boundary_has_only_closed_seal_and_quality_report_writes(self):
         class Cursor:
             def __init__(self):
@@ -615,20 +667,41 @@ class PublicationCertificationTests(unittest.TestCase):
             for statement, params in connection.cursor_instance.executions
             if "INSERT INTO catalog.partitions" in statement
         )
-        target_columns = partition_sql.split("INSERT INTO catalog.partitions (", 1)[1].split(") VALUES", 1)[0]
-        self.assertEqual(len([item for item in target_columns.split(",") if item.strip()]), 17)
-        self.assertEqual(partition_sql.count("%s"), 16)
+        target_columns = [
+            item.strip()
+            for item in partition_sql.split("INSERT INTO catalog.partitions (", 1)[1]
+                .split(") VALUES", 1)[0].split(",")
+            if item.strip()
+        ]
+        # created_at joins closed_at as an explicit bound column: B1 requires
+        # the authoritative PartitionManifest.created_at reach the row, never
+        # the DDL's DEFAULT now(), or a historical/backfill seal whose
+        # closed_at predates "now" violates closed_after_created.
+        self.assertEqual(len(target_columns), 18)
+        self.assertIn("created_at", target_columns)
+        self.assertIn("closed_at", target_columns)
+        self.assertEqual(partition_sql.count("%("), 17)
         self.assertEqual(partition_sql.count("'closed'"), 1)
-        self.assertEqual(len(partition_params), 16)
-        self.assertEqual(tuple(partition_params[:3]), ("dataset-1", "dt=2024-01-15", 1))
-        self.assertEqual(tuple(partition_params[3:10]), (
-            "hot", partition["rel_path"], Instant.parse(START).to_datetime(),
-            Instant.parse(END).to_datetime(), partition["row_count"],
-            partition["file_size_bytes"], partition["sha256"],
-        ))
-        self.assertEqual(partition_params[10], "a" * 64)
-        self.assertEqual(partition_params[11], partition["closed_at"])
-        self.assertEqual(tuple(partition_params[12:]), (None, None, partition["producer"], partition["code_ref"]))
+        self.assertIsInstance(partition_params, dict)
+        self.assertEqual(len(partition_params), 17)
+        self.assertEqual(partition_params["dataset_id"], "dataset-1")
+        self.assertEqual(partition_params["partition_key"], "dt=2024-01-15")
+        self.assertEqual(partition_params["revision"], 1)
+        self.assertEqual(partition_params["storage_root_id"], "hot")
+        self.assertEqual(partition_params["rel_path"], partition["rel_path"])
+        self.assertEqual(partition_params["ts_start"], Instant.parse(START).to_datetime())
+        self.assertEqual(partition_params["ts_end"], Instant.parse(END).to_datetime())
+        self.assertEqual(partition_params["row_count"], partition["row_count"])
+        self.assertEqual(partition_params["byte_size"], partition["file_size_bytes"])
+        self.assertEqual(partition_params["content_sha256"], partition["sha256"])
+        self.assertEqual(partition_params["manifest_sha256"], "a" * 64)
+        self.assertEqual(partition_params["created_at"], partition["created_at"])
+        self.assertNotEqual(partition_params["created_at"], partition["closed_at"])
+        self.assertEqual(partition_params["closed_at"], partition["closed_at"])
+        self.assertEqual(partition_params["first_sequence"], None)
+        self.assertEqual(partition_params["last_sequence"], None)
+        self.assertEqual(partition_params["producer"], partition["producer"])
+        self.assertEqual(partition_params["code_ref"], partition["code_ref"])
 
 
 if __name__ == "__main__":

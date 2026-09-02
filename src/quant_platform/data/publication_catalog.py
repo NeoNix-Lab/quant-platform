@@ -65,28 +65,45 @@ class CatalogPublicationWriter:
                 partition["code_ref"],
             )
             if existing is None:
+                # Named parameters, not positional slicing: the authoritative
+                # PartitionManifest.created_at (never DB now()) must reach
+                # catalog.partitions.created_at so historical/backfill seals
+                # with closed_at in the past satisfy closed_after_created
+                # (closed_at >= created_at) instead of racing DEFAULT now().
                 cursor.execute(
                     """
                     INSERT INTO catalog.partitions (
                         dataset_id, partition_key, revision, storage_root_id,
                         rel_path, ts_start, ts_end, row_count, byte_size,
-                        content_sha256, state, manifest_sha256, closed_at,
-                        first_sequence, last_sequence, producer, code_ref
+                        content_sha256, state, manifest_sha256, created_at,
+                        closed_at, first_sequence, last_sequence, producer, code_ref
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        'closed', %s, %s, %s, %s, %s, %s
+                        %(dataset_id)s, %(partition_key)s, %(revision)s, %(storage_root_id)s,
+                        %(rel_path)s, %(ts_start)s, %(ts_end)s, %(row_count)s, %(byte_size)s,
+                        %(content_sha256)s, 'closed', %(manifest_sha256)s, %(created_at)s,
+                        %(closed_at)s, %(first_sequence)s, %(last_sequence)s, %(producer)s, %(code_ref)s
                     )
                     RETURNING partition_id::text
                     """,
-                    (
-                        dataset_id,
-                        partition["partition_key"],
-                        partition["revision"],
-                        *values[:7],
-                        values[7],
-                        partition["closed_at"],
-                        *values[8:],
-                    ),
+                    {
+                        "dataset_id": dataset_id,
+                        "partition_key": partition["partition_key"],
+                        "revision": partition["revision"],
+                        "storage_root_id": values[0],
+                        "rel_path": values[1],
+                        "ts_start": values[2],
+                        "ts_end": values[3],
+                        "row_count": values[4],
+                        "byte_size": values[5],
+                        "content_sha256": values[6],
+                        "manifest_sha256": values[7],
+                        "created_at": partition["created_at"],
+                        "closed_at": partition["closed_at"],
+                        "first_sequence": values[8],
+                        "last_sequence": values[9],
+                        "producer": values[10],
+                        "code_ref": values[11],
+                    },
                 )
                 partition_id = cursor.fetchone()[0]
             else:
