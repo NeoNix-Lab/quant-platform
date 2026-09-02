@@ -62,6 +62,13 @@ from .publication import (
     SealedPartitionEvidence,
 )
 from .publication_catalog import CatalogPublicationConflict, CatalogPublicationWriter
+from .publication_eligibility import (
+    PublicationEligibilityBridge,
+    PublicationEligibilityEvidence,
+    PublicationEligibilityRefusal,
+    PublicationEligibilityResult,
+)
+from .publication_eligibility_catalog import PublicationEligibilityCatalog
 
 __all__ = [
     "CatalogConflict",
@@ -127,4 +134,9 @@ __all__ = [
     "SealedPartitionEvidence",
     "CatalogPublicationConflict",
     "CatalogPublicationWriter",
+    "PublicationEligibilityBridge",
+    "PublicationEligibilityEvidence",
+    "PublicationEligibilityRefusal",
+    "PublicationEligibilityResult",
+    "PublicationEligibilityCatalog",
 ]

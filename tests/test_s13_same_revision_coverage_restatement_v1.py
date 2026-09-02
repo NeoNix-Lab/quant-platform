@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -67,8 +67,14 @@ def partition(revision: int = 1, token: str = "a") -> dict[str, object]:
     }
 
 
-def db_timestamp(value: str) -> datetime:
-    return Instant.parse(value).to_datetime()
+def db_timestamp(value) -> datetime:
+    """Model PostgreSQL's microsecond rounding for unnormalised strings."""
+
+    instant = Instant.parse(value)
+    epoch_us, remainder = divmod(instant.epoch_ns, 1_000)
+    if isinstance(value, str) and remainder >= 500:
+        epoch_us += 1
+    return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=epoch_us)
 
 
 class Cursor:
@@ -230,6 +236,25 @@ class SameRevisionRestatementTests(unittest.TestCase):
         self.assertEqual(first.partition_id, retry.partition_id)
         self.assertEqual(len(connection.rows), 1)
         self.assertEqual(connection.rows[0][1], "closed")
+
+    def test_nine_digit_phase_one_timestamps_project_once_and_retry_exactly(self):
+        connection = Connection()
+        item = partition()
+        item["created_at"] = "2026-09-01T10:00:00.123456789Z"
+        item["closed_at"] = "2026-09-01T10:00:01.987654789Z"
+        first = self.admit(connection, item=item)
+        expected_created = Instant.parse(item["created_at"]).to_datetime()
+        expected_closed = Instant.parse(item["closed_at"]).to_datetime()
+        insert_params = next(params for statement, params in connection.statements if "INSERT INTO catalog.partitions" in statement)
+        self.assertEqual(insert_params["created_at"], expected_created)
+        self.assertEqual(insert_params["closed_at"], expected_closed)
+        self.assertEqual(connection.rows[0][11], expected_created)
+        self.assertEqual(connection.rows[0][12], expected_closed)
+        retry = self.admit(connection, item=item)
+        self.assertEqual(retry.partition_id, first.partition_id)
+        self.assertEqual(retry.natural_identity.revision, 1)
+        self.assertEqual(connection.rows[0][1], "closed")
+        self.assertEqual(len(connection.rows), 1)
 
     def test_non_coverage_conflict_does_not_partially_restate(self):
         for field, value, storage_root_id in (
