@@ -37,10 +37,10 @@ def resolve_partition_path(storage_root: str, dataset_rel_root: str, rel_path: s
     return candidate
 
 
-def scan_trade_v1(
+def _scan_trade_v1(
     path: str | Path,
-    start: Instant,
-    end: Instant,
+    start: Instant | None,
+    end: Instant | None,
     batch_size: int = 65_536,
 ) -> Iterator[tuple[TradeRecord, ...]]:
     """Stream one canonical trade-v1 file as bounded logical record batches.
@@ -77,7 +77,12 @@ def scan_trade_v1(
         columns = [column for column in _COLUMNS if column in names]
         filter_expression = None
         field = dataset.schema.field("exchange_ts")
-        if pa.types.is_timestamp(field.type) and _arrow_boundary_safe(start, end, field.type, pa):
+        if (
+            start is not None
+            and end is not None
+            and pa.types.is_timestamp(field.type)
+            and _arrow_boundary_safe(start, end, field.type, pa)
+        ):
             arrow_start = pa.scalar(start.to_datetime(), type=field.type)
             arrow_end = pa.scalar(end.to_datetime(), type=field.type)
             exchange_field = ds.field("exchange_ts")
@@ -114,6 +119,17 @@ def scan_trade_v1(
         raise DataIntegrityError(f"cannot read trade-v1 Parquet: {file_path.name}") from exc
 
 
+def scan_trade_v1(
+    path: str | Path,
+    start: Instant,
+    end: Instant,
+    batch_size: int = 65_536,
+) -> Iterator[tuple[TradeRecord, ...]]:
+    """Stream one bounded canonical trade-v1 file read."""
+
+    yield from _scan_trade_v1(path, start, end, batch_size)
+
+
 def read_trade_v1(
     path: str | Path,
     start: Instant,
@@ -127,13 +143,31 @@ def read_trade_v1(
     return records
 
 
+def scan_trade_v1_all(
+    path: str | Path,
+    *,
+    batch_size: int = 65_536,
+) -> Iterator[tuple[TradeRecord, ...]]:
+    """Stream every canonical row without applying a temporal filter.
+
+    Certification uses this path to inspect the complete physical artifact.
+    It preserves row order and the same bounded Arrow read-ahead as the
+    consumer scan; it never sorts or repairs rows.
+    """
+
+    # The internal reader uses ``None`` boundaries only for this full-artifact
+    # inspection path.  Existing bounded-read callers retain their original
+    # required start/end contract.
+    yield from _scan_trade_v1(path, None, None, batch_size)
+
+
 def _trade_records_from_batch(
     batch: Any,
     *,
     names: set[str],
     exchange_type: Any,
-    start: Instant,
-    end: Instant,
+    start: Instant | None,
+    end: Instant | None,
     pa: Any,
     pc: Any,
 ) -> tuple[TradeRecord, ...]:
@@ -152,7 +186,7 @@ def _trade_records_from_batch(
             raise DataIntegrityError("trade-v1 exchange_ts is null")
         exchange = Instant(exchange_value)
 
-        if not (start <= exchange < end):
+        if start is not None and end is not None and not (start <= exchange < end):
             continue
         try:
             receive = None if receive_values[index] is None else Instant.parse(receive_values[index])
@@ -261,4 +295,4 @@ def _optional_text(value: Any) -> str | None:
     return value
 
 
-__all__ = ["read_trade_v1", "resolve_partition_path", "scan_trade_v1"]
+__all__ = ["read_trade_v1", "resolve_partition_path", "scan_trade_v1", "scan_trade_v1_all"]

@@ -23,5 +23,7 @@ venv/
 *.arrow
 *.feather
 data/
+!src/quant_platform/data/
+!src/quant_platform/data/*.py
 artifacts/
 cache/

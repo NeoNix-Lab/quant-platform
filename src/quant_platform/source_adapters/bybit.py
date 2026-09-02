@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,8 @@ from ..ordering import OrderingProvider, TRADES_CANONICAL_TOTAL_ORDER_V1
 
 
 BYBIT_TRADE_V1_ORDERING_POLICY = "bybit-trade-v1-exchange-ts-trade-id-v1"
+BYBIT_TRADE_V1_CHECK_SUITE = "producer-consumer-conformity-v1/bybit-trade-v1-first-vertical"
+BYBIT_TRADE_V1_CERTIFICATION_PROFILE = "producer-consumer-conformity-v1/bybit-trade-v1-first-vertical-v1"
 
 
 class BybitTradeV1EligibilityError(ValueError):
@@ -20,8 +24,10 @@ class BybitTradeV1EligibilityError(ValueError):
 
 def bybit_trade_v1_applies_to(identity: DatasetIdentity) -> bool:
     return (
-        identity.venue == "bybit"
+        identity.layer == "canonical"
+        and identity.venue == "bybit"
         and identity.dataset_kind == "trades"
+        and identity.instrument == "BTCUSDT"
         and identity.record_schema_id == "trade-v1"
     )
 
@@ -72,6 +78,59 @@ def validate_bybit_trade_v1_eligibility(
                 "partition is ineligible: duplicate (exchange_ts, trade_id) ordering key"
             )
         seen.add(key)
+
+
+@dataclass(frozen=True, slots=True)
+class BybitTradeV1CertificationProfile:
+    """Source-owned semantics injected into the generic S13 certifier."""
+
+    code_ref: str
+    profile_id: str = BYBIT_TRADE_V1_CERTIFICATION_PROFILE
+    check_suite: str = BYBIT_TRADE_V1_CHECK_SUITE
+
+    def applies_to(self, identity: DatasetIdentity) -> bool:
+        return bybit_trade_v1_applies_to(identity)
+
+    def ordering_key(self, record: TradeRecord) -> tuple[Instant, str]:
+        return bybit_trade_v1_ordering_key(record)
+
+    def validate_source(
+        self,
+        identity: DatasetIdentity,
+        coverage_documents: Sequence[Mapping[str, Any]],
+    ) -> Mapping[str, Any]:
+        if not self.applies_to(identity):
+            raise BybitTradeV1EligibilityError("Bybit certification profile does not apply")
+        if not coverage_documents:
+            raise BybitTradeV1EligibilityError("certification requires durable source coverage evidence")
+        for document in coverage_documents:
+            acquisition = document.get("acquisition") or {}
+            if acquisition.get("source_semantics") != "bybit-public-trades-sqlite-v1":
+                raise BybitTradeV1EligibilityError("coverage source_semantics is not the frozen Bybit extract profile")
+            if acquisition.get("mapping") != "bybit-sqlite-day-extract-v1":
+                raise BybitTradeV1EligibilityError("coverage mapping is not the frozen Bybit extract mapping")
+            for assertion in document.get("assertions") or ():
+                if assertion.get("status") != "complete":
+                    continue
+                if not any(item.get("kind") == "deterministic_source_extract" for item in assertion.get("evidence") or ()):
+                    raise BybitTradeV1EligibilityError("complete Bybit coverage lacks deterministic source-extract evidence")
+        return {
+            "source_semantics": "bybit-public-trades-sqlite-v1",
+            "mapping": "bybit-sqlite-day-extract-v1",
+            "documents": len(coverage_documents),
+        }
+
+    def validate_records(
+        self,
+        identity: DatasetIdentity,
+        records: Sequence[TradeRecord],
+    ) -> Mapping[str, Any]:
+        validate_bybit_trade_v1_eligibility(identity, tuple(records))
+        if any(record.receive_ts is not None for record in records):
+            raise BybitTradeV1EligibilityError("Bybit first-vertical records must not fabricate receive_ts")
+        if any(record.sequence is not None for record in records):
+            raise BybitTradeV1EligibilityError("Bybit first-vertical records must not fabricate sequence")
+        return {"records": len(records), "trade_id_policy": "non-null-unique-(exchange_ts,trade_id)"}
 
 
 def materialize_bybit_trade_v1(
@@ -162,7 +221,10 @@ def build_bybit_trade_v1_source_extract_coverage(
 
 __all__ = [
     "BYBIT_ORDERING_PROVIDER",
+    "BYBIT_TRADE_V1_CERTIFICATION_PROFILE",
+    "BYBIT_TRADE_V1_CHECK_SUITE",
     "BYBIT_TRADE_V1_ORDERING_POLICY",
+    "BybitTradeV1CertificationProfile",
     "BybitTradeV1EligibilityError",
     "build_bybit_trade_v1_source_extract_coverage",
     "bybit_trade_v1_applies_to",

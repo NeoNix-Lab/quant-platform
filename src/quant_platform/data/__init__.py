@@ -46,6 +46,22 @@ from .manifests import (
     emit_partition_manifest,
 )
 from .parquet import read_trade_v1, resolve_partition_path, scan_trade_v1
+from .parquet import scan_trade_v1_all
+from .coverage import CoverageViolation, reconstruct_catalog_coverage
+from .publication import (
+    CatalogSealer,
+    Certifier,
+    CertificationEvidenceRecorder,
+    CertificationResult,
+    EvidenceCategoryResult,
+    PublicationCertification,
+    PublicationCertificationError,
+    PublicationCertificationRun,
+    QualityReport,
+    SealedCatalogPartition,
+    SealedPartitionEvidence,
+)
+from .publication_catalog import CatalogPublicationConflict, CatalogPublicationWriter
 
 __all__ = [
     "CatalogConflict",
@@ -95,4 +111,20 @@ __all__ = [
     "read_trade_v1",
     "resolve_partition_path",
     "scan_trade_v1",
+    "scan_trade_v1_all",
+    "CoverageViolation",
+    "reconstruct_catalog_coverage",
+    "CertificationResult",
+    "CatalogSealer",
+    "Certifier",
+    "CertificationEvidenceRecorder",
+    "EvidenceCategoryResult",
+    "PublicationCertification",
+    "PublicationCertificationError",
+    "PublicationCertificationRun",
+    "QualityReport",
+    "SealedCatalogPartition",
+    "SealedPartitionEvidence",
+    "CatalogPublicationConflict",
+    "CatalogPublicationWriter",
 ]
