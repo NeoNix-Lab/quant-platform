@@ -119,12 +119,16 @@ def main() -> int:
             # certification/evidence recording.  A remains in quality_reports.
             coverage_b_path = root / "coverage-b.json"
             emit_coverage_manifest(coverage_b_path, dataset_identity=identity, source_dataset_identity=identity, coverage_id="integration-coverage-b", supersedes="integration-coverage", created_at="2026-09-01T10:00:03Z", acquisition={"basis": "source_extract", "intent_start": "2024-01-15T00:00:00Z", "intent_end": "2024-01-16T00:00:00Z", "source_semantics": "bybit-public-trades-sqlite-v1", "mapping": "bybit-sqlite-day-extract-v1"}, assertions=[{"assertion_id": "integration-assertion-b", "start": "2024-01-15T00:00:00Z", "end": "2024-01-15T23:00:00Z", "status": "complete", "partitions": [{"partition_key": "dt=2024-01-15", "revision": 1}], "evidence": [{"kind": "deterministic_source_extract", "detail": "integration restatement"}]}], producer="integration-source", code_ref="integration-source-commit-b", partition_manifests=[partition])
-            evidence_b_s13 = SealedPartitionEvidence(dataset_path, partition_path, (coverage_b_path,), artifact, "s14-hot")
+            # The fold must see the superseded document A as well as B.  Put B
+            # first so the frozen positional singular evidence IDs continue to
+            # identify the current restatement, while plural evidence proves the
+            # complete durable A -> B lineage.
+            evidence_b_s13 = SealedPartitionEvidence(dataset_path, partition_path, (coverage_b_path, coverage_path), artifact, "s14-hot")
             run_b = PublicationCertification(writer, profile).run(evidence_b_s13)
             assert run_b.sealed_partition.partition_id == original_uuid
             assert run_b.sealed_partition.ts_start == Instant.parse("2024-01-15T00:00:00Z")
             assert run_b.sealed_partition.ts_end == Instant.parse("2024-01-15T23:00:00Z")
-            evidence_b = PublicationEligibilityEvidence(dataset_path, partition_path, (coverage_b_path,), "s14-hot", profile.profile_id, profile.check_suite)
+            evidence_b = PublicationEligibilityEvidence(dataset_path, partition_path, (coverage_b_path, coverage_path), "s14-hot", profile.profile_id, profile.check_suite)
             duplicate = run_b.quality_report
             assert duplicate is not None
             with connection.cursor() as cursor:

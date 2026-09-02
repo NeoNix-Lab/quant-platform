@@ -279,7 +279,12 @@ class AuthorityTests(unittest.TestCase):
             self.assertEqual([], forbidden_imports)
             self.assertEqual([], forbidden_calls)
             injected = ast.parse("import quant_platform.source_adapters.bybit\nPublicationCertification(x)\nPath.open(x)")
-            injected_imports = [node for node in ast.walk(injected) if isinstance(node, (ast.Import, ast.ImportFrom)) and "source_adapters" in ((getattr(node, "module", "") or "") + str(node.names))]
+            injected_imports = []
+            for node in ast.walk(injected):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    modules = [alias.name for alias in node.names]
+                    module = getattr(node, "module", "") or ""
+                    injected_imports.extend(item for item in [module, *modules] if "source_adapters" in item)
             injected_calls = [node for node in ast.walk(injected) if isinstance(node, ast.Call) and ((isinstance(node.func, ast.Name) and node.func.id == "PublicationCertification") or (isinstance(node.func, ast.Attribute) and node.func.attr == "open"))]
             self.assertTrue(injected_imports and len(injected_calls) == 2)
 
