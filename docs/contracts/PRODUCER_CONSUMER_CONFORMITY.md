@@ -877,13 +877,20 @@ quality_reports.status = 'pass'
   AND code_ref IS NULL or empty (CE6)           -> certification incomplete;
                                                     partitions.state MUST NOT
                                                     become 'valid' or 'degraded'
-quality_reports.status = 'warn'                 -> partitions.state MAY become
-                                                    'degraded' (weaker
-                                                    source-scope evidence per
-                                                    §13.4's "degraded"
-                                                    definition, never a
-                                                    coverage, physical, or
-                                                    certifier-identity defect)
+quality_reports.status = 'warn'
+  AND code_ref IS NOT NULL AND non-empty (CE6)
+  AND metrics.evidence.source.status = 'warn'
+  AND metrics.evidence.canonical.status = 'pass'
+  AND metrics.evidence.physical.status = 'pass'
+  AND metrics.evidence.manifests.status = 'pass'
+  AND metrics.evidence.coverage.status = 'pass'
+                                                    -> partitions.state MAY
+                                                       become 'degraded'
+                                                       (weaker source-scope
+                                                       evidence only)
+quality_reports.status = 'warn' with any other
+  evidence shape or missing certifier identity       -> partitions.state MUST
+                                                       NOT become 'degraded'
 quality_reports.status = 'fail'                 -> partitions.state MUST NOT
                                                     become 'valid' or
                                                     'degraded'; publication is
@@ -892,7 +899,12 @@ quality_reports.status = 'fail'                 -> partitions.state MUST NOT
 
 `status == 'pass'` is therefore necessary but not sufficient for `valid`;
 CE6's non-null, non-empty `code_ref` is an independent, equally mandatory
-condition.
+condition. For `degraded`, `status == 'warn'` is also necessary but not
+sufficient: the exact predicate above is frozen for v1. It admits only a
+source-scope warning while canonical, physical, manifest and coverage
+evidence all pass. A warning caused by any other category, an unknown overall
+status, an unexplained warning, or a missing/empty certifier identity is a
+refusal condition, never degraded evidence.
 
 **Invariant CE2 — frozen `metrics` shape.** For a certification run against
 this vertical, `quality_reports.check_suite` MUST be the literal string
@@ -1130,12 +1142,17 @@ slice does not define automatic restoration or recovery.
 INPUTS                                    OUTPUTS
 DatasetManifest                           catalog.datasets row
 PartitionManifest                         catalog.partitions row
-CoverageManifest (folded per              catalog.lineage row(s)
+CoverageManifest (folded per              catalog.dataset_lineage row(s)
   DECLARED_COVERAGE.md §4)                catalog.quality_reports row (§13.3)
 physical artifact (content_sha256)
 storage-root context
 certification result (§13)
 ```
+
+Dataset lineage is derived from the `DatasetManifest.derived_from` parent
+identities together with `DatasetManifest.transform`, and is persisted in
+`catalog.dataset_lineage`. CoverageManifest folding establishes declared
+coverage only; it does not establish dataset lineage.
 
 ### 14.2 Critical invariant
 
@@ -1174,14 +1191,24 @@ sequence number or wall-clock time.
 
 **Invariant BC3 — revision handling.** A `CoverageManifest` supersession
 (DECLARED_COVERAGE.md I10) that changes a partition's folded interval MUST
-result in the catalog row being updated to the new folded interval, or, if the
-partition manifest itself was revised (`revision N+1`), a new catalog row
+result in the catalog row being updated to the new folded interval when the
+exact natural partition target is already `closed` and every non-coverage
+Phase-1 field is identical. That is an in-place update of only `ts_start` and
+`ts_end`: the `partition_id`, revision, physical/manifest evidence, producer
+identity and `closed` lifecycle remain unchanged. If the partition manifest
+itself was revised (`revision N+1`), a new catalog row
 under the new revision with the old one's lifecycle state moved to
 `superseded` — mirroring the existing partition-manifest supersession
 mechanics MARKET_DATA_INGEST_CONTRACTS.md §11 already assumes. Certification
-(§13.5) MUST be re-run for the new revision; a superseded revision's
+(§13.5) MUST be re-run after either kind of coverage change; a superseded revision's
 `quality_reports` evidence is not carried forward as evidence for the new
 revision's content.
+
+For a same-revision coverage change, an existing target is updated in place
+only when it is `closed` and every non-coverage Phase-1 field is identical.
+Any non-`closed` target or changed non-coverage evidence is refused without
+mutation. Certification MUST be re-run after the update; existing quality
+evidence is never copied or rewritten.
 
 **Invariant BC4 — storage-root mapping.** The bridge resolves
 `storage_root_id` from the physical location actually used for the artifact

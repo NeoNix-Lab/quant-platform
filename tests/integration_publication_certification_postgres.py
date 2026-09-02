@@ -45,10 +45,21 @@ def trade(timestamp: str, trade_id: str) -> TradeRecord:
     )
 
 
-def write_evidence(root: Path, dataset_path: Path, identity: DatasetIdentity, revision: int) -> SealedPartitionEvidence:
+def write_evidence(
+    root: Path,
+    dataset_path: Path,
+    identity: DatasetIdentity,
+    revision: int,
+    *,
+    coverage_start: str = "2024-01-15T00:00:00Z",
+    coverage_end: str = "2024-01-16T00:00:00Z",
+    coverage_id: str | None = None,
+    assertion_id: str | None = None,
+    coverage_path: Path | None = None,
+) -> SealedPartitionEvidence:
     artifact = root / "dt=2024-01-15" / f"part-{revision:03d}.parquet"
     partition_path = root / f"partition-{revision}.json"
-    coverage_path = root / f"coverage-{revision}.json"
+    coverage_path = coverage_path or root / f"coverage-{revision}.json"
     materialization = materialize_bybit_trade_v1(
         artifact,
         [trade("2024-01-15T00:00:01Z", "1"), trade("2024-01-15T00:00:02Z", "2")],
@@ -63,7 +74,7 @@ def write_evidence(root: Path, dataset_path: Path, identity: DatasetIdentity, re
     )
     emit_coverage_manifest(
         coverage_path, dataset_identity=identity, source_dataset_identity=identity,
-        coverage_id=f"integration-coverage-{revision}", supersedes=None,
+        coverage_id=coverage_id or f"integration-coverage-{revision}", supersedes=None,
         created_at="2026-09-01T10:00:02Z",
         acquisition={
             "basis": "source_extract", "intent_start": "2024-01-15T00:00:00Z",
@@ -72,8 +83,8 @@ def write_evidence(root: Path, dataset_path: Path, identity: DatasetIdentity, re
             "mapping": "bybit-sqlite-day-extract-v1",
         },
         assertions=[{
-            "assertion_id": f"integration-assertion-{revision}",
-            "start": "2024-01-15T00:00:00Z", "end": "2024-01-16T00:00:00Z",
+            "assertion_id": assertion_id or f"integration-assertion-{revision}",
+            "start": coverage_start, "end": coverage_end,
             "status": "complete",
             "partitions": [{"partition_key": "dt=2024-01-15", "revision": revision}],
             "evidence": [{"kind": "deterministic_source_extract", "detail": "integration source"}],
@@ -83,6 +94,45 @@ def write_evidence(root: Path, dataset_path: Path, identity: DatasetIdentity, re
     return SealedPartitionEvidence(
         dataset_path, partition_path, (coverage_path,), artifact, "hot",
     )
+
+
+class FailAfterCoverageUpdateConnection:
+    """Inject a real PostgreSQL error after the restatement UPDATE executes."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def cursor(self):
+        return FailAfterCoverageUpdateCursor(self.connection.cursor())
+
+    def commit(self):
+        return self.connection.commit()
+
+    def rollback(self):
+        return self.connection.rollback()
+
+
+class FailAfterCoverageUpdateCursor:
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    def __enter__(self):
+        self.cursor.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self.cursor.__exit__(*args)
+
+    def execute(self, statement, params=None):
+        self.cursor.execute(statement, params)
+        if "UPDATE catalog.partitions" in statement and "SET ts_start" in statement:
+            self.cursor.execute("SELECT 1 / 0")
+
+    def fetchone(self):
+        return self.cursor.fetchone()
+
+    def fetchall(self):
+        return self.cursor.fetchall()
 
 
 def main() -> int:
@@ -156,6 +206,91 @@ def main() -> int:
                 raise AssertionError("conflicting sealed evidence was accepted")
             evidence[1].partition_manifest_path.write_bytes(original_partition_bytes)
 
+            restated_coverage_path = root / "coverage-1-restated.json"
+            restated_evidence = write_evidence(
+                root, dataset_path, identity, 1,
+                coverage_start="2024-01-15T00:00:00Z",
+                coverage_end="2024-01-15T12:00:00Z",
+                coverage_id="integration-coverage-1-restated",
+                assertion_id="integration-assertion-1-restated",
+                coverage_path=restated_coverage_path,
+            )
+            restated_evidence = replace(
+                restated_evidence,
+                partition_manifest_path=evidence[1].partition_manifest_path,
+            )
+
+            for lifecycle_state in ("valid", "degraded"):
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE catalog.partitions SET state = %s WHERE partition_id = %s",
+                        (lifecycle_state, run1.sealed_partition.partition_id),
+                    )
+                connection.commit()
+                try:
+                    runtime.seal(restated_evidence)
+                except CatalogPublicationConflict:
+                    pass
+                else:
+                    raise AssertionError(f"{lifecycle_state} target accepted changed coverage")
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT state, ts_start, ts_end FROM catalog.partitions WHERE partition_id = %s",
+                        (run1.sealed_partition.partition_id,),
+                    )
+                    row = cursor.fetchone()
+                    assert row == (
+                        lifecycle_state,
+                        Instant.parse("2024-01-15T00:00:00Z").to_datetime(),
+                        Instant.parse("2024-01-16T00:00:00Z").to_datetime(),
+                    )
+                    cursor.execute(
+                        "UPDATE catalog.partitions SET state = 'closed' WHERE partition_id = %s",
+                        (run1.sealed_partition.partition_id,),
+                    )
+                connection.commit()
+
+            rollback_runtime = PublicationCertification(
+                CatalogPublicationWriter(FailAfterCoverageUpdateConnection(connection)),
+                BybitTradeV1CertificationProfile("integration-rollback-certifier"),
+            )
+            try:
+                rollback_runtime.seal(restated_evidence)
+            except psycopg.errors.DivisionByZero:
+                pass
+            else:
+                raise AssertionError("real post-update rollback failure did not propagate")
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT state, ts_start, ts_end FROM catalog.partitions WHERE partition_id = %s",
+                    (run1.sealed_partition.partition_id,),
+                )
+                assert cursor.fetchone() == (
+                    "closed",
+                    Instant.parse("2024-01-15T00:00:00Z").to_datetime(),
+                    Instant.parse("2024-01-16T00:00:00Z").to_datetime(),
+                )
+
+            restated_run = runtime.run(restated_evidence)
+            assert restated_run.sealed_partition.partition_id == run1.sealed_partition.partition_id
+            assert restated_run.sealed_partition.natural_identity.revision == 1
+            assert restated_run.sealed_partition.state == "closed"
+            assert restated_run.sealed_partition.ts_end == Instant.parse("2024-01-15T12:00:00Z")
+            assert restated_run.quality_report.report_id != run1.quality_report.report_id
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT partition_id::text, status, metrics, violations, code_ref FROM catalog.quality_reports WHERE partition_id = %s ORDER BY ran_at, report_id::text",
+                    (run1.sealed_partition.partition_id,),
+                )
+                reports = cursor.fetchall()
+                assert len(reports) == 2
+                assert reports[0][0] == reports[1][0] == run1.sealed_partition.partition_id
+                assert reports[0][1] == reports[1][1] == "pass"
+                assert reports[0][2]["coverage_manifest_id"] == "integration-coverage-1"
+                assert reports[1][2]["coverage_manifest_id"] == "integration-coverage-1-restated"
+                assert reports[0][3] == reports[1][3] == []
+                assert reports[0][4] == reports[1][4] == "integration-certifier"
+
             run2 = runtime.run(evidence[2])
             retry2 = runtime.run(evidence[2])
             assert retry2.sealed_partition.partition_id == run2.sealed_partition.partition_id
@@ -184,7 +319,7 @@ def main() -> int:
                     "SELECT count(*) FROM catalog.quality_reports WHERE partition_id = %s",
                     (run1.sealed_partition.partition_id,),
                 )
-                assert cursor.fetchone()[0] == 1
+                assert cursor.fetchone()[0] == 2
                 cursor.execute(
                     "SELECT count(*) FROM catalog.quality_reports WHERE partition_id = %s",
                     (run2.sealed_partition.partition_id,),
@@ -328,7 +463,7 @@ def main() -> int:
                     (dataset_id, "dt=2024-01-15"),
                 )
                 assert cursor.fetchall() == [(1, "superseded"), (2, "superseded"), (3, "closed"), (4, "superseded")]
-            print("PASS PostgreSQL 17 S13 revision admission: topology, retry, quality locality, rollback")
+            print("PASS PostgreSQL 17 S13 revision admission and same-revision coverage restatement")
         finally:
             if owns_fixture:
                 with connection.cursor() as cursor:

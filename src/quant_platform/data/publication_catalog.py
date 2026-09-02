@@ -67,11 +67,55 @@ class CatalogPublicationWriter:
                         f"S13 seal refuses existing target state {existing[1]!r}"
                     )
                 if current[0] != existing[0] or not _same_phase_one_evidence(
-                    existing, partition, storage_root_id, coverage_start, coverage_end
+                    existing, partition, storage_root_id
                 ):
                     raise CatalogPublicationConflict(
                         "existing closed target conflicts with authoritative Phase-1 evidence"
                     )
+                expected_start = coverage_start.to_datetime()
+                expected_end = coverage_end.to_datetime()
+                if existing[5] != expected_start or existing[6] != expected_end:
+                    cursor.execute(
+                        """
+                        UPDATE catalog.partitions
+                           SET ts_start = %s, ts_end = %s
+                         WHERE partition_id = %s
+                           AND state = 'closed'
+                        RETURNING partition_id::text
+                        """,
+                        (expected_start, expected_end, existing[0]),
+                    )
+                    updated = cursor.fetchone()
+                    if updated is None or str(updated[0]) != str(existing[0]):
+                        raise CatalogPublicationConflict(
+                            "same-revision coverage restatement did not update the closed target"
+                        )
+                    cursor.execute(
+                        """
+                        SELECT partition_id::text, dataset_id::text, partition_key,
+                               state, revision, storage_root_id, rel_path,
+                               ts_start, ts_end, row_count, byte_size,
+                               content_sha256, manifest_sha256, created_at, closed_at,
+                               first_sequence, last_sequence, producer, code_ref
+                          FROM catalog.partitions
+                         WHERE partition_id = %s
+                         FOR UPDATE
+                        """,
+                        (existing[0],),
+                    )
+                    restated = cursor.fetchone()
+                    if not _same_restatement_row(
+                        restated,
+                        partition_id=existing[0],
+                        dataset_id=dataset_id,
+                        partition=partition,
+                        storage_root_id=storage_root_id,
+                        coverage_start=expected_start,
+                        coverage_end=expected_end,
+                    ):
+                        raise CatalogPublicationConflict(
+                            "same-revision coverage restatement verification failed"
+                        )
                 return _sealed_partition(
                     existing[0], dataset_id, identity, partition,
                     coverage_start, coverage_end,
@@ -306,8 +350,6 @@ def _same_phase_one_evidence(
     existing: tuple[Any, ...],
     partition: Mapping[str, Any],
     storage_root_id: str,
-    coverage_start: Any,
-    coverage_end: Any,
 ) -> bool:
     """Compare all Phase-1 evidence represented by the catalog row."""
 
@@ -315,8 +357,6 @@ def _same_phase_one_evidence(
         existing[3] == storage_root_id
     ) and (
         existing[4] == partition["rel_path"]
-        and existing[5] == coverage_start.to_datetime()
-        and existing[6] == coverage_end.to_datetime()
         and int(existing[7]) == int(partition["row_count"])
         and int(existing[8]) == int(partition["file_size_bytes"])
         and _text(existing[9]) == partition["sha256"]
@@ -327,6 +367,43 @@ def _same_phase_one_evidence(
         and _number(existing[14]) == _number(partition.get("last_sequence"))
         and existing[15] == partition["producer"]
         and existing[16] == partition["code_ref"]
+    )
+
+
+def _same_restatement_row(
+    row: tuple[Any, ...] | None,
+    *,
+    partition_id: Any,
+    dataset_id: Any,
+    partition: Mapping[str, Any],
+    storage_root_id: str,
+    coverage_start: Any,
+    coverage_end: Any,
+) -> bool:
+    """Verify the exact row after an in-place coverage-only update."""
+
+    if row is None:
+        return False
+    return (
+        str(row[0]) == str(partition_id)
+        and str(row[1]) == str(dataset_id)
+        and row[2] == partition["partition_key"]
+        and row[3] == "closed"
+        and int(row[4]) == int(partition["revision"])
+        and row[5] == storage_root_id
+        and row[6] == partition["rel_path"]
+        and row[7] == coverage_start
+        and row[8] == coverage_end
+        and int(row[9]) == int(partition["row_count"])
+        and int(row[10]) == int(partition["file_size_bytes"])
+        and _text(row[11]) == partition["sha256"]
+        and _text(row[12]) == _manifest_sha(partition)
+        and _timestamp(row[13]) == _timestamp(partition["created_at"])
+        and _timestamp(row[14]) == _timestamp(partition["closed_at"])
+        and _number(row[15]) == _number(partition.get("first_sequence"))
+        and _number(row[16]) == _number(partition.get("last_sequence"))
+        and row[17] == partition["producer"]
+        and row[18] == partition["code_ref"]
     )
 
 
