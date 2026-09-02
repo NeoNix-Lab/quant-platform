@@ -1055,10 +1055,20 @@ sequence that avoids that:
 ```text
 Phase 1 — SEAL (no certification dependency)
   the physical artifact is written and hashed; DatasetManifest/PartitionManifest
-  are written; the catalog partition row is inserted/updated at state='closed'
-  with content_sha256/manifest_sha256/closed_at populated. This already
-  satisfies the existing `closed_is_sealed` DDL constraint and requires no
-  certification outcome.
+  are written; the catalog partition row is admitted at state='closed' with
+  content_sha256/manifest_sha256/closed_at populated. This already satisfies
+  the existing `closed_is_sealed` DDL constraint and requires no certification
+  outcome. Revision admission is a contiguous rematerialization ordinal:
+  the first admitted revision is 1, and a new revision is admitted only as
+  the exact successor N+1 of the one authoritative live revision N. The
+  complete `(dataset, partition_key)` topology is inspected under lock;
+  historical rows must be superseded and lower than the live revision, and a
+  family with history but no live row fails closed. Before admitting N+1,
+  superseding N and inserting the new CLOSED row are one atomic Phase-1
+  operation. An exact existing CLOSED target with identical authoritative
+  Phase-1 evidence is an idempotent retry; conflicting or otherwise
+  lifecycle-ineligible targets fail closed. No meaning is assigned to skipped
+  revision numbers.
         |
         v
 Phase 2 — CERTIFY (reads Phase 1's durable evidence + the coverage manifest)
@@ -1103,6 +1113,14 @@ an earlier phase, never on its own eventual output.
 transaction shape; an implementation may collapse Phases 3–4 into one
 transaction (preferred, for atomicity) or run them as separate fail-closed
 steps, as long as SEQ1 holds either way.
+
+**Invariant SEQ3 — revision-local Phase-1 admission.** Phase 1 does not carry
+quality evidence across revisions. A newly admitted successor receives its
+own generated `partition_id` and must proceed through Phase 2 CERTIFY and
+Phase 3 RECORD EVIDENCE against that partition's own manifests, physical
+artifact and coverage. If Phase 2 or Phase 3 fails after Phase 1 committed,
+the predecessor remains `superseded` and the successor remains `closed`; this
+slice does not define automatic restoration or recovery.
 
 ## 14. Manifest + Coverage -> Catalog mapping (resolves B2)
 
