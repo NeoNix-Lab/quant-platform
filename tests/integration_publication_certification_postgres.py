@@ -410,7 +410,7 @@ def main() -> int:
                     "SELECT count(*) FROM catalog.quality_reports WHERE partition_id = %s",
                     (run1.sealed_partition.partition_id,),
                 )
-                assert cursor.fetchone()[0] == 1
+                assert cursor.fetchone()[0] == 2
                 try:
                     cursor.execute(
                         "INSERT INTO catalog.quality_reports (partition_id, check_suite, status) VALUES ('00000000-0000-0000-0000-000000000000', 'fk-test', 'pass')"
