@@ -180,8 +180,12 @@ class CatalogPublicationWriter:
                     "byte_size": partition["file_size_bytes"],
                     "content_sha256": partition["sha256"],
                     "manifest_sha256": _manifest_sha(partition),
-                    "created_at": partition["created_at"],
-                    "closed_at": partition["closed_at"],
+                    # PostgreSQL timestamptz is microsecond precision.  Use
+                    # the same deterministic projection already used by the
+                    # existing-row comparator so first insert and retry see
+                    # one catalog representation.
+                    "created_at": _timestamp(partition["created_at"]),
+                    "closed_at": _timestamp(partition["closed_at"]),
                     "first_sequence": partition.get("first_sequence"),
                     "last_sequence": partition.get("last_sequence"),
                     "producer": partition["producer"],
