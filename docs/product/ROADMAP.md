@@ -54,13 +54,13 @@ development   development
 ```
 
 The completed slices are Shared Semantic Primitives v1, Canonical Parquet
-Materializer v1, Manifest + Coverage Emission v1 and Bounded DataGateway finite
-read v1. Golden Conformity Acceptance Support v1 is also READY as reusable gate
-support, but it is not the Golden E2E proof. The remaining critical path is
-Publication Certification, the manifest/coverage/certification-to-catalog
-bridge, the Golden Bybit E2E, adversarial acceptance, Candle ordering
-compatibility acceptance and the gate review. See `SCOPE.md` and
-`CAPABILITY_MAP.md` for the current ledger.
+Materializer v1, Manifest + Coverage Emission v1, Bounded DataGateway finite
+read v1 and Publication Certification runtime v1 (S13 Phases 1–3). Golden
+Conformity Acceptance Support v1 is also READY as reusable gate support, but it
+is not the Golden E2E proof. The remaining critical path is the Publication
+Eligibility Bridge v1 (S14 / Phases 4–5), the Golden Bybit E2E, adversarial
+acceptance, Candle ordering compatibility acceptance and the gate review. See
+`SCOPE.md` and `CAPABILITY_MAP.md` for the current ledger.
 
 This is a temporary integration gate pair, not a permanent architecture layer.
 Passing both gates does not add a phase to the dependency order below; it
@@ -78,7 +78,8 @@ The following are blocked until the implementation gate passes:
 - unrelated consumer or producer vertical expansion.
 
 The conformity slices themselves may proceed in their frozen dependency order.
-The next authorized Producer slice is **Publication Certification runtime v1**.
+The next authorized Producer slice is **Publication Eligibility Bridge v1**
+(frozen S14 / S13.5 Phases 4–5: PUBLISH ELIGIBILITY → VERIFY).
 
 ## Phase B — full bidirectional expansion after Conformity Implementation Gate PASS
 
@@ -124,11 +125,16 @@ Contract Freeze Gate — PASSED
 Historical Trades publication conformity:
   Canonical Parquet Materializer — COMPLETE
   Manifest + Coverage Emission — COMPLETE
-  Bybit eligibility profile — PARTIAL until authoritative certification
+  Bybit first-vertical eligibility profile — READY through authoritative S13
         ↓
-Publication Certification — NEXT
+Publication Certification — COMPLETE
+  Phase 1 SEAL → durable CLOSED registration
+  Phase 2 CERTIFY → authoritative evaluation
+  Phase 3 RECORD EVIDENCE → durable quality_reports
         ↓
-Manifest/Coverage/Certification → Catalog Publication Bridge
+Publication Eligibility Bridge — NEXT
+  Phase 4 PUBLISH ELIGIBILITY → valid/degraded where frozen rules permit
+  Phase 5 VERIFY → post-write eligibility/evidence verification
         ↓
 Golden Bybit E2E + adversarial acceptance + Candle ordering proof
         ↓
@@ -179,8 +185,8 @@ implementation. It does not add a product capability or renumber the phases.
 Phase 2 (Representation foundation) has its semantic contract frozen and
 accepted (ADR-0021, CandleDefinition v1). Candle runtime implementation is
 explicitly postponed until the Conformity Implementation Gate passes, because
-the bounded historical DataGateway read, Canonical Parquet Materializer and
-Manifest + Coverage Emission are implemented, but authoritative Publication
-Certification and the Publication Bridge still require completion and proof.
-Candle runtime remains blocked until the complete seam is proven and the
-Conformity Implementation Gate passes.
+the bounded historical DataGateway read, Canonical Parquet Materializer,
+Manifest + Coverage Emission and authoritative Publication Certification are
+implemented, but S14 Publication Eligibility Bridge plus full Golden/adversarial
+proof still require completion. Candle runtime remains blocked until the
+complete seam is proven and the Conformity Implementation Gate passes.

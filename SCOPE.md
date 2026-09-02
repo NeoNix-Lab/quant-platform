@@ -26,14 +26,18 @@ Completed conformity slices on authoritative `origin/main`:
 3. Bounded DataGateway finite read v1 — **DONE**;
 4. Manifest + Coverage Emission v1 — **DONE**;
 5. Golden Conformity Acceptance Support v1 — **DONE** as reusable gate-support
-   infrastructure; it is not the Golden E2E proof and does not imply Gate PASS.
+   infrastructure; it is not the Golden E2E proof and does not imply Gate PASS;
+6. Publication Certification runtime v1 — **DONE** for frozen S13 Phases 1–3:
+   SEAL to durable `state='closed'`, authoritative CERTIFY, and durable
+   `quality_reports` evidence recording. It does not grant publication
+   eligibility.
 
-**Next authorized implementation slice:** Publication Certification runtime v1.
+**Next authorized implementation slice:** Publication Eligibility Bridge v1
+(frozen S14 / S13.5 Phases 4–5: PUBLISH ELIGIBILITY → VERIFY).
 
 Remaining critical path to the Conformity Implementation Gate review:
 
-6. Publication Certification runtime;
-7. Manifest/Coverage/Certification → Catalog Publication Bridge;
+7. Publication Eligibility Bridge v1;
 8. Human vertical / Golden Bybit E2E;
 9. Adversarial acceptance;
 10. Candle ordering compatibility acceptance;
@@ -48,8 +52,11 @@ architecture constraint.
 
 ## In scope
 
-- the first-vertical publication certifier and durable evidence flow;
-- the manifest/coverage/certification-to-catalog publication bridge;
+- the completed first-vertical publication certifier and durable evidence flow
+  as the authoritative prerequisite for publication eligibility;
+- the Publication Eligibility Bridge v1 that consumes sealed certification
+  evidence and owns `closed → valid/degraded` eligibility plus post-write
+  verification;
 - the human vertical and Golden Bybit BTCUSDT E2E proof;
 - required adversarial acceptance, including zero-event coverage, gaps,
   supersession, overlap, relocation, rebuild, physical-layout variation and
@@ -158,9 +165,9 @@ sequential by this scope.
 
 - this file describes the active Conformity Implementation scope and current
   gate state;
-- the five completed slices/support capabilities and the remaining critical
+- the six completed slices/support capabilities and the remaining critical
   path are explicit;
-- Publication Certification runtime v1 is explicit as the next authorized
+- Publication Eligibility Bridge v1 is explicit as the next authorized
   implementation slice;
 - pre-gate controlled convergence and post-gate independent concurrency are
   explicit;
