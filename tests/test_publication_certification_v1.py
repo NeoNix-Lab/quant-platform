@@ -55,28 +55,51 @@ def trade(timestamp: str, trade_id: str = "1", *, receive_ts=None, sequence=None
 class FakeCatalogWriter:
     def __init__(self):
         self.partition: SealedCatalogPartition | None = None
+        self.partitions = []
         self.reports = []
         self.commits = 0
         self.rollbacks = 0
         self.lifecycle_updates = []
+        self.fail_quality_report = False
 
     def seal_partition(self, *, dataset, partition, coverage_start, coverage_end, storage_root_id):
         identity = DatasetIdentity(
             dataset["layer"], dataset["dataset_kind"], dataset["venue"],
             dataset["instrument"], dataset["record_schema_id"],
         )
-        if self.partition is None:
-            self.partition = SealedCatalogPartition(
-                "partition-uuid-1", "dataset-uuid-1",
-                NaturalPartitionIdentity(identity, partition["partition_key"], partition["revision"]),
-                "closed", coverage_start, coverage_end,
-                partition["row_count"], partition["file_size_bytes"],
-                partition["sha256"], partition["_manifest_sha256"],
-                partition["producer"], partition["code_ref"],
-            )
-        return self.partition
+        existing = next(
+            (item for item in self.partitions
+             if item.natural_identity.partition_key == partition["partition_key"]
+             and item.natural_identity.revision == partition["revision"]),
+            None,
+        )
+        if existing is not None:
+            if existing.state != "closed":
+                raise RuntimeError("existing target is not closed")
+            return existing
+        live = [item for item in self.partitions if item.state != "superseded"]
+        if not live:
+            if partition["revision"] != 1:
+                raise RuntimeError("first admitted revision must be 1")
+        elif partition["revision"] != live[0].natural_identity.revision + 1:
+            raise RuntimeError("revision is not a contiguous successor")
+        if live:
+            self.partitions[self.partitions.index(live[0])] = replace(live[0], state="superseded")
+        admitted = SealedCatalogPartition(
+            f"partition-uuid-{len(self.partitions) + 1}", "dataset-uuid-1",
+            NaturalPartitionIdentity(identity, partition["partition_key"], partition["revision"]),
+            "closed", coverage_start, coverage_end,
+            partition["row_count"], partition["file_size_bytes"],
+            partition["sha256"], partition["_manifest_sha256"],
+            partition["producer"], partition["code_ref"],
+        )
+        self.partitions.append(admitted)
+        self.partition = admitted
+        return admitted
 
     def record_quality_report(self, *, partition_id, check_suite, status, metrics, violations, code_ref):
+        if self.fail_quality_report:
+            raise RuntimeError("simulated phase three failure")
         report = {
             "partition_id": partition_id, "check_suite": check_suite,
             "status": status, "metrics": dict(metrics),
@@ -105,7 +128,8 @@ class PublicationCertificationTests(unittest.TestCase):
     def tearDown(self):
         self.tempdir.cleanup()
 
-    def evidence(self, records=None, *, coverage_start=START, coverage_end=END, source_detail="sqlite extract complete"):
+    def evidence(self, records=None, *, coverage_start=START, coverage_end=END,
+                 source_detail="sqlite extract complete", revision=1):
         records = records if records is not None else [trade("2024-01-15T00:00:01Z", "1"), trade("2024-01-15T00:00:02Z", "2")]
         if any(item.trade_id is None for item in records):
             provider = OrderingProvider(
@@ -128,7 +152,7 @@ class PublicationCertificationTests(unittest.TestCase):
         )
         emit_partition_manifest(
             self.partition_path, materialization, dataset_identity=IDENTITY,
-            dataset_root=self.root, partition_key="dt=2024-01-15", revision=1,
+            dataset_root=self.root, partition_key="dt=2024-01-15", revision=revision,
             rel_path="dt=2024-01-15/part-000.parquet",
             created_at="2026-09-01T10:00:00Z", closed_at="2026-09-01T10:00:01Z",
             producer="test-materializer", code_ref="producer-ref",
@@ -144,7 +168,7 @@ class PublicationCertificationTests(unittest.TestCase):
             assertions=[{
                 "assertion_id": "assertion-1", "start": coverage_start,
                 "end": coverage_end, "status": "complete",
-                "partitions": [{"partition_key": "dt=2024-01-15", "revision": 1}],
+                "partitions": [{"partition_key": "dt=2024-01-15", "revision": revision}],
                 "evidence": [{"kind": "deterministic_source_extract", "detail": source_detail}],
             }], producer="test-source", code_ref="source-ref",
             partition_manifests=[json.loads(self.partition_path.read_text())],
@@ -462,6 +486,18 @@ class PublicationCertificationTests(unittest.TestCase):
         self.assertEqual(writer.reports, [])
         self.assertEqual(writer.rollbacks, 1)
 
+    def test_successor_phase_three_failure_leaves_old_superseded_and_new_closed(self):
+        writer = FakeCatalogWriter()
+        self.runtime(writer).run(self.evidence(revision=1))
+        writer.fail_quality_report = True
+        with self.assertRaises(RuntimeError):
+            self.runtime(writer).run(self.evidence(revision=2))
+        self.assertEqual(
+            [item.state for item in writer.partitions], ["superseded", "closed"]
+        )
+        self.assertEqual(writer.partitions[0].partition_id, "partition-uuid-1")
+        self.assertEqual(writer.partitions[1].partition_id, "partition-uuid-2")
+
     def test_canonical_hash_is_layout_independent_and_physical_hash_is_not_required_equal(self):
         records = [trade("2024-01-15T00:00:01Z", "1"), trade("2024-01-15T00:00:02Z", "2")]
         first = materialize_bybit_trade_v1(self.root / "first.parquet", records, dataset_identity=IDENTITY, compression="zstd", row_group_size=1)
@@ -626,7 +662,9 @@ class PublicationCertificationTests(unittest.TestCase):
     def test_postgres_writer_boundary_has_only_closed_seal_and_quality_report_writes(self):
         class Cursor:
             def __init__(self):
-                self.responses = [None, ("dataset-1",), None, ("partition-1",), ("closed",), ("report-1",)]
+                self.partition_row = None
+                self.one = None
+                self.many = []
                 self.sql = []
                 self.executions = []
             def __enter__(self): return self
@@ -634,8 +672,32 @@ class PublicationCertificationTests(unittest.TestCase):
             def execute(self, statement, params=None):
                 self.sql.append(statement)
                 self.executions.append((statement, params))
-            def fetchone(self): return self.responses.pop(0)
-            def fetchall(self): return []
+                self.one = None
+                self.many = []
+                if "FROM catalog.datasets" in statement:
+                    self.one = None
+                elif "INSERT INTO catalog.datasets" in statement:
+                    self.one = ("dataset-1",)
+                elif "FROM catalog.partitions" in statement and "SELECT state" in statement:
+                    self.one = ("closed",) if self.partition_row is not None else None
+                elif "FROM catalog.partitions" in statement:
+                    self.many = [] if self.partition_row is None else [self.partition_row]
+                elif "INSERT INTO catalog.partitions" in statement:
+                    self.partition_row = (
+                        "partition-1", "closed", params["revision"], params["storage_root_id"],
+                        params["rel_path"], params["ts_start"], params["ts_end"],
+                        params["row_count"], params["byte_size"], params["content_sha256"],
+                        params["manifest_sha256"], Instant.parse(params["created_at"]).to_datetime(),
+                        Instant.parse(params["closed_at"]).to_datetime(), params["first_sequence"],
+                        params["last_sequence"], params["producer"], params["code_ref"],
+                    )
+                    self.one = ("partition-1",)
+                elif "FROM catalog.quality_reports" in statement:
+                    self.many = []
+                elif "INSERT INTO catalog.quality_reports" in statement:
+                    self.one = ("report-1",)
+            def fetchone(self): return self.one
+            def fetchall(self): return self.many
         class Connection:
             def __init__(self): self.cursor_instance = Cursor(); self.commits = 0; self.rollbacks = 0
             def cursor(self): return self.cursor_instance

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 import sys
 import tempfile
@@ -44,6 +45,46 @@ def trade(timestamp: str, trade_id: str) -> TradeRecord:
     )
 
 
+def write_evidence(root: Path, dataset_path: Path, identity: DatasetIdentity, revision: int) -> SealedPartitionEvidence:
+    artifact = root / "dt=2024-01-15" / f"part-{revision:03d}.parquet"
+    partition_path = root / f"partition-{revision}.json"
+    coverage_path = root / f"coverage-{revision}.json"
+    materialization = materialize_bybit_trade_v1(
+        artifact,
+        [trade("2024-01-15T00:00:01Z", "1"), trade("2024-01-15T00:00:02Z", "2")],
+        dataset_identity=identity,
+    )
+    partition = emit_partition_manifest(
+        partition_path, materialization, dataset_identity=identity, dataset_root=root,
+        partition_key="dt=2024-01-15", revision=revision,
+        rel_path=f"dt=2024-01-15/part-{revision:03d}.parquet",
+        created_at="2026-09-01T10:00:00Z", closed_at="2026-09-01T10:00:01Z",
+        producer=f"integration-materializer-{revision}", code_ref=f"integration-producer-{revision}",
+    )
+    emit_coverage_manifest(
+        coverage_path, dataset_identity=identity, source_dataset_identity=identity,
+        coverage_id=f"integration-coverage-{revision}", supersedes=None,
+        created_at="2026-09-01T10:00:02Z",
+        acquisition={
+            "basis": "source_extract", "intent_start": "2024-01-15T00:00:00Z",
+            "intent_end": "2024-01-16T00:00:00Z",
+            "source_semantics": "bybit-public-trades-sqlite-v1",
+            "mapping": "bybit-sqlite-day-extract-v1",
+        },
+        assertions=[{
+            "assertion_id": f"integration-assertion-{revision}",
+            "start": "2024-01-15T00:00:00Z", "end": "2024-01-16T00:00:00Z",
+            "status": "complete",
+            "partitions": [{"partition_key": "dt=2024-01-15", "revision": revision}],
+            "evidence": [{"kind": "deterministic_source_extract", "detail": "integration source"}],
+        }], producer=f"integration-source-{revision}", code_ref=f"integration-source-{revision}",
+        partition_manifests=[partition.document],
+    )
+    return SealedPartitionEvidence(
+        dataset_path, partition_path, (coverage_path,), artifact, "hot",
+    )
+
+
 def main() -> int:
     dsn = os.environ.get("DATA_GATEWAY_TEST_DSN")
     if not dsn:
@@ -55,48 +96,19 @@ def main() -> int:
     end = "2024-01-16T00:00:00Z"
     with tempfile.TemporaryDirectory() as holder:
         root = Path(holder)
-        artifact = root / "dt=2024-01-15" / "part-000.parquet"
         dataset_path = root / "dataset.json"
-        partition_path = root / "partition.json"
-        coverage_path = root / "coverage.json"
-        materialization = materialize_bybit_trade_v1(
-            artifact,
-            [trade("2024-01-15T00:00:01Z", "1"), trade("2024-01-15T00:00:02Z", "2")],
-            dataset_identity=identity,
-        )
         emit_dataset_manifest(
             dataset_path, dataset_identity=identity, created_at="2026-09-01T10:00:00Z",
             derived_from=[DatasetIdentity("raw", "trades", "bybit", "BTCUSDT", "trade-v1")],
             transform="canonicalize-trades-v1",
         )
-        partition = emit_partition_manifest(
-            partition_path, materialization, dataset_identity=identity, dataset_root=root,
-            partition_key="dt=2024-01-15", revision=1,
-            rel_path="dt=2024-01-15/part-000.parquet",
-            created_at="2026-09-01T10:00:00Z", closed_at="2026-09-01T10:00:01Z",
-            producer="integration-materializer", code_ref="integration-producer",
-        )
-        emit_coverage_manifest(
-            coverage_path, dataset_identity=identity, source_dataset_identity=identity,
-            coverage_id="integration-coverage", supersedes=None,
-            created_at="2026-09-01T10:00:02Z",
-            acquisition={
-                "basis": "source_extract", "intent_start": start, "intent_end": end,
-                "source_semantics": "bybit-public-trades-sqlite-v1",
-                "mapping": "bybit-sqlite-day-extract-v1",
-            },
-            assertions=[{
-                "assertion_id": "integration-assertion", "start": start, "end": end,
-                "status": "complete",
-                "partitions": [{"partition_key": "dt=2024-01-15", "revision": 1}],
-                "evidence": [{"kind": "deterministic_source_extract", "detail": "integration source"}],
-            }], producer="integration-source", code_ref="integration-source",
-            partition_manifests=[partition.document],
-        )
+        evidence = {
+            revision: write_evidence(root, dataset_path, identity, revision)
+            for revision in (1, 2, 3, 4, 5)
+        }
 
         connection = psycopg.connect(dsn)
         owns_fixture = False
-        original_partition_bytes = partition_path.read_bytes()
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -120,26 +132,97 @@ def main() -> int:
                 BybitTradeV1CertificationProfile("integration-certifier"),
             )
             owns_fixture = True
-            run = runtime.run(SealedPartitionEvidence(
-                dataset_path, partition_path, (coverage_path,), artifact, "hot",
-            ))
-            retry = runtime.run(SealedPartitionEvidence(
-                dataset_path, partition_path, (coverage_path,), artifact, "hot",
-            ))
-            assert retry.sealed_partition.partition_id == run.sealed_partition.partition_id
-            assert retry.quality_report.report_id == run.quality_report.report_id
+            run1 = runtime.run(evidence[1])
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT revision, state, partition_id::text FROM catalog.partitions WHERE dataset_id = %s AND partition_key = %s ORDER BY revision",
+                    (run1.sealed_partition.dataset_id, "dt=2024-01-15"),
+                )
+                assert cursor.fetchall() == [(1, "closed", run1.sealed_partition.partition_id)]
+                cursor.execute(
+                    "SELECT indexdef FROM pg_indexes WHERE schemaname = 'catalog' AND indexname = 'partitions_one_live'"
+                )
+                assert "UNIQUE INDEX partitions_one_live" in cursor.fetchone()[0]
+
+            original_partition_bytes = evidence[1].partition_manifest_path.read_bytes()
             conflicting_partition = json.loads(original_partition_bytes)
             conflicting_partition["producer"] = "conflicting-producer"
-            partition_path.write_text(json.dumps(conflicting_partition))
+            evidence[1].partition_manifest_path.write_text(json.dumps(conflicting_partition))
             try:
-                runtime.run(SealedPartitionEvidence(
-                    dataset_path, partition_path, (coverage_path,), artifact, "hot",
-                ))
+                runtime.run(evidence[1])
             except CatalogPublicationConflict:
                 pass
             else:
                 raise AssertionError("conflicting sealed evidence was accepted")
-            partition_path.write_bytes(original_partition_bytes)
+            evidence[1].partition_manifest_path.write_bytes(original_partition_bytes)
+
+            run2 = runtime.run(evidence[2])
+            retry2 = runtime.run(evidence[2])
+            assert retry2.sealed_partition.partition_id == run2.sealed_partition.partition_id
+            assert retry2.quality_report.report_id == run2.quality_report.report_id
+            assert run1.sealed_partition.partition_id != run2.sealed_partition.partition_id
+            assert run2.certification.metrics["natural_partition_identity"]["revision"] == 2
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT revision, state, partition_id::text FROM catalog.partitions WHERE dataset_id = %s AND partition_key = %s ORDER BY revision",
+                    (run1.sealed_partition.dataset_id, "dt=2024-01-15"),
+                )
+                topology = cursor.fetchall()
+                assert [(row[0], row[1]) for row in topology] == [(1, "superseded"), (2, "closed")]
+                assert sum(row[1] != "superseded" for row in topology) == 1
+                cursor.execute(
+                    "SELECT partition_id::text, code_ref, metrics #>> '{natural_partition_identity,revision}' FROM catalog.quality_reports WHERE partition_id IN (%s, %s)",
+                    (run1.sealed_partition.partition_id, run2.sealed_partition.partition_id),
+                )
+                assert {
+                    row[0]: (row[1], row[2]) for row in cursor.fetchall()
+                } == {
+                    run1.sealed_partition.partition_id: ("integration-certifier", "1"),
+                    run2.sealed_partition.partition_id: ("integration-certifier", "2"),
+                }
+                cursor.execute(
+                    "SELECT count(*) FROM catalog.quality_reports WHERE partition_id = %s",
+                    (run1.sealed_partition.partition_id,),
+                )
+                assert cursor.fetchone()[0] == 1
+                cursor.execute(
+                    "SELECT count(*) FROM catalog.quality_reports WHERE partition_id = %s",
+                    (run2.sealed_partition.partition_id,),
+                )
+                assert cursor.fetchone()[0] == 1
+
+            before_gap = topology
+            try:
+                runtime.run(evidence[4])
+            except CatalogPublicationConflict:
+                pass
+            else:
+                raise AssertionError("revision gap was accepted")
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT revision, state, partition_id::text FROM catalog.partitions WHERE dataset_id = %s AND partition_key = %s ORDER BY revision",
+                    (run1.sealed_partition.dataset_id, "dt=2024-01-15"),
+                )
+                assert cursor.fetchall() == before_gap
+
+            rollback_runtime = PublicationCertification(
+                CatalogPublicationWriter(connection),
+                BybitTradeV1CertificationProfile("integration-rollback-certifier"),
+            )
+            try:
+                rollback_runtime.seal(replace(
+                    evidence[3], storage_root_id="missing-storage-root",
+                ))
+            except psycopg.errors.ForeignKeyViolation:
+                pass
+            else:
+                raise AssertionError("invalid storage root did not fail successor insertion")
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT revision, state, partition_id::text FROM catalog.partitions WHERE dataset_id = %s AND partition_key = %s ORDER BY revision",
+                    (run1.sealed_partition.dataset_id, "dt=2024-01-15"),
+                )
+                assert cursor.fetchall() == before_gap
 
             class FailingPhaseThreeWriter(CatalogPublicationWriter):
                 def record_quality_report(self, **kwargs):
@@ -150,9 +233,7 @@ def main() -> int:
                 BybitTradeV1CertificationProfile("failing-certifier"),
             )
             try:
-                failing_runtime.run(SealedPartitionEvidence(
-                    dataset_path, partition_path, (coverage_path,), artifact, "hot",
-                ))
+                failing_runtime.run(evidence[3])
             except RuntimeError:
                 pass
             else:
@@ -163,15 +244,19 @@ def main() -> int:
                 )
                 dataset_id = cursor.fetchone()[0]
                 cursor.execute(
-                    "SELECT state FROM catalog.partitions WHERE partition_id = %s",
-                    (run.sealed_partition.partition_id,),
+                    "SELECT revision, state, partition_id::text FROM catalog.partitions WHERE dataset_id = %s AND partition_key = %s ORDER BY revision",
+                    (dataset_id, "dt=2024-01-15"),
                 )
-                assert cursor.fetchone()[0] == "closed"
+                after_phase_three_failure = cursor.fetchall()
+                assert [(row[0], row[1]) for row in after_phase_three_failure] == [
+                    (1, "superseded"), (2, "superseded"), (3, "closed")
+                ]
+                assert sum(row[1] != "superseded" for row in after_phase_three_failure) == 1
                 cursor.execute(
-                    "SELECT status, code_ref FROM catalog.quality_reports WHERE partition_id = %s",
-                    (run.sealed_partition.partition_id,),
+                    "SELECT count(*) FROM catalog.quality_reports WHERE partition_id = %s",
+                    (after_phase_three_failure[-1][2],),
                 )
-                assert cursor.fetchone() == ("pass", "integration-certifier")
+                assert cursor.fetchone()[0] == 0
                 try:
                     cursor.execute(
                         """
@@ -179,7 +264,7 @@ def main() -> int:
                             (partition_id, dataset_id, check_suite, status)
                         VALUES (%s, %s, 'xor-test', 'pass')
                         """,
-                        (run.sealed_partition.partition_id, dataset_id),
+                        (run1.sealed_partition.partition_id, dataset_id),
                     )
                 except psycopg.errors.CheckViolation:
                     connection.rollback()
@@ -188,7 +273,7 @@ def main() -> int:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT count(*) FROM catalog.quality_reports WHERE partition_id = %s",
-                    (run.sealed_partition.partition_id,),
+                    (run1.sealed_partition.partition_id,),
                 )
                 assert cursor.fetchone()[0] == 1
                 try:
@@ -201,16 +286,49 @@ def main() -> int:
                     raise AssertionError("quality_reports partition_id FK did not reject an unknown partition")
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT state FROM catalog.partitions WHERE partition_id = %s",
-                    (run.sealed_partition.partition_id,),
+                    "SELECT revision, state FROM catalog.partitions WHERE dataset_id = %s AND partition_key = %s ORDER BY revision",
+                    (dataset_id, "dt=2024-01-15"),
                 )
-                assert cursor.fetchone()[0] == "closed"
+                assert cursor.fetchall()[-1] == (3, "closed")
                 cursor.execute(
                     "SELECT count(*) FROM catalog.quality_reports WHERE partition_id = %s AND code_ref = 'failing-certifier'",
-                    (run.sealed_partition.partition_id,),
+                    (after_phase_three_failure[-1][2],),
                 )
                 assert cursor.fetchone()[0] == 0
-            print("PASS PostgreSQL publication certification integration: closed seal + quality report")
+
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO catalog.partitions (
+                        dataset_id, partition_key, revision, storage_root_id,
+                        rel_path, ts_start, ts_end, row_count, byte_size,
+                        content_sha256, state, manifest_sha256, created_at,
+                        closed_at, producer, code_ref
+                    ) VALUES (%s, %s, 4, 'hot', %s, %s, %s, 0, 0, %s,
+                              'superseded', %s, %s, %s, 'topology-test', 'topology-test')
+                    """,
+                    (
+                        dataset_id, "dt=2024-01-15", "dt=2024-01-15/part-004.parquet",
+                        Instant.parse(start).to_datetime(), Instant.parse(end).to_datetime(),
+                        "e" * 64, "f" * 64,
+                        Instant.parse("2026-09-01T10:00:00Z").to_datetime(),
+                        Instant.parse("2026-09-01T10:00:01Z").to_datetime(),
+                    ),
+                )
+            connection.commit()
+            try:
+                runtime.run(evidence[5])
+            except CatalogPublicationConflict:
+                pass
+            else:
+                raise AssertionError("inconsistent higher superseded topology was accepted")
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT revision, state FROM catalog.partitions WHERE dataset_id = %s AND partition_key = %s ORDER BY revision",
+                    (dataset_id, "dt=2024-01-15"),
+                )
+                assert cursor.fetchall() == [(1, "superseded"), (2, "superseded"), (3, "closed"), (4, "superseded")]
+            print("PASS PostgreSQL 17 S13 revision admission: topology, retry, quality locality, rollback")
         finally:
             if owns_fixture:
                 with connection.cursor() as cursor:
