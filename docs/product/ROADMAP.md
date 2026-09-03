@@ -55,12 +55,13 @@ development   development
 
 The completed slices are Shared Semantic Primitives v1, Canonical Parquet
 Materializer v1, Manifest + Coverage Emission v1, Bounded DataGateway finite
-read v1 and Publication Certification runtime v1 (S13 Phases 1–3). Golden
-Conformity Acceptance Support v1 is also READY as reusable gate support, but it
-is not the Golden E2E proof. The remaining critical path is the Publication
-Eligibility Bridge v1 (S14 / Phases 4–5), the Golden Bybit E2E, adversarial
-acceptance, Candle ordering compatibility acceptance and the gate review. See
-`SCOPE.md` and `CAPABILITY_MAP.md` for the current ledger.
+read v1, Publication Certification runtime v1 (S13 Phases 1–3), and
+Publication Eligibility Bridge v1 (S14 / S13.5 Phases 4–5). Golden Conformity
+Acceptance Support v1 is also READY as reusable gate support, but it is not the
+Golden E2E proof. The remaining critical path is the Human vertical / Golden
+Bybit BTCUSDT E2E, adversarial acceptance, Candle ordering compatibility
+acceptance and the gate review. See `SCOPE.md` and `CAPABILITY_MAP.md` for the
+current ledger.
 
 This is a temporary integration gate pair, not a permanent architecture layer.
 Passing both gates does not add a phase to the dependency order below; it
@@ -77,9 +78,10 @@ The following are blocked until the implementation gate passes:
 - L1/L2/L3/MBO runtime;
 - unrelated consumer or producer vertical expansion.
 
-The conformity slices themselves may proceed in their frozen dependency order.
-The next authorized Producer slice is **Publication Eligibility Bridge v1**
-(frozen S14 / S13.5 Phases 4–5: PUBLISH ELIGIBILITY → VERIFY).
+The conformity implementation slices are complete through S14. The next
+authorized milestone is **Human vertical / Golden Bybit BTCUSDT E2E**, which
+must exercise the real first-vertical publication chain rather than add another
+infrastructure slice.
 
 ## Phase B — full bidirectional expansion after Conformity Implementation Gate PASS
 
@@ -132,11 +134,13 @@ Publication Certification — COMPLETE
   Phase 2 CERTIFY → authoritative evaluation
   Phase 3 RECORD EVIDENCE → durable quality_reports
         ↓
-Publication Eligibility Bridge — NEXT
+Publication Eligibility Bridge — COMPLETE
   Phase 4 PUBLISH ELIGIBILITY → valid/degraded where frozen rules permit
   Phase 5 VERIFY → post-write eligibility/evidence verification
         ↓
-Golden Bybit E2E + adversarial acceptance + Candle ordering proof
+Human vertical / Golden Bybit BTCUSDT E2E — NEXT
+        ↓
+Adversarial acceptance + Candle ordering proof
         ↓
 Conformity Implementation Gate — IN PROGRESS / PARTIAL
         ↓
@@ -186,7 +190,8 @@ Phase 2 (Representation foundation) has its semantic contract frozen and
 accepted (ADR-0021, CandleDefinition v1). Candle runtime implementation is
 explicitly postponed until the Conformity Implementation Gate passes, because
 the bounded historical DataGateway read, Canonical Parquet Materializer,
-Manifest + Coverage Emission and authoritative Publication Certification are
-implemented, but S14 Publication Eligibility Bridge plus full Golden/adversarial
-proof still require completion. Candle runtime remains blocked until the
-complete seam is proven and the Conformity Implementation Gate passes.
+Manifest + Coverage Emission, authoritative Publication Certification and S14
+Publication Eligibility Bridge are implemented, but the full Golden/adversarial
+proof and Candle ordering compatibility acceptance still require completion.
+Candle runtime remains blocked until the complete seam is proven and the
+Conformity Implementation Gate passes.

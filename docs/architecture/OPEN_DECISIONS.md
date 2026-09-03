@@ -9,8 +9,11 @@ conformity slices) and the **Conformity Implementation Gate** (runtime-level;
 unlocks broader producer/consumer vertical expansion and Candle runtime). The
 Contract Freeze Gate has **PASSED**. The Conformity Implementation Gate remains
 **OPEN / IN PROGRESS**: only the conformity slices and their gate evidence may
-advance until it passes. See ADR-0023 for the exact, separate exit criteria of
-each.
+advance until it passes. The automated first-vertical publication path is now
+implemented through S13 Publication Certification and S14 Publication
+Eligibility/Verification; the next gate milestone is the Human vertical /
+Golden Bybit BTCUSDT E2E. See ADR-0023 for the exact, separate exit criteria of
+each gate.
 
 ## Package Boundary / Modular Monolith Foundation v1
 
@@ -47,7 +50,7 @@ certification rule (including the durable evidence model and
 certification/publication sequencing), semantic catalog-rebuild equality, and
 the manifest+coverage-to-catalog mapping. The following remain explicitly
 open even after that freeze, as implementation choices deliberately left
-tunable:
+tunable or future generalizations beyond the first implemented vertical:
 
 - transport for a bounded historical read (HTTP streaming, gRPC, Arrow
   Flight, WebSocket, network pagination) — the contract freezes only the
@@ -56,7 +59,9 @@ tunable:
   for `RecordTimeBounds`;
 - Parquet writer implementation/library, compression, row-group size and
   page/dictionary settings;
-- the manifest+coverage-to-catalog bridge's SQL/transaction implementation;
+- generalization of the current S13/S14 catalog transaction and publication
+  mechanics beyond the first Bybit `trade-v1` vertical; the first-vertical
+  implementation itself is no longer an open decision;
 - second-venue ordering-identity integration (the mapping mechanism is frozen
   in `PRODUCER_CONSUMER_CONFORMITY.md` §8.2 OI2, including that a second venue
   needs its own eligibility profile analogous to §10; no second venue is added

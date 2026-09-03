@@ -29,15 +29,18 @@ Completed conformity slices on authoritative `origin/main`:
    infrastructure; it is not the Golden E2E proof and does not imply Gate PASS;
 6. Publication Certification runtime v1 — **DONE** for frozen S13 Phases 1–3:
    SEAL to durable `state='closed'`, authoritative CERTIFY, and durable
-   `quality_reports` evidence recording. It does not grant publication
-   eligibility.
+   `quality_reports` evidence recording;
+7. Publication Eligibility Bridge v1 — **DONE** for frozen S14 / S13.5 Phases
+   4–5: current certification evidence drives `closed → valid/degraded` under
+   the frozen first-vertical rules and Phase-5 post-write verification fails
+   closed.
 
-**Next authorized implementation slice:** Publication Eligibility Bridge v1
-(frozen S14 / S13.5 Phases 4–5: PUBLISH ELIGIBILITY → VERIFY).
+**Next authorized milestone:** Human vertical / Golden Bybit BTCUSDT E2E.
+This is gate evidence over the real first vertical, not another infrastructure
+slice.
 
 Remaining critical path to the Conformity Implementation Gate review:
 
-7. Publication Eligibility Bridge v1;
 8. Human vertical / Golden Bybit E2E;
 9. Adversarial acceptance;
 10. Candle ordering compatibility acceptance;
@@ -52,11 +55,9 @@ architecture constraint.
 
 ## In scope
 
-- the completed first-vertical publication certifier and durable evidence flow
-  as the authoritative prerequisite for publication eligibility;
-- the Publication Eligibility Bridge v1 that consumes sealed certification
-  evidence and owns `closed → valid/degraded` eligibility plus post-write
-  verification;
+- the completed first-vertical publication certification and eligibility flow,
+  from S13 SEAL/CERTIFY/RECORD EVIDENCE through S14 PUBLISH ELIGIBILITY/VERIFY,
+  as the automated publication baseline to be exercised end to end;
 - the human vertical and Golden Bybit BTCUSDT E2E proof;
 - required adversarial acceptance, including zero-event coverage, gaps,
   supersession, overlap, relocation, rebuild, physical-layout variation and
@@ -165,10 +166,10 @@ sequential by this scope.
 
 - this file describes the active Conformity Implementation scope and current
   gate state;
-- the six completed slices/support capabilities and the remaining critical
+- the seven completed slices/support capabilities and the remaining critical
   path are explicit;
-- Publication Eligibility Bridge v1 is explicit as the next authorized
-  implementation slice;
+- Human vertical / Golden Bybit BTCUSDT E2E is explicit as the next authorized
+  milestone;
 - pre-gate controlled convergence and post-gate independent concurrency are
   explicit;
 - blocked broader work and preserved future Producer/Consumer roadmap items
