@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""Test del reference importer Bybit trades -> trade-v1.
+"""Test del reference importer Bybit trades -> artifact trade-v1 JSONL.
 
-La canonicalizzazione e' una funzione pura: la maggior parte dei casi non ha
-bisogno di SQLite. Solo i test su finestra temporale, ordinamento e scrittura
-atomica costruiscono un database temporaneo.
+Questo file NON verifica piu' la semantica sorgente: quella appartiene al
+production seam ed e' provata da tests/test_bybit_historical_source_v1.py.
+Qui si verifica soltanto cio' che il tool possiede davvero:
 
-Ogni record canonico prodotto viene inoltre validato contro il contratto
-congelato schemas/trade-v1.json: non basta che l'importer sia coerente con se
-stesso, deve produrre record che il contratto accetta.
+    TradeRecord prodotto dal seam di produzione
+        -> serializzazione JSONL di riferimento
+        -> byte esatti, ordine delle chiavi, SHA-256
+
+piu' il percorso reale completo:
+
+    SQLite temporaneo -> seam di produzione -> importer -> artifact
+
+I byte attesi sono CONGELATI in questo file. Non aggiornarli per accomodare
+un refactor: un byte diverso significa che l'artifact di riferimento e'
+cambiato, non che il test e' obsoleto.
 
 Uscita: 0 se tutto conforme, 1 altrimenti.
 """
@@ -16,15 +24,19 @@ import json
 import sqlite3
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "src"))
 
 from import_bybit_trades import (  # noqa: E402
-    CANONICAL_FIELD_ORDER, ImportError_, SourceRow, canonicalize_trade,
-    encode_record, format_exchange_ts, iter_source_rows, open_source,
-    parse_utc_to_nanos, run_import, utc_day_bounds_ms, write_jsonl_atomic,
+    CANONICAL_FIELD_ORDER, ImportError_, encode_record, format_exchange_ts,
+    run_import, write_jsonl_atomic,
+)
+from quant_platform.source_adapters.bybit_historical import (  # noqa: E402
+    BybitHistoricalTradeRow, canonicalize_bybit_historical_trade_v1,
 )
 
 try:
@@ -43,6 +55,7 @@ if "date-time" not in _fc.checkers:
 VALIDATOR = Draft202012Validator(SCHEMA, format_checker=_fc)
 
 FAILURES = []
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def check(condition, what, detail=None):
@@ -70,145 +83,160 @@ def must_fail(callable_, what, expect_field=None):
         check(False, what, "ACCETTATO, doveva fallire")
 
 
-def row(**overrides):
-    base = dict(category="linear", symbol="BTCUSDT",
-                trade_id="0a14459b-c7a6-5e90-bc0a-30b46a3fbb90",
-                trade_time_ms=1705276800492,
-                trade_time_utc="2024-01-15T00:00:00.492000Z",
-                side="Buy", size="0.004", price="41731.10")
-    base.update(overrides)
-    return SourceRow(**base)
+def source_row(trade_time_ms, side, price, size, trade_id):
+    """Una riga sorgente coerente: i due timestamp sorgente concordano."""
+    seconds, millis = divmod(trade_time_ms, 1000)
+    moment = EPOCH + timedelta(seconds=seconds)
+    return BybitHistoricalTradeRow(
+        category="linear", symbol="BTCUSDT", trade_id=trade_id,
+        trade_time_ms=trade_time_ms,
+        trade_time_utc=f"{moment:%Y-%m-%dT%H:%M:%S}.{millis:03d}000Z",
+        side=side, size=size, price=price)
 
 
-def canonical_is_valid(record):
-    errors = sorted(VALIDATOR.iter_errors(record), key=str)
-    return (not errors), "; ".join(e.message for e in errors[:2])
+def production_record(*args):
+    """Il TradeRecord vero, prodotto dal canonicalizer di produzione."""
+    return canonicalize_bybit_historical_trade_v1(source_row(*args))
 
 
 # ==========================================================================
-print("\n1-2. mappatura del lato aggressore")
-rec_buy = canonicalize_trade(row(side="Buy"))
-check(rec_buy["aggressor_side"] == "buy", "Buy -> 'buy'")
-rec_sell = canonicalize_trade(row(side="Sell"))
-check(rec_sell["aggressor_side"] == "sell", "Sell -> 'sell'")
+# 1. Byte congelati: TradeRecord di produzione -> riga JSONL di riferimento
+#
+# Include obbligatoriamente i due casi che una resa ingenua via
+# Instant.isoformat() romperebbe in silenzio: il millisecondo con zero finale
+# (.490 -> .49) e il millisecondo nullo (.000 -> nessuna frazione).
+# ==========================================================================
+print("\n1. byte congelati dell'artifact di riferimento")
+FROZEN = [
+    ((1705276800490, "Buy", "41731.10", "0.00400", "tid-1"),
+     b'{"venue":"bybit","instrument":"BTCUSDT",'
+     b'"exchange_ts":"2024-01-15T00:00:00.490Z","receive_ts":null,'
+     b'"price":"41731.10","size":"0.00400","aggressor_side":"buy",'
+     b'"trade_id":"tid-1","sequence":null}\n'),
+    ((1705276800000, "Sell", "41731.1", "0.004",
+      "0a14459b-c7a6-5e90-bc0a-30b46a3fbb90"),
+     b'{"venue":"bybit","instrument":"BTCUSDT",'
+     b'"exchange_ts":"2024-01-15T00:00:00.000Z","receive_ts":null,'
+     b'"price":"41731.1","size":"0.004","aggressor_side":"sell",'
+     b'"trade_id":"0a14459b-c7a6-5e90-bc0a-30b46a3fbb90","sequence":null}\n'),
+    ((1705276800400, "Sell", "9007199254740993.1",
+      "0.1000000000000000055511151231257827", "zz"),
+     b'{"venue":"bybit","instrument":"BTCUSDT",'
+     b'"exchange_ts":"2024-01-15T00:00:00.400Z","receive_ts":null,'
+     b'"price":"9007199254740993.1",'
+     b'"size":"0.1000000000000000055511151231257827",'
+     b'"aggressor_side":"sell","trade_id":"zz","sequence":null}\n'),
+    ((1705363199931, "Buy", "1", "123456.789012345678901234567890", "1"),
+     b'{"venue":"bybit","instrument":"BTCUSDT",'
+     b'"exchange_ts":"2024-01-15T23:59:59.931Z","receive_ts":null,'
+     b'"price":"1","size":"123456.789012345678901234567890",'
+     b'"aggressor_side":"buy","trade_id":"1","sequence":null}\n'),
+    ((0, "Buy", "0.5", "0.0000001", "epoch"),
+     b'{"venue":"bybit","instrument":"BTCUSDT",'
+     b'"exchange_ts":"1970-01-01T00:00:00.000Z","receive_ts":null,'
+     b'"price":"0.5","size":"0.0000001","aggressor_side":"buy",'
+     b'"trade_id":"epoch","sequence":null}\n'),
+]
+for arguments, expected in FROZEN:
+    produced = encode_record(production_record(*arguments))
+    check(produced == expected,
+          f"trade_time_ms={arguments[0]} -> byte congelati",
+          produced.decode().strip())
 
-print("\n3. side sconosciuta -> failure")
-for bad in ["buy", "BUY", "Bid", "Ask", "", None, "Buy "]:
-    must_fail(lambda b=bad: canonicalize_trade(row(side=b)),
-              f"side={bad!r} respinto", expect_field="side")
+print("\n2. receive_ts e sequence restano null nell'artifact")
+for arguments, _ in FROZEN:
+    line = json.loads(encode_record(production_record(*arguments)))
+    check(line["receive_ts"] is None and line["sequence"] is None,
+          f"trade_time_ms={arguments[0]}: receive_ts e sequence null")
 
-print("\n4-5. price e size preservati byte per byte")
-for field, value in [("price", "41731.10"), ("price", "41731.1"),
-                     ("size", "0.004"), ("size", "0.00400"),
-                     ("price", "1"), ("size", "123456.789012345678901234567890")]:
-    rec = canonicalize_trade(row(**{field: value}))
-    check(rec[field] == value and isinstance(rec[field], str),
-          f"{field}={value!r} preservato identico", repr(rec[field]))
+print("\n3. price e size restano stringhe nel JSON, mai numeri")
+for arguments, _ in FROZEN:
+    line = json.loads(encode_record(production_record(*arguments)))
+    check(isinstance(line["price"], str) and isinstance(line["size"], str),
+          f"trade_time_ms={arguments[0]}: price e size sono stringhe",
+          f"price={line['price']!r} size={line['size']!r}")
 
-print("\n6. nessun passaggio tramite float")
-# La rappresentazione decimale esatta del float 0.1: se un solo passaggio per
-# IEEE-754 avvenisse, questa stringa tornerebbe '0.1'.
-exact = "0.1000000000000000055511151231257827"
-rec = canonicalize_trade(row(size=exact))
-check(rec["size"] == exact, "decimale oltre la precisione di float64 intatto",
-      rec["size"])
-# 2^53+1 con parte frazionaria: float lo collasserebbe
-big = "9007199254740993.1"
-rec = canonicalize_trade(row(price=big))
-check(rec["price"] == big, "valore oltre 2^53 intatto", rec["price"])
-line = json.loads(encode_record(rec).decode())
-check(isinstance(line["price"], str),
-      "nel JSON price resta una stringa, non un numero", repr(line["price"]))
-check("e" not in rec["price"].lower() and "E" not in rec["price"],
-      "nessuna notazione esponenziale introdotta")
+print("\n4. ordine delle chiavi e assenza di campi sorgente")
+forbidden = {"category", "trade_time_ms", "trade_time_utc", "side", "symbol",
+             "tick_direction", "gross_value", "home_notional", "foreign_notional"}
+for arguments, _ in FROZEN:
+    line = json.loads(encode_record(production_record(*arguments)))
+    check(tuple(line) == CANONICAL_FIELD_ORDER,
+          f"trade_time_ms={arguments[0]}: chiavi nell'ordine del contratto",
+          ", ".join(line))
+    check(not (set(line) & forbidden),
+          f"trade_time_ms={arguments[0]}: nessun campo sorgente filtrato")
 
-print("\n7-9. receive_ts, sequence, trade_id")
-rec = canonicalize_trade(row())
-check(rec["receive_ts"] is None, "receive_ts = null")
-check(rec["sequence"] is None, "sequence = null")
-check(rec["trade_id"] == "0a14459b-c7a6-5e90-bc0a-30b46a3fbb90",
-      "trade_id preservato", rec["trade_id"])
-must_fail(lambda: canonicalize_trade(row(trade_id="")),
-          "trade_id vuoto respinto", expect_field="trade_id")
+print("\n5. conformita' al contratto congelato trade-v1")
+for arguments, _ in FROZEN:
+    line = json.loads(encode_record(production_record(*arguments)))
+    errors = sorted(VALIDATOR.iter_errors(line), key=str)
+    check(not errors, f"trade_time_ms={arguments[0]}: valido per trade-v1",
+          "; ".join(e.message for e in errors[:2]))
 
-print("\n10-11. identita' della sorgente")
-must_fail(lambda: canonicalize_trade(row(category="spot")),
-          "category errata respinta", expect_field="category")
-must_fail(lambda: canonicalize_trade(row(category="inverse")),
-          "category 'inverse' respinta", expect_field="category")
-must_fail(lambda: canonicalize_trade(row(symbol="ETHUSDT")),
-          "symbol errato respinto", expect_field="symbol")
+print("\n6. LF, mai CRLF, e determinismo del serializzatore")
+for arguments, _ in FROZEN:
+    payload = encode_record(production_record(*arguments))
+    check(payload.endswith(b"\n") and not payload.endswith(b"\r\n"),
+          f"trade_time_ms={arguments[0]}: newline LF")
+check(encode_record(production_record(*FROZEN[0][0])) ==
+      encode_record(production_record(*FROZEN[0][0])),
+      "due serializzazioni dello stesso record danno gli stessi byte")
 
-print("\n12-13. coerenza fra trade_time_ms e trade_time_utc")
-rec = canonicalize_trade(row(trade_time_ms=1705276800492,
-                             trade_time_utc="2024-01-15T00:00:00.492000Z"))
-check(rec["exchange_ts"] == "2024-01-15T00:00:00.492Z",
-      "ms e UTC coerenti -> pass", rec["exchange_ts"])
-rec = canonicalize_trade(row(trade_time_ms=1705276800492,
-                             trade_time_utc="2024-01-15T00:00:00.492Z"))
-check(rec["exchange_ts"] == "2024-01-15T00:00:00.492Z",
-      "stesso istante scritto con 3 decimali invece di 6 -> pass")
-for bad_utc in ["2024-01-15T00:00:00.493000Z",   # 1 ms di scarto
-                "2024-01-15T00:00:00.492001Z",   # 1 us: sub-millisecondo
-                "2024-01-15T01:00:00.492000Z",   # un'ora
-                "2024-01-15T00:00:00.492000",    # senza timezone
-                "2024-13-45T00:00:00.492000Z"]:  # data inesistente
-    must_fail(lambda u=bad_utc: canonicalize_trade(row(trade_time_utc=u)),
-              f"UTC divergente {bad_utc!r} respinto", expect_field="trade_time_utc")
-must_fail(lambda: canonicalize_trade(row(trade_time_ms=None)),
-          "trade_time_ms mancante respinto", expect_field="trade_time_ms")
-must_fail(lambda: canonicalize_trade(row(trade_time_utc="")),
-          "trade_time_utc mancante respinto", expect_field="trade_time_utc")
 
-print("\n17. determinismo: stessa riga -> stesso record")
-a = canonicalize_trade(row())
-b = canonicalize_trade(row())
-check(a == b, "due canonicalizzazioni della stessa riga coincidono")
-check(encode_record(a) == encode_record(b), "e producono gli stessi byte")
+# ==========================================================================
+# 7. Fail-fast del serializzatore su Mapping di riferimento
+# ==========================================================================
+print("\n7. campi estranei respinti, campi assenti omessi (comportamento baseline)")
+canonical_mapping = json.loads(encode_record(production_record(*FROZEN[0][0])))
 
-print("\n18. nessun campo sorgente extra nell'output")
-rec = canonicalize_trade(row())
-check(tuple(rec) == CANONICAL_FIELD_ORDER,
-      "chiavi esattamente quelle di trade-v1, nell'ordine del contratto",
-      ", ".join(rec))
-forbidden = {"category", "trade_time_ms", "trade_time_utc", "side",
-             "tick_direction", "gross_value", "home_notional", "foreign_notional",
-             "symbol"}
-check(not (set(rec) & forbidden), "nessun campo sorgente e' filtrato nel record",
-      f"assenti: {', '.join(sorted(forbidden))}")
+check(encode_record(canonical_mapping) == FROZEN[0][1],
+      "un Mapping canonico produce gli stessi byte del TradeRecord")
 
-print("\nconformita' al contratto congelato trade-v1")
-for name, sample in [("buy", rec_buy), ("sell", rec_sell), ("base", rec)]:
-    ok, why = canonical_is_valid(sample)
-    check(ok, f"record {name} valido secondo schemas/trade-v1.json", why)
+for extraneous in ("gross_value", "tick_direction", "unknown_field"):
+    polluted = dict(canonical_mapping, **{extraneous: "x"})
+    must_fail(lambda p=polluted: encode_record(p),
+              f"campo estraneo {extraneous!r} respinto, non scartato in silenzio")
 
-print("\nvalidazione decimale contro il contratto")
-for bad in ["0", "0.0", "-1", "-0.5", "01.5", "1.", ".5", "1e5", "abc", "", " 1"]:
-    must_fail(lambda b=bad: canonicalize_trade(row(price=b)),
-              f"price={bad!r} respinto", expect_field="price")
-for bad in ["0", "0.000", "-0.004"]:
-    must_fail(lambda b=bad: canonicalize_trade(row(size=b)),
-              f"size={bad!r} respinto", expect_field="size")
+polluted_many = dict(canonical_mapping, gross_value="1", tick_direction="PlusTick")
+must_fail(lambda: encode_record(polluted_many),
+          "piu' campi estranei insieme respinti")
 
-print("\nformattazione di exchange_ts")
+for absent in ("sequence", "receive_ts", "trade_id"):
+    partial = {k: v for k, v in canonical_mapping.items() if k != absent}
+    payload = encode_record(partial)
+    decoded = json.loads(payload)
+    check(absent not in decoded and tuple(decoded) ==
+          tuple(n for n in CANONICAL_FIELD_ORDER if n != absent),
+          f"campo noto assente {absent!r}: omesso, come nel baseline",
+          payload.decode().strip())
+
+must_fail(lambda: encode_record(["not", "a", "record"]),
+          "un input che non e' TradeRecord ne' Mapping viene respinto")
+
+
+# ==========================================================================
+# 8. Resa temporale di riferimento: responsabilita' di serializzazione
+# ==========================================================================
+print("\n8. formattazione di exchange_ts a tre decimali esatti")
 for ms, expected in [(1705276800492, "2024-01-15T00:00:00.492Z"),
                      (1705363199931, "2024-01-15T23:59:59.931Z"),
                      (1705276800000, "2024-01-15T00:00:00.000Z"),
+                     (1705276800490, "2024-01-15T00:00:00.490Z"),
+                     (1705276800400, "2024-01-15T00:00:00.400Z"),
                      (0, "1970-01-01T00:00:00.000Z")]:
     got = format_exchange_ts(ms)
     check(got == expected, f"{ms} -> {expected}", got)
-check(parse_utc_to_nanos("2024-01-15T00:00:00.492Z") ==
-      parse_utc_to_nanos("2024-01-15T00:00:00.492000Z"),
-      "3 e 6 decimali dello stesso istante danno gli stessi nanosecondi")
-
-print("\nfinestra UTC")
-start_ms, end_ms = utc_day_bounds_ms("2024-01-15")
-check((start_ms, end_ms) == (1705276800000, 1705363200000),
-      "2024-01-15 -> [1705276800000, 1705363200000)", f"{start_ms}, {end_ms}")
+for ms in (1705276800490, 1705276800000, 1705276800400, 1705276800492):
+    rendered = format_exchange_ts(ms)
+    record = production_record(ms, "Buy", "1", "1", "t")
+    check(record.exchange_ts.epoch_ns == ms * 1_000_000,
+          f"{ms}: la resa a tre decimali {rendered} descrive l'istante canonico",
+          f"{record.exchange_ts.epoch_ns} ns")
 
 
 # ==========================================================================
-# Test che hanno davvero bisogno di SQLite
+# 9. Percorso reale: SQLite -> seam di produzione -> importer -> artifact
 # ==========================================================================
 DDL = """
 CREATE TABLE trades (
@@ -255,7 +283,7 @@ with tempfile.TemporaryDirectory() as tmp:
         ("linear", "ETHUSDT", "other-sym", START + 9, "Buy", "1", "100"),
     ])
 
-    print("\n14-15. boundary della finestra temporale")
+    print("\n9. boundary della finestra temporale, sul percorso reale")
     out = tmp / "day.jsonl"
     report = run_import(db, "2024-01-15", out)
     ids = [json.loads(l)["trade_id"] for l in out.read_text().splitlines()]
@@ -266,7 +294,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("other-cat" not in ids and "other-sym" not in ids,
           "category/symbol fuori scope non estratti")
 
-    print("\n16. ordinamento deterministico per (trade_time_ms, trade_id)")
+    print("\n10. ordinamento deterministico per (trade_time_ms, trade_id)")
     check(ids == ["at-start", "a-mid", "b-mid", "last-in"],
           "ordine atteso a parita' di trade_time_ms", " -> ".join(ids))
     check(report.canonical_rows == 4 and report.source_rows == 4,
@@ -275,23 +303,32 @@ with tempfile.TemporaryDirectory() as tmp:
     check(report.receive_ts_non_null == 0 and report.sequence_non_null == 0,
           "nessun receive_ts o sequence valorizzato")
 
-    print("\nriproducibilita': stesso input -> stesso SHA-256")
+    print("\n11. byte dell'artifact prodotto dal percorso reale")
+    produced_lines = out.read_bytes().split(b"\n")[:-1]
+    expected_first = (
+        b'{"venue":"bybit","instrument":"BTCUSDT",'
+        b'"exchange_ts":"2024-01-15T00:00:00.000Z","receive_ts":null,'
+        b'"price":"100","size":"1","aggressor_side":"buy",'
+        b'"trade_id":"at-start","sequence":null}')
+    check(produced_lines[0] == expected_first,
+          "prima riga dell'artifact identica ai byte attesi",
+          produced_lines[0].decode())
+    check(all(not line.endswith(b"\r") for line in produced_lines),
+          "nessun CRLF introdotto dalla piattaforma")
+    check(report.extract_evidence.source_row_count == 4,
+          "la source evidence e' disponibile dopo l'esaurimento completo",
+          report.extract_evidence.detail)
+
+    print("\n12. riproducibilita': stesso input -> stesso SHA-256")
     out2 = tmp / "day2.jsonl"
     report2 = run_import(db, "2024-01-15", out2)
     check(report.sha256 == report2.sha256,
           "due run indipendenti danno lo stesso digest", report.sha256[:32] + "...")
+    check(report.extract_evidence.source_fingerprint_sha256 ==
+          report2.extract_evidence.source_fingerprint_sha256,
+          "e la stessa source fingerprint")
 
-    print("\nstreaming: nessuna query per record")
-    con = open_source(db)
-    try:
-        rows = list(iter_source_rows(con, "linear", "BTCUSDT", START, END))
-        check(len(rows) == 4, "il reader restituisce solo la finestra richiesta")
-        check(all(isinstance(r, SourceRow) for r in rows),
-              "il reader restituisce SourceRow, non tuple grezze")
-    finally:
-        con.close()
-
-    print("\noutput atomico: un fallimento non lascia un artifact valido")
+    print("\n13. output atomico: un fallimento non lascia un artifact valido")
     bad_db = tmp / "bad.sqlite"
     build_db(bad_db, [
         ("linear", "BTCUSDT", "ok-1", START, "Buy", "1", "100"),
@@ -305,7 +342,7 @@ with tempfile.TemporaryDirectory() as tmp:
     leftovers = [p.name for p in tmp.iterdir() if ".tmp-" in p.name]
     check(not leftovers, "nessun file temporaneo abbandonato", str(leftovers))
 
-    print("\nprotezione overwrite: un artifact esistente non si sovrascrive")
+    print("\n14. protezione overwrite: un artifact esistente non si sovrascrive")
     guarded = tmp / "guarded.jsonl"
     first_run = run_import(db, "2024-01-15", guarded)
     original_bytes = guarded.read_bytes()
@@ -326,7 +363,7 @@ with tempfile.TemporaryDirectory() as tmp:
     must_fail(lambda: run_import(db, "2024-01-15", occupied),
               "un percorso occupato da una directory viene respinto")
 
-    print("\nfuori scope: fallire chiaramente invece di generalizzare")
+    print("\n15. fuori scope: fallire chiaramente invece di generalizzare")
     for kwargs, label in [({"venue": "coinbase"}, "venue"),
                           ({"category": "spot"}, "category"),
                           ({"instrument": "ETHUSDT"}, "instrument")]:
@@ -339,16 +376,17 @@ with tempfile.TemporaryDirectory() as tmp:
     must_fail(lambda: run_import(db, "2024-13-45", tmp / "nope.jsonl"),
               "data inesistente respinta")
 
-    print("\nogni record dell'artifact e' valido secondo il contratto")
-    bad_records = []
-    for line in out.read_text().splitlines():
-        record = json.loads(line)
-        ok, why = canonical_is_valid(record)
-        if not ok:
-            bad_records.append((record.get("trade_id"), why))
-    check(not bad_records, "tutti i record scritti passano schemas/trade-v1.json",
-          str(bad_records[:2]))
+    print("\n16. il writer accetta il TradeRecord di produzione senza ponti")
+    direct = tmp / "direct.jsonl"
+    result = write_jsonl_atomic(
+        (production_record(*arguments) for arguments, _ in FROZEN), direct)
+    check(result.rows == len(FROZEN),
+          "write_jsonl_atomic consuma direttamente i TradeRecord di produzione")
+    check(direct.read_bytes() == b"".join(expected for _, expected in FROZEN),
+          "e produce esattamente i byte congelati, nell'ordine di emissione")
 
+
+# ==========================================================================
 print()
 if FAILURES:
     print(f"{RED}FAIL{OFF}: {len(FAILURES)} controlli non superati")
