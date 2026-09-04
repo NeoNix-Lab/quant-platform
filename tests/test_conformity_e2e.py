@@ -117,6 +117,30 @@ class ConformityE2ETest(unittest.TestCase):
             ordinary.assert_not_called()
             self.assertFalse((config.storage_root / "canonical").exists())
 
+    def test_preflight_does_not_resolve_a_fake_raw_parent(self):
+        with tempfile.TemporaryDirectory() as holder:
+            root = Path(holder)
+            source = root / "source.sqlite"
+            _make_source(source)
+            config = _config(root / "storage", source)
+            config.storage_root.mkdir()
+            resolved = []
+
+            class Catalog:
+                def __init__(self, connection):
+                    pass
+
+                def resolve_dataset(self, identity):
+                    resolved.append(identity)
+                    raise DatasetNotFound("target is absent")
+
+            with patch.object(harness, "_connect_catalog", return_value=_CatalogConnection()), \
+                 patch.object(harness, "Catalog", Catalog):
+                result = harness.collect_preflight(config)
+
+        self.assertTrue(result.passed)
+        self.assertEqual([item.layer for item in resolved], ["canonical"])
+
     def test_cli_legacy_source_is_explicit_and_defaults_off(self):
         ordinary_config = harness._config_from_namespace(
             harness.build_parser().parse_args(["preflight"])
@@ -186,6 +210,7 @@ class ConformityE2ETest(unittest.TestCase):
                 (harness.Check("all", True, "controlled"),),
             )
             calls: list[str] = []
+            dataset_manifest_kwargs = {}
 
             class Accumulator:
                 def evidence(self, *args):
@@ -240,6 +265,7 @@ class ConformityE2ETest(unittest.TestCase):
 
             def fake_emit_dataset(*args, **kwargs):
                 calls.append("dataset-manifest")
+                dataset_manifest_kwargs.update(kwargs)
                 return Emission()
 
             def fake_emit_partition(*args, **kwargs):
@@ -275,6 +301,10 @@ class ConformityE2ETest(unittest.TestCase):
                 report = harness.run_vertical(config)
 
             self.assertEqual(report.eligibility.state, "valid")
+            self.assertEqual(dataset_manifest_kwargs["schema_version"], "dataset-manifest-v2")
+            self.assertEqual(dataset_manifest_kwargs["origin"], "source_acquired")
+            self.assertNotIn("derived_from", dataset_manifest_kwargs)
+            self.assertEqual(dataset_manifest_kwargs["transform"], "canonicalize-trades-v1")
             ordinary_opener.assert_called_once_with(config.sqlite_path)
             legacy_opener.assert_not_called()
             self.assertLess(calls.index("materialize"), calls.index("dataset-manifest"))

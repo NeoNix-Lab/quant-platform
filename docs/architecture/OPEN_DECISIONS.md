@@ -79,7 +79,8 @@ tunable or future generalizations beyond the first implemented vertical:
 ### DataGateway and representations
 
 - precise candle materialization identity;
-- required dataset-manifest evolution path.
+- required dataset-manifest evolution path, resolved by
+  [ADR-0025](../decisions/ADR-0025-source-acquired-canonical-dataset-lineage-v2.md).
 
 DataGateway logical boundary and first implementation slice are resolved by
 ADR-0019 and `docs/contracts/DATA_GATEWAY.md`. The following remain open for

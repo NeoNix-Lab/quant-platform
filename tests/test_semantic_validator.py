@@ -34,6 +34,21 @@ DATASET = {
     "created_at": "2026-08-01T00:00:00Z",
 }
 
+V2_SOURCE_ACQUIRED = {
+    "schema_version": "dataset-manifest-v2", "layer": "canonical",
+    "dataset_kind": "trades", "venue": "bybit", "instrument": "BTC/USD",
+    "record_schema_id": "trade-v1",
+    "rel_root": "canonical/trades/bybit/BTC%2FUSD/trade-v1",
+    "origin": "source_acquired", "transform": "canonicalize-trades-v1",
+    "created_at": "2026-08-01T00:00:00Z",
+}
+
+V2_DATASET_DERIVED = {
+    **V2_SOURCE_ACQUIRED,
+    "origin": "dataset_derived",
+    "derived_from": [DATASET["derived_from"][0]],
+}
+
 PARTITION = {
     "schema_version": "partition-manifest-v1", "layer": "canonical",
     "dataset_kind": "trades", "venue": "bybit", "instrument": "BTC/USD",
@@ -192,6 +207,19 @@ for path in parts:
 print("\n9. validate() aggrega dataset e partizioni")
 v = validate(DATASET, [PARTITION, variant(PARTITION, venue="coinbase")])
 expect(["IDENTITY_MISMATCH"], v, "una partizione incoerente su due segnalata")
+
+print("\n10. dataset-manifest-v2 dispatcha la topologia senza reinterpretare v1")
+expect([], check_dataset_manifest(V2_SOURCE_ACQUIRED), "source_acquired v2 senza lineage accettato")
+expect([], check_dataset_manifest(V2_DATASET_DERIVED), "dataset_derived v2 con genitore accettato")
+expect(["MISSING_ORIGIN"], check_dataset_manifest(
+    {key: value for key, value in V2_SOURCE_ACQUIRED.items() if key != "origin"}
+), "canonical v2 senza origin respinto")
+expect(["UNSUPPORTED_DATASET_MANIFEST_VERSION"], check_dataset_manifest(
+    variant(V2_SOURCE_ACQUIRED, schema_version="dataset-manifest-v9")
+), "schema version non supportato respinto")
+expect(["LINEAGE_REQUIRED"], check_dataset_manifest(
+    variant(DATASET, derived_from=[])
+), "canonical v1 senza genitore continua a essere respinto")
 
 print()
 if fail:

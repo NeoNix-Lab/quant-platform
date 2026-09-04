@@ -82,7 +82,7 @@ ALL_PARTITION_STATES = (
     "invalid",
     "superseded",
 )
-RAW_PARENT_LAYER = "raw"
+DATASET_ORIGIN = "source_acquired"
 DATASET_TRANSFORM = "canonicalize-trades-v1"
 PRODUCER_ID = "human-e2e-operator-harness-v1"
 CERTIFIER_CODE_REF = "human-e2e-operator-harness-v1"
@@ -103,7 +103,6 @@ class HarnessConfig:
 class Target:
     golden: GoldenExpectation
     identity: DatasetIdentity
-    parent_identity: DatasetIdentity
     day: str
     start: Instant
     end: Instant
@@ -207,9 +206,6 @@ def _target_from_golden(config: HarnessConfig) -> Target:
     identity = DatasetIdentity(
         "canonical", "trades", SUPPORTED_VENUE, SUPPORTED_INSTRUMENT, "trade-v1"
     )
-    parent_identity = DatasetIdentity(
-        RAW_PARENT_LAYER, "trades", SUPPORTED_VENUE, SUPPORTED_INSTRUMENT, "trade-v1"
-    )
     if config.storage_root is None:
         dataset_root = Path(".")
     else:
@@ -225,7 +221,6 @@ def _target_from_golden(config: HarnessConfig) -> Target:
     return Target(
         golden=golden,
         identity=identity,
-        parent_identity=parent_identity,
         day=day,
         start=start,
         end=end,
@@ -320,25 +315,17 @@ def _catalog_checks(config: HarnessConfig, target: Target | None) -> tuple[Check
         connection = _connect_catalog(config.dsn)
         catalog = Catalog(connection=connection)
         try:
-            catalog.resolve_dataset(target.parent_identity)
-        except DatasetNotFound:
-            return (
-                Check("catalog", True, "PostgreSQL catalog connected"),
-                Check("lineage", False, "required raw parent dataset is not catalogued"),
-                Check("rerun", False, "rerun safety cannot be established without the raw parent"),
-            )
-        try:
             catalog.resolve_dataset(target.identity)
         except DatasetNotFound:
             return (
                 Check("catalog", True, "PostgreSQL catalog connected"),
-                Check("lineage", True, "required raw parent dataset is catalogued"),
+                Check("lineage", True, "source-acquired canonical has no required catalog parent"),
                 Check("rerun", True, "canonical target natural identity is absent"),
             )
         else:
             return (
                 Check("catalog", True, "PostgreSQL catalog connected"),
-                Check("lineage", True, "required raw parent dataset is catalogued"),
+                Check("lineage", True, "source-acquired canonical has no required catalog parent"),
                 Check("rerun", False, "canonical target natural identity already exists; refusing ambiguous rerun"),
             )
     except Exception as exc:
@@ -501,8 +488,9 @@ def run_vertical(config: HarnessConfig) -> RunReport:
             target.dataset_manifest_path,
             dataset_identity=target.identity,
             created_at=created_at,
-            derived_from=[target.parent_identity],
             transform=DATASET_TRANSFORM,
+            schema_version="dataset-manifest-v2",
+            origin=DATASET_ORIGIN,
         )
         closed_at = _now_text()
         partition_emission = emit_partition_manifest(

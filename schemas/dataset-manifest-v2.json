@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:market-platform:schema:dataset-manifest-v2",
+  "title": "dataset-manifest-v2",
+  "description": "Durable logical dataset identity, topology, relative storage root, and semantic transformation. Source provenance remains in coverage-manifest-v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "layer",
+    "dataset_kind",
+    "venue",
+    "instrument",
+    "record_schema_id",
+    "rel_root",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "dataset-manifest-v2"
+    },
+    "layer": {
+      "enum": ["raw", "canonical", "features"]
+    },
+    "dataset_kind": {
+      "enum": [
+        "trades",
+        "l2",
+        "footprint",
+        "trade_microstructure",
+        "footprint_microstructure",
+        "l2_microstructure"
+      ]
+    },
+    "venue": {
+      "$ref": "#/$defs/venue_name"
+    },
+    "instrument": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "feature_set_slug": {
+      "$ref": "#/$defs/canonical_identifier"
+    },
+    "feature_set_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "record_schema_id": {
+      "$ref": "#/$defs/canonical_identifier"
+    },
+    "rel_root": {
+      "type": "string",
+      "allOf": [
+        {"$ref": "#/$defs/relative_path_shape"},
+        {"$ref": "#/$defs/no_traversal"}
+      ]
+    },
+    "origin": {
+      "enum": ["dataset_derived", "source_acquired"]
+    },
+    "derived_from": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/dataset_identity"},
+      "uniqueItems": true
+    },
+    "transform": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "created_at": {
+      "$ref": "#/$defs/utc_timestamp"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["layer"],
+        "properties": {"layer": {"const": "features"}}
+      },
+      "then": {
+        "required": ["feature_set_slug", "feature_set_version", "origin", "derived_from", "transform"],
+        "properties": {
+          "origin": {"const": "dataset_derived"},
+          "derived_from": {"minItems": 1}
+        }
+      },
+      "else": {
+        "properties": {
+          "feature_set_slug": false,
+          "feature_set_version": false
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["layer"],
+        "properties": {"layer": {"const": "raw"}}
+      },
+      "then": {
+        "properties": {
+          "origin": false,
+          "derived_from": false,
+          "transform": false,
+          "dataset_kind": {"enum": ["trades", "l2"]}
+        }
+      },
+      "else": {
+        "if": {
+          "required": ["layer"],
+          "properties": {"layer": {"const": "canonical"}}
+        },
+        "then": {
+          "required": ["origin"],
+          "properties": {
+            "dataset_kind": {"enum": ["trades", "footprint", "l2"]}
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {"origin": {"const": "dataset_derived"}}
+              },
+              "then": {
+                "required": ["derived_from", "transform"],
+                "properties": {"derived_from": {"minItems": 1}}
+              }
+            },
+            {
+              "if": {
+                "properties": {"origin": {"const": "source_acquired"}}
+              },
+              "then": {
+                "required": ["transform"],
+                "properties": {"derived_from": false}
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["layer"],
+        "properties": {"layer": {"const": "features"}}
+      },
+      "then": {
+        "properties": {
+          "dataset_kind": {
+            "enum": [
+              "trade_microstructure",
+              "footprint_microstructure",
+              "l2_microstructure"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "dataset_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "dataset_kind",
+        "venue",
+        "instrument",
+        "record_schema_id"
+      ],
+      "properties": {
+        "layer": {"enum": ["raw", "canonical", "features"]},
+        "dataset_kind": {
+          "enum": [
+            "trades",
+            "l2",
+            "footprint",
+            "trade_microstructure",
+            "footprint_microstructure",
+            "l2_microstructure"
+          ]
+        },
+        "venue": {"$ref": "#/$defs/venue_name"},
+        "instrument": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "feature_set_slug": {"$ref": "#/$defs/canonical_identifier"},
+        "feature_set_version": {"type": "integer", "minimum": 1},
+        "record_schema_id": {"$ref": "#/$defs/canonical_identifier"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["layer"],
+            "properties": {"layer": {"const": "features"}}
+          },
+          "then": {
+            "required": ["feature_set_slug", "feature_set_version"]
+          },
+          "else": {
+            "properties": {
+              "feature_set_slug": false,
+              "feature_set_version": false
+            }
+          }
+        }
+      ]
+    },
+    "venue_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+([_-][a-z0-9]+)*$"
+    },
+    "relative_path_shape": {
+      "pattern": "^[A-Za-z0-9._=%-]+(/[A-Za-z0-9._=%-]+)*$"
+    },
+    "no_traversal": {
+      "allOf": [
+        {"not": {"pattern": "(^|/)\\.\\.?(/|$)"}},
+        {"not": {"pattern": "%(?![0-9A-F]{2})"}},
+        {"not": {"pattern": "%2[Ee]"}}
+      ]
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "canonical_identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*$"
+    }
+  }
+}

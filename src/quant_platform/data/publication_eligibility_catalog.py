@@ -13,6 +13,7 @@ import hashlib
 import json
 from typing import Any, Mapping, Sequence
 
+from .manifests import DATASET_MANIFEST_V1, DATASET_MANIFEST_V2
 from .models import DatasetIdentity, Instant, NaturalPartitionIdentity
 
 
@@ -160,11 +161,31 @@ class PublicationEligibilityCatalog:
     @staticmethod
     def _resolve_parents(cursor: Any, document: Mapping[str, Any], child: DatasetIdentity):
         lineage = document.get("derived_from")
-        if child.layer == "raw":
-            if lineage is not None or document.get("transform") is not None:
-                raise PublicationEligibilityRefusal("raw dataset carries derived lineage")
-            return []
-        if not isinstance(lineage, list) or not lineage or not isinstance(document.get("transform"), str):
+        version = document.get("schema_version")
+        if version == DATASET_MANIFEST_V1:
+            if child.layer == "raw":
+                if lineage is not None or document.get("transform") is not None:
+                    raise PublicationEligibilityRefusal("raw dataset carries derived lineage")
+                return []
+        elif version == DATASET_MANIFEST_V2:
+            if child.layer == "raw":
+                if "origin" in document or "derived_from" in document or "transform" in document:
+                    raise PublicationEligibilityRefusal("raw dataset-manifest-v2 carries derived topology")
+                return []
+            origin = document.get("origin")
+            if child.layer == "canonical" and origin == "source_acquired":
+                if "derived_from" in document:
+                    raise PublicationEligibilityRefusal("source_acquired dataset declares lineage")
+                transform = document.get("transform")
+                if not isinstance(transform, str) or not transform.strip():
+                    raise PublicationEligibilityRefusal("source_acquired dataset lacks explicit transform")
+                return []
+            if child.layer not in {"canonical", "features"} or origin != "dataset_derived":
+                raise PublicationEligibilityRefusal("v2 dataset origin is incompatible with its layer")
+        else:
+            raise PublicationEligibilityRefusal("unsupported dataset manifest schema_version")
+
+        if not isinstance(lineage, list) or not lineage or not isinstance(document.get("transform"), str) or not document["transform"].strip():
             raise PublicationEligibilityRefusal("derived dataset lacks explicit lineage and transform")
         result = []
         seen = set()

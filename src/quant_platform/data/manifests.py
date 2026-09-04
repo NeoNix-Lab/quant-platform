@@ -1,4 +1,4 @@
-"""Durable dataset, partition, and coverage manifest emission for conformity v1.
+"""Durable dataset, partition, and coverage manifest emission.
 
 This module owns only the generic manifest seam.  Source-specific code supplies
 the acquisition evidence; it is deliberately not imported here.
@@ -23,7 +23,13 @@ from .models import DataIntegrityError, DatasetIdentity, Instant, InvalidRequest
 
 
 class ManifestValidationError(DataIntegrityError):
-    """Raised when a manifest cannot be published under a frozen v1 contract."""
+    """Raised when a manifest cannot be published under a frozen contract."""
+
+
+DATASET_MANIFEST_V1 = "dataset-manifest-v1"
+DATASET_MANIFEST_V2 = "dataset-manifest-v2"
+_DATASET_MANIFEST_VERSIONS = {DATASET_MANIFEST_V1, DATASET_MANIFEST_V2}
+_DATASET_ORIGINS = {"dataset_derived", "source_acquired"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,20 +100,55 @@ def emit_dataset_manifest(
     created_at: Instant | str,
     derived_from: Sequence[DatasetIdentity | Mapping[str, Any]] | None = None,
     transform: str | None = None,
+    schema_version: str = DATASET_MANIFEST_V1,
+    origin: str | None = None,
 ) -> ManifestEmission:
-    """Validate and atomically emit one deterministic ``dataset-manifest-v1``."""
+    """Validate and atomically emit one deterministic dataset manifest.
+
+    V1 remains the default and keeps its frozen semantics.  V2 must be selected
+    deliberately, with an explicit topology origin for every non-raw dataset.
+    """
 
     identity = _identity_document(dataset_identity)
-    if dataset_identity.layer == "raw":
-        if derived_from:
-            raise ManifestValidationError("raw dataset manifests cannot have derived_from")
-        if transform is not None:
-            raise ManifestValidationError("raw dataset manifests cannot have transform")
+    if schema_version not in _DATASET_MANIFEST_VERSIONS:
+        raise ManifestValidationError("unsupported dataset manifest schema_version")
+    if schema_version == DATASET_MANIFEST_V1:
+        if origin is not None:
+            raise ManifestValidationError("dataset-manifest-v1 cannot declare origin")
+        if dataset_identity.layer == "raw":
+            if derived_from:
+                raise ManifestValidationError("raw dataset manifests cannot have derived_from")
+            if transform is not None:
+                raise ManifestValidationError("raw dataset manifests cannot have transform")
+        else:
+            if not derived_from:
+                raise ManifestValidationError("non-raw dataset manifests require explicit derived_from")
+            if transform is None:
+                raise ManifestValidationError("non-raw dataset manifests require explicit transform")
     else:
-        if not derived_from:
-            raise ManifestValidationError("non-raw dataset manifests require explicit derived_from")
-        if transform is None:
-            raise ManifestValidationError("non-raw dataset manifests require explicit transform")
+        if dataset_identity.layer == "raw":
+            if origin is not None:
+                raise ManifestValidationError("raw dataset-manifest-v2 cannot declare origin")
+            if derived_from is not None:
+                raise ManifestValidationError("raw dataset-manifest-v2 requires absent derived_from")
+            if transform is not None:
+                raise ManifestValidationError("raw dataset-manifest-v2 cannot declare transform")
+        elif not isinstance(origin, str) or origin not in _DATASET_ORIGINS:
+            raise ManifestValidationError("dataset-manifest-v2 requires a supported origin")
+        elif dataset_identity.layer == "features" and origin != "dataset_derived":
+            raise ManifestValidationError("features dataset-manifest-v2 must be dataset_derived")
+        elif origin == "source_acquired":
+            if dataset_identity.layer != "canonical":
+                raise ManifestValidationError("source_acquired is only valid for canonical datasets")
+            if derived_from is not None:
+                raise ManifestValidationError("source_acquired manifests require absent derived_from")
+            if transform is None:
+                raise ManifestValidationError("source_acquired manifests require explicit transform")
+        else:
+            if derived_from is None or not derived_from:
+                raise ManifestValidationError("dataset_derived manifests require explicit derived_from")
+            if transform is None:
+                raise ManifestValidationError("dataset_derived manifests require explicit transform")
 
     lineage = None if derived_from is None else [_identity_document(item) for item in derived_from]
     if lineage is not None:
@@ -118,11 +159,13 @@ def emit_dataset_manifest(
             raise ManifestValidationError("dataset manifest cannot derive from itself")
 
     document: dict[str, Any] = {
-        "schema_version": "dataset-manifest-v1",
+        "schema_version": schema_version,
         **identity,
         "rel_root": _derive_rel_root(identity),
         "created_at": _utc_timestamp(created_at, "created_at"),
     }
+    if origin is not None:
+        document["origin"] = origin
     if lineage is not None:
         document["derived_from"] = lineage
     if transform is not None:
@@ -552,6 +595,18 @@ def _coverage_timestamp(value: Instant | str, field: str) -> str:
 
 
 def _validate_dataset_document(document: Mapping[str, Any]) -> None:
+    """Validate a dataset manifest using its explicitly declared version."""
+
+    version = document.get("schema_version")
+    if version == DATASET_MANIFEST_V1:
+        _validate_dataset_document_v1(document)
+    elif version == DATASET_MANIFEST_V2:
+        _validate_dataset_document_v2(document)
+    else:
+        raise ManifestValidationError("unsupported dataset manifest schema_version")
+
+
+def _validate_dataset_document_v1(document: Mapping[str, Any]) -> None:
     required = {
         "schema_version", "layer", "dataset_kind", "venue", "instrument",
         "record_schema_id", "rel_root", "created_at",
@@ -576,6 +631,66 @@ def _validate_dataset_document(document: Mapping[str, Any]) -> None:
             raise ManifestValidationError("derived dataset manifest requires lineage")
         if "transform" not in document:
             raise ManifestValidationError("derived dataset manifest requires transform")
+    if "derived_from" in document:
+        if not isinstance(document["derived_from"], list):
+            raise ManifestValidationError("derived_from must be a list")
+        identities = []
+        for parent in document["derived_from"]:
+            parent_identity = _identity_document(parent)
+            identities.append(_identity_tuple(parent_identity))
+        if len(set(identities)) != len(identities):
+            raise ManifestValidationError("derived_from identities must be unique")
+        if _identity_tuple(document) in identities:
+            raise ManifestValidationError("dataset manifest cannot derive from itself")
+    if "transform" in document:
+        _canonical_identifier(document["transform"], "transform")
+
+
+def _validate_dataset_document_v2(document: Mapping[str, Any]) -> None:
+    required = {
+        "schema_version", "layer", "dataset_kind", "venue", "instrument",
+        "record_schema_id", "rel_root", "created_at",
+    }
+    allowed = required | {
+        "feature_set_slug", "feature_set_version", "origin", "derived_from", "transform",
+    }
+    if not required.issubset(document) or not set(document).issubset(allowed):
+        raise ManifestValidationError("dataset manifest fields do not match the frozen v2 shape")
+    _identity_document({key: document[key] for key in document if key in {
+        "layer", "dataset_kind", "venue", "instrument", "record_schema_id", "feature_set_slug", "feature_set_version"
+    }})
+    if document.get("schema_version") != DATASET_MANIFEST_V2:
+        raise ManifestValidationError("invalid dataset manifest schema_version")
+    if document.get("rel_root") != _derive_rel_root(document):
+        raise ManifestValidationError("dataset manifest rel_root is not derived from identity")
+    _utc_timestamp(document["created_at"], "created_at")
+
+    layer = document["layer"]
+    origin = document.get("origin")
+    if layer == "raw":
+        if "origin" in document or "derived_from" in document or "transform" in document:
+            raise ManifestValidationError("raw dataset-manifest-v2 cannot declare topology metadata")
+    elif layer == "canonical":
+        if not isinstance(origin, str) or origin not in _DATASET_ORIGINS:
+            raise ManifestValidationError("canonical dataset-manifest-v2 requires a supported origin")
+        if origin == "source_acquired":
+            if "derived_from" in document:
+                raise ManifestValidationError("source_acquired manifests require absent derived_from")
+            if "transform" not in document:
+                raise ManifestValidationError("source_acquired manifests require transform")
+        else:
+            if not isinstance(document.get("derived_from"), list) or not document["derived_from"]:
+                raise ManifestValidationError("dataset_derived manifests require non-empty derived_from")
+            if "transform" not in document:
+                raise ManifestValidationError("dataset_derived manifests require transform")
+    elif layer == "features":
+        if origin != "dataset_derived":
+            raise ManifestValidationError("features dataset-manifest-v2 must be dataset_derived")
+        if not isinstance(document.get("derived_from"), list) or not document["derived_from"]:
+            raise ManifestValidationError("features dataset-manifest-v2 require non-empty derived_from")
+        if "transform" not in document:
+            raise ManifestValidationError("features dataset-manifest-v2 require transform")
+
     if "derived_from" in document:
         if not isinstance(document["derived_from"], list):
             raise ManifestValidationError("derived_from must be a list")
@@ -731,6 +846,8 @@ def _remove_temporary_file(path: Path) -> None:
 
 
 __all__ = [
+    "DATASET_MANIFEST_V1",
+    "DATASET_MANIFEST_V2",
     "ManifestEmission",
     "ManifestValidationError",
     "emit_coverage_manifest",
