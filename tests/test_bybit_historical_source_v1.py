@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import sys
 import tempfile
 import unittest
@@ -527,7 +528,7 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
         return database, start, end
 
     def _block_shm(self, database: Path) -> None:
-        """Reproduce the real blocker: the -shm sidecar cannot be created."""
+        """Place a sentinel that an immutable reader must not touch."""
 
         Path(str(database) + "-shm").mkdir()
 
@@ -551,24 +552,47 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
         }
         self.assertEqual(immutable_owners, {"open_bybit_historical_legacy_source"})
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "models deployed POSIX directory permissions; Windows is development-only",
+    )
     def test_ordinary_reader_fails_where_the_legacy_reader_succeeds(self):
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             database, start, end = self._legacy_db(directory, wal=True)
-            self._block_shm(database)
+            # Closing the WAL-setting connection leaves no writer. Remove any
+            # cleanly disposable sidecars before making their directory
+            # non-writable, matching the deployed legacy archive condition.
+            for suffix in ("-wal", "-shm", "-journal"):
+                sidecar = Path(str(database) + suffix)
+                if sidecar.exists():
+                    self.assertTrue(sidecar.is_file(), str(sidecar))
+                    sidecar.unlink()
 
-            with self.assertRaises(Exception):
-                connection = open_bybit_historical_source(database)
+            original_mode = stat.S_IMODE(directory.stat().st_mode)
+            directory.chmod(original_mode & ~0o222)
+            try:
+                self.assertEqual(stat.S_IMODE(directory.stat().st_mode) & 0o222, 0)
+                with self.assertRaises(BybitHistoricalSourceError) as ordinary_failure:
+                    connection = open_bybit_historical_source(database)
+                    try:
+                        next(iter_bybit_historical_trade_rows(
+                            connection, start, end), None)
+                    finally:
+                        connection.close()
+                self.assertIsInstance(
+                    ordinary_failure.exception.__cause__, sqlite3.OperationalError)
+
+                connection = open_bybit_historical_legacy_source(database)
                 try:
-                    next(iter_bybit_historical_trade_rows(connection, start, end), None)
+                    rows = list(iter_bybit_historical_trade_rows(
+                        connection, start, end))
                 finally:
                     connection.close()
-
-            connection = open_bybit_historical_legacy_source(database)
-            try:
-                rows = list(iter_bybit_historical_trade_rows(connection, start, end))
             finally:
-                connection.close()
+                directory.chmod(original_mode)
+
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), original_mode)
             self.assertEqual(len(rows), 6)
             self.assertEqual(rows[0].trade_id, "id-0")
 
