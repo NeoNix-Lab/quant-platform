@@ -236,6 +236,8 @@ def build_publication_fixture(
     coverage_id: str | None = None,
     supersedes: str | None = None,
     source_extract_detail: str = "deterministic source extract",
+    compression: str | None = "zstd",
+    row_group_size: int = 65_536,
 ) -> PublicationFixture:
     """Materialize one partition and emit its durable dataset/partition/coverage evidence.
 
@@ -256,7 +258,11 @@ def build_publication_fixture(
 
     if ordering_provider is None:
         materialization = materialize_bybit_trade_v1(
-            artifact_path, list(records), dataset_identity=identity
+            artifact_path,
+            list(records),
+            dataset_identity=identity,
+            compression=compression,
+            row_group_size=row_group_size,
         )
     else:
         materialization = materialize_trade_v1(
@@ -264,6 +270,8 @@ def build_publication_fixture(
             list(records),
             dataset_identity=identity,
             ordering_provider=ordering_provider,
+            compression=compression,
+            row_group_size=row_group_size,
         )
 
     partition_manifest_path = root / f"partition-{partition_key}.json"
