@@ -8,7 +8,6 @@ database infrastructure.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from dataclasses import replace
@@ -18,8 +17,14 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tools"))
 
 import psycopg  # noqa: E402
+
+from bootstrap_schema_registry import (  # noqa: E402
+    bootstrap_schema_registry,
+    read_schema_registration,
+)
 
 from quant_platform.data import (  # noqa: E402
     CatalogPublicationConflict,
@@ -166,16 +171,12 @@ def main() -> int:
                 )
                 if cursor.fetchone() is not None:
                     raise RuntimeError("integration database already contains the fixed first-vertical dataset")
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO catalog.schema_registry (schema_id, name, version, json_sha256, body)
-                    VALUES ('trade-v1', 'trade', 1, %s, %s::jsonb)
-                    ON CONFLICT (schema_id) DO NOTHING
-                    """,
-                    (hashlib.sha256((ROOT / "schemas" / "trade-v1.json").read_bytes()).hexdigest(),
-                     json.dumps(json.loads((ROOT / "schemas" / "trade-v1.json").read_text()))),
-                )
+            # One bootstrap semantics: the integration database registers
+            # trade-v1 through the same seam production uses, so a divergence
+            # between test and production registration cannot hide here.
+            bootstrap_schema_registry(
+                connection, read_schema_registration(ROOT / "schemas" / "trade-v1.json")
+            )
             connection.commit()
             runtime = PublicationCertification(
                 CatalogPublicationWriter(connection),

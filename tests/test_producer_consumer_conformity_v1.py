@@ -683,12 +683,13 @@ class FrozenContractsAreNotMutatedInPlace(unittest.TestCase):
     def test_frozen_schemas_are_not_touched_by_this_pass(self):
         # sha256 stability is already covered by their own contract test
         # suites; this only guards that this pass did not add a stray schema
-        # version file for trade-v1/manifests.
+        # version file outside the explicitly authorized manifest-v2 evolution.
         schemas_dir = ROOT / "schemas"
         expected = {
             "candle-v1.json",
             "coverage-manifest-v1.json",
             "dataset-manifest-v1.json",
+            "dataset-manifest-v2.json",
             "partition-manifest-v1.json",
             "trade-v1.json",
         }

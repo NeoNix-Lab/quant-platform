@@ -142,8 +142,8 @@ through a later ADR.
   `main`;
 - moving packages now creates import, test and documentation churn without
   adding a capability;
-- the Golden E2E has not yet provided complete evidence about natural runtime
-  seams;
+- at acceptance time, the Golden E2E had not provided complete evidence about
+  natural runtime seams;
 - premature package design risks encoding guessed rather than observed
   bounded contexts.
 

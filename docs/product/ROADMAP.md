@@ -23,9 +23,9 @@ The roadmap expresses dependency direction, not day estimates. Exact scope may e
 
 The repository is in **Phase A — Controlled Bidirectional Convergence**. The
 Contract Freeze Gate has passed; the Conformity Implementation Gate remains
-open. Until the implementation gate passes, Producer and Consumer may advance
-concurrently only on work that directly advances the shared conformity seam
-and its evidence.
+**IN PROGRESS / PARTIAL**. Human/Golden Bybit BTCUSDT E2E has passed, while
+adversarial acceptance, Candle ordering compatibility and the final Gate review
+remain open.
 
 [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md)
 freezes two sequential, non-circular gates between the accepted foundation
@@ -36,32 +36,35 @@ broader vertical expansion:
 foundation contracts
         ↓
 CONTRACT FREEZE GATE — PASSED
-  (documentation-level: ADR-0023 and
-   PRODUCER_CONSUMER_CONFORMITY.md accepted)
         ↓
-  unlocks: implementing the conformity slices — NOT broader
-  vertical expansion
+conformity implementation slices
         ↓
-CONFORMITY IMPLEMENTATION GATE — IN PROGRESS / PARTIAL
-  (runtime-level: the conformity slices are implemented and pass the
-   required tests, including the golden Bybit BTCUSDT vertical)
+Human / Golden Bybit BTCUSDT E2E — PASS
         ↓
-  unlocks: producer AND consumer vertical expansion, AND Candle runtime
-      ↙       ↘
-producer      consumer
-vertical      vertical
-development   development
+governance closeout → branch review / CI → merge
+        ↓
+from authoritative main:
+Adversarial Acceptance + Candle Ordering Compatibility
+        ↓
+Final Conformity Gate Review
+        ↓
+CONFORMITY IMPLEMENTATION GATE — PASS
+        ↓
+Package Boundary → Legacy Capability Harvest → broader expansion
 ```
 
 The completed slices are Shared Semantic Primitives v1, Canonical Parquet
 Materializer v1, Manifest + Coverage Emission v1, Bounded DataGateway finite
 read v1, Publication Certification runtime v1 (S13 Phases 1–3), and
 Publication Eligibility Bridge v1 (S14 / S13.5 Phases 4–5). Golden Conformity
-Acceptance Support v1 is also READY as reusable gate support, but it is not the
-Golden E2E proof. The remaining critical path is the Human vertical / Golden
-Bybit BTCUSDT E2E, adversarial acceptance, Candle ordering compatibility
-acceptance and the gate review. See `SCOPE.md` and `CAPABILITY_MAP.md` for the
-current ledger.
+Acceptance Support v1 is READY, and the first real Human/Golden vertical has
+now produced an exact Golden match through `DataGateway.scan()`. Its detailed
+evidence is recorded in
+[`HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md`](../integration/HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md).
+
+Merging the Human E2E branch records this completed milestone. It does not
+promote the Conformity Implementation Gate and does not authorize post-gate
+work.
 
 This is a temporary integration gate pair, not a permanent architecture layer.
 Passing both gates does not add a phase to the dependency order below; it
@@ -78,10 +81,23 @@ The following are blocked until the implementation gate passes:
 - L1/L2/L3/MBO runtime;
 - unrelated consumer or producer vertical expansion.
 
-The conformity implementation slices are complete through S14. The next
-authorized milestone is **Human vertical / Golden Bybit BTCUSDT E2E**, which
-must exercise the real first-vertical publication chain rather than add another
-infrastructure slice.
+The Human/Golden Bybit BTCUSDT vertical is complete. The current branch proceeds
+through governance closeout, final review and CI before merge. From authoritative
+`main`, the remaining gate path is **Adversarial Acceptance**, **Candle Ordering
+Compatibility**, then the **Final Conformity Gate Review**.
+
+## Operational follow-up outside the Gate critical path
+
+**Server Access & Runtime Identity Hardening v1** is a separate operational
+follow-up to restore or audit canonical server access, service identities,
+filesystem ACLs, database roles and credential disposition. Human E2E
+operator/bootstrap privileges are acceptance evidence only and do not define
+production runtime authorization.
+
+This follow-up does not block the Human E2E merge and does not open or close the
+Conformity Implementation Gate. Human administration remains via SSH, local
+services use canonical service identities, and future normal remote consumers
+remain behind the planned Canonical API. No API runtime is introduced here.
 
 ## Phase B — full bidirectional expansion after Conformity Implementation Gate PASS
 
@@ -138,11 +154,15 @@ Publication Eligibility Bridge — COMPLETE
   Phase 4 PUBLISH ELIGIBILITY → valid/degraded where frozen rules permit
   Phase 5 VERIFY → post-write eligibility/evidence verification
         ↓
-Human vertical / Golden Bybit BTCUSDT E2E — NEXT
+Human vertical / Golden Bybit BTCUSDT E2E — PASS
         ↓
-Adversarial acceptance + Candle ordering proof
+Governance closeout → branch review / CI → MERGE
         ↓
-Conformity Implementation Gate — IN PROGRESS / PARTIAL
+From main: Adversarial acceptance + Candle ordering proof
+        ↓
+Final Conformity Gate Review
+        ↓
+Conformity Implementation Gate — PASS
         ↓
 Package Boundary / Modular Monolith Foundation v1
         ↓
@@ -191,7 +211,8 @@ accepted (ADR-0021, CandleDefinition v1). Candle runtime implementation is
 explicitly postponed until the Conformity Implementation Gate passes, because
 the bounded historical DataGateway read, Canonical Parquet Materializer,
 Manifest + Coverage Emission, authoritative Publication Certification and S14
-Publication Eligibility Bridge are implemented, but the full Golden/adversarial
-proof and Candle ordering compatibility acceptance still require completion.
+Publication Eligibility Bridge are implemented, and the Human Golden proof is
+complete. Adversarial acceptance, Candle ordering compatibility and the final
+Gate review still require completion.
 Candle runtime remains blocked until the complete seam is proven and the
 Conformity Implementation Gate passes.

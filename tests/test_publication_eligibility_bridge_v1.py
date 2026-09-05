@@ -432,7 +432,7 @@ class AuthorityTests(unittest.TestCase):
         identity = DatasetIdentity("canonical", "trades", "genericvenue", "BTC-USD", "trade-v1")
         parent_a = DatasetIdentity("raw", "trades", "genericvenue", "BTC-USD", "trade-v1")
         parent_b = DatasetIdentity("raw", "trades", "genericvenue", "ETH-USD", "trade-v1")
-        dataset = {"layer": "canonical", "dataset_kind": "trades", "venue": "genericvenue", "instrument": "BTC-USD", "record_schema_id": "trade-v1", "rel_root": "canonical/trades/genericvenue/BTC-USD/trade-v1", "derived_from": [parent_a.stable_dict(), parent_b.stable_dict()], "transform": "canonicalize-trades-v1"}
+        dataset = {"schema_version": "dataset-manifest-v1", "layer": "canonical", "dataset_kind": "trades", "venue": "genericvenue", "instrument": "BTC-USD", "record_schema_id": "trade-v1", "rel_root": "canonical/trades/genericvenue/BTC-USD/trade-v1", "derived_from": [parent_a.stable_dict(), parent_b.stable_dict()], "transform": "canonicalize-trades-v1"}
         child = ("child", "canonical", "trades", "genericvenue", "BTC-USD", "trade-v1", None, dataset["rel_root"], "dataset-hash")
         parent1 = ("parent-b", "raw", "trades", "genericvenue", "BTC-USD", "trade-v1", None, "raw/trades/genericvenue/BTC-USD/trade-v1", "parent-hash")
         parent2 = ("parent-a", "raw", "trades", "genericvenue", "ETH-USD", "trade-v1", None, "raw/trades/genericvenue/ETH-USD/trade-v1", "parent-hash")

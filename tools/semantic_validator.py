@@ -45,6 +45,7 @@ Ricostruzione (reconstruct_catalog_coverage):
 """
 
 from datetime import datetime, timedelta, timezone
+import re
 import string
 
 __all__ = [
@@ -57,6 +58,10 @@ __all__ = [
 # Caratteri che restano letterali nel percent-encoding. Il '%' NON e' fra
 # questi: e' cio' che rende la mappa iniettiva.
 SAFE = frozenset(string.ascii_letters + string.digits + "._-")
+DATASET_MANIFEST_V1 = "dataset-manifest-v1"
+DATASET_MANIFEST_V2 = "dataset-manifest-v2"
+DATASET_ORIGINS = frozenset(("dataset_derived", "source_acquired"))
+CANONICAL_IDENTIFIER = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 
 
 class Violation:
@@ -181,9 +186,122 @@ def _parse_seq(value):
 # --------------------------------------------------------------------------
 # controlli
 # --------------------------------------------------------------------------
+def _check_transform(manifest, violations):
+    transform = manifest.get("transform")
+    if not isinstance(transform, str) or not CANONICAL_IDENTIFIER.fullmatch(transform):
+        violations.append(Violation(
+            "TRANSFORM_REQUIRED",
+            "transform deve essere un identificatore semantico non vuoto",
+            "transform",
+        ))
+
+
+def _check_dataset_topology_v1(manifest):
+    violations = []
+    layer = manifest.get("layer")
+    lineage = manifest.get("derived_from")
+    if layer == "raw":
+        if lineage not in (None, []):
+            violations.append(Violation(
+                "RAW_LINEAGE",
+                "un dataset raw non puo' dichiarare genitori",
+                "derived_from",
+            ))
+        if "transform" in manifest:
+            violations.append(Violation(
+                "RAW_TRANSFORM",
+                "un dataset raw non puo' dichiarare transform",
+                "transform",
+            ))
+    elif layer in {"canonical", "features"}:
+        if not isinstance(lineage, list) or not lineage:
+            violations.append(Violation(
+                "LINEAGE_REQUIRED",
+                "un dataset v1 non raw richiede almeno un genitore",
+                "derived_from",
+            ))
+        if "transform" not in manifest or not isinstance(manifest.get("transform"), str) or not CANONICAL_IDENTIFIER.fullmatch(manifest["transform"]):
+            violations.append(Violation(
+                "TRANSFORM_REQUIRED",
+                "un dataset v1 non raw richiede transform",
+                "transform",
+            ))
+    return violations
+
+
+def _check_dataset_topology_v2(manifest):
+    violations = []
+    layer = manifest.get("layer")
+    origin = manifest.get("origin")
+    lineage = manifest.get("derived_from")
+    if layer == "raw":
+        for field in ("origin", "derived_from", "transform"):
+            if field in manifest:
+                violations.append(Violation(
+                    "RAW_TOPOLOGY",
+                    "un dataset raw v2 non puo' dichiarare metadati di topologia",
+                    field,
+                ))
+    elif layer == "canonical":
+        if not isinstance(origin, str) or origin not in DATASET_ORIGINS:
+            violations.append(Violation(
+                "MISSING_ORIGIN" if "origin" not in manifest else "INVALID_ORIGIN",
+                "un dataset canonical v2 richiede un origin supportato",
+                "origin",
+            ))
+        elif origin == "source_acquired":
+            if "derived_from" in manifest:
+                violations.append(Violation(
+                    "SOURCE_ACQUIRED_LINEAGE",
+                    "source_acquired richiede derived_from assente",
+                    "derived_from",
+                ))
+            if "transform" not in manifest or not isinstance(manifest.get("transform"), str) or not CANONICAL_IDENTIFIER.fullmatch(manifest["transform"]):
+                violations.append(Violation(
+                    "TRANSFORM_REQUIRED",
+                    "source_acquired richiede transform",
+                    "transform",
+                ))
+        else:
+            if not isinstance(lineage, list) or not lineage:
+                violations.append(Violation(
+                    "LINEAGE_REQUIRED",
+                    "dataset_derived richiede almeno un genitore",
+                    "derived_from",
+                ))
+            _check_transform(manifest, violations)
+    elif layer == "features":
+        if origin != "dataset_derived":
+            violations.append(Violation(
+                "FEATURE_ORIGIN",
+                "features v2 richiede origin=dataset_derived",
+                "origin",
+            ))
+        if not isinstance(lineage, list) or not lineage:
+            violations.append(Violation(
+                "LINEAGE_REQUIRED",
+                "features v2 richiede almeno un genitore",
+                "derived_from",
+            ))
+        _check_transform(manifest, violations)
+    return violations
+
+
 def check_dataset_manifest(manifest):
     """Invarianti interne a un dataset-manifest."""
     v = []
+
+    version = manifest.get("schema_version")
+    if version == DATASET_MANIFEST_V1:
+        v.extend(_check_dataset_topology_v1(manifest))
+    elif version == DATASET_MANIFEST_V2:
+        v.extend(_check_dataset_topology_v2(manifest))
+    else:
+        v.append(Violation(
+            "UNSUPPORTED_DATASET_MANIFEST_VERSION",
+            f"schema_version dataset non supportato: {version!r}",
+            "schema_version",
+        ))
 
     # 1. rel_root derivato
     try:
@@ -201,7 +319,10 @@ def check_dataset_manifest(manifest):
 
     # 6. no self-lineage
     me = natural_identity(manifest)
-    for i, parent in enumerate(manifest.get("derived_from") or []):
+    lineage = manifest.get("derived_from")
+    if not isinstance(lineage, list):
+        lineage = []
+    for i, parent in enumerate(lineage):
         if natural_identity(parent) == me:
             v.append(Violation("SELF_LINEAGE",
                                "il dataset dichiara di derivare da se stesso",
