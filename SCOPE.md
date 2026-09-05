@@ -4,81 +4,127 @@
 
 Complete the executable conformity seam between the Data Plane producer output
 and the DataGateway consumer input, using the accepted
-`PRODUCER_CONSUMER_CONFORMITY.md` contract as the semantic authority. The
-Contract Freeze Gate has passed. This cycle is the controlled convergence
-period before the Conformity Implementation Gate; it is not a redesign of the
-product roadmap or architecture.
+`PRODUCER_CONSUMER_CONFORMITY.md` contract as semantic authority. The Contract
+Freeze Gate has passed. This cycle remains the controlled convergence period
+before the Conformity Implementation Gate; it is not a redesign of the product
+roadmap or architecture.
 
 ## Current state and roadmap position
 
-The repository is in **Phase A — Controlled Bidirectional Convergence**:
+The repository remains in **Phase A — Controlled Bidirectional Convergence**:
 
 - Contract Freeze Gate: **PASSED**;
 - Conformity Implementation Gate: **IN PROGRESS / PARTIAL**;
-- Producer and Consumer may progress bidirectionally and concurrently only on
-  work that directly advances the shared conformity seam and its gate evidence.
+- Human vertical / Golden Bybit BTCUSDT E2E: **PASSED** on 2026-09-05;
+- broader Producer/Consumer expansion remains blocked until the complete
+  Conformity Implementation Gate passes.
 
-Completed conformity slices on authoritative `origin/main`:
+Completed conformity slices on authoritative `origin/main` before the Human E2E
+branch:
 
-1. Shared Semantic Primitives v1 — **DONE** (`RecordTimeBounds`,
-   `CanonicalContentHashV1`, and provider-supplied ordering compatibility);
+1. Shared Semantic Primitives v1 — **DONE**;
 2. Canonical Parquet Materializer v1 — **DONE**;
 3. Bounded DataGateway finite read v1 — **DONE**;
 4. Manifest + Coverage Emission v1 — **DONE**;
-5. Golden Conformity Acceptance Support v1 — **DONE** as reusable gate-support
-   infrastructure; it is not the Golden E2E proof and does not imply Gate PASS;
-6. Publication Certification runtime v1 — **DONE** for frozen S13 Phases 1–3:
-   SEAL to durable `state='closed'`, authoritative CERTIFY, and durable
-   `quality_reports` evidence recording;
-7. Publication Eligibility Bridge v1 — **DONE** for frozen S14 / S13.5 Phases
-   4–5: current certification evidence drives `closed → valid/degraded` under
-   the frozen first-vertical rules and Phase-5 post-write verification fails
-   closed.
+5. Golden Conformity Acceptance Support v1 — **DONE** as reusable gate support;
+6. Publication Certification runtime v1 — **DONE** for S13 Phases 1–3;
+7. Publication Eligibility Bridge v1 — **DONE** for S14 / S13.5 Phases 4–5.
 
-**Next authorized milestone:** Human vertical / Golden Bybit BTCUSDT E2E.
-This is gate evidence over the real first vertical, not another infrastructure
-slice.
+The Human E2E branch also closes two integration gaps discovered while preparing
+the real vertical:
 
-Remaining critical path to the Conformity Implementation Gate review:
+- ADR-0025 + `dataset-manifest-v2` represent a canonical dataset acquired
+  directly from a source/archive without fabricating a raw dataset parent;
+- the catalog schema-registry bootstrap establishes the frozen repository schema
+  representation required by `catalog.datasets.schema_id`.
 
-8. Human vertical / Golden Bybit E2E;
-9. Adversarial acceptance;
+These remediations are part of the branch under closeout and do not broaden the
+first vertical beyond Bybit BTCUSDT `trade-v1`.
+
+## Human Golden E2E acceptance
+
+The first real Human Golden E2E has passed for Bybit BTCUSDT UTC day
+`2024-01-15`.
+
+Observed acceptance facts:
+
+```text
+rows                 1,105,145
+buy                    553,875
+sell                   551,270
+other side                    0
+first exchange_ts     2024-01-15T00:00:00.492Z
+last exchange_ts      2024-01-15T23:59:59.931Z
+S13                    pass
+S14                    valid
+coverage_complete      true
+coverage_gaps          0
+catalog partitions     1
+DataGateway batches    17
+max batch size         65,536
+lifecycle              OPEN → READING → COMPLETED
+Golden comparison      exact match
+```
+
+Durable identity evidence captured from the successful run:
+
+```text
+source fingerprint
+  a707835c5ca7743ff8879383ca5127111b23bb041289c4c888acb2f294ac9609
+
+physical artifact SHA256
+  a9581327807fe2c3286bab8b2e6a2ce82dbb7d28a1724bc4d47bc66b9199ef6f
+
+CanonicalContentHashV1 payload
+  e0a2bc287aef3b95f07d584b5203e3ddd1f8b9807347e609f69618525f41eedf
+```
+
+The runtime observation used `DataGateway.scan()` and completed in 17 bounded
+batches. Memory telemetry was not sampled during this operator run; therefore
+the Golden evidence records bounded batch behaviour, while the BR1
+memory-independence property remains established by the bounded DataGateway
+implementation and its dedicated tests.
+
+The successful artifacts and catalog rows are acceptance evidence and are not
+to be destructively cleaned up or silently overwritten during closeout.
+
+## Remaining critical path
+
+The Human E2E milestone is complete. The remaining path to the Conformity
+Implementation Gate review is now:
+
+8. Human vertical / Golden Bybit BTCUSDT E2E — **DONE / PASS**;
+9. adversarial acceptance;
 10. Candle ordering compatibility acceptance;
-11. Conformity Implementation Gate review.
+11. final Conformity Implementation Gate review.
 
-The post-gate model is **Phase B — Full Bidirectional Expansion**. After the
-Conformity Implementation Gate passes, the temporary Producer–Consumer
-lockstep is removed and Producer and Consumer may resume independent,
-concurrent development subject to normal contracts, ownership, dependency
-direction, architecture gates and explicit scopes. This does not remove any
-architecture constraint.
+The Human E2E PASS does **not** by itself promote the complete Conformity
+Implementation Gate to PASS.
 
 ## In scope
 
-- the completed first-vertical publication certification and eligibility flow,
-  from S13 SEAL/CERTIFY/RECORD EVIDENCE through S14 PUBLISH ELIGIBILITY/VERIFY,
-  as the automated publication baseline to be exercised end to end;
-- the human vertical and Golden Bybit BTCUSDT E2E proof;
+- closeout and review of the first Human/Golden Bybit vertical;
+- preservation of the successful acceptance evidence;
 - required adversarial acceptance, including zero-event coverage, gaps,
   supersession, overlap, relocation, rebuild, physical-layout variation and
   abort-before-completion;
 - CandleDefinition ordering-compatibility acceptance;
-- the evidence, tests and review needed for Conformity Implementation Gate
-  PASS;
-- documentation that records current status without changing frozen semantics.
+- final evidence and review needed for Conformity Implementation Gate PASS;
+- governance synchronization that records current status without widening the
+  first vertical.
 
-The implementation dependency order and normative requirements are frozen in
+The implementation dependency order and normative requirements remain frozen in
 `docs/contracts/PRODUCER_CONSUMER_CONFORMITY.md` §23. Shared/core remains
-source-neutral; source-specific components depend toward generic/core, never
-the inverse. Quantitative business logic remains outside App UI, TUI and CLI
+source-neutral; source-specific components depend toward generic/core, never the
+inverse. Quantitative business logic remains outside App UI, TUI and CLI
 clients, and upper layers do not bypass the DataGateway boundary.
 
 ## Controlled convergence rule
 
 Until the Conformity Implementation Gate passes, broader vertical expansion is
 blocked. Producer and Consumer work is allowed only when it directly advances
-one of the conformity slices or its gate evidence. The completed slices do not
-constitute Conformity Implementation Gate PASS by themselves.
+one of the remaining gate acceptance items or closes reviewed defects in the
+first vertical.
 
 ## Explicitly blocked until Conformity Implementation Gate PASS
 
@@ -91,90 +137,47 @@ constitute Conformity Implementation Gate PASS by themselves.
 - unrelated consumer or producer vertical expansion;
 - broader paper/live operational mechanics.
 
-Maintenance, documentation and tests may proceed when they do not weaken a
-frozen contract or bypass the current scope boundary.
-
 ## Package topology boundary
 
-Current Conformity scope: broad package restructuring is **OUT OF SCOPE**.
-The current single-repository, single-`src/` topology remains valid while the
-Golden vertical and gate evidence are completed.
-
-Immediately after Conformity Implementation Gate PASS, the next structural
-scope is **Package Boundary / Modular Monolith Foundation v1**, before broad
-independent Producer/Consumer expansion. This is a temporary cross-cutting
-checkpoint, not a new product phase. Exact package names, hierarchy,
-deployment split and migration mechanics remain open until that audit.
-
-Immediately after that structural checkpoint, run **Legacy Capability Harvest
-Audit v1** before broad bidirectional expansion. Legacy code remains evidence
-only and is classified capability-by-capability as ADOPT / ADAPT / REVIEW /
-REJECT against current canonical semantics.
+Broad package restructuring remains **OUT OF SCOPE** for the current Conformity
+closeout. Immediately after Conformity Implementation Gate PASS, the next
+structural checkpoint remains **Package Boundary / Modular Monolith Foundation
+v1**, followed by **Legacy Capability Harvest Audit v1**, before broad
+bidirectional expansion.
 
 ## Preserved future roadmap
 
-The following work remains planned and is not deleted or made permanently
-sequential by this scope.
+Producer roadmap after the conformity gate remains: capacity monitoring,
+storage health/pressure behavior, RAW/source protection, safe placement and
+relocation, backup/restore and verification, retention/deletion authority,
+backfill/repair, live trades, multi-venue trades, L1, L2, L3/MBO and advanced
+recovery/reconciliation.
 
-### Producer roadmap after the conformity gate
+Consumer/Product roadmap after the conformity gate remains: Candle runtime,
+FeatureDefinition/FeatureSetDefinition/FeatureArtifact, Research and Outcomes,
+Validation/Labeling, Strategy/DecisionIntent, Execution/Replay/Portfolio,
+Experiment orchestration, API/job runtime, supervised ML, strategic/execution
+RL, clients, paper/shadow and live operation.
 
-- capacity monitoring;
-- storage health and pressure behavior;
-- RAW/source protection;
-- safe storage placement and relocation;
-- backup and restore;
-- backup verification;
-- retention/deletion authority;
-- backfill and repair;
-- live trades pilot;
-- multi-venue trades;
-- L1;
-- L2;
-- L3/MBO;
-- advanced recovery and reconciliation.
+## Out of scope for this governance closeout
 
-### Consumer/Product roadmap after the conformity gate
+- declaring the Conformity Implementation Gate PASS before adversarial,
+  Candle-ordering and final gate review complete;
+- changing `trade-v1`, partition/coverage contracts, CandleDefinition,
+  DataGateway or Consumer API semantics;
+- introducing a fake raw parent or parallel source-provenance architecture;
+- broad multi-venue/live/runtime expansion;
+- destructive cleanup of the successful Human E2E evidence;
+- treating documentation closeout as a substitute for branch architecture,
+  functional/code review or CI.
 
-- Candle runtime / Representation foundation;
-- `FeatureDefinition` / `FeatureSetDefinition` / `FeatureArtifact`;
-- Research / Hypothesis / Event / Outcome;
-- Validation, labeling, warmup, walk-forward, purge, embargo, lockbox and
-  censoring;
-- Strategy / `DecisionIntent` / risk / sizing;
-- Execution / replay / portfolio;
-- Unified Experiment Orchestration and Persistence;
-- Canonical API and job runtime;
-- Supervised ML;
-- Strategic RL;
-- Execution RL;
-- Clients: CLI / TUI / App UI;
-- Paper / shadow;
-- Live operation.
+## Completion criteria for this closeout
 
-## Out of scope for this documentation synchronization
-
-- changing `trade-v1`, dataset/partition/coverage contracts, CandleDefinition,
-  DataGateway, Consumer API or any accepted ADR semantics;
-- weakening or replacing frozen invariants;
-- modifying runtime code, tests, schemas, DDL or fixtures as part of this
-  documentation pass;
-- implementing any remaining runtime slice while synchronizing these files;
-- creating a parallel architecture or a generic framework;
-- branch creation/switching as part of this documentation synchronization.
-
-## Completion criteria
-
-- this file describes the active Conformity Implementation scope and current
-  gate state;
-- the seven completed slices/support capabilities and the remaining critical
-  path are explicit;
-- Human vertical / Golden Bybit BTCUSDT E2E is explicit as the next authorized
-  milestone;
-- pre-gate controlled convergence and post-gate independent concurrency are
-  explicit;
-- blocked broader work and preserved future Producer/Consumer roadmap items
-  are explicit;
-- the allowed documentation set is factually aligned with `origin/main`;
-- `python tools/check_markdown_links.py` and `git diff --check` pass;
-- no runtime code, tests, schemas, DDL, fixtures or frozen normative semantics
-  are changed by this synchronization.
+- Human Golden E2E is recorded as **PASS** with exact observed counts, bounds,
+  lifecycle and content identities;
+- ADR-0025 / dataset-manifest-v2 and schema-registry bootstrap are reflected as
+  first-vertical integration remediations, without claiming broader readiness;
+- the remaining critical path begins with adversarial acceptance;
+- Conformity Implementation Gate remains **IN PROGRESS / PARTIAL**;
+- successful E2E artifacts/catalog rows are treated as retained evidence;
+- final branch review and CI remain mandatory before merge/release.
