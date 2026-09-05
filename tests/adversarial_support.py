@@ -15,7 +15,7 @@ production entry point in ``tools/``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import re
@@ -91,10 +91,9 @@ CLOSED_AT = "2026-09-01T10:00:01Z"
 COVERAGE_CREATED_AT = "2026-09-01T10:00:02Z"
 
 # catalog.storage_roots.abs_path is constrained by db/init/001_catalog.sql to a
-# POSIX absolute path.  No assertion in this slice opens a partition through a
-# storage root -- every DataGateway leg here is a refusal that fails before
-# path resolution -- so a non-openable placeholder is used where the fixture
-# root is not itself POSIX-absolute (developer runs on Windows).
+# POSIX absolute path.  Refusal-only developer runs on Windows may use a
+# non-openable placeholder because they fail before path resolution.  Positive
+# DataGateway acceptance runs on POSIX and therefore registers the real root.
 _ABS_PATH = re.compile(r"^(/[A-Za-z0-9._-]+)+$")
 _PLACEHOLDER_ABS_PATH = "/tmp/adversarial-refusal-fixture-root"
 
@@ -235,6 +234,7 @@ def build_publication_fixture(
     revision: int = 1,
     ordering_provider: OrderingProvider | None = None,
     coverage_id: str | None = None,
+    supersedes: str | None = None,
     source_extract_detail: str = "deterministic source extract",
 ) -> PublicationFixture:
     """Materialize one partition and emit its durable dataset/partition/coverage evidence.
@@ -248,8 +248,11 @@ def build_publication_fixture(
     """
 
     dataset_manifest_path = emit_dataset(root, identity)
+    dataset_root = root / json.loads(
+        dataset_manifest_path.read_text(encoding="utf-8")
+    )["rel_root"]
     rel_path = f"{partition_key}/part-000.parquet"
-    artifact_path = root / partition_key / "part-000.parquet"
+    artifact_path = dataset_root / partition_key / "part-000.parquet"
 
     if ordering_provider is None:
         materialization = materialize_bybit_trade_v1(
@@ -268,7 +271,7 @@ def build_publication_fixture(
         partition_manifest_path,
         materialization,
         dataset_identity=identity,
-        dataset_root=root,
+        dataset_root=dataset_root,
         partition_key=partition_key,
         revision=revision,
         rel_path=rel_path,
@@ -279,13 +282,13 @@ def build_publication_fixture(
     )
 
     resolved_coverage_id = coverage_id or f"adversarial-coverage-{_slug(partition_key)}"
-    coverage_manifest_path = root / f"coverage-{partition_key}.json"
+    coverage_manifest_path = root / f"coverage-{_slug(resolved_coverage_id)}.json"
     emit_coverage_manifest(
         coverage_manifest_path,
         dataset_identity=identity,
         source_dataset_identity=identity,
         coverage_id=resolved_coverage_id,
-        supersedes=None,
+        supersedes=supersedes,
         created_at=COVERAGE_CREATED_AT,
         acquisition={
             "basis": "source_extract",
@@ -327,6 +330,78 @@ def build_publication_fixture(
         revision=revision,
         interval_start=intent_start,
         interval_end=intent_end,
+    )
+
+
+def restate_coverage(
+    fixture: PublicationFixture,
+    *,
+    coverage_id: str,
+    supersedes: str,
+    coverage_assertions: Sequence[tuple[str, str]],
+    intent_start: str,
+    intent_end: str,
+    created_at: str = "2026-09-01T10:00:03Z",
+    source_extract_detail: str = "deterministic source restatement",
+) -> PublicationFixture:
+    """Emit a successor coverage document over an existing durable partition.
+
+    The returned evidence tuple places the successor first because the frozen
+    S13 singular evidence identity denotes the current document.  The complete
+    tuple still carries every predecessor required by the production coverage
+    fold; no supersession decision is made by this helper.
+    """
+
+    coverage_manifest_path = fixture.dataset_manifest_path.parent / (
+        f"coverage-{_slug(coverage_id)}.json"
+    )
+    emit_coverage_manifest(
+        coverage_manifest_path,
+        dataset_identity=fixture.identity,
+        source_dataset_identity=fixture.identity,
+        coverage_id=coverage_id,
+        supersedes=supersedes,
+        created_at=created_at,
+        acquisition={
+            "basis": "source_extract",
+            "intent_start": intent_start,
+            "intent_end": intent_end,
+            "source_semantics": SOURCE_SEMANTICS,
+            "mapping": SOURCE_MAPPING,
+        },
+        assertions=[
+            {
+                "assertion_id": f"{coverage_id}-assertion-{index}",
+                "start": start,
+                "end": end,
+                "status": "complete",
+                "partitions": [
+                    {
+                        "partition_key": fixture.partition_key,
+                        "revision": fixture.revision,
+                    }
+                ],
+                "evidence": [
+                    {
+                        "kind": "deterministic_source_extract",
+                        "detail": source_extract_detail,
+                    }
+                ],
+            }
+            for index, (start, end) in enumerate(coverage_assertions, start=1)
+        ],
+        producer=SOURCE_ID,
+        code_ref=SOURCE_CODE_REF,
+        partition_manifests=[fixture.partition_document],
+    )
+    return replace(
+        fixture,
+        coverage_manifest_paths=(
+            coverage_manifest_path,
+            *fixture.coverage_manifest_paths,
+        ),
+        interval_start=coverage_assertions[0][0],
+        interval_end=coverage_assertions[-1][1],
     )
 
 
@@ -378,12 +453,14 @@ def gateway(connection: Any) -> DataGateway:
 def request(
     fixture: PublicationFixture,
     *,
+    start: str | None = None,
+    end: str | None = None,
     lifecycle_policy: LifecyclePolicy = LifecyclePolicy.VALID_ONLY,
 ) -> DataRequest:
     return DataRequest(
         fixture.identity,
-        fixture.interval_start,
-        fixture.interval_end,
+        start or fixture.interval_start,
+        end or fixture.interval_end,
         lifecycle_policy=lifecycle_policy,
         ordering_policy=BYBIT_TRADE_V1_ORDERING_POLICY,
     )
@@ -555,6 +632,7 @@ __all__ = [
     "nullable_trade_id_ordering_provider",
     "register_catalog_prerequisites",
     "request",
+    "restate_coverage",
     "scoped_catalog_state",
     "trade",
 ]
