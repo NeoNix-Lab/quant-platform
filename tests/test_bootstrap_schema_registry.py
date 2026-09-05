@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -28,6 +30,7 @@ from bootstrap_schema_registry import (  # noqa: E402
 )
 
 TRADE_V1 = ROOT / "schemas" / "trade-v1.json"
+TRADE_V1_LF_SHA256 = "53b5d37e7613d1130157aa1390b20e44a5cb236423dc1267df01e62dd280b55b"
 
 
 class FakeCursor:
@@ -78,11 +81,76 @@ class SchemaRegistryBootstrapTests(unittest.TestCase):
     def test_registration_is_derived_from_the_authoritative_file(self):
         registration = read_schema_registration(TRADE_V1)
         raw = TRADE_V1.read_bytes()
+        self.assertIn(b"\n", raw)
+        self.assertNotIn(b"\r", raw)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), TRADE_V1_LF_SHA256)
         self.assertEqual(registration.schema_id, "trade-v1")
         self.assertEqual(registration.name, "trade")
         self.assertEqual(registration.version, 1)
         self.assertEqual(registration.json_sha256, hashlib.sha256(raw).hexdigest())
         self.assertEqual(registration.body, json.loads(raw.decode("utf-8")))
+
+    def test_git_checkout_preserves_lf_bytes_across_eol_settings(self):
+        # Exercise the real repository policy in a disposable Git index. No
+        # developer/global config, attributes, templates or Git env may leak in.
+        env = {key: value for key, value in os.environ.items()
+               if not key.upper().startswith("GIT_")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_ATTR_NOSYSTEM="1")
+        raw = TRADE_V1.read_bytes()
+        for autocrlf in ("false", "true", "input"):
+            for eol in ("lf", "crlf"):
+                with self.subTest(autocrlf=autocrlf, eol=eol), \
+                        tempfile.TemporaryDirectory() as holder:
+                    checkout = Path(holder)
+                    schema = checkout / "schemas" / "trade-v1.json"
+                    schema.parent.mkdir()
+                    schema.write_bytes(raw)
+                    shutil.copyfile(ROOT / ".gitattributes", checkout / ".gitattributes")
+
+                    def git(*args):
+                        return subprocess.run(
+                            ["git", "-c", f"core.attributesFile={os.devnull}",
+                             "-c", f"core.autocrlf={autocrlf}",
+                             "-c", f"core.eol={eol}", *args],
+                            cwd=checkout, env=env, check=True, capture_output=True,
+                        ).stdout
+
+                    git("init", "--template=")
+                    git("add", "--", ".gitattributes", "schemas/trade-v1.json")
+                    blob = git("show", ":schemas/trade-v1.json")
+                    self.assertEqual(blob, raw)
+                    schema.unlink()
+                    git("checkout-index", "--", "schemas/trade-v1.json")
+                    self.assertEqual(schema.read_bytes(), blob)
+                    self.assertNotIn(b"\r", schema.read_bytes())
+                    self.assertEqual(
+                        read_schema_registration(schema).json_sha256, TRADE_V1_LF_SHA256,
+                    )
+
+    def test_crlf_changes_raw_fingerprint_and_refuses_despite_equal_json(self):
+        original = read_schema_registration(TRADE_V1)
+        with tempfile.TemporaryDirectory() as holder:
+            schema = Path(holder) / "trade-v1.json"
+            raw = TRADE_V1.read_bytes().replace(b"\n", b"\r\n")
+            schema.write_bytes(raw)
+            variant = read_schema_registration(schema)
+        self.assertEqual(variant.body, original.body)
+        self.assertEqual(variant.json_sha256, hashlib.sha256(raw).hexdigest())
+        self.assertEqual(
+            variant.json_sha256,
+            "0cfc249dcbe6fb9600f01ff438c8c9252c7fc5b4af4213a6d4b3296401ed4f08",
+        )
+        self.assertNotEqual(variant.json_sha256, original.json_sha256)
+        connection = FakeConnection()
+        self.assertEqual(bootstrap_schema_registry(connection, original), CREATED)
+        before = dict(connection.store)
+        connection.journal.clear()
+        with self.assertRaisesRegex(SchemaRegistryError, "json_sha256"):
+            bootstrap_schema_registry(connection, variant)
+        self.assertEqual(connection.store, before)
+        self.assertEqual(len(connection.journal), 1)
+        self.assertTrue(connection.journal[0].startswith("SELECT "))
 
     def test_changing_the_schema_bytes_changes_the_registration(self):
         with tempfile.TemporaryDirectory() as holder:
