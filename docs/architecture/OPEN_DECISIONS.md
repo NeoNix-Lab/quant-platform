@@ -8,12 +8,52 @@ the **Contract Freeze Gate** (documentation-level; unlocks implementing the
 conformity slices) and the **Conformity Implementation Gate** (runtime-level;
 unlocks broader producer/consumer vertical expansion and Candle runtime). The
 Contract Freeze Gate has **PASSED**. The Conformity Implementation Gate remains
-**OPEN / IN PROGRESS**: only the conformity slices and their gate evidence may
-advance until it passes. The automated first-vertical publication path is now
-implemented through S13 Publication Certification and S14 Publication
-Eligibility/Verification; the next gate milestone is the Human vertical /
-Golden Bybit BTCUSDT E2E. See ADR-0023 for the exact, separate exit criteria of
-each gate.
+**OPEN / IN PROGRESS / PARTIAL**. The Human vertical / Golden Bybit BTCUSDT E2E
+has **PASSED**, closing that first-vertical milestone without closing the
+complete Gate. The residual blockers are Adversarial Acceptance, Candle
+Ordering Compatibility and the Final Conformity Gate Review.
+
+```text
+Human Golden E2E PASS → governance closeout → branch review / CI → merge
+
+from authoritative main:
+Adversarial Acceptance + Candle Ordering Compatibility
+    → Final Conformity Gate Review
+    → Conformity Implementation Gate PASS
+```
+
+Package Boundary / Modular Monolith Foundation and Legacy Capability Harvest
+remain post-gate work and are not blockers for the Human E2E merge.
+
+## Source-acquired canonical dataset lineage
+
+This is no longer an open first-vertical decision. Accepted
+[ADR-0025](../decisions/ADR-0025-source-acquired-canonical-dataset-lineage-v2.md)
+and its implementation establish the required evolution path:
+
+- `dataset-manifest-v1` remains frozen and is never reinterpreted;
+- `dataset-manifest-v2` represents canonical `source_acquired` datasets with
+  `derived_from` absent, a required transform and exactly zero lineage edges;
+- the historical SQLite remains a source/archive, not a raw `DatasetIdentity`,
+  fake parent or proxy dataset;
+- source provenance remains owned by CoverageManifest evidence.
+
+## Server Access & Runtime Identity Hardening v1
+
+The Human E2E used operator/bootstrap privileges sufficient to exercise
+publication end to end. Those privileges are acceptance/bootstrap evidence
+only. They do not define the production runtime authorization model.
+
+The separate operational follow-up must restore or audit canonical server
+access, service identities, filesystem ACLs, database roles and credential
+disposition. Human administrators continue to use SSH; local services must use
+canonical service identities; future normal remote consumers remain behind the
+Canonical API, application services and DataGateway.
+
+This follow-up does not block the Human E2E merge and does not open or close the
+Conformity Implementation Gate. It does not authorize an interim HTTP API,
+Canonical API runtime implementation, new identities, ACL changes or database
+role changes in this closeout.
 
 ## Package Boundary / Modular Monolith Foundation v1
 
@@ -79,8 +119,6 @@ tunable or future generalizations beyond the first implemented vertical:
 ### DataGateway and representations
 
 - precise candle materialization identity;
-- required dataset-manifest evolution path, resolved by
-  [ADR-0025](../decisions/ADR-0025-source-acquired-canonical-dataset-lineage-v2.md).
 
 DataGateway logical boundary and first implementation slice are resolved by
 ADR-0019 and `docs/contracts/DATA_GATEWAY.md`. The following remain open for
@@ -92,7 +130,8 @@ the relevant implementation work:
   explicitly insufficient for durable reproducibility;
 - the concrete logical row/columnar batch return representation;
 - the live stream interface and identity/cursor semantics;
-- schema-v2 compatibility and evolution policy.
+- schema compatibility and evolution policy beyond the accepted
+  `dataset-manifest-v2` decision.
 
 ### Market Data Ingest
 

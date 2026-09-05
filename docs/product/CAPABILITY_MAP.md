@@ -5,13 +5,15 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | Domain | Capability | Canonical State | Legacy Evidence | Target owner | Notes |
 |---|---|---|---|---|---|
 | Data | `trade-v1` | FROZEN | NONE | Data Plane | Frozen contract. |
-| Data | Dataset/partition manifests | FROZEN | NONE | Data Plane | Fixtures and validators exist. |
+| Data | Dataset/partition manifests | FROZEN | NONE | Data Plane | `dataset-manifest-v1` remains frozen; accepted ADR-0025 adds versioned `dataset-manifest-v2` for source-acquired canonical topology without reinterpreting v1. |
+| Data | Source-Acquired Canonical Dataset Lineage v2 | READY | NONE | Data Plane | `source_acquired` canonical datasets retain transform in the manifest, have no synthetic parent and exactly zero catalog lineage rows; source provenance remains in CoverageManifest evidence. |
 | Data | PostgreSQL catalog, lineage, storage roots | READY | NONE | Data Plane | DDL and provisioning exist. |
-| Data | Historical Bybit import | PARTIAL | NONE | Data Plane | Importer and tests exist. |
+| Data | Catalog Schema Registry Bootstrap | READY | NONE | Engineering/Data Plane | Repository schema bytes remain authoritative; bootstrap inserts absent registrations, accepts identical registrations and refuses conflicts without update/upsert/delete. |
+| Data | Historical Bybit import | PARTIAL | NONE | Data Plane | The reference importer delegates source semantics to the production historical adapter; it is not the publication runtime. |
 | Data | Market Data Ingest Architecture | PARTIAL | NONE | Data Plane | Producer architecture documented; runtime remains unimplemented. |
 | Data | Market Data Ingest Runtime | MISSING | NONE | Data Plane | No canonical collector/acquisition runtime. |
-| Data | Source/Venue Adapter Contract | MISSING | NONE | Data Plane | Semantic contract documented; no adapter runtime. |
-| Data | Historical Acquisition | PARTIAL | NONE | Data Plane | Narrow Bybit historical slice only. |
+| Data | Source/Venue Adapter Contract | PARTIAL | NONE | Data Plane | Semantic contract is documented and a narrow production Bybit historical source adapter exists for the first vertical. |
+| Data | Historical Acquisition | PARTIAL | NONE | Data Plane | Narrow Bybit historical source slice implemented and exercised by the Human Golden E2E. |
 | Data | Backfill / Repair | MISSING | NONE | Data Plane | Reconciliation and repair runtime are open. |
 | Data | Live Collection | MISSING | NONE | Data Plane | Architectural target only. |
 | Data | Trades Acquisition | PARTIAL | NONE | Data Plane | Bybit trade evidence exists. |
@@ -22,13 +24,14 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | Data | Quality / Reconciliation | PARTIAL | NONE | Data Plane | Lifecycle, authoritative S13 certification, durable quality-report evidence and S14 eligibility verification exist for the first vertical; broader reconciliation remains open. |
 | Data | Declared Coverage Contract | FROZEN | NONE | Data Plane | ADR-0022; schema, fixtures and semantic tests exist. |
 | Data | Manifest + Coverage Emission | READY | NONE | Data Plane | Durable DatasetManifest, PartitionManifest and explicit CoverageManifest emission are implemented with deterministic persistence, source-owned evidence and fail-closed identity/artifact checks. |
-| Data | Canonical Partition Publication | PARTIAL | NONE | Data Plane | The automated first-vertical chain through materialization, manifests/coverage, S13 certification and S14 eligibility/verification is implemented; Human/Golden E2E evidence is still required before the full publication seam is treated as proven. |
+| Data | Canonical Partition Publication | READY | NONE | Data Plane | The Bybit BTCUSDT `2024-01-15` first vertical completed materialization, manifests/coverage, S13 pass, S14 valid, catalog publication and DataGateway exact Golden verification. Broader generalization remains open. |
 | Gate | Producer–Consumer Conformity Gate — Contract Freeze Gate | READY | NONE | Data Plane/Application | PASSED: ADR-0023 and `PRODUCER_CONSUMER_CONFORMITY.md` are accepted; this documentation-level gate authorizes the conformity slices but does not certify runtime completion. |
-| Gate | Producer–Consumer Conformity Gate — Conformity Implementation Gate | PARTIAL | NONE | Data Plane/Application | IN PROGRESS: Shared Semantic Primitives v1, Canonical Parquet Materializer v1, Manifest + Coverage Emission v1, Bounded DataGateway finite read v1, Golden Acceptance Support v1, Publication Certification v1 and Publication Eligibility Bridge v1 are on `main`; Human/Golden Bybit E2E and remaining acceptance are open. |
+| Gate | Producer–Consumer Conformity Gate — Conformity Implementation Gate | PARTIAL | NONE | Data Plane/Application | IN PROGRESS: Human Golden E2E is PASS. Adversarial Acceptance, Candle Ordering Compatibility and Final Gate Review remain open. |
 | Gate | Golden Conformity Acceptance Support | READY | NONE | Application/Data | Shared Golden fixture, incremental OPEN-only `DataScan` observer, bounded telemetry and lifecycle/reporting support are implemented. This is support evidence only, not Golden E2E or Conformity Gate PASS. |
+| Gate | Human Golden Bybit BTCUSDT E2E | READY | NONE | Data Plane/Application/Engineering | PASS for `2024-01-15`: 1,105,145 rows, exact side counts and time bounds, S13 pass, S14 valid, complete gap-free coverage, one partition and DataGateway `OPEN → READING → COMPLETED` in 17 bounded batches. |
 | Data | Bybit First-Vertical Eligibility Profile | READY | NONE | Data Plane | Source-owned pre-check plus authoritative S13 certification are implemented for exactly `canonical/trades/bybit/BTCUSDT/trade-v1`; non-null, unique `trade_id` remains distinct from generic `trade-v1` nullability, and S14 consumes the resulting current certification evidence for publication eligibility. |
 | Access | Bounded Historical DataGateway Read | READY | NONE | Application/Data | `DataGateway.scan()` provides lazy ordered batches with explicit open/reading/completed/aborted lifecycle and bounded-read tests; broader/live access remains open. |
-| Data | Canonical trade-v1 Parquet Materialization | READY | NONE | Data Plane | `src/quant_platform/data/materializer.py` provides `ParquetWriter`-backed materialization and canonical round-trip tests; downstream automated publication now continues through manifests, S13 and S14, while Human/Golden E2E remains gate evidence. |
+| Data | Canonical trade-v1 Parquet Materialization | READY | NONE | Data Plane | `src/quant_platform/data/materializer.py` provides canonical Parquet materialization and was exercised successfully by the Human Golden E2E. |
 | Data | CanonicalContentHashV1 | READY | NONE | Data Plane/Application | Implemented in `src/quant_platform/data/models.py` and covered by pinned-vector tests; it remains additive to the existing physical `result_identity`. |
 | Data | Canonical Publication Bridge | READY | NONE | Data Plane | S14 Publication Eligibility Bridge v1 is implemented: it selects current certification evidence, applies the frozen `valid`/`degraded` eligibility rules, establishes lineage idempotently and verifies post-write publication state fail-closed. |
 | Data | Publication Certification | READY | NONE | Data Plane | Authoritative S13 runtime is implemented: Phase 1 SEAL registers durable `closed` catalog evidence, Phase 2 CERTIFY re-evaluates source/canonical/physical/manifests/coverage, and Phase 3 records durable `quality_reports` against the real partition UUID. PASS alone does not grant eligibility; S14 owns that transition. |
@@ -44,7 +47,7 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | Storage | Backup Verification | MISSING | NONE | Operations | No restore verification. |
 | Storage | Retention Policy | MISSING | NONE | Operations | No retention or deletion policy. |
 | Data | L1/L2/L3 contracts | MISSING | WEAK | Data Plane | Must follow ADR-0018. |
-| Access | DataGateway | PARTIAL | PARTIAL | Application/Data | Narrow catalog-backed v1 implementation is present; broader live access remains open. |
+| Access | DataGateway | PARTIAL | PARTIAL | Application/Data | Narrow catalog-backed v1 implementation is proven for the first vertical; broader live access remains open. |
 | Representation | CandleDefinition/runtime | MISSING | PARTIAL | Representations | CandleDefinition v1 contract is frozen and accepted by ADR-0021; runtime remains missing. |
 | Features | FeatureDefinition | MISSING | STRONG | Feature Engine | Legacy registry is evidence only. |
 | Features | FeatureSetDefinition catalog | PARTIAL | PARTIAL | Data/Feature Engine | Existing catalog foundation retained. |
@@ -59,6 +62,7 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | Experiments | Study/Trial/Run/Artifact | MISSING | MULTIPLE | Experiment System | Avoid competing persistence. |
 | Interfaces | API/App/TUI/CLI | MISSING | PARTIAL | API/Clients | Consumer API Boundary v1 is frozen; API runtime and clients remain roadmap work. Clients cannot own quant logic. |
 | Operations | Provisioning, fixtures, semantic tests | READY | NONE | Engineering/Infrastructure | CI and backup certification missing. |
+| Operations | Server Access & Runtime Identity Hardening v1 | MISSING | NONE | Operations | Non-blocking follow-up: audit/restore canonical server access, service identities, filesystem ACLs, database roles and credential disposition. Operator/bootstrap E2E privilege is not the production authorization model. |
 
 ## Evidence vocabulary
 
