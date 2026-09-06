@@ -48,6 +48,9 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | Storage | Retention Policy | MISSING | NONE | Operations | No retention or deletion policy. |
 | Data | L1/L2/L3 contracts | MISSING | WEAK | Data Plane | Must follow ADR-0018. |
 | Access | DataGateway | PARTIAL | PARTIAL | Application/Data | Narrow catalog-backed v1 implementation is proven for the first vertical; broader live access remains open. |
+| Application | Application Service Ownership & Architecture Enforcement (ASS-01) | READY | NONE | Application | `quant_platform.application` is the canonical in-process composition owner. PR #27 merged as `066e7cd577104fb2c8f657430402b79cd58ba9aa`; executable orchestration under `tools/` is governed, with finite exact-edge ASS-03 debt. No application use-case runtime is introduced. |
+| Application | First canonical application-service vertical (ASS-02) | MISSING | NONE | Application | No `MarketDataService` or equivalent canonical use case yet. Semantic-selector resolution, result-envelope construction and stable application error translation remain unimplemented. |
+| Application | Executable orchestration / configuration convergence (ASS-03) | MISSING | NONE | Application/Engineering | Existing pre-ASS-01 tool bypasses and configuration divergence remain explicit bounded debt; no migration/convergence runtime has been implemented. |
 | Representation | CandleDefinition/runtime | MISSING | PARTIAL | Representations | CandleDefinition v1 contract is frozen and accepted by ADR-0021; runtime remains missing. |
 | Features | FeatureDefinition | MISSING | STRONG | Feature Engine | Legacy registry is evidence only. |
 | Features | FeatureSetDefinition catalog | PARTIAL | PARTIAL | Data/Feature Engine | Existing catalog foundation retained. |
@@ -60,7 +63,9 @@ Canonical State describes this repository. Legacy Evidence is reference evidence
 | ML | Supervised learning/evaluation | MISSING | STRONG | Learning/Supervised | Bind to canonical provenance. |
 | RL | Strategic and execution RL | MISSING | MULTIPLE/REVIEW | Learning/RL | Legacy runtimes are mixed. |
 | Experiments | Study/Trial/Run/Artifact | MISSING | MULTIPLE | Experiment System | Avoid competing persistence. |
-| Interfaces | API/App/TUI/CLI | MISSING | PARTIAL | API/Clients | Consumer API Boundary v1 is frozen; API runtime and clients remain roadmap work. Clients cannot own quant logic. |
+| Interfaces | Consumer API semantic boundary | FROZEN | PARTIAL | Application/API | ADR-0020 and `CONSUMER_API.md` freeze the semantic client boundary. This is not evidence of API transport/runtime implementation. |
+| Interfaces | Canonical API runtime + Job runtime | MISSING | PARTIAL | API/Application | Transport, wire representation and Job implementation remain roadmap work; draft Job concepts are not promoted to frozen authority. |
+| Interfaces | Clients (App UI, TUI, CLI) | MISSING | PARTIAL | Clients | Clients must consume the canonical API and cannot own quantitative logic. No canonical product client is implemented. |
 | Operations | Provisioning, fixtures, semantic tests | READY | NONE | Engineering/Infrastructure | CI and backup certification missing. |
 | Operations | Server Access & Runtime Identity Hardening v1 | MISSING | NONE | Operations | Non-blocking follow-up: audit/restore canonical server access, service identities, filesystem ACLs, database roles and credential disposition. Operator/bootstrap E2E privilege is not the production authorization model. |
 
