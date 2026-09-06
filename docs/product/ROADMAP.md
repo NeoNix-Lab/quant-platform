@@ -52,9 +52,9 @@ CONFORMITY IMPLEMENTATION GATE — PASSED
         ↓
 Package Boundary / Modular Monolith Foundation v1 — COMPLETE
         ↓
-Legacy Capability Harvest Audit v1 — NEXT
+Legacy Capability Harvest Audit v1 — COMPLETE
         ↓
-broader independent Producer / Consumer expansion
+broader independent Producer / Consumer expansion — UNLOCKED
 ```
 
 The completed slices are Shared Semantic Primitives v1, Canonical Parquet
@@ -114,21 +114,38 @@ ownership and architecture tests inside the existing single-repository,
 single-`src/` modular-monolith default without adding a product phase or
 renumbering phases 0–15.
 
-The next governed checkpoint is **Legacy Capability Harvest Audit v1**, which
-runs before broad bidirectional expansion. The legacy repository is evidence
-only; each target capability is classified ADOPT / ADAPT / REVIEW / REJECT
-against current canonical semantics, temporal correctness and dependency
-baggage.
+The mandatory **Legacy Capability Harvest Audit v1** is also **COMPLETE**. It
+classified 31 legacy capabilities against current canonical semantics and
+selected H01 — the pure diagonal / stacked imbalance core — as the first
+recommended harvest slice. H14 DSR/PBO remains REVIEW on exact Evaluation
+estimator/input semantics and does not block H01.
+
+The legacy repository remains evidence only; harvesting never creates a runtime
+dependency on it. Broad independent Producer/Consumer expansion is now
+**UNLOCKED**, but every implementation capability still requires an explicit
+bounded scope and must respect current ownership, dependency direction and
+frozen contracts.
 
 ```text
 Conformity Implementation Gate PASSED
             ↓
 Package Boundary / Modular Monolith Foundation v1 COMPLETE
             ↓
-Legacy Capability Harvest Audit v1 NEXT
+Legacy Capability Harvest Audit v1 COMPLETE
             ↓
-Broad independent Producer / Consumer expansion
+Broad independent Producer / Consumer expansion UNLOCKED
 ```
+
+Selected next implementation candidate:
+
+```text
+H01 — Diagonal / Stacked Imbalance Core
+```
+
+H01 selection does not declare a complete Feature Engine or Footprint runtime.
+Its pure quantitative legacy kernel is the accepted harvest candidate; canonical
+grain, validated tick-grid input, temporal availability and FeatureDefinition
+provenance remain requirements of the future bounded H01 implementation scope.
 
 ## Parallel producer track
 
@@ -168,7 +185,7 @@ Conformity Implementation Gate — PASSED
         ↓
 Package Boundary / Modular Monolith Foundation v1 — COMPLETE
         ↓
-Legacy Capability Harvest Audit v1 — NEXT
+Legacy Capability Harvest Audit v1 — COMPLETE
         ↓
 Capacity monitoring foundation
         ↓
@@ -209,9 +226,10 @@ gate between the reviewed DataGateway Contract v1 and DataGateway runtime
 implementation. It does not add a product capability or renumber the phases.
 
 Phase 2 (Representation foundation) has its semantic contract frozen and
-accepted (ADR-0021, CandleDefinition v1). The Conformity Implementation Gate
-has passed, so Candle runtime is no longer blocked by that Gate. Candle runtime
-is still unimplemented and remains a future capability requiring its own
-explicit scope. Package Boundary / Modular Monolith Foundation v1 is complete;
-Legacy Capability Harvest Audit v1 is the next explicit checkpoint before
-broad expansion.
+accepted (ADR-0021, CandleDefinition v1). The Conformity Implementation Gate has
+passed, so Candle runtime is no longer blocked by that Gate. Candle runtime is
+still unimplemented and remains a future capability requiring its own explicit
+scope. Package Boundary / Modular Monolith Foundation v1 and Legacy Capability
+Harvest Audit v1 are complete; independently scoped post-Gate expansion is now
+unlocked. H01 — Diagonal / Stacked Imbalance Core — is the selected first
+harvest implementation candidate.
