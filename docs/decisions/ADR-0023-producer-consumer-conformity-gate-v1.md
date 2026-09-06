@@ -4,7 +4,7 @@
 
 **Contract Freeze Gate:** PASSED
 
-**Conformity Implementation Gate:** IN PROGRESS / PARTIAL
+**Conformity Implementation Gate:** PASSED
 
 This ADR records the accepted governance and semantic boundary. Runtime
 implementation progress is tracked by `SCOPE.md`,
@@ -295,12 +295,14 @@ broader producer or consumer vertical expansion.
 ### 8. After Contract Freeze Gate PASS
 
 Implementation of the conformity slices — Parquet writer, manifest/coverage
-emission, certifier, catalog bridge, bounded DataGateway read path — is
-authorized against the frozen contract, and the first three slices are now
-implemented on `origin/main`. Producer vertical expansion and
-consumer vertical expansion beyond these conformity slices (a second venue,
-L1/L2/L3, live collection, Candle runtime, further representations) remain
-suspended.
+emission, certifier, catalog bridge, bounded DataGateway read path — was
+authorized against the frozen contract. Those slices and the Decision §7
+acceptance evidence are now complete on `origin/main`; the resulting Gate
+closure is recorded below without changing the frozen criteria.
+Under this Decision, broader Producer/Consumer verticals and Candle runtime
+remain suspended until the Conformity Implementation Gate passes. That
+condition is now satisfied; Decision §9 governs their post-Gate progression
+through explicit scopes.
 
 ### 9. After Conformity Implementation Gate PASS
 
@@ -322,11 +324,10 @@ a frozen piece needs to change.
   once the Contract Freeze Gate passes, without re-deriving cross-boundary
   semantics.
 - The golden Bybit BTCUSDT 2024-01-15 vertical (rows = 1,105,145; buy =
-  553,875; sell = 551,270) already has partial evidence in
-  `tests/integration_bybit_trades_2024_01_15.py` (SQLite -> JSONL only); the
-  full SQLite -> canonical Parquet -> manifests -> catalog -> bounded
-  DataGateway read chain remains a required Conformity Implementation Gate
-  proof, not yet available.
+  553,875; sell = 551,270) passed the full source -> canonical Parquet ->
+  manifests -> certification -> catalog -> bounded DataGateway chain. Its
+  accepted evidence is recorded in
+  `docs/integration/HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md` and PR #20.
 - `result_identity` as defined by ADR-0019/DATA_GATEWAY.md §5 is unchanged and
   remains physical-evidence-sensitive; `CanonicalContentHashV1` is additive,
   not a replacement, so no existing provenance chain is invalidated.
@@ -345,13 +346,11 @@ a frozen piece needs to change.
 The historical review gate kept this ADR in `PROPOSED` status and kept
 [PRODUCER_CONSUMER_CONFORMITY.md](../contracts/PRODUCER_CONSUMER_CONFORMITY.md)
 proposed until independent review confirmed the Contract Freeze Gate criteria.
-That review is complete and the Contract Freeze Gate has passed. A separate
-implementation mandate for the conformity slices may proceed against the
-accepted contract; the Conformity Implementation Gate remains open until the
-runtime slices and required evidence satisfy Decision §7. The suspension in
-Decision §8 remains binding for vertical expansion beyond the conformity
-slices, while the accepted Decision §8 authorization covers the conformity
-implementation itself.
+That review is complete and the Contract Freeze Gate has passed. The
+subsequent runtime slices and required evidence satisfied all eight Decision
+§7 criteria, and the final read-only Gate review returned **APPROVE** with no
+blockers or important findings. The Conformity Implementation Gate has
+therefore passed; Decision §9 now governs the post-Gate program order.
 
 ## Acceptance provenance
 
@@ -368,6 +367,32 @@ The review record states:
 - **READY TO IMPLEMENT CONFORMITY SLICES**.
 
 This is repository provenance for the accepted governance state, not an
-additional semantic or implementation requirement. Runtime completion remains
-governed by the Conformity Implementation Gate and its existing Decision §7
-criteria.
+additional semantic or implementation requirement.
+
+### Conformity Implementation Gate acceptance provenance
+
+The Conformity Implementation Gate closed against Decision §7 with the
+following merged evidence chain:
+
+- Human Golden E2E / PR #20 — full Bybit BTCUSDT `2024-01-15` vertical PASS;
+- adversarial refusal / PR #21 — eligibility and gap refusal PASS;
+- adversarial acceptance / PR #22 — zero-event coverage and supersession PASS;
+- evidence completion / PR #23 — real overlap rejection, RB1 rebuild, physical
+  layout variation and Candle ordering composition PASS;
+- Final Conformity Gate Review at authoritative `main`
+  `84a2705bc1ccc94c8d68cbdeb874b3312a2f78fc` — **APPROVE**,
+  `BLOCKERS: NONE`, `IMPORTANT: NONE`.
+
+The final ledger records all eight Decision §7 exit criteria as PASS,
+Adversarial Acceptance A1–A9 as PASS, Candle Ordering Compatibility as PASS,
+zero missing implementation proofs and zero unresolved Gate dispositions.
+Accordingly:
+
+```text
+Contract Freeze Gate              = PASSED
+Conformity Implementation Gate    = PASSED
+```
+
+`DataSliceMetadata.canonical_content_hash` remains an additive future
+extension and is non-blocking for this Gate. Semantic relocation invariance is
+proved; an operational relocation subsystem remains a post-Gate capability.

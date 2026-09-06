@@ -21,11 +21,12 @@ The roadmap expresses dependency direction, not day estimates. Exact scope may e
 
 ## Producer–Consumer Conformity Gate
 
-The repository is in **Phase A — Controlled Bidirectional Convergence**. The
-Contract Freeze Gate has passed; the Conformity Implementation Gate remains
-**IN PROGRESS / PARTIAL**. Human/Golden Bybit BTCUSDT E2E has passed, while
-adversarial acceptance, Candle ordering compatibility and the final Gate review
-remain open.
+**Phase A — Controlled Bidirectional Convergence is COMPLETE.** The Contract
+Freeze Gate and Conformity Implementation Gate have passed. Human/Golden Bybit
+BTCUSDT E2E, Adversarial Acceptance A1–A9 and Candle Ordering Compatibility are
+PASS; the Final Conformity Gate Review is APPROVE with no blockers or important
+findings. The temporary Producer/Consumer synchronization constraint is
+removed.
 
 [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md)
 freezes two sequential, non-circular gates between the accepted foundation
@@ -41,16 +42,19 @@ conformity implementation slices
         ↓
 Human / Golden Bybit BTCUSDT E2E — PASS
         ↓
-governance closeout → branch review / CI → merge
+Adversarial Acceptance A1–A9 — PASS
         ↓
-from authoritative main:
-Adversarial Acceptance + Candle Ordering Compatibility
+Candle Ordering Compatibility — PASS
         ↓
-Final Conformity Gate Review
+Final Conformity Gate Review — APPROVE
         ↓
-CONFORMITY IMPLEMENTATION GATE — PASS
+CONFORMITY IMPLEMENTATION GATE — PASSED
         ↓
-Package Boundary → Legacy Capability Harvest → broader expansion
+Package Boundary / Modular Monolith Foundation v1
+        ↓
+Legacy Capability Harvest Audit v1
+        ↓
+broader independent Producer / Consumer expansion
 ```
 
 The completed slices are Shared Semantic Primitives v1, Canonical Parquet
@@ -62,29 +66,26 @@ now produced an exact Golden match through `DataGateway.scan()`. Its detailed
 evidence is recorded in
 [`HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md`](../integration/HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md).
 
-Merging the Human E2E branch records this completed milestone. It does not
-promote the Conformity Implementation Gate and does not authorize post-gate
-work.
-
 This is a temporary integration gate pair, not a permanent architecture layer.
-Passing both gates does not add a phase to the dependency order below; it
-reopens the parallelism that already existed.
+Both gates have passed. Their closure does not add a phase to the dependency
+order below; it removes the temporary lockstep and restores the parallelism
+that already existed.
 
-## Phase A — controlled convergence before Conformity Implementation Gate PASS
+## Phase A — controlled convergence — COMPLETE
 
-The following are blocked until the implementation gate passes:
+The following remain unimplemented future capabilities and require their own
+explicit scopes:
 
-- full Candle runtime;
+- full Candle runtime, which is no longer blocked by the Conformity Gate;
 - Feature runtime and broader Representation expansion;
 - broader producer verticals;
 - live ingest and multi-venue runtime;
 - L1/L2/L3/MBO runtime;
 - unrelated consumer or producer vertical expansion.
 
-The Human/Golden Bybit BTCUSDT vertical is complete. The current branch proceeds
-through governance closeout, final review and CI before merge. From authoritative
-`main`, the remaining gate path is **Adversarial Acceptance**, **Candle Ordering
-Compatibility**, then the **Final Conformity Gate Review**.
+The Human/Golden Bybit BTCUSDT vertical, Adversarial Acceptance, Candle Ordering
+Compatibility and Final Conformity Gate Review are complete. All eight
+ADR-0023 Decision §7 exit criteria passed.
 
 ## Operational follow-up outside the Gate critical path
 
@@ -94,14 +95,14 @@ filesystem ACLs, database roles and credential disposition. Human E2E
 operator/bootstrap privileges are acceptance evidence only and do not define
 production runtime authorization.
 
-This follow-up does not block the Human E2E merge and does not open or close the
+This follow-up was not a Gate blocker and remains independent of the completed
 Conformity Implementation Gate. Human administration remains via SSH, local
 services use canonical service identities, and future normal remote consumers
 remain behind the planned Canonical API. No API runtime is introduced here.
 
-## Phase B — full bidirectional expansion after Conformity Implementation Gate PASS
+## Phase B — post-Gate bidirectional expansion
 
-After the Conformity Implementation Gate passes, the temporary cross-track
+The Conformity Implementation Gate has passed and the temporary cross-track
 synchronization constraint is removed. Producer and Consumer development may
 resume independently and concurrently, subject to normal ownership, dependency
 direction, frozen contracts, architecture gates and explicit slice scopes.
@@ -119,7 +120,7 @@ each target capability is classified ADOPT / ADAPT / REVIEW / REJECT against
 current canonical semantics, temporal correctness and dependency baggage.
 
 ```text
-Conformity Implementation Gate PASS
+Conformity Implementation Gate PASSED
             ↓
 Package Boundary / Modular Monolith Foundation v1
             ↓
@@ -156,13 +157,13 @@ Publication Eligibility Bridge — COMPLETE
         ↓
 Human vertical / Golden Bybit BTCUSDT E2E — PASS
         ↓
-Governance closeout → branch review / CI → MERGE
+Adversarial Acceptance A1–A9 — PASS
         ↓
-From main: Adversarial acceptance + Candle ordering proof
+Candle Ordering Compatibility — PASS
         ↓
-Final Conformity Gate Review
+Final Conformity Gate Review — APPROVE
         ↓
-Conformity Implementation Gate — PASS
+Conformity Implementation Gate — PASSED
         ↓
 Package Boundary / Modular Monolith Foundation v1
         ↓
@@ -207,12 +208,9 @@ gate between the reviewed DataGateway Contract v1 and DataGateway runtime
 implementation. It does not add a product capability or renumber the phases.
 
 Phase 2 (Representation foundation) has its semantic contract frozen and
-accepted (ADR-0021, CandleDefinition v1). Candle runtime implementation is
-explicitly postponed until the Conformity Implementation Gate passes, because
-the bounded historical DataGateway read, Canonical Parquet Materializer,
-Manifest + Coverage Emission, authoritative Publication Certification and S14
-Publication Eligibility Bridge are implemented, and the Human Golden proof is
-complete. Adversarial acceptance, Candle ordering compatibility and the final
-Gate review still require completion.
-Candle runtime remains blocked until the complete seam is proven and the
-Conformity Implementation Gate passes.
+accepted (ADR-0021, CandleDefinition v1). The Conformity Implementation Gate
+has passed, so Candle runtime is no longer blocked by that Gate. Candle runtime
+is still unimplemented and remains a future capability requiring its own
+explicit scope. Package Boundary / Modular Monolith Foundation v1 is the next
+explicit checkpoint, followed by Legacy Capability Harvest Audit v1 before
+broad expansion.
