@@ -19,13 +19,14 @@ Human Golden E2E PASS
     → Candle Ordering Compatibility PASS
     → Final Conformity Gate Review APPROVE
     → Conformity Implementation Gate PASSED
-    → Package Boundary / Modular Monolith Foundation v1
-    → Legacy Capability Harvest Audit v1
+    → Package Boundary / Modular Monolith Foundation v1 COMPLETE
+    → Legacy Capability Harvest Audit v1 COMPLETE
 ```
 
-Package Boundary / Modular Monolith Foundation v1 is **COMPLETE**. Legacy
-Capability Harvest remains the next post-Gate checkpoint and has not started;
-see the section below and `SCOPE.md`.
+Legacy Capability Harvest Audit v1 is **COMPLETE**. Its accepted classification
+is recorded in `docs/legacy/ADOPTION_LEDGER.md`; H01 remains the first selected
+legacy harvest candidate and H14 DSR/PBO remains the sole non-blocking REVIEW
+residue.
 
 `DataSliceMetadata.canonical_content_hash` remains an additive future extension
 and was non-blocking for the Gate. Semantic relocation invariance passed; the
@@ -76,29 +77,91 @@ executed from baseline `9c938a5`; final reviewed candidate
 `900c128ddf063b9e4ea393596fb37aa3c0692ba8` merged through PR #25 as
 `7d531fcd8eb46b3d562de93ccae9c2352f2706fa` after independent review and
 exact-head CI passed. Its disposition is recorded in ADR-0024 under
-"Implementation outcome". **Legacy Capability Harvest Audit v1** is the next
-governed checkpoint before broad independent expansion.
+"Implementation outcome". Legacy Capability Harvest Audit v1 is now also
+**COMPLETE**.
 
-Resolved by that slice, and therefore no longer open:
+Resolved by Package Boundary and subsequent ASS-01 work, and therefore no
+longer open:
 
 - the Data Access bounded context is `quant_platform.access`; shared canonical
   primitives and Producer remain under `quant_platform.data`;
   `quant_platform.data.parquet` remains a deliberate shared physical seam; and
   `quant_platform.source_adapters` remains source-specific;
 - the package hierarchy and dependency graph for the current runtime modules,
-  now mechanically enforced by `tests/test_package_boundaries_v1.py`;
-- migration mechanics and sequence for current `quant_platform.data` modules.
+  mechanically enforced by `tests/test_package_boundaries_v1.py`;
+- migration mechanics and sequence for current `quant_platform.data` modules;
+- the application-service composition owner is `application`, with canonical
+  package `quant_platform.application`;
+- executable orchestration under `tools/` is now governed as a dependency
+  source and may not introduce new domain/runtime bypasses around the application
+  seam.
 
-The following remain intentionally open, because this slice did not exercise
-them:
+The following remain intentionally open:
 
-- bounded-context and package names beyond the Data Access seam;
+- bounded-context and package names beyond the implemented Data Access and
+  Application seams;
 - executable package hierarchy for future bounded contexts;
 - executable host placement, including any future `apps/` layout;
 - independently installable API, worker or client packages;
 - service/deployment split and process topology.
 
 ADR-0024 records this boundary without freezing the future package tree.
+
+## Application Service Seam v1
+
+The accepted API-first architecture already places application services between
+future clients/API transport and domain/DataGateway capabilities. ASS-01 closes
+the previously unowned in-process composition boundary without introducing a
+network/runtime platform.
+
+ASS-01 — Application Service Ownership & Architecture Enforcement is
+**COMPLETE** through PR #27, merged as
+`066e7cd577104fb2c8f657430402b79cd58ba9aa` after independent exact-head review
+and CI success.
+
+Resolved by ASS-01:
+
+```text
+owner   = application
+package = quant_platform.application
+```
+
+Current ownership permits `application` to compose the existing `access`,
+`producer`, `source`, `physical` and `shared` owners while no existing runtime
+owner may depend on `application`. The owner graph remains acyclic.
+
+Verification composition is intentionally asymmetric:
+
+```text
+runtime !-> tools/tests
+tools   !-> tests
+tests   -> tools/runtime/test-support is permitted
+```
+
+Existing historical tool bypasses are not silently accepted: they are recorded
+as finite exact-edge, self-cleaning ASS-03 debt. New executable orchestration
+must go through the application seam. Dynamic import/code-execution bypasses
+are fail-closed consistently with the runtime dependency analyzer.
+
+ASS-01 does not implement an application use case. The following remain separate
+future work:
+
+- ASS-02: first canonical application-service vertical, including semantic
+  request resolution and the already-frozen application result/error semantics;
+- ASS-03: convergence of existing executable orchestration and configuration
+  resolution behind the application seam;
+- Canonical API transport/runtime, Job runtime and product clients at their
+  later roadmap milestones.
+
+The following decision is newly explicit and intentionally **OPEN**:
+
+- **multi-venue / multi-representation capability resolution** inside the
+  application composition layer. The first vertical may compose currently
+  available source-specific semantics directly; the general mechanism
+  (registry, capability lookup, explicit composition or another design) must
+  not be frozen before a real second venue/representation provides evidence.
+
+No next implementation slice is selected by this closeout.
 
 [PRODUCER_CONSUMER_CONFORMITY.md](../contracts/PRODUCER_CONSUMER_CONFORMITY.md)
 freezes the bounded-read property, `RecordTimeBounds`, the ordering contract,
@@ -136,6 +199,17 @@ tunable or future generalizations beyond the first implemented vertical:
   operation, re-run on catalog loss).
 
 ## Must resolve before relevant implementation
+
+### Application services
+
+ASS-02 may use the already-frozen Consumer API semantic selector/result/error
+rules without choosing transport. Before broader multi-venue or
+multi-representation application composition is generalized, resolve the exact
+capability-resolution mechanism using observed second-provider evidence.
+
+ASS-03 must converge the finite pre-ASS-01 tool-domain/tool-test debt and the
+currently divergent configuration-resolution conventions without introducing a
+general dependency-injection or plugin framework merely for cleanup.
 
 ### DataGateway and representations
 
@@ -227,6 +301,8 @@ See [Storage Lifecycle](STORAGE_LIFECYCLE.md).
 - exact L3 contract until a real L3 feed is selected;
 - calibration-method choice;
 - full custom/reward-code sandbox until user-authored code is supported;
-- complete paper/live operational mechanics until their roadmap phases.
+- complete paper/live operational mechanics until their roadmap phases;
+- transport, remote host and product-client implementation while application
+  work remains in-process and does not require them.
 
 FeatureDefinition versus FeatureSetDefinition and candle runtime/materialization are resolved by ADR-0016 and ADR-0017.
