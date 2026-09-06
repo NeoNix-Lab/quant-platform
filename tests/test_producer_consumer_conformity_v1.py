@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from quant_platform.data.models import DataRequest  # noqa: E402
+from quant_platform.access.models import DataRequest  # noqa: E402
 from quant_platform.data.parquet import _OPTIONAL, _REQUIRED  # noqa: E402
 from golden_conformity_support import load_golden_expectation  # noqa: E402
 
@@ -59,7 +59,7 @@ CONFORMITY_IMPLEMENTATION_GATE = "Conformity Implementation Gate"
 # Canonical-JSON SHA-256 of the accepted schemas/trade-v1.json content,
 # computed with json.dumps(sort_keys=True, separators=(",", ":"),
 # ensure_ascii=True) -- the same fingerprint convention
-# quant_platform.data.models._fingerprint() already uses -- over the
+# quant_platform.access.models._fingerprint() already uses -- over the
 # *parsed* schema, not its raw bytes. Pinned once; see
 # BybitEligibilityProfileIsDistinctFromGenericSchema below.
 PINNED_TRADE_V1_CANONICAL_SHA256 = "8ac391b0d03073ccf06a40676cb66a1a91934eb973efb79d3d05e2bb1bd943e2"
@@ -248,7 +248,7 @@ class BybitEligibilityProfileIsDistinctFromGenericSchema(unittest.TestCase):
         #
         # Canonicalization matches this repository's own convention for
         # stable fingerprints (see _fingerprint() in
-        # src/quant_platform/data/models.py): json.dumps with sort_keys=True,
+        # src/quant_platform/access/models.py): json.dumps with sort_keys=True,
         # separators=(",", ":"), ensure_ascii=True.
         #
         # PINNED_TRADE_V1_CANONICAL_SHA256 was computed once, from the
@@ -329,7 +329,7 @@ class OrderingProofCorrectlyAttributesNonOverlapEnforcement(unittest.TestCase):
         self.assertIn("says nothing, by\nitself, about whether two different partitions", text)
 
     def test_gateway_still_enforces_the_catalog_conflict_check(self):
-        text = _read(ROOT / "src" / "quant_platform" / "data" / "gateway.py")
+        text = _read(ROOT / "src" / "quant_platform" / "access" / "gateway.py")
         self.assertIn("unexplained temporal overlap", text)
         self.assertIn("CatalogConflict", text)
 
@@ -470,7 +470,7 @@ class PhysicalVsSemanticVsResultIdentityMatrixIsConsistent(unittest.TestCase):
         # Documents today's actual coupling this section reasons about; if a
         # future change removes content_hashes from the stable payload this
         # test must be revisited together with PRODUCER_CONSUMER_CONFORMITY.md S12.
-        text = _read(ROOT / "src" / "quant_platform" / "data" / "gateway.py")
+        text = _read(ROOT / "src" / "quant_platform" / "access" / "gateway.py")
         self.assertIn('"content_hashes": list(content_hashes)', text)
 
 

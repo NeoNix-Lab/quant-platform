@@ -19,11 +19,16 @@ from golden_conformity_support import (  # noqa: E402
     load_golden_expectation,
     observe_scan,
 )
-from quant_platform.data.gateway import DataGateway, ScanState  # noqa: E402
-from quant_platform.data.models import (  # noqa: E402
+from quant_platform.access.gateway import (  # noqa: E402
+    DataGateway,
+    ScanState,
+)
+from quant_platform.access.models import (  # noqa: E402
     CatalogDataset,
     CatalogPartition,
     DataRequest,
+)
+from quant_platform.data.models import (  # noqa: E402
     DatasetIdentity,
     Instant,
     NaturalPartitionIdentity,

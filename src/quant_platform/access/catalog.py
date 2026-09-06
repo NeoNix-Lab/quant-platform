@@ -12,6 +12,8 @@ from typing import Any, Callable
 from .models import (
     CatalogDataset,
     CatalogPartition,
+)
+from ..data.models import (
     CatalogConflict,
     DatasetIdentity,
     DatasetNotFound,

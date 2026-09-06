@@ -26,12 +26,16 @@ from bootstrap_schema_registry import (  # noqa: E402
     read_schema_registration,
 )
 
-from quant_platform.data import (  # noqa: E402
+from quant_platform.data.publication_catalog import (  # noqa: E402
     CatalogPublicationConflict,
     CatalogPublicationWriter,
-    DatasetIdentity,
+)
+from quant_platform.data import DatasetIdentity  # noqa: E402
+from quant_platform.data.publication import (  # noqa: E402
     PublicationCertification,
     SealedPartitionEvidence,
+)
+from quant_platform.data.manifests import (  # noqa: E402
     emit_coverage_manifest,
     emit_dataset_manifest,
     emit_partition_manifest,

@@ -56,7 +56,9 @@ from adversarial_support import (  # noqa: E402
     scoped_catalog_state,
     trade,
 )
-from quant_platform.data import Catalog, NoCoverage, read_trade_v1  # noqa: E402
+from quant_platform.access.catalog import Catalog  # noqa: E402
+from quant_platform.data import NoCoverage  # noqa: E402
+from quant_platform.data.parquet import read_trade_v1  # noqa: E402
 from quant_platform.data.coverage import reconstruct_catalog_coverage  # noqa: E402
 from quant_platform.data.publication import PublicationCertificationError  # noqa: E402
 from quant_platform.data.publication_eligibility import (  # noqa: E402

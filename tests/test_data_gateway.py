@@ -15,17 +15,19 @@ import pyarrow.parquet as pq
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant_platform.data.catalog import Catalog  # noqa: E402
-from quant_platform.data.gateway import DataGateway  # noqa: E402
-from quant_platform.data.models import (  # noqa: E402
+from quant_platform.access.catalog import Catalog  # noqa: E402
+from quant_platform.access.gateway import DataGateway  # noqa: E402
+from quant_platform.access.models import (  # noqa: E402
     CatalogDataset,
     CatalogPartition,
+    DataRequest,
+    LifecyclePolicy,
+)
+from quant_platform.data.models import (  # noqa: E402
     CatalogConflict,
     DataIntegrityError,
-    DataRequest,
     DatasetIdentity,
     Instant,
-    LifecyclePolicy,
     NaturalPartitionIdentity,
     NoCoverage,
     SchemaMismatch,

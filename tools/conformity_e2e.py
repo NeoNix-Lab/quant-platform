@@ -32,20 +32,28 @@ from golden_conformity_support import (  # noqa: E402
     load_golden_expectation,
     observe_scan,
 )
-from quant_platform.data import (  # noqa: E402
-    Catalog,
-    CatalogPublicationWriter,
-    DataGateway,
+from quant_platform.access.catalog import Catalog  # noqa: E402
+from quant_platform.data.publication_catalog import CatalogPublicationWriter  # noqa: E402
+from quant_platform.access.gateway import DataGateway  # noqa: E402
+from quant_platform.access.models import (  # noqa: E402
     DataRequest,
+    LifecyclePolicy,
+)
+from quant_platform.data import (  # noqa: E402
     DatasetIdentity,
     DatasetNotFound,
     Instant,
-    LifecyclePolicy,
+)
+from quant_platform.data.publication import (  # noqa: E402
     PublicationCertification,
-    PublicationEligibilityBridge,
-    PublicationEligibilityCatalog,
-    PublicationEligibilityEvidence,
     SealedPartitionEvidence,
+)
+from quant_platform.data.publication_eligibility import (  # noqa: E402
+    PublicationEligibilityBridge,
+    PublicationEligibilityEvidence,
+)
+from quant_platform.data.publication_eligibility_catalog import PublicationEligibilityCatalog  # noqa: E402
+from quant_platform.data.manifests import (  # noqa: E402
     emit_coverage_manifest,
     emit_dataset_manifest,
     emit_partition_manifest,

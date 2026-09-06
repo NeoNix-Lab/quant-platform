@@ -1,10 +1,6 @@
-"""Catalog-backed canonical market-data access."""
+"""Shared canonical data primitives; runtime entry points live in their owner modules."""
 
-from .catalog import Catalog
-from .gateway import DataGateway, DataScan, DataScanOpenMetadata, ScanState
 from .models import (
-    CatalogDataset,
-    CatalogPartition,
     CatalogConflict,
     CorruptContent,
     CoverageInterval,
@@ -15,14 +11,11 @@ from .models import (
     canonical_content_hash_v1,
     DataGatewayError,
     DataIntegrityError,
-    DataRequest,
-    DataSlice,
     DatasetIdentity,
     DatasetNotFound,
     InvalidRequest,
     InvalidPartitionState,
     Instant,
-    LifecyclePolicy,
     NaturalPartitionIdentity,
     NoCoverage,
     SchemaMismatch,
@@ -31,50 +24,14 @@ from .models import (
     UnsupportedDatasetKind,
     UnsupportedSchema,
 )
-from ..ordering import OrderingProvider, TRADES_CANONICAL_TOTAL_ORDER_V1, ordering_policy_satisfies
-from .materializer import (
-    EligibilityValidator,
-    ParquetMaterialization,
-    materialize_trade_v1,
-    physical_artifact_sha256,
+from ..ordering import (
+    OrderingProvider,
+    TRADES_CANONICAL_TOTAL_ORDER_V1,
+    ordering_policy_satisfies,
 )
-from .manifests import (
-    ManifestEmission,
-    ManifestValidationError,
-    emit_coverage_manifest,
-    emit_dataset_manifest,
-    emit_partition_manifest,
-)
-from .parquet import read_trade_v1, resolve_partition_path, scan_trade_v1
-from .parquet import scan_trade_v1_all
-from .coverage import CoverageViolation, reconstruct_catalog_coverage
-from .publication import (
-    CatalogSealer,
-    Certifier,
-    CertificationEvidenceRecorder,
-    CertificationResult,
-    EvidenceCategoryResult,
-    PublicationCertification,
-    PublicationCertificationError,
-    PublicationCertificationRun,
-    QualityReport,
-    SealedCatalogPartition,
-    SealedPartitionEvidence,
-)
-from .publication_catalog import CatalogPublicationConflict, CatalogPublicationWriter
-from .publication_eligibility import (
-    PublicationEligibilityBridge,
-    PublicationEligibilityEvidence,
-    PublicationEligibilityRefusal,
-    PublicationEligibilityResult,
-)
-from .publication_eligibility_catalog import PublicationEligibilityCatalog
 
 __all__ = [
     "CatalogConflict",
-    "Catalog",
-    "CatalogDataset",
-    "CatalogPartition",
     "CorruptContent",
     "CoverageInterval",
     "RecordTimeBounds",
@@ -82,61 +39,21 @@ __all__ = [
     "CANONICAL_CONTENT_HASH_V1_IDENTITY",
     "CANONICAL_CONTENT_HASH_V1_DOMAIN_TAG",
     "canonical_content_hash_v1",
-    "OrderingProvider",
-    "TRADES_CANONICAL_TOTAL_ORDER_V1",
-    "ordering_policy_satisfies",
-    "DataGateway",
-    "DataScan",
-    "DataScanOpenMetadata",
-    "ScanState",
     "DataGatewayError",
     "DataIntegrityError",
-    "DataRequest",
-    "DataSlice",
     "DatasetIdentity",
     "DatasetNotFound",
-    "EligibilityValidator",
     "InvalidRequest",
     "InvalidPartitionState",
     "Instant",
-    "LifecyclePolicy",
     "NaturalPartitionIdentity",
     "NoCoverage",
-    "ParquetMaterialization",
     "SchemaMismatch",
     "StorageResolutionError",
     "TradeRecord",
     "UnsupportedDatasetKind",
     "UnsupportedSchema",
-    "materialize_trade_v1",
-    "physical_artifact_sha256",
-    "ManifestEmission",
-    "ManifestValidationError",
-    "emit_coverage_manifest",
-    "emit_dataset_manifest",
-    "emit_partition_manifest",
-    "read_trade_v1",
-    "resolve_partition_path",
-    "scan_trade_v1",
-    "scan_trade_v1_all",
-    "CoverageViolation",
-    "reconstruct_catalog_coverage",
-    "CertificationResult",
-    "CatalogSealer",
-    "Certifier",
-    "CertificationEvidenceRecorder",
-    "EvidenceCategoryResult",
-    "PublicationCertification",
-    "PublicationCertificationError",
-    "PublicationCertificationRun",
-    "QualityReport",
-    "SealedCatalogPartition",
-    "SealedPartitionEvidence",
-    "CatalogPublicationConflict",
-    "CatalogPublicationWriter",
-    "PublicationEligibilityBridge",
-    "PublicationEligibilityEvidence",
-    "PublicationEligibilityRefusal",
-    "PublicationEligibilityResult",
-    "PublicationEligibilityCatalog",
+    "OrderingProvider",
+    "TRADES_CANONICAL_TOTAL_ORDER_V1",
+    "ordering_policy_satisfies",
 ]

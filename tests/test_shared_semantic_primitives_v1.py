@@ -18,15 +18,12 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant_platform.data.gateway import DataGateway  # noqa: E402
+from quant_platform.access.gateway import DataGateway  # noqa: E402
 from quant_platform import ordering as ordering_module  # noqa: E402
 from quant_platform.data.models import (  # noqa: E402
     CanonicalContentHashV1,
-    CatalogDataset,
-    CatalogPartition,
     CoverageInterval,
     DataIntegrityError,
-    DataRequest,
     DatasetIdentity,
     InvalidRequest,
     Instant,
@@ -36,6 +33,11 @@ from quant_platform.data.models import (  # noqa: E402
     UnsupportedDatasetKind,
     UnsupportedSchema,
     canonical_content_hash_v1,
+)
+from quant_platform.access.models import (  # noqa: E402
+    CatalogDataset,
+    CatalogPartition,
+    DataRequest,
 )
 from quant_platform.ordering import (  # noqa: E402
     DuplicateOrderingProviderError,
@@ -262,7 +264,11 @@ class CanonicalContentHashV1Tests(unittest.TestCase):
 class OrderingCompatibilityTests(unittest.TestCase):
     def test_core_modules_do_not_own_bybit_key_implementation(self):
         shared_root = ROOT / "src" / "quant_platform"
-        paths = [shared_root / "ordering.py", *sorted((shared_root / "data").rglob("*.py"))]
+        paths = [
+            shared_root / "ordering.py",
+            *sorted((shared_root / "data").rglob("*.py")),
+            *sorted((shared_root / "access").rglob("*.py")),
+        ]
         for path in paths:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):

@@ -10,12 +10,17 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant_platform.data.gateway import DataGateway, ScanState  # noqa: E402
-from quant_platform.data.models import (  # noqa: E402
+from quant_platform.access.gateway import (  # noqa: E402
+    DataGateway,
+    ScanState,
+)
+from quant_platform.access.models import (  # noqa: E402
     CatalogDataset,
     CatalogPartition,
-    DataIntegrityError,
     DataRequest,
+)
+from quant_platform.data.models import (  # noqa: E402
+    DataIntegrityError,
     DatasetIdentity,
     Instant,
     NaturalPartitionIdentity,
@@ -374,7 +379,7 @@ class BoundedDataGatewayReadV1Tests(unittest.TestCase):
 
     def test_streaming_implementation_has_no_full_file_table_or_global_result_sort(self):
         parquet_source = (ROOT / "src" / "quant_platform" / "data" / "parquet.py").read_text(encoding="utf-8")
-        gateway_source = (ROOT / "src" / "quant_platform" / "data" / "gateway.py").read_text(encoding="utf-8")
+        gateway_source = (ROOT / "src" / "quant_platform" / "access" / "gateway.py").read_text(encoding="utf-8")
         self.assertIn("scanner.to_batches()", parquet_source)
         self.assertNotIn("scanner.to_table()", parquet_source)
         self.assertNotIn("records.sort(", gateway_source)

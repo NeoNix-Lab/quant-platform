@@ -11,28 +11,30 @@ from .catalog import Catalog
 from .models import (
     CatalogDataset,
     CatalogPartition,
-    CatalogConflict,
-    CoverageInterval,
-    RecordTimeBounds,
-    DataIntegrityError,
     DataRequest,
     DataSlice,
     DataSliceMetadata,
-    DatasetIdentity,
-    Instant,
     LifecyclePolicy,
-    NaturalPartitionIdentity,
-    NoCoverage,
-    SchemaMismatch,
-    UnsupportedDatasetKind,
-    UnsupportedSchema,
     gaps_for,
     intersect,
     merge_intervals,
     result_fingerprint,
 )
+from ..data.models import (
+    CatalogConflict,
+    CoverageInterval,
+    RecordTimeBounds,
+    DataIntegrityError,
+    DatasetIdentity,
+    Instant,
+    NaturalPartitionIdentity,
+    NoCoverage,
+    SchemaMismatch,
+    UnsupportedDatasetKind,
+    UnsupportedSchema,
+)
 from ..ordering import OrderingProvider, TRADES_CANONICAL_TOTAL_ORDER_V1, provider_for
-from .parquet import resolve_partition_path, scan_trade_v1
+from ..data.parquet import resolve_partition_path, scan_trade_v1
 
 
 BatchReader = Callable[[str, Instant, Instant, int], Iterable[tuple[Any, ...]]]
