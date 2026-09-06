@@ -7,23 +7,28 @@ Two sequential, non-circular gates are defined by
 the **Contract Freeze Gate** (documentation-level; unlocks implementing the
 conformity slices) and the **Conformity Implementation Gate** (runtime-level;
 unlocks broader producer/consumer vertical expansion and Candle runtime). The
-Contract Freeze Gate has **PASSED**. The Conformity Implementation Gate remains
-**OPEN / IN PROGRESS / PARTIAL**. The Human vertical / Golden Bybit BTCUSDT E2E
-has **PASSED**, closing that first-vertical milestone without closing the
-complete Gate. The residual blockers are Adversarial Acceptance, Candle
-Ordering Compatibility and the Final Conformity Gate Review.
+Contract Freeze Gate has **PASSED** and the Conformity Implementation Gate has
+**PASSED**. Human Golden E2E, Adversarial Acceptance A1–A9 and Candle Ordering
+Compatibility are PASS; the Final Conformity Gate Review is APPROVE with
+`BLOCKERS: NONE` and `IMPORTANT: NONE`. The temporary integration gate pair is
+concluded.
 
 ```text
-Human Golden E2E PASS → governance closeout → branch review / CI → merge
-
-from authoritative main:
-Adversarial Acceptance + Candle Ordering Compatibility
-    → Final Conformity Gate Review
-    → Conformity Implementation Gate PASS
+Human Golden E2E PASS
+    → Adversarial Acceptance A1–A9 PASS
+    → Candle Ordering Compatibility PASS
+    → Final Conformity Gate Review APPROVE
+    → Conformity Implementation Gate PASSED
+    → Package Boundary / Modular Monolith Foundation v1
+    → Legacy Capability Harvest Audit v1
 ```
 
 Package Boundary / Modular Monolith Foundation and Legacy Capability Harvest
-remain post-gate work and are not blockers for the Human E2E merge.
+remain post-Gate checkpoints and have not been started by this closeout.
+
+`DataSliceMetadata.canonical_content_hash` remains an additive future extension
+and was non-blocking for the Gate. Semantic relocation invariance passed; the
+operational relocation runtime remains missing and independent of Gate closure.
 
 ## Source-acquired canonical dataset lineage
 
@@ -50,7 +55,7 @@ disposition. Human administrators continue to use SSH; local services must use
 canonical service identities; future normal remote consumers remain behind the
 Canonical API, application services and DataGateway.
 
-This follow-up does not block the Human E2E merge and does not open or close the
+This follow-up was non-blocking and remains independent of the completed
 Conformity Implementation Gate. It does not authorize an interim HTTP API,
 Canonical API runtime implementation, new identities, ACL changes or database
 role changes in this closeout.
@@ -62,9 +67,9 @@ The following direction is resolved for the post-Conformity program order:
 - one authoritative repository remains acceptable;
 - one Python source root, `src/`, remains acceptable;
 - the default target is a modular monolith;
-- a mandatory Package Boundary / Modular Monolith Foundation v1 checkpoint
-  occurs immediately after Conformity Implementation Gate PASS and before
-  broad independent Producer/Consumer expansion;
+- Package Boundary / Modular Monolith Foundation v1 is the next explicit scope
+  after Conformity Implementation Gate PASS and before broad independent
+  Producer/Consumer expansion;
 - bounded ownership and dependency direction must become enforceable through
   package boundaries and architecture tests.
 
