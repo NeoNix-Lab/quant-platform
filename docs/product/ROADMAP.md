@@ -117,11 +117,11 @@ renumbering phases 0–15.
 The mandatory **Legacy Capability Harvest Audit v1** is also **COMPLETE**. It
 classified 31 legacy capabilities against current canonical semantics and
 selected H01 — the pure diagonal / stacked imbalance core — as the first
-recommended harvest slice. H14 DSR/PBO remains REVIEW on exact Evaluation
+recommended **harvest** slice. H14 DSR/PBO remains REVIEW on exact Evaluation
 estimator/input semantics and does not block H01.
 
 The legacy repository remains evidence only; harvesting never creates a runtime
-dependency on it. Broad independent Producer/Consumer expansion is now
+dependency on it. Broad independent Producer/Consumer expansion is
 **UNLOCKED**, but every implementation capability still requires an explicit
 bounded scope and must respect current ownership, dependency direction and
 frozen contracts.
@@ -136,16 +136,56 @@ Legacy Capability Harvest Audit v1 COMPLETE
 Broad independent Producer / Consumer expansion UNLOCKED
 ```
 
-Selected next implementation candidate:
+### Application Service Seam v1 — structural checkpoint
+
+Post-harvest architecture analysis identified that the accepted API-first
+architecture already requires an in-process application-service seam before
+later transport/runtime work, while the repository lacked a canonical owner
+for that composition layer.
+
+This is an **unnumbered structural checkpoint**, not a new product phase and not
+a reordering of phase 9 (`Canonical API and job runtime`) or phase 13
+(`Clients`). It does not relock independent Producer expansion.
+
+ASS-01 — Application Service Ownership & Architecture Enforcement is
+**COMPLETE** through PR #27, merged as
+`066e7cd577104fb2c8f657430402b79cd58ba9aa` after exact-head independent review
+and `Quant Platform integrity` CI success.
+
+ASS-01 establishes:
 
 ```text
-H01 — Diagonal / Stacked Imbalance Core
+quant_platform.application
+        ↓
+application-service composition owner
 ```
 
-H01 selection does not declare a complete Feature Engine or Footprint runtime.
-Its pure quantitative legacy kernel is the accepted harvest candidate; canonical
-grain, validated tick-grid input, temporal availability and FeatureDefinition
-provenance remain requirements of the future bounded H01 implementation scope.
+with mechanically enforced dependency direction and governed executable
+orchestration under `tools/`. It introduces no application use-case runtime,
+transport, server, Job runtime or client.
+
+Application Service Seam maturity:
+
+```text
+ASS-01 ownership + architecture enforcement       COMPLETE
+ASS-02 first canonical application-service vertical NOT ACTIVE
+ASS-03 orchestration/configuration convergence     NOT ACTIVE
+```
+
+Existing pre-ASS-01 tool bypasses remain finite exact-edge debt for ASS-03;
+new executable orchestration must pass through the application seam. Transport,
+serialization, remote reachability, auth/TLS, runtime host/process topology,
+Job implementation and client implementation remain intentionally deferred.
+
+H01 remains the selected first **legacy harvest candidate**, not an automatically
+active next project slice. Its pure quantitative legacy kernel is the accepted
+harvest candidate; canonical grain, validated tick-grid input, temporal
+availability and FeatureDefinition provenance remain requirements of a future
+bounded H01 implementation scope.
+
+No next implementation slice is selected by the ASS-01 closeout. The next
+planning decision must evaluate dependency/value ordering among ASS-02, ASS-03,
+H01 and broader roadmap/capability atomization.
 
 ## Parallel producer track
 
@@ -229,7 +269,7 @@ Phase 2 (Representation foundation) has its semantic contract frozen and
 accepted (ADR-0021, CandleDefinition v1). The Conformity Implementation Gate has
 passed, so Candle runtime is no longer blocked by that Gate. Candle runtime is
 still unimplemented and remains a future capability requiring its own explicit
-scope. Package Boundary / Modular Monolith Foundation v1 and Legacy Capability
-Harvest Audit v1 are complete; independently scoped post-Gate expansion is now
-unlocked. H01 — Diagonal / Stacked Imbalance Core — is the selected first
-harvest implementation candidate.
+scope. Package Boundary / Modular Monolith Foundation v1, Legacy Capability
+Harvest Audit v1 and ASS-01 ownership/enforcement are complete. Independently
+scoped post-Gate expansion remains unlocked; the next implementation slice is
+to be selected explicitly rather than inferred from roadmap ordering.
