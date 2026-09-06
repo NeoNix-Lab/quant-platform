@@ -33,25 +33,33 @@ from bootstrap_schema_registry import (  # noqa: E402
     read_schema_registration,
 )
 
-from quant_platform.data import (  # noqa: E402
-    Catalog,
-    CatalogPublicationWriter,
-    DataGateway,
+from quant_platform.access.catalog import Catalog  # noqa: E402
+from quant_platform.data.publication_catalog import CatalogPublicationWriter  # noqa: E402
+from quant_platform.access.gateway import DataGateway  # noqa: E402
+from quant_platform.access.models import (  # noqa: E402
     DataRequest,
+    LifecyclePolicy,
+)
+from quant_platform.data import (  # noqa: E402
     DatasetIdentity,
     Instant,
-    LifecyclePolicy,
-    PublicationCertification,
-    PublicationEligibilityBridge,
-    PublicationEligibilityCatalog,
-    PublicationEligibilityEvidence,
-    SealedPartitionEvidence,
     TradeRecord,
+)
+from quant_platform.data.publication import (  # noqa: E402
+    PublicationCertification,
+    SealedPartitionEvidence,
+)
+from quant_platform.data.publication_eligibility import (  # noqa: E402
+    PublicationEligibilityBridge,
+    PublicationEligibilityEvidence,
+)
+from quant_platform.data.publication_eligibility_catalog import PublicationEligibilityCatalog  # noqa: E402
+from quant_platform.data.manifests import (  # noqa: E402
     emit_coverage_manifest,
     emit_dataset_manifest,
     emit_partition_manifest,
-    materialize_trade_v1,
 )
+from quant_platform.data.materializer import materialize_trade_v1  # noqa: E402
 from quant_platform.ordering import (  # noqa: E402
     TRADES_CANONICAL_TOTAL_ORDER_V1,
     OrderingProvider,

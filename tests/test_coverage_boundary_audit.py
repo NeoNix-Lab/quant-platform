@@ -32,9 +32,19 @@ sys.path.insert(0, str(ROOT / "src"))
 from semantic_validator import (  # noqa: E402
     _format_ts, reconstruct_catalog_coverage,
 )
+from quant_platform.access.models import (  # noqa: E402
+    CatalogDataset,
+    CatalogPartition,
+    DataRequest,
+    LifecyclePolicy,
+)
+from quant_platform.access.gateway import DataGateway  # noqa: E402
 from quant_platform.data import (  # noqa: E402
-    CatalogDataset, CatalogPartition, DataGateway, DataRequest, DatasetIdentity,
-    Instant, LifecyclePolicy, NaturalPartitionIdentity, NoCoverage, TradeRecord,
+    DatasetIdentity,
+    Instant,
+    NaturalPartitionIdentity,
+    NoCoverage,
+    TradeRecord,
 )
 from quant_platform.source_adapters.bybit import (  # noqa: E402
     BYBIT_ORDERING_PROVIDER,

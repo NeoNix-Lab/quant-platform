@@ -12,11 +12,11 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant_platform.data import (  # noqa: E402
+from quant_platform.data.publication_catalog import (  # noqa: E402
     CatalogPublicationConflict,
     CatalogPublicationWriter,
-    Instant,
 )
+from quant_platform.data import Instant  # noqa: E402
 
 
 START = Instant.parse("2024-01-15T00:00:00Z")

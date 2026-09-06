@@ -29,13 +29,15 @@ from quant_platform.data import (  # noqa: E402
     DataIntegrityError,
     DatasetIdentity,
     Instant,
-    ManifestValidationError,
     TradeRecord,
+)
+from quant_platform.data.manifests import (  # noqa: E402
+    ManifestValidationError,
     emit_coverage_manifest,
     emit_dataset_manifest,
     emit_partition_manifest,
-    materialize_trade_v1,
 )
+from quant_platform.data.materializer import materialize_trade_v1  # noqa: E402
 from quant_platform.data.materializer import ParquetMaterialization  # noqa: E402
 from quant_platform.ordering import OrderingProvider  # noqa: E402
 from quant_platform.source_adapters.bybit import (  # noqa: E402

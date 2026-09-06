@@ -18,8 +18,12 @@ from typing import Any, Callable, Mapping
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant_platform.data.gateway import DataScan, ScanState  # noqa: E402
-from quant_platform.data.models import DataSliceMetadata, Instant  # noqa: E402
+from quant_platform.access.gateway import (  # noqa: E402
+    DataScan,
+    ScanState,
+)
+from quant_platform.access.models import DataSliceMetadata  # noqa: E402
+from quant_platform.data.models import Instant  # noqa: E402
 
 DEFAULT_GOLDEN_FIXTURE = ROOT / "fixtures" / "conformity" / "golden-bybit-btcusdt-2024-01-15.json"
 MemorySampler = Callable[[], int | float]

@@ -15,14 +15,20 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant_platform.data import (  # noqa: E402
+from quant_platform.data.publication_catalog import (  # noqa: E402
     CatalogPublicationConflict,
     CatalogPublicationWriter,
+)
+from quant_platform.data import (  # noqa: E402
     DatasetIdentity,
     Instant,
+    TradeRecord,
+)
+from quant_platform.data.publication import (  # noqa: E402
     PublicationCertification,
     SealedPartitionEvidence,
-    TradeRecord,
+)
+from quant_platform.data.manifests import (  # noqa: E402
     emit_coverage_manifest,
     emit_dataset_manifest,
     emit_partition_manifest,

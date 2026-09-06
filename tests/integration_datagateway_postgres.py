@@ -21,9 +21,10 @@ import psycopg
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant_platform.data.catalog import Catalog  # noqa: E402
-from quant_platform.data.gateway import DataGateway  # noqa: E402
-from quant_platform.data.models import DataRequest, DatasetIdentity  # noqa: E402
+from quant_platform.access.catalog import Catalog  # noqa: E402
+from quant_platform.access.gateway import DataGateway  # noqa: E402
+from quant_platform.access.models import DataRequest  # noqa: E402
+from quant_platform.data.models import DatasetIdentity  # noqa: E402
 from quant_platform.source_adapters.bybit import (  # noqa: E402
     BYBIT_ORDERING_PROVIDER,
     BYBIT_TRADE_V1_ORDERING_POLICY,

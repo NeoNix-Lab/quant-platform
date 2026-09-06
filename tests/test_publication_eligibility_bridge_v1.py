@@ -19,6 +19,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from quant_platform.data import (
     DatasetIdentity,
     Instant,
+)
+from quant_platform.data.publication_eligibility import (
     PublicationEligibilityBridge,
     PublicationEligibilityEvidence,
     PublicationEligibilityRefusal,
