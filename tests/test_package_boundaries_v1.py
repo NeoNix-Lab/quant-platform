@@ -192,26 +192,9 @@ TOOLS_PENDING_ASS03 = {
 # ASS-03 must remove it; relocating golden_conformity_support here would change
 # the Golden acceptance path, which ASS-01 may not do.
 TOOLS_TESTS_PENDING_ASS03 = {("conformity_e2e", "golden_conformity_support")}
-# Verification composition that reaches tools-resident modules.  Permitted for
-# these modules only; a new tests -> tools edge fails.  Testing an executable is
-# legitimate, so this ledger records migration debt, not wrongdoing.
-TESTS_PENDING_ASS03 = {
-    "adversarial_support",
-    "integration_bybit_trades_2024_01_15",
-    "integration_publication_certification_postgres",
-    "test_bootstrap_schema_registry",
-    "test_bybit_historical_source_v1",
-    "test_conformity_e2e",
-    "test_coverage_boundary_audit",
-    "test_coverage_lineage_and_reconstruction",
-    "test_dataset_manifest_v2",
-    "test_declared_coverage_semantics",
-    "test_import_bybit_trades",
-    "test_manifest_coverage_emission_v1",
-    "test_publication_coverage_oracle_parity",
-    "test_rel_root_convention",
-    "test_semantic_validator",
-}
+# The rule is deliberately one-directional.  Forbidding tools -> tests is what
+# makes a tools/tests cycle impossible, so tests -> tools needs no restriction:
+# a test importing the executable it tests is verification, not a bypass.
 
 
 def script_layers():
@@ -284,13 +267,6 @@ def script_violations(scripts, layers):
                     errors.append(
                         f"{layer}/{module}.py:{line}: executable depends on "
                         f"verification support -> {root}"
-                    )
-                elif layer == "tests" and target_layer == "tools":
-                    if module in TESTS_PENDING_ASS03:
-                        continue
-                    errors.append(
-                        f"{layer}/{module}.py:{line}: verification depends on "
-                        f"executable orchestration -> {root}"
                     )
             elif layer == "tools" and root not in sys.stdlib_module_names and root not in THIRD_PARTY:
                 errors.append(
@@ -381,38 +357,27 @@ class PackageBoundaryTests(unittest.TestCase):
         layers = script_layers()
         for module in TOOLS_PENDING_ASS03:
             self.assertEqual("tools", layers.get(module), module)
-        for module in TESTS_PENDING_ASS03:
-            self.assertEqual("tests", layers.get(module), module)
         for module, target in TOOLS_TESTS_PENDING_ASS03:
             self.assertEqual("tools", layers.get(module), module)
             self.assertEqual("tests", layers.get(target), target)
         # An exemption that no longer describes a violation must be removed, so
-        # the ledgers cannot outlive the debt they record.
-        for ledger in (TOOLS_PENDING_ASS03, TESTS_PENDING_ASS03):
-            for module in ledger:
-                reduced = {name: value for name, value in scripts.items() if name == module}
-                relaxed = ledger - {module}
-                with self.subTest(module=module):
-                    self.assertTrue(
-                        self._violations_without(reduced, layers, ledger, relaxed),
-                        f"{module} no longer violates; remove it from the ledger",
-                    )
+        # the ledger cannot outlive the debt it records.
+        for module in TOOLS_PENDING_ASS03:
+            reduced = {name: value for name, value in scripts.items() if name == module}
+            with self.subTest(module=module):
+                self.assertTrue(
+                    self._violations_without(reduced, layers, TOOLS_PENDING_ASS03 - {module}),
+                    f"{module} no longer violates; remove it from the ledger",
+                )
 
-    def _violations_without(self, scripts, layers, ledger, relaxed):
-        global TOOLS_PENDING_ASS03, TESTS_PENDING_ASS03
-        is_tools = ledger is TOOLS_PENDING_ASS03
-        original = TOOLS_PENDING_ASS03 if is_tools else TESTS_PENDING_ASS03
+    def _violations_without(self, scripts, layers, relaxed):
+        global TOOLS_PENDING_ASS03
+        original = TOOLS_PENDING_ASS03
         try:
-            if is_tools:
-                TOOLS_PENDING_ASS03 = relaxed
-            else:
-                TESTS_PENDING_ASS03 = relaxed
+            TOOLS_PENDING_ASS03 = relaxed
             return script_violations(scripts, layers)
         finally:
-            if is_tools:
-                TOOLS_PENDING_ASS03 = original
-            else:
-                TESTS_PENDING_ASS03 = original
+            TOOLS_PENDING_ASS03 = original
 
     def test_forbidden_orchestration_forms_are_detected_without_editing_repository(self):
         layers = dict(script_layers())
@@ -425,8 +390,6 @@ class PackageBoundaryTests(unittest.TestCase):
             ("new_tool", "tools", "import golden_conformity_support"),
             ("new_tool", "tools", "from adversarial_support import build"),
             ("new_tool", "tools", "import requests"),
-            ("new_test", "tests", "import conformity_e2e"),
-            ("new_test", "tests", "from semantic_validator import validate"),
         ]
         for module, layer, injected in cases:
             with self.subTest(module=module, injected=injected):
@@ -443,10 +406,14 @@ class PackageBoundaryTests(unittest.TestCase):
             ("new_tool", "tools", "import argparse, json, sys"),
             ("new_tool", "tools", "import psycopg"),
             ("new_tool", "tools", "import semantic_validator"),
-            # A6: verification composition reaches runtime owners directly.
+            # Verification composition roots: a test may import runtime owners,
+            # the executable it tests, and test support, without restriction.
             ("new_test", "tests", "from quant_platform.access.gateway import DataGateway"),
             ("new_test", "tests", "import quant_platform.data.materializer"),
             ("new_test", "tests", "from golden_conformity_support import observe_scan"),
+            ("new_test", "tests", "import conformity_e2e"),
+            ("new_test", "tests", "from semantic_validator import validate"),
+            ("new_test", "tests", "from import_bybit_trades import main"),
         ]
         for module, layer, injected in cases:
             with self.subTest(module=module, injected=injected):
