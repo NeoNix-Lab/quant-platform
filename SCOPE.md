@@ -1,60 +1,35 @@
-# Scope: Package Boundary / Modular Monolith Foundation v1
+# Scope: Legacy Capability Harvest Audit v1 — COMPLETE
 
 ## Goal
 
-Execute the mandatory post-Gate structural checkpoint accepted by
-[ADR-0024](docs/decisions/ADR-0024-package-boundary-modular-monolith-v1.md):
-establish bounded package ownership and make dependency direction mechanically
-testable, before broad independent Producer/Consumer expansion.
+Close the mandatory post-Gate Legacy Capability Harvest Audit checkpoint using the accepted read-only audit evidence, and hand off the next explicit implementation slice without changing runtime, contracts, schemas or architecture semantics.
 
-This is a structural checkpoint, not a new product phase and not a numbered
-roadmap phase. It changes package ownership and import direction only. It does
-not change DataGateway semantics, Producer–Consumer conformity semantics, any
-frozen contract, schema, DDL or fixture.
+Legacy repositories remain reference/evidence libraries only. They are never runtime dependencies of the canonical platform.
 
 ## Cycle state
 
 ```text
-baseline                 = 9c938a57daee9e37dfc98c56e88721d42e6391af
+canonical baseline       = 7f9b8dc9c5671908c5580c525705c42db7263dc7
+legacy repository        = NeoNix-Lab/ml_core
+legacy baseline          = 1adf6ba79bcb766c93c6e487017561565ab8c131
 audit                    = COMPLETE
-implementation candidate = 900c128ddf063b9e4ea393596fb37aa3c0692ba8
-branch                   = implementation/package-boundary-foundation-v1
-PR                       = #25 MERGED
-merge commit             = 7d531fcd8eb46b3d562de93ccae9c2352f2706fa
+mutation during audit    = NONE
+tests during audit       = NOT EXECUTED
 scope state              = COMPLETE
 ```
 
-**Package Boundary / Modular Monolith Foundation v1 is `COMPLETE`.** The
-implementation candidate, independent review, exact-head CI and merge to
-authoritative `origin/main` are closed. The next governed checkpoint is
-**Legacy Capability Harvest Audit v1**; broad independent expansion still waits
-for that audit.
+The audit verified both exact Git baselines and read evidence from those objects rather than from working-tree state.
 
-## Baseline: completed predecessor cycle
+## Completed predecessor checkpoints
 
-Recorded here as the baseline this scope builds on, not as work in this scope.
+```text
+Contract Freeze Gate                              = PASSED
+Conformity Implementation Gate                    = PASSED
+Package Boundary / Modular Monolith Foundation   = COMPLETE
+Legacy Capability Harvest Audit v1               = COMPLETE
+```
 
-**Phase A — Controlled Bidirectional Convergence is COMPLETE** at baseline
-`9c938a5`:
-
-- Contract Freeze Gate: **PASSED**;
-- Conformity Implementation Gate: **PASSED**;
-- Human vertical / Golden Bybit BTCUSDT E2E: **PASS** for UTC day
-  `2024-01-15`, with an exact Golden match through `DataGateway.scan()`;
-- Adversarial Acceptance A1–A9: **PASS**;
-- Candle Ordering Compatibility: **PASS**;
-- Final Conformity Gate Review: **APPROVE** with `BLOCKERS: NONE` and
-  `IMPORTANT: NONE`;
-- temporary Producer/Consumer lockstep: **REMOVED**.
-
-The exact Human E2E observations and durable identities remain recorded in
-[`docs/integration/HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md`](docs/integration/HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md).
-
-## Audit outcome and current ownership
-
-The structural audit is **COMPLETE**. It used evidence from the finished Golden
-vertical rather than assumed bounded contexts, as ADR-0024 section 5 requires.
-The resulting ownership is:
+Package Boundary established the current modular-monolith ownership and dependency rules:
 
 ```text
 quant_platform.access
@@ -64,31 +39,11 @@ quant_platform.data
   owns shared canonical primitives + Producer
 
 quant_platform.data.parquet
-  remains deliberate shared physical seam
+  remains the deliberate shared physical seam
 
 quant_platform.source_adapters
   remains source-specific
 ```
-
-Concretely:
-
-- `quant_platform.access` owns `DataGateway`, `DataScan`,
-  `DataScanOpenMetadata`, `ScanState`, the read `Catalog`, and the Access
-  request/result/locator models (`DataRequest`, `DataSlice`,
-  `DataSliceMetadata`, `CatalogDataset`, `CatalogPartition`,
-  `LifecyclePolicy`) with their fingerprint and interval helpers;
-- `quant_platform.data` retains the shared canonical identity, time, record,
-  hash and error primitives, and continues to host the Producer modules
-  (materializer, manifests, coverage, publication, publication catalog and
-  publication eligibility);
-- `quant_platform.data.parquet` is a **deliberate shared physical seam**: it is
-  the canonical physical reader/locator used by both the Access read path and
-  the Producer write path, and is owned as `physical`, not as Producer
-  orchestration;
-- `quant_platform.source_adapters` remains source-specific and is not
-  restructured by this scope.
-
-## Dependency rules
 
 ```text
 shared !→ source-specific
@@ -96,97 +51,127 @@ producer !→ access
 access !→ producer orchestration/publication
 ```
 
-These rules are **mechanically enforced**, not documentary. The architecture
-proof lives in [`tests/test_package_boundaries_v1.py`](tests/test_package_boundaries_v1.py)
-and runs in the standard local suite and CI. It resolves absolute and relative
-imports, aliases, re-exports and package initialization; it refuses star and
-dynamic imports rather than leaving them untracked; it requires every runtime
-module to carry an explicit ownership decision; and it asserts that the shared
-façade does not eagerly load Access or Producer runtimes.
+Those rules remain unchanged by this audit.
 
-## In scope
+## Audit outcome
 
-- extract the Access package and its models from the generic `data` package;
-- narrow the `quant_platform.data` façade so shared consumers do not eagerly
-  load Access or Producer runtimes;
-- migrate call sites explicitly to their owner modules, with no compatibility
-  shim reintroducing a catch-all;
-- add the executable architecture proof for ownership and dependency
-  direction;
-- record the resolved structural choices in the existing authorities
-  (ADR-0024 and `docs/architecture/OPEN_DECISIONS.md`).
-
-## Out of scope
-
-- changing `trade-v1`, dataset/partition/coverage contracts, CandleDefinition,
-  DataGateway, Consumer API or any accepted ADR semantics;
-- weakening or replacing frozen invariants;
-- changing identity, hash, ordering, lifecycle or error semantics of any moved
-  class or function;
-- changing schemas, DDL, fixtures or the frozen S13/S14 publication path;
-- restructuring `quant_platform.source_adapters`;
-- deciding executable host placement, independently installable packages,
-  service/deployment split or process topology;
-- creating a parallel canonical architecture, a new numbered roadmap phase or a
-  generic framework;
-- broad independent Producer/Consumer expansion, which does not begin until
-  this scope is `COMPLETE`.
-
-## Next scopes
+The accepted final capability classification is recorded in `docs/legacy/ADOPTION_LEDGER.md`.
 
 ```text
-Package Boundary / Modular Monolith Foundation v1   (COMPLETE)
-        ↓
-Legacy Capability Harvest Audit v1                  (NEXT)
-        ↓
-Broad independent Producer / Consumer expansion
+capabilities assessed = 31
+ADOPT                = 3
+ADAPT                = 20
+REVIEW               = 1
+REJECT               = 6
+SUPERSEDED           = 1
 ```
 
-Legacy code remains evidence only and is classified capability-by-capability as
-ADOPT / ADAPT / REVIEW / REJECT against current canonical semantics.
+Harvest priority:
 
-## Unimplemented post-Gate capabilities
+```text
+P1 = H01, H04, H09, H17
+P2 = H02, H03, H05, H06, H07, H08, H10, H11, H12, H15, H16, H18, H19, H20
+P3 = H13, H21, H22, H23, H24
+```
 
-Unchanged by this scope and still not implemented:
+The only REVIEW residue is H14 — DSR/PBO estimator semantics. It is non-blocking for the selected first harvest slice.
 
-- full Candle runtime — no longer blocked by the Conformity Gate;
-- Feature runtime and broader Representation expansion;
-- broader producer verticals;
-- live ingest and live collection;
-- multi-venue runtime;
-- L1, L2, L3/MBO runtime;
-- unrelated consumer or producer vertical expansion;
-- broader paper/live operational mechanics;
-- the Producer and Consumer/Product roadmaps preserved in
-  [`docs/product/ROADMAP.md`](docs/product/ROADMAP.md).
+## Selected next implementation slice
 
-**Server Access & Runtime Identity Hardening v1** remains a separate,
-non-blocking operational follow-up tracked in
-[`docs/architecture/OPEN_DECISIONS.md`](docs/architecture/OPEN_DECISIONS.md).
+The audit selected exactly one first implementation candidate:
 
-Maintenance, documentation and tests may proceed when they do not weaken a
-frozen contract or bypass the current scope boundary.
+```text
+H01 — pure diagonal / stacked imbalance core
+classification = ADOPT
+priority       = P1
+canonical owner = Feature Engine / Footprint
+```
+
+The ADOPT boundary is intentionally narrow:
+
+```text
+_ratio
+compute_diagonal_imbalance
+compute_stacked_imbalance
+```
+
+The following are explicitly outside that ADOPT boundary:
+
+```text
+compute_bar_flow
+stacked_imbalance_zone
+legacy registry / engine / orchestration
+legacy package topology
+```
+
+Legacy numeric and edge-case evidence for H01 is credited where it proves the same quantitative properties. The audit does **not** claim that production integration is already proven.
+
+A future H01 implementation scope must still establish the minimum canonical connection to:
+
+```text
+canonical input / grain
+validated tick grid
+temporal availability
+FeatureDefinition provenance
+```
+
+Selecting H01 therefore does not declare a complete Feature Engine, Footprint runtime, provider framework or materialization layer implemented.
+
+## H14 REVIEW residue
+
+H14 remains unresolved only on the exact Evaluation semantics of DSR/PBO:
+
+```text
+precise estimator definitions
+input return series
+trial population
+comparable fold semantics
+reference numeric vectors
+```
+
+This residue does not block H01 or other independently authorized post-Gate slices that do not depend on DSR/PBO.
+
+## Expansion state
+
+The mandatory cross-cutting checkpoints are now complete:
+
+```text
+Conformity Implementation Gate PASSED
+        ↓
+Package Boundary Foundation COMPLETE
+        ↓
+Legacy Capability Harvest Audit v1 COMPLETE
+        ↓
+broad independent Producer / Consumer expansion UNLOCKED
+```
+
+`UNLOCKED` does not mean architecture-unconstrained or automatically active. Each implementation capability still requires an explicit bounded scope and must respect frozen contracts, ownership, dependency direction and authorization boundaries.
+
+## Next scope
+
+```text
+H01 — Diagonal / Stacked Imbalance Core
+```
+
+H01 is the next selected implementation slice. It is not implemented by this governance closeout and is not ACTIVE until its own explicit implementation scope/mandate is opened.
+
+## Out of scope for this closeout
+
+- any changes under `src/`, `tests/`, `tools/`, `schemas/`, `db/` or `fixtures/`;
+- implementation of H01 or any other legacy capability;
+- resolution of H14 DSR/PBO semantics;
+- creation of a generic provider/plugin framework;
+- migration of legacy runtime topology;
+- server/database work;
+- Human Golden E2E;
+- changes to accepted contracts, ADR semantics, schemas, DDL or fixtures.
 
 ## Completion criteria
 
-- `quant_platform.access` owns Gateway, read catalog and Access models;
-  `quant_platform.data` owns shared canonical primitives and Producer;
-  `quant_platform.data.parquet` remains the shared physical seam;
-  `quant_platform.source_adapters` remains source-specific;
-- the three dependency rules above are enforced by executable architecture
-  tests covering alias, re-export and dynamic-import forms;
-- the shared façade does not eagerly load Access or Producer runtimes and no
-  compatibility shim reintroduces the catch-all;
-- moved classes and functions preserve identity, hash, ordering, lifecycle and
-  error semantics; S13/S14 and the Bybit vertical are unchanged;
-- the resolved structural choices are recorded in ADR-0024 and
-  `docs/architecture/OPEN_DECISIONS.md`, and choices this slice did not
-  exercise remain explicitly open;
-- `python tools/run_tests.py`, `python tools/check_markdown_links.py` and
-  `git diff --check` pass;
-- no schemas, DDL, fixtures or frozen normative semantics are changed;
-- independent review, CI and merge to authoritative `origin/main` are closed —
-  only then is this scope `COMPLETE`.
+This governance closeout is complete when:
 
-All completion criteria were satisfied before PR #25 merged as
-`7d531fcd8eb46b3d562de93ccae9c2352f2706fa`.
+- `docs/legacy/ADOPTION_LEDGER.md` records the accepted 31-capability audit result and exact evidence baselines;
+- H14 remains an exact non-blocking REVIEW residue;
+- H01 is recorded as the first selected harvest slice with its narrow ADOPT boundary and remaining production proposition;
+- `docs/product/ROADMAP.md` records Legacy Capability Harvest Audit v1 as COMPLETE and broad independent expansion as unlocked;
+- runtime and semantic contract delta remain NONE.
