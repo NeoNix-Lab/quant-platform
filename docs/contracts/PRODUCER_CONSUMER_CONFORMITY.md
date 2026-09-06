@@ -141,7 +141,7 @@ pagination are all compatible implementations; none is frozen here, and none
 is required for the first slice to satisfy BR1 (a purely in-process
 generator/iterator satisfies it without any network transport at all).
 
-**Current-state note.** `DataGateway.read()` in `src/quant_platform/data/gateway.py`
+**Current-state note.** `DataGateway.read()` in `src/quant_platform/access/gateway.py`
 does not satisfy BR1 today: it extends one Python `list` across every
 partition and calls one global `records.sort(...)` before returning. This is
 existing behavior this contract records as non-conforming, not behavior it

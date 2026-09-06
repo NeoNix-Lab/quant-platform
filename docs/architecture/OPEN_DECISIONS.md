@@ -23,8 +23,9 @@ Human Golden E2E PASS
     → Legacy Capability Harvest Audit v1
 ```
 
-Package Boundary / Modular Monolith Foundation and Legacy Capability Harvest
-remain post-Gate checkpoints and have not been started by this closeout.
+Legacy Capability Harvest remains a post-Gate checkpoint and has not started.
+Package Boundary / Modular Monolith Foundation v1 is the active scope; see the
+section below and `SCOPE.md`.
 
 `DataSliceMetadata.canonical_content_hash` remains an additive future extension
 and was non-blocking for the Gate. Semantic relocation invariance passed; the
@@ -67,20 +68,33 @@ The following direction is resolved for the post-Conformity program order:
 - one authoritative repository remains acceptable;
 - one Python source root, `src/`, remains acceptable;
 - the default target is a modular monolith;
-- Package Boundary / Modular Monolith Foundation v1 is the next explicit scope
-  after Conformity Implementation Gate PASS and before broad independent
-  Producer/Consumer expansion;
-- bounded ownership and dependency direction must become enforceable through
+- bounded ownership and dependency direction must be enforceable through
   package boundaries and architecture tests.
 
-The following remain intentionally open for that checkpoint:
+Package Boundary / Modular Monolith Foundation v1 is the **active scope**
+(`SCOPE.md`), executed from baseline `9c938a5` with implementation candidate
+`745de0f`. It is not `COMPLETE` until that candidate, its independent review,
+CI and merge to authoritative `origin/main` are closed. Its disposition is
+recorded in ADR-0024 under "Implementation outcome".
 
-- exact bounded-context and package names;
-- exact package hierarchy and dependency graph;
+Resolved by that slice, and therefore no longer open:
+
+- the Data Access bounded context is `quant_platform.access`; shared canonical
+  primitives and Producer remain under `quant_platform.data`;
+  `quant_platform.data.parquet` remains a deliberate shared physical seam; and
+  `quant_platform.source_adapters` remains source-specific;
+- the package hierarchy and dependency graph for the current runtime modules,
+  now mechanically enforced by `tests/test_package_boundaries_v1.py`;
+- migration mechanics and sequence for current `quant_platform.data` modules.
+
+The following remain intentionally open, because this slice did not exercise
+them:
+
+- bounded-context and package names beyond the Data Access seam;
+- executable package hierarchy for future bounded contexts;
 - executable host placement, including any future `apps/` layout;
 - independently installable API, worker or client packages;
-- service/deployment split and process topology;
-- migration mechanics and sequence for current `quant_platform.data` modules.
+- service/deployment split and process topology.
 
 ADR-0024 records this boundary without freezing the future package tree.
 
