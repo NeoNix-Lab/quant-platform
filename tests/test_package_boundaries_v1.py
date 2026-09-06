@@ -17,6 +17,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src"
+TOOLS = ROOT / "tools"
+TESTS = ROOT / "tests"
 OWNERS = {
     "quant_platform": "shared",
     "quant_platform.ordering": "shared",
@@ -37,6 +39,7 @@ OWNERS = {
     "quant_platform.source_adapters": "source",
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
+    "quant_platform.application": "application",
 }
 ALLOWED = {
     "shared": {"shared"},
@@ -44,6 +47,9 @@ ALLOWED = {
     "producer": {"producer", "physical", "shared"},
     "access": {"access", "physical", "shared"},
     "source": {"source", "producer", "shared"},
+    # The application seam composes capabilities and owns no domain semantics.
+    # Nothing may depend on it: it is the top of the owner graph.
+    "application": {"application", "access", "producer", "source", "physical", "shared"},
 }
 SHARED_STDLIB = {
     "__future__", "collections", "dataclasses", "datetime", "hashlib",
@@ -168,6 +174,131 @@ def owner_cycles(graph):
     return cycles
 
 
+APPLICATION = "quant_platform.application"
+# Declared runtime dependencies from pyproject.  Executables may use them; the
+# rule below constrains which *repository* code a tool may reach, not which
+# third-party libraries it links.
+THIRD_PARTY = {"psycopg", "pyarrow"}
+
+# ASS-01 establishes the invariant; ASS-03 migrates these executables behind
+# the application seam.  A tools/ module that is not listed here gets no
+# exemption, so new executable orchestration is governed from the start.
+TOOLS_PENDING_ASS03 = {
+    "conformity_e2e",
+    "import_bybit_trades",
+}
+# The single tools -> tests edge in the repository.  It is the cycle-making
+# direction: an executable doing production work through test-only support.
+# ASS-03 must remove it; relocating golden_conformity_support here would change
+# the Golden acceptance path, which ASS-01 may not do.
+TOOLS_TESTS_PENDING_ASS03 = {("conformity_e2e", "golden_conformity_support")}
+# Verification composition that reaches tools-resident modules.  Permitted for
+# these modules only; a new tests -> tools edge fails.  Testing an executable is
+# legitimate, so this ledger records migration debt, not wrongdoing.
+TESTS_PENDING_ASS03 = {
+    "adversarial_support",
+    "integration_bybit_trades_2024_01_15",
+    "integration_publication_certification_postgres",
+    "test_bootstrap_schema_registry",
+    "test_bybit_historical_source_v1",
+    "test_conformity_e2e",
+    "test_coverage_boundary_audit",
+    "test_coverage_lineage_and_reconstruction",
+    "test_dataset_manifest_v2",
+    "test_declared_coverage_semantics",
+    "test_import_bybit_trades",
+    "test_manifest_coverage_emission_v1",
+    "test_publication_coverage_oracle_parity",
+    "test_rel_root_convention",
+    "test_semantic_validator",
+}
+
+
+def script_layers():
+    """Map every tools/ and tests/ module name to its layer.
+
+    Both directories are placed on ``sys.path`` by existing scripts, so a bare
+    import name must resolve to exactly one layer for the rules to be sound.
+    """
+    layers = {}
+    for directory, layer in ((TOOLS, "tools"), (TESTS, "tests")):
+        for path in sorted(directory.glob("*.py")):
+            if path.stem in layers:
+                raise AssertionError(f"ambiguous script module name: {path.stem}")
+            layers[path.stem] = layer
+    return layers
+
+
+def script_inventory():
+    scripts = {}
+    for directory, layer in ((TOOLS, "tools"), (TESTS, "tests")):
+        for path in sorted(directory.glob("*.py")):
+            scripts[path.stem] = (layer, path.read_text(encoding="utf-8"))
+    return scripts
+
+
+def imported_targets(source, filename):
+    """Every imported module path, with the line that imported it."""
+    targets = []
+    for node in ast.walk(ast.parse(source, filename=filename)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                targets.append((alias.name, node.lineno))
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                # tools/ and tests/ are flat script directories, not packages.
+                targets.append((f"relative-import-level-{node.level}", node.lineno))
+            else:
+                targets.append((node.module or "", node.lineno))
+    return targets
+
+
+def script_violations(scripts, layers):
+    """Executable orchestration must not bypass the application seam.
+
+    tools/ is executable orchestration: it may reach repository code only
+    through ``quant_platform.application`` (plus its own siblings).
+    tests/ is verification composition: it may compose any runtime owner
+    directly, and is bound only by the tools/tests direction rules.
+    """
+    errors = []
+    for module, (layer, source) in sorted(scripts.items()):
+        for target, line in imported_targets(source, module):
+            root = target.split(".")[0]
+            if root == "quant_platform":
+                if layer != "tools":
+                    continue
+                if target == APPLICATION or target.startswith(APPLICATION + "."):
+                    continue
+                if module in TOOLS_PENDING_ASS03:
+                    continue
+                errors.append(
+                    f"{layer}/{module}.py:{line}: executable orchestration bypasses "
+                    f"the application seam -> {target}"
+                )
+            elif root in layers:
+                target_layer = layers[root]
+                if layer == "tools" and target_layer == "tests":
+                    if (module, root) in TOOLS_TESTS_PENDING_ASS03:
+                        continue
+                    errors.append(
+                        f"{layer}/{module}.py:{line}: executable depends on "
+                        f"verification support -> {root}"
+                    )
+                elif layer == "tests" and target_layer == "tools":
+                    if module in TESTS_PENDING_ASS03:
+                        continue
+                    errors.append(
+                        f"{layer}/{module}.py:{line}: verification depends on "
+                        f"executable orchestration -> {root}"
+                    )
+            elif layer == "tools" and root not in sys.stdlib_module_names and root not in THIRD_PARTY:
+                errors.append(
+                    f"{layer}/{module}.py:{line}: undeclared dependency -> {target}"
+                )
+    return errors
+
+
 class PackageBoundaryTests(unittest.TestCase):
     def test_every_runtime_module_has_an_owner_and_only_allowed_dependencies(self):
         sources, packages = source_inventory()
@@ -227,6 +358,111 @@ class PackageBoundaryTests(unittest.TestCase):
             "quant_platform.data.models": {"quant_platform.access.gateway"},
         }
         self.assertTrue(owner_cycles(graph))
+
+    def test_application_is_owned_and_nothing_depends_on_it(self):
+        sources, _ = source_inventory()
+        self.assertIn(APPLICATION, sources)
+        self.assertEqual("application", OWNERS[APPLICATION])
+        for owner, permitted in ALLOWED.items():
+            if owner == "application":
+                continue
+            self.assertNotIn("application", permitted, owner)
+
+    def test_script_module_names_resolve_to_one_layer(self):
+        layers = script_layers()
+        self.assertEqual("tools", layers["conformity_e2e"])
+        self.assertEqual("tests", layers["golden_conformity_support"])
+
+    def test_executable_orchestration_respects_the_application_seam(self):
+        self.assertEqual([], script_violations(script_inventory(), script_layers()))
+
+    def test_migration_ledgers_describe_real_unmigrated_modules(self):
+        scripts = script_inventory()
+        layers = script_layers()
+        for module in TOOLS_PENDING_ASS03:
+            self.assertEqual("tools", layers.get(module), module)
+        for module in TESTS_PENDING_ASS03:
+            self.assertEqual("tests", layers.get(module), module)
+        for module, target in TOOLS_TESTS_PENDING_ASS03:
+            self.assertEqual("tools", layers.get(module), module)
+            self.assertEqual("tests", layers.get(target), target)
+        # An exemption that no longer describes a violation must be removed, so
+        # the ledgers cannot outlive the debt they record.
+        for ledger in (TOOLS_PENDING_ASS03, TESTS_PENDING_ASS03):
+            for module in ledger:
+                reduced = {name: value for name, value in scripts.items() if name == module}
+                relaxed = ledger - {module}
+                with self.subTest(module=module):
+                    self.assertTrue(
+                        self._violations_without(reduced, layers, ledger, relaxed),
+                        f"{module} no longer violates; remove it from the ledger",
+                    )
+
+    def _violations_without(self, scripts, layers, ledger, relaxed):
+        global TOOLS_PENDING_ASS03, TESTS_PENDING_ASS03
+        is_tools = ledger is TOOLS_PENDING_ASS03
+        original = TOOLS_PENDING_ASS03 if is_tools else TESTS_PENDING_ASS03
+        try:
+            if is_tools:
+                TOOLS_PENDING_ASS03 = relaxed
+            else:
+                TESTS_PENDING_ASS03 = relaxed
+            return script_violations(scripts, layers)
+        finally:
+            if is_tools:
+                TOOLS_PENDING_ASS03 = original
+            else:
+                TESTS_PENDING_ASS03 = original
+
+    def test_forbidden_orchestration_forms_are_detected_without_editing_repository(self):
+        layers = dict(script_layers())
+        layers["new_tool"] = "tools"
+        layers["new_test"] = "tests"
+        cases = [
+            ("new_tool", "tools", "from quant_platform.access.gateway import DataGateway"),
+            ("new_tool", "tools", "import quant_platform.data.materializer"),
+            ("new_tool", "tools", "from quant_platform.source_adapters.bybit import materialize_bybit_trade_v1"),
+            ("new_tool", "tools", "import golden_conformity_support"),
+            ("new_tool", "tools", "from adversarial_support import build"),
+            ("new_tool", "tools", "import requests"),
+            ("new_test", "tests", "import conformity_e2e"),
+            ("new_test", "tests", "from semantic_validator import validate"),
+        ]
+        for module, layer, injected in cases:
+            with self.subTest(module=module, injected=injected):
+                errors = script_violations({module: (layer, injected)}, layers)
+                self.assertTrue(errors, injected)
+
+    def test_permitted_orchestration_forms_are_accepted(self):
+        layers = dict(script_layers())
+        layers["new_tool"] = "tools"
+        layers["new_test"] = "tests"
+        cases = [
+            ("new_tool", "tools", "from quant_platform.application import compose"),
+            ("new_tool", "tools", "import quant_platform.application"),
+            ("new_tool", "tools", "import argparse, json, sys"),
+            ("new_tool", "tools", "import psycopg"),
+            ("new_tool", "tools", "import semantic_validator"),
+            # A6: verification composition reaches runtime owners directly.
+            ("new_test", "tests", "from quant_platform.access.gateway import DataGateway"),
+            ("new_test", "tests", "import quant_platform.data.materializer"),
+            ("new_test", "tests", "from golden_conformity_support import observe_scan"),
+        ]
+        for module, layer, injected in cases:
+            with self.subTest(module=module, injected=injected):
+                errors = script_violations({module: (layer, injected)}, layers)
+                self.assertEqual([], errors, injected)
+
+    def test_runtime_owner_cannot_depend_on_the_application_seam(self):
+        sources, packages = source_inventory()
+        for module in ("quant_platform.access.gateway", "quant_platform.data.materializer", "quant_platform.data.models"):
+            with self.subTest(module=module):
+                injected = {**sources, module: f"from {APPLICATION} import compose"}
+                _, errors = dependency_graph(injected, packages)
+                self.assertTrue(
+                    any("forbidden dependency" in error and APPLICATION in error for error in errors),
+                    errors,
+                )
 
     def test_shared_imports_do_not_load_access_or_producer_runtimes(self):
         # Fresh isolated processes prevent previous test imports from hiding eager loads.
