@@ -17,15 +17,18 @@ frozen contract, schema, DDL or fixture.
 ```text
 baseline                 = 9c938a57daee9e37dfc98c56e88721d42e6391af
 audit                    = COMPLETE
-implementation candidate = 745de0f0cfc7d5bd24942b9be74bd5ac9c5ef9bd
+implementation candidate = 900c128ddf063b9e4ea393596fb37aa3c0692ba8
 branch                   = implementation/package-boundary-foundation-v1
-scope state              = ACTIVE — not COMPLETE
+PR                       = #25 MERGED
+merge commit             = 7d531fcd8eb46b3d562de93ccae9c2352f2706fa
+scope state              = COMPLETE
 ```
 
-**Package Boundary / Modular Monolith Foundation v1 is not `COMPLETE`.** It
-closes only when the implementation candidate, its independent review, CI and
-merge to authoritative `origin/main` are all closed. Until then this scope
-remains the active scope and broad independent expansion does not begin.
+**Package Boundary / Modular Monolith Foundation v1 is `COMPLETE`.** The
+implementation candidate, independent review, exact-head CI and merge to
+authoritative `origin/main` are closed. The next governed checkpoint is
+**Legacy Capability Harvest Audit v1**; broad independent expansion still waits
+for that audit.
 
 ## Baseline: completed predecessor cycle
 
@@ -132,9 +135,9 @@ façade does not eagerly load Access or Producer runtimes.
 ## Next scopes
 
 ```text
-Package Boundary / Modular Monolith Foundation v1   (ACTIVE)
+Package Boundary / Modular Monolith Foundation v1   (COMPLETE)
         ↓
-Legacy Capability Harvest Audit v1
+Legacy Capability Harvest Audit v1                  (NEXT)
         ↓
 Broad independent Producer / Consumer expansion
 ```
@@ -184,3 +187,6 @@ frozen contract or bypass the current scope boundary.
 - no schemas, DDL, fixtures or frozen normative semantics are changed;
 - independent review, CI and merge to authoritative `origin/main` are closed —
   only then is this scope `COMPLETE`.
+
+All completion criteria were satisfied before PR #25 merged as
+`7d531fcd8eb46b3d562de93ccae9c2352f2706fa`.

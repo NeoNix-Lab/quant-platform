@@ -50,9 +50,9 @@ Final Conformity Gate Review — APPROVE
         ↓
 CONFORMITY IMPLEMENTATION GATE — PASSED
         ↓
-Package Boundary / Modular Monolith Foundation v1
+Package Boundary / Modular Monolith Foundation v1 — COMPLETE
         ↓
-Legacy Capability Harvest Audit v1
+Legacy Capability Harvest Audit v1 — NEXT
         ↓
 broader independent Producer / Consumer expansion
 ```
@@ -108,23 +108,24 @@ resume independently and concurrently, subject to normal ownership, dependency
 direction, frozen contracts, architecture gates and explicit slice scopes.
 The post-gate model is not architecture-unconstrained.
 
-Before that broad expansion begins, the mandatory cross-cutting structural
-checkpoint is **Package Boundary / Modular Monolith Foundation v1**. It does
-not add a product phase or renumber phases 0–15; it establishes bounded package
+The mandatory cross-cutting structural checkpoint **Package Boundary / Modular
+Monolith Foundation v1** is **COMPLETE**. It established bounded package
 ownership and architecture tests inside the existing single-repository,
-single-`src/` modular-monolith default.
+single-`src/` modular-monolith default without adding a product phase or
+renumbering phases 0–15.
 
-Immediately after that checkpoint, run **Legacy Capability Harvest Audit v1**
-before broad bidirectional expansion. The legacy repository is evidence only;
-each target capability is classified ADOPT / ADAPT / REVIEW / REJECT against
-current canonical semantics, temporal correctness and dependency baggage.
+The next governed checkpoint is **Legacy Capability Harvest Audit v1**, which
+runs before broad bidirectional expansion. The legacy repository is evidence
+only; each target capability is classified ADOPT / ADAPT / REVIEW / REJECT
+against current canonical semantics, temporal correctness and dependency
+baggage.
 
 ```text
 Conformity Implementation Gate PASSED
             ↓
-Package Boundary / Modular Monolith Foundation v1
+Package Boundary / Modular Monolith Foundation v1 COMPLETE
             ↓
-Legacy Capability Harvest Audit v1
+Legacy Capability Harvest Audit v1 NEXT
             ↓
 Broad independent Producer / Consumer expansion
 ```
@@ -165,9 +166,9 @@ Final Conformity Gate Review — APPROVE
         ↓
 Conformity Implementation Gate — PASSED
         ↓
-Package Boundary / Modular Monolith Foundation v1
+Package Boundary / Modular Monolith Foundation v1 — COMPLETE
         ↓
-Legacy Capability Harvest Audit v1
+Legacy Capability Harvest Audit v1 — NEXT
         ↓
 Capacity monitoring foundation
         ↓
@@ -211,6 +212,6 @@ Phase 2 (Representation foundation) has its semantic contract frozen and
 accepted (ADR-0021, CandleDefinition v1). The Conformity Implementation Gate
 has passed, so Candle runtime is no longer blocked by that Gate. Candle runtime
 is still unimplemented and remains a future capability requiring its own
-explicit scope. Package Boundary / Modular Monolith Foundation v1 is the next
-explicit checkpoint, followed by Legacy Capability Harvest Audit v1 before
+explicit scope. Package Boundary / Modular Monolith Foundation v1 is complete;
+Legacy Capability Harvest Audit v1 is the next explicit checkpoint before
 broad expansion.

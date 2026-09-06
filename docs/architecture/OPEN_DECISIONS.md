@@ -23,9 +23,9 @@ Human Golden E2E PASS
     → Legacy Capability Harvest Audit v1
 ```
 
-Legacy Capability Harvest remains a post-Gate checkpoint and has not started.
-Package Boundary / Modular Monolith Foundation v1 is the active scope; see the
-section below and `SCOPE.md`.
+Package Boundary / Modular Monolith Foundation v1 is **COMPLETE**. Legacy
+Capability Harvest remains the next post-Gate checkpoint and has not started;
+see the section below and `SCOPE.md`.
 
 `DataSliceMetadata.canonical_content_hash` remains an additive future extension
 and was non-blocking for the Gate. Semantic relocation invariance passed; the
@@ -71,11 +71,13 @@ The following direction is resolved for the post-Conformity program order:
 - bounded ownership and dependency direction must be enforceable through
   package boundaries and architecture tests.
 
-Package Boundary / Modular Monolith Foundation v1 is the **active scope**
-(`SCOPE.md`), executed from baseline `9c938a5` with implementation candidate
-`745de0f`. It is not `COMPLETE` until that candidate, its independent review,
-CI and merge to authoritative `origin/main` are closed. Its disposition is
-recorded in ADR-0024 under "Implementation outcome".
+Package Boundary / Modular Monolith Foundation v1 is **COMPLETE**. It was
+executed from baseline `9c938a5`; final reviewed candidate
+`900c128ddf063b9e4ea393596fb37aa3c0692ba8` merged through PR #25 as
+`7d531fcd8eb46b3d562de93ccae9c2352f2706fa` after independent review and
+exact-head CI passed. Its disposition is recorded in ADR-0024 under
+"Implementation outcome". **Legacy Capability Harvest Audit v1** is the next
+governed checkpoint before broad independent expansion.
 
 Resolved by that slice, and therefore no longer open:
 

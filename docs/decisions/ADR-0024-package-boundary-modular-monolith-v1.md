@@ -221,10 +221,10 @@ create a new contract, and does not reinterpret or weaken the Conformity
 contract or ADR-0023.
 
 The checkpoint was executed on `implementation/package-boundary-foundation-v1`
-from baseline `9c938a5`, with implementation candidate `745de0f`. It is not
-`COMPLETE` until that candidate, its independent review, CI and merge to
-authoritative `origin/main` are closed; the active scope is tracked in
-`SCOPE.md`.
+from baseline `9c938a5`. Final reviewed candidate
+`900c128ddf063b9e4ea393596fb37aa3c0692ba8` passed independent review and
+exact-head CI, then merged through PR #25 as
+`7d531fcd8eb46b3d562de93ccae9c2352f2706fa`. The checkpoint is **COMPLETE**.
 
 ### Resolved by this slice
 
