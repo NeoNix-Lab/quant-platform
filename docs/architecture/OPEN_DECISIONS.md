@@ -15,6 +15,8 @@ Legacy Capability Harvest Audit v1                   COMPLETE
 ASS-01 Application ownership/enforcement             COMPLETE
 ```
 
+The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
+
 Resolved architecture includes:
 
 - canonical Data Access owner `quant_platform.access`;
