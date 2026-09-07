@@ -135,6 +135,20 @@ class SemanticSelectorResolutionTests(unittest.TestCase):
                         query(representation=RepresentationRef(kind, version))
                     )
 
+    def test_malformed_representation_version_is_refused(self):
+        # True == 1 and 1.0 == 1, so an equality-only check would admit these
+        # as trades@1.  The accepted version is an exact integer.
+        for version in (True, 1.0):
+            with self.subTest(version=repr(version)):
+                with self.assertRaises(UnsupportedRepresentation):
+                    resolve_market_data_request(
+                        query(representation=RepresentationRef("trades", version))
+                    )
+        accepted = resolve_market_data_request(
+            query(representation=RepresentationRef("trades", 1))
+        )
+        self.assertEqual(GOLDEN_REQUEST.request_identity, accepted.request_identity)
+
     def test_unsupported_definition_or_options_are_refused_not_ignored(self):
         with self.assertRaises(UnsupportedOption):
             resolve_market_data_request(

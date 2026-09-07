@@ -139,7 +139,14 @@ def resolve_market_data_request(query: ConsumerMarketDataQuery) -> DataRequest:
 def _require_supported_representation(representation: RepresentationRef) -> None:
     if not isinstance(representation, RepresentationRef):
         raise UnsupportedRepresentation("representation must be a RepresentationRef")
-    if representation.kind != TRADES_V1_KIND or representation.version != TRADES_V1_VERSION:
+    # The version is an exact integer, not merely something equal to one:
+    # ``True == 1`` and ``1.0 == 1``, so equality alone would admit a malformed
+    # semantic version as trades@1.
+    if (
+        representation.kind != TRADES_V1_KIND
+        or type(representation.version) is not int
+        or representation.version != TRADES_V1_VERSION
+    ):
         raise UnsupportedRepresentation(
             "unsupported representation",
             context={
