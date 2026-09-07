@@ -93,7 +93,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
 | C01 | Application ownership | Application | B01 | C02-C05 | RESOLVED | COMPLETE | `quant_platform.application`; ASS-01/ADR-0024 |
-| C02 | ASS-02 semantic selector resolution | Application | C01,B02,D01,J01 | C03 | FROZEN | MISSING | Semantic request resolves without storage identity; Consumer API |
+| C02 | ASS-02 semantic selector resolution | Application | C01,B02,D01,J01 | C03 | FROZEN | COMPLETE | Semantic request resolves without storage identity; Consumer API |
 | C03 | ASS-02 result/error translation | Application | C02 | C04,J02,J04-J06 | FROZEN | MISSING | Stable envelope/error semantics; Consumer API |
 | C04 | Tool orchestration convergence | Application | C02,C03,C05 | governed entry points | RESOLVED | MISSING | Exact ASS-03 debt reaches zero |
 | C05 | Configuration convergence | Engineering/Application | C01 | C04,K02 | OPEN_BLOCKING | MISSING | One explicit resolution convention; DG-D |
@@ -288,7 +288,7 @@ Only operational prerequisites of the selected atom are activated.
 | ID | Path | Proposition | State |
 |---|---|---|---|
 | V1 | Source -> canonical -> catalog -> DataGateway | First published data vertical is deterministically readable through canonical access | COMPLETE |
-| V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | READY_CHAIN (`C02 -> C03`) |
+| V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | C03 READY (C02 COMPLETE) |
 | V3 | DataGateway -> historical Candle | Bounded trades yield reproducible CLOSED candles | READY (`D03`) |
 | V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | BLOCKED by DG-A canonical-H01 branch |
 | V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies | BLOCKED by E04 |
@@ -303,7 +303,7 @@ Only operational prerequisites of the selected atom are activated.
 Decision-complete, missing atoms whose declared dependencies are currently satisfied:
 
 ```text
-C02  ASS-02 semantic selector resolution
+C03  ASS-02 result/error translation
 D03  historical Candle runtime (on-demand only)
 E05  H01 pure imbalance kernel
 F05  deterministic walk-forward schedule
@@ -329,7 +329,7 @@ Wave 7  Runtime / Clients                                 C03 -> J02 -> J04/J05/
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. In particular, ASS-02, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently.
+Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C03, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently.
 
 ## Macro roadmap relationship
 
