@@ -47,12 +47,13 @@ Candle Ordering Compatibility                        PASS
 Package Boundary / Modular Monolith Foundation v1   COMPLETE
 Legacy Capability Harvest Audit v1                   COMPLETE
 ASS-01 Application ownership/enforcement             COMPLETE
+K11 Governance-state consistency                     COMPLETE
 Broad independent Producer/Consumer expansion        UNLOCKED
 ```
 
 The two-stage Producer–Consumer Conformity Gate is governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md): the **Contract Freeze Gate** and **Conformity Implementation Gate** remain PASSED. The gate pair is concluded and is referenced here as credited foundation evidence, not reopened work.
 
-Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients.
+Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients. Roadmap vNext governance-state consistency is complete after PR #28 established the coherent canonical authority set on `main`.
 
 Completed checkpoints are credited and must not be re-proved absent a concrete invalidating change.
 
@@ -140,7 +141,6 @@ E05  H01 pure imbalance kernel
 F05  deterministic walk-forward schedule
 I01  Study/Trial/Run/Artifact semantic model
 K04  observational capacity monitoring
-K11  governance-state consistency
 ```
 
 Frontier membership is **not implementation authorization** and does not select the next atom.

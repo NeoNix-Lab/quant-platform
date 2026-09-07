@@ -93,7 +93,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Backup/restore proof | OPEN_BLOCKING | MISSING | Operations | K08 | DG-H backup branch; depends on K06, not K07; restore proof precedes deletion authority. |
 | Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
 | Operations | Checkpoint/recovery | OPEN_BLOCKING | MISSING | Operations/Data Plane | K10 | DG-H recovery branch; implementation follows A11 and requires K03/K08. |
-| Governance | Governance-state consistency | RESOLVED | MISSING | Governance | K11 | Current governance slice; complete only after reviewed merge establishes one coherent authority set. |
+| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Roadmap vNext integrated through PR #28; canonical authority set is coherent on `main`. |
 
 ## Gate / evidence state
 
@@ -105,11 +105,12 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Package Boundary / Modular Monolith Foundation v1 | COMPLETE | Ownership/dependency enforcement established. |
 | Legacy Capability Harvest Audit v1 | COMPLETE | 31 capabilities classified; H01 selected as harvest candidate, H14 retained as REVIEW. |
 | ASS-01 Application ownership/enforcement | COMPLETE | PR #27 integrated. |
+| K11 Governance-state consistency | COMPLETE | Roadmap vNext authority set integrated by PR #28 and post-merge state reconciled. |
 
 ## Current frontier
 
 ```text
-C02  D03  E05  F05  I01  K04  K11
+C02  D03  E05  F05  I01  K04
 ```
 
 Frontier membership means planning dependencies are satisfied; it does not authorize implementation.

@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **PROPOSED on governance branch; canonical only after merge**.
+Status: **CANONICAL on `main` after PR #28**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -194,7 +194,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | K08 | Backup/restore proof | Operations | K06 | K09,J08,K10,A11 | OPEN_BLOCKING | MISSING | Independent restore reproduces required identities; DG-H backup branch |
 | K09 | Retention/deletion authority | Operations | K08 | sustainable live | OPEN_BLOCKING | MISSING | Never delete protected/sole recoverable evidence; DG-H deletion branch |
 | K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | OPEN_BLOCKING | MISSING | Crash/restart preserves cursor/publication invariants; DG-H recovery branch; follows live acquisition rather than blocking its implementation |
-| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | MISSING | Canonical docs represent accepted state without ambiguity |
+| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; Roadmap vNext integrated via PR #28 |
 
 ## Dependency integrity
 
@@ -309,7 +309,6 @@ E05  H01 pure imbalance kernel
 F05  deterministic walk-forward schedule
 I01  Study/Trial/Run/Artifact semantic model
 K04  observational capacity monitoring
-K11  governance-state consistency
 ```
 
 This is a **frontier, not authorization**. `SCOPE.md` must activate exactly one bounded implementation or decision slice before mutation.
