@@ -1,16 +1,31 @@
 # Quant Platform Roadmap
 
-The roadmap expresses dependency direction, not day estimates. Exact scope may evolve through ADRs and `SCOPE.md`; product completeness remains the target.
+This document is the **macro product-progression view**. The authoritative atomic dependency/execution model is [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md). Exact semantic authority remains in accepted ADRs/contracts; `SCOPE.md` activates bounded work.
+
+## Planning layers
+
+```text
+ROADMAP.md          = product progression
+CAPABILITY_DAG.md   = atomic capability dependencies + decision gates + verticals
+CAPABILITY_MAP.md   = compact current-state snapshot
+OPEN_DECISIONS.md   = unresolved decisions / gate triggers
+ADRs + contracts    = semantic authority
+SCOPE.md            = active bounded authorization
+```
+
+A numbered phase is not an executable work packet. Parallel work is allowed when the Capability DAG dependencies are satisfied.
+
+## Macro phases 0–15
 
 0. Repository and governance foundation
 1. Data access and identity foundation: DataGateway, catalog-backed reads and provenance
-2. Representation foundation: CandleDefinition identity, closed/partial semantics and equivalence tests
-3. Feature foundation: FeatureDefinition, FeatureSetDefinition and FeatureArtifact identity, source dataset/partition provenance, implementation identity, providers and materialization
+2. Representation foundation: representation identity, CandleDefinition and deterministic historical/live semantics
+3. Feature foundation: FeatureDefinition, FeatureSetDefinition, FeatureArtifact, provenance, providers and materialization
 4. Research and outcome foundation: Hypothesis/Event/Outcome identity, reproducibility, event studies and sweeps
-5. Validation and labeling: warmup, walk-forward, purge, embargo, lockbox and censoring
+5. Validation and labeling: availability, warmup, walk-forward, purge, embargo, lockbox and censoring
 6. Strategy and decision foundation: StrategySpec, policies, DecisionIntent, risk and sizing
 7. Execution, replay and portfolio: orders, fills, positions, accounting and deterministic replay
-8. Unified Experiment Orchestration and Persistence: Study, Trial, Run, Artifact cross-referencing, comparison, reproduction and canonical experiment persistence
+8. Unified Experiment Orchestration and Persistence: Study, Trial, Run and Artifact identity/persistence/comparison/reproduction
 9. Canonical API and job runtime
 10. Supervised ML
 11. Strategic RL
@@ -19,257 +34,193 @@ The roadmap expresses dependency direction, not day estimates. Exact scope may e
 14. Paper and shadow operation
 15. Live operation
 
-## Producer–Consumer Conformity Gate
+These phases remain intentionally stable. The DAG determines actual dependency order inside and across them.
 
-**Phase A — Controlled Bidirectional Convergence is COMPLETE.** The Contract
-Freeze Gate and Conformity Implementation Gate have passed. Human/Golden Bybit
-BTCUSDT E2E, Adversarial Acceptance A1–A9 and Candle Ordering Compatibility are
-PASS; the Final Conformity Gate Review is APPROVE with no blockers or important
-findings. The temporary Producer/Consumer synchronization constraint is
-removed.
-
-[ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md)
-freezes two sequential, non-circular gates between the accepted foundation
-contracts (DataGateway v1, CandleDefinition v1, Declared Coverage v1) and
-broader vertical expansion:
+## Completed foundation checkpoints
 
 ```text
-foundation contracts
-        ↓
-CONTRACT FREEZE GATE — PASSED
-        ↓
-conformity implementation slices
-        ↓
-Human / Golden Bybit BTCUSDT E2E — PASS
-        ↓
-Adversarial Acceptance A1–A9 — PASS
-        ↓
-Candle Ordering Compatibility — PASS
-        ↓
-Final Conformity Gate Review — APPROVE
-        ↓
-CONFORMITY IMPLEMENTATION GATE — PASSED
-        ↓
-Package Boundary / Modular Monolith Foundation v1 — COMPLETE
-        ↓
-Legacy Capability Harvest Audit v1 — COMPLETE
-        ↓
-broader independent Producer / Consumer expansion — UNLOCKED
+Contract Freeze Gate                                  PASSED
+Conformity Implementation Gate                        PASSED
+Human / Golden Bybit BTCUSDT E2E                     PASS
+Adversarial Acceptance A1-A9                         PASS
+Candle Ordering Compatibility                        PASS
+Package Boundary / Modular Monolith Foundation v1   COMPLETE
+Legacy Capability Harvest Audit v1                   COMPLETE
+ASS-01 Application ownership/enforcement             COMPLETE
+Broad independent Producer/Consumer expansion        UNLOCKED
 ```
 
-The completed slices are Shared Semantic Primitives v1, Canonical Parquet
-Materializer v1, Manifest + Coverage Emission v1, Bounded DataGateway finite
-read v1, Publication Certification runtime v1 (S13 Phases 1–3), and
-Publication Eligibility Bridge v1 (S14 / S13.5 Phases 4–5). Golden Conformity
-Acceptance Support v1 is READY, and the first real Human/Golden vertical has
-now produced an exact Golden match through `DataGateway.scan()`. Its detailed
-evidence is recorded in
-[`HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md`](../integration/HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md).
+The Conformity Gate pair is concluded. Package Boundary established the modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients.
 
-This is a temporary integration gate pair, not a permanent architecture layer.
-Both gates have passed. Their closure does not add a phase to the dependency
-order below; it removes the temporary lockstep and restores the parallelism
-that already existed.
+Completed checkpoints are credited and must not be re-proved absent a concrete invalidating change.
 
-## Phase A — controlled convergence — COMPLETE
+## Roadmap vNext planning state
 
-The following remain unimplemented future capabilities and require their own
-explicit scopes:
-
-- full Candle runtime, which is no longer blocked by the Conformity Gate;
-- Feature runtime and broader Representation expansion;
-- broader producer verticals;
-- live ingest and multi-venue runtime;
-- L1/L2/L3/MBO runtime;
-- unrelated consumer or producer vertical expansion.
-
-The Human/Golden Bybit BTCUSDT vertical, Adversarial Acceptance, Candle Ordering
-Compatibility and Final Conformity Gate Review are complete. All eight
-ADR-0023 Decision §7 exit criteria passed.
-
-## Operational follow-up outside the Gate critical path
-
-**Server Access & Runtime Identity Hardening v1** is a separate operational
-follow-up to restore or audit canonical server access, service identities,
-filesystem ACLs, database roles and credential disposition. Human E2E
-operator/bootstrap privileges are acceptance evidence only and do not define
-production runtime authorization.
-
-This follow-up was not a Gate blocker and remains independent of the completed
-Conformity Implementation Gate. Human administration remains via SSH, local
-services use canonical service identities, and future normal remote consumers
-remain behind the planned Canonical API. No API runtime is introduced here.
-
-## Phase B — post-Gate bidirectional expansion
-
-The Conformity Implementation Gate has passed and the temporary cross-track
-synchronization constraint is removed. Producer and Consumer development may
-resume independently and concurrently, subject to normal ownership, dependency
-direction, frozen contracts, architecture gates and explicit slice scopes.
-The post-gate model is not architecture-unconstrained.
-
-The mandatory cross-cutting structural checkpoint **Package Boundary / Modular
-Monolith Foundation v1** is **COMPLETE**. It established bounded package
-ownership and architecture tests inside the existing single-repository,
-single-`src/` modular-monolith default without adding a product phase or
-renumbering phases 0–15.
-
-The mandatory **Legacy Capability Harvest Audit v1** is also **COMPLETE**. It
-classified 31 legacy capabilities against current canonical semantics and
-selected H01 — the pure diagonal / stacked imbalance core — as the first
-recommended **harvest** slice. H14 DSR/PBO remains REVIEW on exact Evaluation
-estimator/input semantics and does not block H01.
-
-The legacy repository remains evidence only; harvesting never creates a runtime
-dependency on it. Broad independent Producer/Consumer expansion is
-**UNLOCKED**, but every implementation capability still requires an explicit
-bounded scope and must respect current ownership, dependency direction and
-frozen contracts.
+The architecture-roadmap atomization audit classified the full platform planning inventory:
 
 ```text
-Conformity Implementation Gate PASSED
-            ↓
-Package Boundary / Modular Monolith Foundation v1 COMPLETE
-            ↓
-Legacy Capability Harvest Audit v1 COMPLETE
-            ↓
-Broad independent Producer / Consumer expansion UNLOCKED
+TOTAL_ATOMS                     87
+CLASSIFIED_ATOMS                87
+UNCLASSIFIED_GAPS               0
+SEMANTIC_FROZEN_OR_RESOLVED     49 / 87 = 56.3%
+OPEN_BLOCKING                   30
+OPEN_DEFERABLE                  8
+ROADMAP_PLANNING_COMPLETENESS   >= 90%
 ```
 
-### Application Service Seam v1 — structural checkpoint
+The 56.3% value is a semantic-freeze metric, not roadmap readiness. Future choices are not frozen merely to increase a percentage. A deferable decision is roadmap-defined when its trigger and required evidence are explicit.
 
-Post-harvest architecture analysis identified that the accepted API-first
-architecture already requires an in-process application-service seam before
-later transport/runtime work, while the repository lacked a canonical owner
-for that composition layer.
+See [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for all 87 atoms and their dependencies.
 
-This is an **unnumbered structural checkpoint**, not a new product phase and not
-a reordering of phase 9 (`Canonical API and job runtime`) or phase 13
-(`Clients`). It does not relock independent Producer expansion.
+## Decision-gate model
 
-ASS-01 — Application Service Ownership & Architecture Enforcement is
-**COMPLETE** through PR #27, merged as
-`066e7cd577104fb2c8f657430402b79cd58ba9aa` after exact-head independent review
-and `Quant Platform integrity` CI success.
-
-ASS-01 establishes:
+Open blockers are grouped into activation boundaries:
 
 ```text
-quant_platform.application
-        ↓
-application-service composition owner
+DG-A  Representation / Feature integration
+DG-B  Historical / Live data convergence
+DG-C  Market-data depth (L1/L2)
+DG-D  Application configuration / ASS-03
+DG-E  Validation semantics
+DG-F  Strategy / Execution semantics
+DG-G  Experiment / RL / Jobs
+DG-H  Operational safety
 ```
 
-with mechanically enforced dependency direction and governed executable
-orchestration under `tools/`. It introduces no application use-case runtime,
-transport, server, Job runtime or client.
+These are not eight mandatory design projects to run immediately. Each gate is activated only when a selected dependent atom reaches it.
 
-Application Service Seam maturity:
+Explicitly deferable choices — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension, multi-asset execution and concrete API transport — remain open until their evidence trigger exists.
+
+## Vertical milestones
+
+The cross-spine integration model is:
 
 ```text
-ASS-01 ownership + architecture enforcement       COMPLETE
-ASS-02 first canonical application-service vertical NOT ACTIVE
-ASS-03 orchestration/configuration convergence     NOT ACTIVE
+V1  Source -> canonical -> catalog -> DataGateway         COMPLETE
+V2  DataGateway -> Application service                   READY_CHAIN
+V3  DataGateway -> historical Candle                     READY
+V4  Representation -> Feature -> canonical H01           BLOCKED by DG-A
+V5  Feature -> Research                                  BLOCKED by FeatureArtifact
+V6  Research -> Validation                               BLOCKED by DG-E
+V7  Strategy -> deterministic Replay                     BLOCKED by DG-F
+V8  Historical -> Live                                   BLOCKED by DG-B/DG-H
+V9  Application -> API -> Client                         application-ready; transport deferred
+V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
 ```
 
-Existing pre-ASS-01 tool bypasses remain finite exact-edge debt for ASS-03;
-new executable orchestration must pass through the application seam. Transport,
-serialization, remote reachability, auth/TLS, runtime host/process topology,
-Job implementation and client implementation remain intentionally deferred.
+V1 is the accepted Bybit BTCUSDT first vertical. Its detailed evidence remains in the existing conformity/integration documentation.
 
-H01 remains the selected first **legacy harvest candidate**, not an automatically
-active next project slice. Its pure quantitative legacy kernel is the accepted
-harvest candidate; canonical grain, validated tick-grid input, temporal
-availability and FeatureDefinition provenance remain requirements of a future
-bounded H01 implementation scope.
+## Current execution frontier
 
-No next implementation slice is selected by the ASS-01 closeout. The next
-planning decision must evaluate dependency/value ordering among ASS-02, ASS-03,
-H01 and broader roadmap/capability atomization.
-
-## Parallel producer track
-
-The consumer dependency track remains canonical. In parallel, the Data Plane
-producer track is:
+The following atoms are decision-complete, missing, and have their declared planning dependencies satisfied:
 
 ```text
-Market Data Ingest architecture and contracts
-        ↓
-Declared coverage contract
-        ↓
-Contract Freeze Gate — PASSED
-        ↓
-Historical Trades publication conformity:
-  Canonical Parquet Materializer — COMPLETE
-  Manifest + Coverage Emission — COMPLETE
-  Bybit first-vertical eligibility profile — READY through authoritative S13
-        ↓
-Publication Certification — COMPLETE
-  Phase 1 SEAL → durable CLOSED registration
-  Phase 2 CERTIFY → authoritative evaluation
-  Phase 3 RECORD EVIDENCE → durable quality_reports
-        ↓
-Publication Eligibility Bridge — COMPLETE
-  Phase 4 PUBLISH ELIGIBILITY → valid/degraded where frozen rules permit
-  Phase 5 VERIFY → post-write eligibility/evidence verification
-        ↓
-Human vertical / Golden Bybit BTCUSDT E2E — PASS
-        ↓
-Adversarial Acceptance A1–A9 — PASS
-        ↓
-Candle Ordering Compatibility — PASS
-        ↓
-Final Conformity Gate Review — APPROVE
-        ↓
-Conformity Implementation Gate — PASSED
-        ↓
-Package Boundary / Modular Monolith Foundation v1 — COMPLETE
-        ↓
-Legacy Capability Harvest Audit v1 — COMPLETE
-        ↓
-Capacity monitoring foundation
-        ↓
-Storage health / pressure behavior
-        ↓
-RAW/source protection
-        ↓
-Safe storage placement and relocation
-        ↓
-Backup / restore foundation
-        ↓
-Backup verification
-        ↓
-Retention/deletion authority
-        ↓
-Backfill / repair
-        ↓
-Live Trades pilot
-        ↓
-Multi-venue Trades
-        ↓
-L1 → L2 → L3/MBO
-        ↓
-Advanced recovery and reconciliation
+C02  ASS-02 semantic selector resolution
+D03  historical Candle runtime (on-demand only)
+E05  H01 pure imbalance kernel
+F05  deterministic walk-forward schedule
+I01  Study/Trial/Run/Artifact semantic model
+K04  observational capacity monitoring
+K11  governance-state consistency
 ```
 
-The producer and consumer tracks meet through the existing published Data
-Plane contracts and the DataGateway boundary. Storage safety is cross-cutting.
-Persistent high-volume L2/L3/MBO collection is not operationally READY without
-capacity monitoring, pressure behavior, source-data protection and recovery.
+This frontier is **not authorization** and no next implementation atom is selected here. `SCOPE.md` must activate one bounded slice.
 
-Provenance and identity primitives are required as soon as their entities are
-implemented; they do not wait for Phase 8. Research may continue across
-phases. Each phase starts only through an explicit scope.
+## Execution waves
 
-Repository Synchronization & Integrity Foundation v1 is the infrastructure
-gate between the reviewed DataGateway Contract v1 and DataGateway runtime
-implementation. It does not add a product capability or renumber the phases.
+Waves are planning groupings, not new numbered phases:
 
-Phase 2 (Representation foundation) has its semantic contract frozen and
-accepted (ADR-0021, CandleDefinition v1). The Conformity Implementation Gate has
-passed, so Candle runtime is no longer blocked by that Gate. Candle runtime is
-still unimplemented and remains a future capability requiring its own explicit
-scope. Package Boundary / Modular Monolith Foundation v1, Legacy Capability
-Harvest Audit v1 and ASS-01 ownership/enforcement are complete. Independently
-scoped post-Gate expansion remains unlocked; the next implementation slice is
-to be selected explicitly rather than inferred from roadmap ordering.
+```text
+Wave 0  Architecture foundation                           COMPLETE
+Wave 1  First canonical computation verticals             current frontier
+Wave 2  Representation / Feature vertical                 DG-A then dependent atoms
+Wave 3  Research / Validation                             research foundation then DG-E
+Wave 4  Strategy / Replay                                 strategy foundation then DG-F
+Wave 5  Experiment / Supervised ML                       experiment identity/persistence then ML
+Wave 6  Live Data Plane                                   K04 + required DG-H, then DG-B/live
+Wave 7  Runtime / Clients                                 application service -> transport -> clients
+Wave 8  Paper / Live product                             paper/shadow then explicit live gate
+```
+
+Parallelism is expected where DAG dependencies permit it. In particular, ASS-02, historical Candle, pure H01, deterministic walk-forward semantics, experiment identity and observational capacity do not depend on one another merely because the macro phases are numbered.
+
+## Producer/Data Plane path
+
+The first historical publication/read vertical is complete:
+
+```text
+canonical trade semantics
+ -> materialization/manifests/coverage
+ -> S13 certification
+ -> S14 publication
+ -> catalog
+ -> bounded DataGateway read
+ -> Human Golden exact match
+```
+
+Future Data Plane work is no longer represented as one false linear chain. Important independent branches include:
+
+```text
+K04 capacity observation -> DG-H pressure/protection/restore/retention as needed
+DG-B coverage/repair/live convergence -> A10/A11/B06
+DG-C -> L1/L2 only when a concrete feed triggers it
+second venue only when real second-provider evidence exists
+L3/MBO only when a real L3 feed exists
+```
+
+Backfill/repair does not require every storage-lifecycle capability to be complete. API/application work and observational operations work may proceed independently of the live path.
+
+## Application Service Seam
+
+```text
+ASS-01 ownership + architecture enforcement         COMPLETE
+C02/C03 ASS-02 first application vertical           NOT ACTIVE
+C04/C05 ASS-03 orchestration/config convergence     NOT ACTIVE
+```
+
+ASS-02 can remain entirely in-process and does not require phase 9 transport. ASS-03 requires DG-D configuration resolution and a real ASS-02 service target before historical orchestration debt is migrated.
+
+## Representation / Feature / H01
+
+CandleDefinition v1 semantics are accepted. Historical on-demand candle computation (`D03`) is on the current frontier; candle persistence identity (`D05`) remains gated by DG-A.
+
+H01 remains split deliberately:
+
+```text
+E05 pure imbalance kernel          decision-complete, implementation missing
+E06 canonical H01 integration      blocked by D06/E02/E04 and DG-A
+```
+
+Do not treat the pure kernel as a complete Feature/Footprint vertical.
+
+## Runtime and clients
+
+Consumer API semantics are already frozen. Concrete API transport is deliberately deferable until a real remote/client need exists. Long-running durable work requires the separate Job decision/runtime atom. Clients remain thin and cannot own quantitative or storage logic.
+
+## Operations
+
+Operational capability is cross-cutting and progressively gated. `K04` observational capacity monitoring can proceed independently. Destructive/shared-state capabilities require their own operational decision gate and authorization.
+
+Important internal ordering includes:
+
+```text
+K04 -> K05 pressure policy
+K06 source protection -> K08 restore proof -> K09 deletion authority
+K03 observability + K08 restore proof -> K10 recovery
+```
+
+Server/runtime identity hardening remains a separate operational concern and does not authorize an interim API/runtime.
+
+## Roadmap rule
+
+Before implementation:
+
+1. verify current `origin/main`;
+2. select one atom from the DAG, not a whole phase;
+3. verify its dependencies;
+4. activate only its required decision gate(s);
+5. credit existing evidence;
+6. define the exact missing proposition and minimum proof;
+7. authorize mutation through a bounded scope/branch.
+
+`REFERENCE > REPETITION`, `CREDIT > RE-PROVE`, and observed need remains preferable to speculative future flexibility.
