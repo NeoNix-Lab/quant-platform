@@ -1,76 +1,117 @@
 # Capability Map
 
-Canonical State describes this repository. Legacy Evidence is reference evidence only.
+This is the compact canonical-state snapshot. Atom-level dependencies, acceptance propositions, decision gates and execution readiness are authoritative in [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md). Legacy evidence is reference evidence only.
 
-| Domain | Capability | Canonical State | Legacy Evidence | Target owner | Notes |
-|---|---|---|---|---|---|
-| Data | `trade-v1` | FROZEN | NONE | Data Plane | Frozen contract. |
-| Data | Dataset/partition manifests | FROZEN | NONE | Data Plane | `dataset-manifest-v1` remains frozen; accepted ADR-0025 adds versioned `dataset-manifest-v2` for source-acquired canonical topology without reinterpreting v1. |
-| Data | Source-Acquired Canonical Dataset Lineage v2 | READY | NONE | Data Plane | `source_acquired` canonical datasets retain transform in the manifest, have no synthetic parent and exactly zero catalog lineage rows; source provenance remains in CoverageManifest evidence. |
-| Data | PostgreSQL catalog, lineage, storage roots | READY | NONE | Data Plane | DDL and provisioning exist. |
-| Data | Catalog Schema Registry Bootstrap | READY | NONE | Engineering/Data Plane | Repository schema bytes remain authoritative; bootstrap inserts absent registrations, accepts identical registrations and refuses conflicts without update/upsert/delete. |
-| Data | Historical Bybit import | PARTIAL | NONE | Data Plane | The reference importer delegates source semantics to the production historical adapter; it is not the publication runtime. |
-| Data | Market Data Ingest Architecture | PARTIAL | NONE | Data Plane | Producer architecture documented; runtime remains unimplemented. |
-| Data | Market Data Ingest Runtime | MISSING | NONE | Data Plane | No canonical collector/acquisition runtime. |
-| Data | Source/Venue Adapter Contract | PARTIAL | NONE | Data Plane | Semantic contract is documented and a narrow production Bybit historical source adapter exists for the first vertical. |
-| Data | Historical Acquisition | PARTIAL | NONE | Data Plane | Narrow Bybit historical source slice implemented and exercised by the Human Golden E2E. |
-| Data | Backfill / Repair | MISSING | NONE | Data Plane | Reconciliation and repair runtime are open. |
-| Data | Live Collection | MISSING | NONE | Data Plane | Architectural target only. |
-| Data | Trades Acquisition | PARTIAL | NONE | Data Plane | Bybit trade evidence exists. |
-| Data | L1 Acquisition | MISSING | WEAK | Data Plane | Requires versioned contract and source capability. |
-| Data | L2 Acquisition | MISSING | WEAK | Data Plane | Snapshot/incremental semantics remain future work. |
-| Data | L3/MBO Acquisition | MISSING | WEAK | Data Plane | No schema or runtime; ADR-0018 applies. |
-| Data | Checkpoint / Recovery | MISSING | NONE | Data Plane/Operations | No general implementation. |
-| Data | Quality / Reconciliation | PARTIAL | NONE | Data Plane | Lifecycle, authoritative S13 certification, durable quality-report evidence and S14 eligibility verification exist for the first vertical; broader reconciliation remains open. |
-| Data | Declared Coverage Contract | FROZEN | NONE | Data Plane | ADR-0022; schema, fixtures and semantic tests exist. |
-| Data | Manifest + Coverage Emission | READY | NONE | Data Plane | Durable DatasetManifest, PartitionManifest and explicit CoverageManifest emission are implemented with deterministic persistence, source-owned evidence and fail-closed identity/artifact checks. |
-| Data | Canonical Partition Publication | READY | NONE | Data Plane | The Bybit BTCUSDT `2024-01-15` first vertical completed materialization, manifests/coverage, S13 pass, S14 valid, catalog publication and DataGateway exact Golden verification. Broader generalization remains open. |
-| Gate | Producer–Consumer Conformity Gate — Contract Freeze Gate | READY | NONE | Data Plane/Application | PASSED: ADR-0023 and `PRODUCER_CONSUMER_CONFORMITY.md` are accepted; this documentation-level gate authorizes the conformity slices but does not certify runtime completion. |
-| Gate | Producer–Consumer Conformity Gate — Conformity Implementation Gate | READY | NONE | Data Plane/Application | PASSED: all ADR-0023 Decision §7 exit criteria are satisfied; Human Golden E2E, A1–A9 Adversarial Acceptance and Candle Ordering Compatibility are PASS; Final Gate Review APPROVE with no blockers or important findings. |
-| Gate | Golden Conformity Acceptance Support | READY | NONE | Application/Data | Shared Golden fixture, incremental OPEN-only `DataScan` observer, bounded telemetry and lifecycle/reporting support are implemented. This is support evidence only, not Golden E2E or Conformity Gate PASS. |
-| Gate | Human Golden Bybit BTCUSDT E2E | READY | NONE | Data Plane/Application/Engineering | PASS for `2024-01-15`: 1,105,145 rows, exact side counts and time bounds, S13 pass, S14 valid, complete gap-free coverage, one partition and DataGateway `OPEN → READING → COMPLETED` in 17 bounded batches. |
-| Data | Bybit First-Vertical Eligibility Profile | READY | NONE | Data Plane | Source-owned pre-check plus authoritative S13 certification are implemented for exactly `canonical/trades/bybit/BTCUSDT/trade-v1`; non-null, unique `trade_id` remains distinct from generic `trade-v1` nullability, and S14 consumes the resulting current certification evidence for publication eligibility. |
-| Access | Bounded Historical DataGateway Read | READY | NONE | Application/Data | `DataGateway.scan()` provides lazy ordered batches with explicit open/reading/completed/aborted lifecycle and bounded-read tests; broader/live access remains open. |
-| Data | Canonical trade-v1 Parquet Materialization | READY | NONE | Data Plane | `src/quant_platform/data/materializer.py` provides canonical Parquet materialization and was exercised successfully by the Human Golden E2E. |
-| Data | CanonicalContentHashV1 | READY | NONE | Data Plane/Application | Implemented in `src/quant_platform/data/models.py` and covered by pinned-vector tests; it remains additive to the existing physical `result_identity`. `DataSliceMetadata.canonical_content_hash` remains an additive future extension and was non-blocking for the Gate. |
-| Data | Canonical Publication Bridge | READY | NONE | Data Plane | S14 Publication Eligibility Bridge v1 is implemented: it selects current certification evidence, applies the frozen `valid`/`degraded` eligibility rules, establishes lineage idempotently and verifies post-write publication state fail-closed. |
-| Data | Publication Certification | READY | NONE | Data Plane | Authoritative S13 runtime is implemented: Phase 1 SEAL registers durable `closed` catalog evidence, Phase 2 CERTIFY re-evaluates source/canonical/physical/manifests/coverage, and Phase 3 records durable `quality_reports` against the real partition UUID. PASS alone does not grant eligibility; S14 owns that transition. |
-| Data | Multi-Venue Capability Model | MISSING | NONE | Data Plane | Capability dimensions documented; no venue matrix. |
-| Storage | Storage Root Foundation | READY | NONE | Data Plane/Infrastructure | Hot, cold, and deep-cold roots are provisioned. |
-| Storage | Storage Tiering | MISSING | NONE | Data Plane/Operations | No relocation runtime. |
-| Storage | Partition Relocation | MISSING | NONE | Data Plane/Operations | Semantic relocation invariance passed as Gate evidence; the operational relocation runtime remains an unimplemented post-Gate capability. |
-| Storage | Storage Capacity Monitoring | MISSING | NONE | Operations | No capacity monitor. |
-| Storage | Storage Health Monitoring | MISSING | NONE | Operations | No health monitor. |
-| Storage | Storage Pressure Handling | MISSING | NONE | Operations | No pressure policy/runtime. |
-| Storage | RAW / Source Data Protection | MISSING | NONE | Data Plane/Operations | Protection requirements documented only. |
-| Storage | Backup / Restore | MISSING | NONE | Operations | Backup directories do not constitute backup capability. |
-| Storage | Backup Verification | MISSING | NONE | Operations | No restore verification. |
-| Storage | Retention Policy | MISSING | NONE | Operations | No retention or deletion policy. |
-| Data | L1/L2/L3 contracts | MISSING | WEAK | Data Plane | Must follow ADR-0018. |
-| Access | DataGateway | PARTIAL | PARTIAL | Application/Data | Narrow catalog-backed v1 implementation is proven for the first vertical; broader live access remains open. |
-| Application | Application Service Ownership & Architecture Enforcement (ASS-01) | READY | NONE | Application | `quant_platform.application` is the canonical in-process composition owner. PR #27 merged as `066e7cd577104fb2c8f657430402b79cd58ba9aa`; executable orchestration under `tools/` is governed, with finite exact-edge ASS-03 debt. No application use-case runtime is introduced. |
-| Application | First canonical application-service vertical (ASS-02) | MISSING | NONE | Application | No `MarketDataService` or equivalent canonical use case yet. Semantic-selector resolution, result-envelope construction and stable application error translation remain unimplemented. |
-| Application | Executable orchestration / configuration convergence (ASS-03) | MISSING | NONE | Application/Engineering | Existing pre-ASS-01 tool bypasses and configuration divergence remain explicit bounded debt; no migration/convergence runtime has been implemented. |
-| Representation | CandleDefinition/runtime | MISSING | PARTIAL | Representations | CandleDefinition v1 contract is frozen and accepted by ADR-0021; runtime remains missing. |
-| Features | FeatureDefinition | MISSING | STRONG | Feature Engine | Legacy registry is evidence only. |
-| Features | FeatureSetDefinition catalog | PARTIAL | PARTIAL | Data/Feature Engine | Existing catalog foundation retained. |
-| Features | FeatureArtifact/materialization | MISSING | PARTIAL | Feature Engine/Data Plane | No canonical materializer. |
-| Research | Hypothesis/Event/Event Study | MISSING | STRONG | Research Engine | Historical candidate. |
-| Outcomes/labels | Outcome and Label engines | MISSING | STRONG | Outcome/Label Engine | Censoring defects require redesign. |
-| Validation | Availability/walk-forward/purge/embargo | MISSING | STRONG | Validation Engine | Needs canonical temporal tests. |
-| Strategy | StrategySpec/DecisionIntent | MISSING | PARTIAL | Policy/Strategy | No canonical runtime. |
-| Execution | Orders/fills/portfolio/replay | MISSING | STRONG | Execution/Portfolio | Strong foundation only, not READY. |
-| ML | Supervised learning/evaluation | MISSING | STRONG | Learning/Supervised | Bind to canonical provenance. |
-| RL | Strategic and execution RL | MISSING | MULTIPLE/REVIEW | Learning/RL | Legacy runtimes are mixed. |
-| Experiments | Study/Trial/Run/Artifact | MISSING | MULTIPLE | Experiment System | Avoid competing persistence. |
-| Interfaces | Consumer API semantic boundary | FROZEN | PARTIAL | Application/API | ADR-0020 and `CONSUMER_API.md` freeze the semantic client boundary. This is not evidence of API transport/runtime implementation. |
-| Interfaces | Canonical API runtime + Job runtime | MISSING | PARTIAL | API/Application | Transport, wire representation and Job implementation remain roadmap work; draft Job concepts are not promoted to frozen authority. |
-| Interfaces | Clients (App UI, TUI, CLI) | MISSING | PARTIAL | Clients | Clients must consume the canonical API and cannot own quantitative logic. No canonical product client is implemented. |
-| Operations | Provisioning, fixtures, semantic tests | READY | NONE | Engineering/Infrastructure | CI and backup certification missing. |
-| Operations | Server Access & Runtime Identity Hardening v1 | MISSING | NONE | Operations | Non-blocking follow-up: audit/restore canonical server access, service identities, filesystem ACLs, database roles and credential disposition. Operator/bootstrap E2E privilege is not the production authorization model. |
+Decision state and implementation state are intentionally separate.
 
-## Evidence vocabulary
+Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 
-`NONE`, `WEAK`, `PARTIAL`, `STRONG`, `MULTIPLE`, `DEFECTIVE`, `REVIEW`, `ADOPT_CANDIDATE`, `ADAPT_CANDIDATE`.
+| Domain | Capability | Decision State | Implementation State | Target owner | Atom(s) | Notes |
+|---|---|---|---|---|---|---|
+| Data | `trade-v1` canonical record | FROZEN | COMPLETE | Data Plane | A01 | Frozen schema/identity/ordering semantics. |
+| Data | Dataset/partition identity | FROZEN | COMPLETE | Data Plane | A02 | `dataset-manifest-v1` retained; v2 additive for source-acquired topology. |
+| Data | Source-acquired lineage v2 | FROZEN | COMPLETE | Data Plane | A03 | No synthetic parent; source provenance remains evidence-owned. |
+| Data | Declared coverage | FROZEN | COMPLETE | Data Plane | A04 | Coverage is explicit and distinct from observed row bounds. |
+| Data | Catalog/schema bootstrap | RESOLVED | COMPLETE | Data Plane/Engineering | A05 | Repository schema bytes authoritative; conflicts fail closed. |
+| Data | Canonical Parquet materialization | FROZEN | COMPLETE | Producer | A06 | First historical vertical proven. |
+| Data | Historical Bybit acquisition | FROZEN | PARTIAL | Source/Producer | A07 | Narrow reference vertical exists; not a general ingest runtime. |
+| Data | S13 certification | FROZEN | COMPLETE | Producer | A08 | Durable authoritative quality evidence. |
+| Data | S14 publication/eligibility | FROZEN | COMPLETE | Producer | A09 | First vertical catalog publication proven. |
+| Data | Backfill/repair | OPEN_BLOCKING | MISSING | Data Plane | A10 | DG-B repair branch: resolve only repair-path quality/coverage/reconciliation semantics. |
+| Data | Live trades acquisition | OPEN_BLOCKING | MISSING | Data Plane | A11 | DG-B live branch + relevant DG-H prerequisites; implemented checkpoint/recovery follows live acquisition. |
+| Data | Second-venue trades | OPEN_DEFERABLE | MISSING | Data Plane | A12 | Triggered by real second-provider evidence; do not design a generic resolver early. |
+| Data | L1 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A13 | DG-C L1 branch, triggered by a concrete feed; does not activate L2. |
+| Data | L2 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A14 | DG-C L2 branch, only when L2 is selected. |
+| Data | L3/MBO contract | OPEN_DEFERABLE | MISSING | Data Plane | A15 | Explicitly wait for a real L3 feed. |
+| Data | General quality lifecycle | OPEN_BLOCKING | PARTIAL | Data Plane | A16 | First vertical frozen; general lifecycle belongs to the relevant DG-B branch. |
+| Access | Data Access owner/boundary | RESOLVED | COMPLETE | Data Access | B01 | Canonical `quant_platform.access`; dependency direction mechanically enforced. |
+| Access | Bounded historical scan | FROZEN | COMPLETE | Data Access | B02,B07 | `DataGateway.scan()` is the canonical bounded historical seam. |
+| Access | Result identity/provenance | FROZEN | COMPLETE | Data Access | B03 | Semantic/source identity distinct from physical locator. |
+| Access | Non-contiguous coverage read | OPEN_BLOCKING | MISSING | Data Access | B04 | DG-B repair/shared branch. |
+| Access | Durable DatasetSnapshot | OPEN_DEFERABLE | MISSING | Data Access | B05 | Shape waits for a concrete durable-replay requirement. |
+| Access | Live access/cursor | OPEN_BLOCKING | MISSING | Data Access | B06 | DG-B live branch only. |
+| Access | Schema evolution beyond accepted versions | OPEN_DEFERABLE | MISSING | Data Access | B08 | Resolve against real next-version evidence. |
+| Application | ASS-01 ownership/enforcement | RESOLVED | COMPLETE | Application | C01 | `quant_platform.application` is the canonical in-process composition owner; PR #27 merged. |
+| Application | ASS-02 semantic selector resolution | FROZEN | MISSING | Application | C02 | Current execution frontier; no transport required. |
+| Application | ASS-02 result/error translation | FROZEN | MISSING | Application | C03 | Follows C02 and frozen Consumer API semantics. |
+| Application | ASS-03 tool convergence | RESOLVED | MISSING | Application | C04 | Finite exact-edge orchestration debt; requires real application service target. |
+| Application | Configuration convergence | OPEN_BLOCKING | MISSING | Application/Engineering | C05 | DG-D; one convention only, no speculative DI framework. |
+| Application | Multi-capability resolver | OPEN_DEFERABLE | MISSING | Application | C06 | Triggered by a real second venue/representation. |
+| Representation | Representation identity | RESOLVED | PARTIAL | Representation | D01 | Distinct from DatasetIdentity. |
+| Representation | CandleDefinition v1 | FROZEN | COMPLETE | Representation | D02 | Accepted semantic contract; runtime is a separate capability. |
+| Representation | Historical Candle computation | FROZEN | MISSING | Representation | D03 | Current execution frontier; on-demand CLOSED candles. |
+| Representation | Incremental/live Candle computation | FROZEN | MISSING | Representation | D04 | Runtime blocked by live access implementation, not by Candle semantics. |
+| Representation | Candle materialization identity | OPEN_BLOCKING | MISSING | Representation | D05 | DG-A candle-materialization branch; not a prerequisite of canonical H01. |
+| Representation | Footprint representation | OPEN_BLOCKING | MISSING | Representation | D06 | DG-A canonical-H01 branch: grain/tick-grid/adjacency/availability. |
+| Features | Definition/set/artifact separation | FROZEN | COMPLETE | Feature Engine | E01 | Architectural identity separation accepted. |
+| Features | FeatureDefinition v1 | OPEN_BLOCKING | MISSING | Feature Engine | E02 | DG-A FeatureDefinition branch. |
+| Features | FeatureSet catalog/provider | RESOLVED | PARTIAL | Feature Engine | E03 | Existing catalog foundation retained. |
+| Features | FeatureArtifact/materialization | OPEN_BLOCKING | MISSING | Feature Engine | E04 | DG-A FeatureArtifact branch. |
+| Features | H01 pure imbalance kernel | RESOLVED | MISSING | Feature Engine | E05 | Current execution frontier; narrow Legacy Harvest ADOPT boundary only. |
+| Features | H01 canonical integration | OPEN_BLOCKING | MISSING | Feature Engine | E06 | Requires D06/E02/E04; D05 is not on this path. |
+| Features | Generic provider extension | OPEN_DEFERABLE | MISSING | Feature Engine | E07 | Wait for a real second provider. |
+| Research | HypothesisSpec | RESOLVED | MISSING | Research | F01 | Depends on FeatureDefinition for the canonical vertical. |
+| Research | EventSpec/detection | RESOLVED | MISSING | Research | F02 | Requires FeatureArtifact for the full vertical. |
+| Research | OutcomeSpec/Outcome | RESOLVED | MISSING | Research | F03 | Future-window identity and availability separated from labels. |
+| Research | Event studies/sweeps | RESOLVED | MISSING | Research | F04 | Reproducible study population/aggregates. |
+| Validation | Walk-forward schedule | RESOLVED | MISSING | Validation | F05 | Current execution frontier; deterministic pure temporal atom. |
+| Validation | Availability/purge/embargo | OPEN_BLOCKING | MISSING | Validation | F06 | DG-E validation branch. |
+| Validation | Labels/censoring/lockbox | OPEN_BLOCKING | MISSING | Validation | F07 | DG-E validation branch. |
+| Validation | DSR/PBO | OPEN_BLOCKING | MISSING | Research/Validation | F08 | Separate DG-E DSR/PBO branch; does not block Strategy/ML paths that depend on F07. |
+| Strategy | StrategySpec/DecisionIntent | RESOLVED | MISSING | Strategy | G01 | Strategy remains upstream of execution. |
+| Strategy | Policy composition | RESOLVED | MISSING | Strategy | G02 | Deterministic composition required. |
+| Strategy | Risk/sizing | RESOLVED | MISSING | Strategy | G03 | No client-owned logic. |
+| Strategy | Session/cooldown semantics | OPEN_BLOCKING | MISSING | Strategy | G04 | DG-F. |
+| Execution | Order/Fill lifecycle | RESOLVED | MISSING | Execution | H01 | Explicit state transitions. |
+| Execution | Cost/synthetic-fill model | RESOLVED | MISSING | Execution | H02 | Model version is provenance. |
+| Execution | Conflict/partial-fill semantics | OPEN_BLOCKING | MISSING | Execution | H03 | DG-F. |
+| Portfolio | Portfolio/ledger | RESOLVED | MISSING | Portfolio | H04 | Deterministic accounting. |
+| Execution | Deterministic replay | RESOLVED | MISSING | Execution | H05 | Uses canonical data/access; no storage bypass. |
+| Portfolio | Multi-asset execution | OPEN_DEFERABLE | MISSING | Portfolio | H06 | Wait for concrete product scope. |
+| Experiments | Study/Trial/Run/Artifact semantic model | RESOLVED | MISSING | Experiment System | I01 | Current execution frontier. |
+| Experiments | Canonical experiment persistence | OPEN_BLOCKING | MISSING | Experiment System | I02 | DG-G experiment branch; avoid competing persistence. |
+| Experiments | Trial accounting/comparison | RESOLVED | MISSING | Experiment System | I03 | Requires persistence/replay. |
+| ML | Supervised input/selection | RESOLVED | MISSING | Learning | I04 | Depends on Feature + Validation semantics. |
+| ML | Supervised training/evaluation | RESOLVED | MISSING | Learning | I05 | Binds code/data/splits/model/metrics. |
+| RL | Strategic RL contract | OPEN_BLOCKING | MISSING | Strategic RL | I06 | DG-G strategic-RL branch. |
+| RL | Execution RL contract | OPEN_BLOCKING | MISSING | Execution RL | I07 | DG-G execution-RL branch; structurally separate from strategic RL. |
+| Interfaces | Consumer API semantic boundary | FROZEN | COMPLETE | Application/API | J01 | ADR-0020; semantic API is not a DataGateway wrapper and does not imply transport runtime. |
+| Interfaces | Canonical API transport | OPEN_DEFERABLE | MISSING | API Runtime | J02 | Triggered by real remote/client need. |
+| Runtime | Job runtime | OPEN_BLOCKING | MISSING | Runtime | J03 | DG-G job branch; durable identity/retry/result semantics. |
+| Clients | CLI | RESOLVED | MISSING | Client Layer | J04 | Thin canonical client. |
+| Clients | TUI | RESOLVED | MISSING | Client Layer | J05 | Thin canonical client. |
+| Clients | App UI | RESOLVED | MISSING | Client Layer | J06 | Thin canonical client. |
+| Runtime | Paper/shadow mode | RESOLVED | MISSING | Runtime | J07 | Vertical gate before live operation. |
+| Runtime | Live product mode | RESOLVED | MISSING | Runtime/Operations | J08 | Requires explicit operational authorization; roadmap state is not authorization. |
+| Operations | Provisioning/fixtures/CI | RESOLVED | COMPLETE | Engineering | K01 | Repository validation foundation complete. |
+| Operations | Server/runtime identity | OPEN_BLOCKING | MISSING | Operations | K02 | DG-H identity branch. |
+| Operations | Observability | OPEN_BLOCKING | MISSING | Operations | K03 | DG-H observability branch. |
+| Operations | Capacity observation | RESOLVED | MISSING | Operations | K04 | Current execution frontier; observational only. |
+| Operations | Health/pressure policy | OPEN_BLOCKING | MISSING | Operations | K05 | DG-H pressure branch. |
+| Operations | RAW/source protection | OPEN_BLOCKING | MISSING | Operations/Data Plane | K06 | DG-H protection branch; no backup dependency. |
+| Operations | Tier relocation | OPEN_BLOCKING | MISSING | Operations/Data Plane | K07 | DG-H relocation branch; sibling of backup after source protection. |
+| Operations | Backup/restore proof | OPEN_BLOCKING | MISSING | Operations | K08 | DG-H backup branch; depends on K06, not K07; restore proof precedes deletion authority. |
+| Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
+| Operations | Checkpoint/recovery | OPEN_BLOCKING | MISSING | Operations/Data Plane | K10 | DG-H recovery branch; implementation follows A11 and requires K03/K08. |
+| Governance | Governance-state consistency | RESOLVED | MISSING | Governance | K11 | Current governance slice; complete only after reviewed merge establishes one coherent authority set. |
 
-See [ROADMAP.md](ROADMAP.md) for dependency order and implementation phases.
+## Gate / evidence state
+
+| Capability | State | Notes |
+|---|---|---|
+| Contract Freeze Gate | PASSED | ADR-0023 accepted. |
+| Conformity Implementation Gate | PASSED | All ADR-0023 exit criteria satisfied. |
+| Human Golden Bybit BTCUSDT E2E | PASS | Exact accepted reference vertical. |
+| Package Boundary / Modular Monolith Foundation v1 | COMPLETE | Ownership/dependency enforcement established. |
+| Legacy Capability Harvest Audit v1 | COMPLETE | 31 capabilities classified; H01 selected as harvest candidate, H14 retained as REVIEW. |
+| ASS-01 Application ownership/enforcement | COMPLETE | PR #27 integrated. |
+
+## Current frontier
+
+```text
+C02  D03  E05  F05  I01  K04  K11
+```
+
+Frontier membership means planning dependencies are satisfied; it does not authorize implementation.
+
+See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.
