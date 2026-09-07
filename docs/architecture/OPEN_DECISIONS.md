@@ -1,308 +1,243 @@
 # Open Decisions
 
-## Producer–Consumer Conformity Gate
+This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a gate is activated.
 
-Two sequential, non-circular gates are defined by
-[ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md):
-the **Contract Freeze Gate** (documentation-level; unlocks implementing the
-conformity slices) and the **Conformity Implementation Gate** (runtime-level;
-unlocks broader producer/consumer vertical expansion and Candle runtime). The
-Contract Freeze Gate has **PASSED** and the Conformity Implementation Gate has
-**PASSED**. Human Golden E2E, Adversarial Acceptance A1–A9 and Candle Ordering
-Compatibility are PASS; the Final Conformity Gate Review is APPROVE with
-`BLOCKERS: NONE` and `IMPORTANT: NONE`. The temporary integration gate pair is
-concluded.
+## Resolved foundation — reference only
+
+The following are no longer open and must not be re-litigated without contradictory current authority:
 
 ```text
-Human Golden E2E PASS
-    → Adversarial Acceptance A1–A9 PASS
-    → Candle Ordering Compatibility PASS
-    → Final Conformity Gate Review APPROVE
-    → Conformity Implementation Gate PASSED
-    → Package Boundary / Modular Monolith Foundation v1 COMPLETE
-    → Legacy Capability Harvest Audit v1 COMPLETE
+Contract Freeze Gate                                  PASSED
+Conformity Implementation Gate                        PASSED
+Human / Golden Bybit BTCUSDT E2E                     PASS
+Package Boundary / Modular Monolith Foundation v1   COMPLETE
+Legacy Capability Harvest Audit v1                   COMPLETE
+ASS-01 Application ownership/enforcement             COMPLETE
 ```
 
-Legacy Capability Harvest Audit v1 is **COMPLETE**. Its accepted classification
-is recorded in `docs/legacy/ADOPTION_LEDGER.md`; H01 remains the first selected
-legacy harvest candidate and H14 DSR/PBO remains the sole non-blocking REVIEW
-residue.
+Resolved architecture includes:
 
-`DataSliceMetadata.canonical_content_hash` remains an additive future extension
-and was non-blocking for the Gate. Semantic relocation invariance passed; the
-operational relocation runtime remains missing and independent of Gate closure.
+- canonical Data Access owner `quant_platform.access`;
+- shared canonical primitives/Producer under `quant_platform.data`;
+- deliberate shared physical seam `quant_platform.data.parquet`;
+- source-specific ownership under `quant_platform.source_adapters`;
+- application composition owner/package `application` / `quant_platform.application`;
+- current runtime owner DAG and executable-orchestration enforcement;
+- API-first direction: clients/API transport -> application services -> domain/DataGateway;
+- Consumer API semantic selector/result/error boundary;
+- `trade-v1`, Declared Coverage, CandleDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
 
-## Source-acquired canonical dataset lineage
+Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
-This is no longer an open first-vertical decision. Accepted
-[ADR-0025](../decisions/ADR-0025-source-acquired-canonical-dataset-lineage-v2.md)
-and its implementation establish the required evolution path:
+## Decision-gate policy
 
-- `dataset-manifest-v1` remains frozen and is never reinterpreted;
-- `dataset-manifest-v2` represents canonical `source_acquired` datasets with
-  `derived_from` absent, a required transform and exactly zero lineage edges;
-- the historical SQLite remains a source/archive, not a raw `DatasetIdentity`,
-  fake parent or proxy dataset;
-- source provenance remains owned by CoverageManifest evidence.
+An `OPEN_BLOCKING` decision is not automatically a current project. It becomes active only when a selected dependent atom reaches its gate. An `OPEN_DEFERABLE` decision remains deliberately unresolved until the stated real-world evidence trigger exists.
 
-## Server Access & Runtime Identity Hardening v1
+No decision is frozen merely to improve a roadmap-completeness percentage.
 
-The Human E2E used operator/bootstrap privileges sufficient to exercise
-publication end to end. Those privileges are acceptance/bootstrap evidence
-only. They do not define the production runtime authorization model.
+## DG-A — Representation / Feature integration
 
-The separate operational follow-up must restore or audit canonical server
-access, service identities, filesystem ACLs, database roles and credential
-disposition. Human administrators continue to use SSH; local services must use
-canonical service identities; future normal remote consumers remain behind the
-Canonical API, application services and DataGateway.
+Blocks: `D05,D06,E02,E04,E06`.
 
-This follow-up was non-blocking and remains independent of the completed
-Conformity Implementation Gate. It does not authorize an interim HTTP API,
-Canonical API runtime implementation, new identities, ACL changes or database
-role changes in this closeout.
+Must resolve before canonical Feature runtime / H01 integration:
 
-## Package Boundary / Modular Monolith Foundation v1
+- precise Candle materialization identity: how persisted Candle results bind RepresentationDefinition/CandleDefinition, source dataset/partition evidence, temporal support and implementation identity;
+- canonical Footprint representation/grain for order-flow features, including validated tick grid, price-level ordering/adjacency and temporal availability;
+- canonical `FeatureDefinition` identity/fields/versioning and availability semantics;
+- canonical `FeatureArtifact` identity/provenance/materialization semantics;
+- H01 integration rule binding the pure imbalance kernel to canonical Footprint input and FeatureDefinition/FeatureArtifact provenance.
 
-The following direction is resolved for the post-Conformity program order:
+Does **not** block:
 
-- one authoritative repository remains acceptable;
-- one Python source root, `src/`, remains acceptable;
-- the default target is a modular monolith;
-- bounded ownership and dependency direction must be enforceable through
-  package boundaries and architecture tests.
+- ASS-02 in-process historical application service;
+- on-demand historical Candle computation (`D03`);
+- pure H01 kernel (`E05`).
 
-Package Boundary / Modular Monolith Foundation v1 is **COMPLETE**. It was
-executed from baseline `9c938a5`; final reviewed candidate
-`900c128ddf063b9e4ea393596fb37aa3c0692ba8` merged through PR #25 as
-`7d531fcd8eb46b3d562de93ccae9c2352f2706fa` after independent review and
-exact-head CI passed. Its disposition is recorded in ADR-0024 under
-"Implementation outcome". Legacy Capability Harvest Audit v1 is now also
-**COMPLETE**.
+Do not create a generic provider/plugin framework as part of this gate.
 
-Resolved by Package Boundary and subsequent ASS-01 work, and therefore no
-longer open:
+## DG-B — Historical / Live data convergence
 
-- the Data Access bounded context is `quant_platform.access`; shared canonical
-  primitives and Producer remain under `quant_platform.data`;
-  `quant_platform.data.parquet` remains a deliberate shared physical seam; and
-  `quant_platform.source_adapters` remains source-specific;
-- the package hierarchy and dependency graph for the current runtime modules,
-  mechanically enforced by `tests/test_package_boundaries_v1.py`;
-- migration mechanics and sequence for current `quant_platform.data` modules;
-- the application-service composition owner is `application`, with canonical
-  package `quant_platform.application`;
-- executable orchestration under `tools/` is now governed as a dependency
-  source and may not introduce new domain/runtime bypasses around the application
-  seam.
+Blocks: `A10,A11,A16,B04,B06`.
 
-The following remain intentionally open:
+Must resolve before live/backfill convergence:
 
-- bounded-context and package names beyond the implemented Data Access and
-  Application seams;
-- executable package hierarchy for future bounded contexts;
-- executable host placement, including any future `apps/` layout;
-- independently installable API, worker or client packages;
-- service/deployment split and process topology.
+- general quality-report -> lifecycle mapping beyond the accepted first Bybit `trade-v1` vertical;
+- explicit representation and DataGateway semantics for non-contiguous covered intervals;
+- live/backfill overlap and source precedence;
+- repair triggering and idempotent revision/retry behavior;
+- duplicate resolution, including sources without native identity;
+- live DataGateway stream/cursor identity and deterministic resume/replay semantics.
 
-ADR-0024 records this boundary without freezing the future package tree.
+Historical first-vertical publication/read remains authoritative and does not need re-proof.
 
-## Application Service Seam v1
+## DG-C — Market-data depth (L1/L2)
 
-The accepted API-first architecture already places application services between
-future clients/API transport and domain/DataGateway capabilities. ASS-01 closes
-the previously unowned in-process composition boundary without introducing a
-network/runtime platform.
+Blocks: `A13,A14`.
 
-ASS-01 — Application Service Ownership & Architecture Enforcement is
-**COMPLETE** through PR #27, merged as
-`066e7cd577104fb2c8f657430402b79cd58ba9aa` after independent exact-head review
-and CI success.
+Trigger: a concrete source/feed is selected for L1 or L2 implementation.
 
-Resolved by ASS-01:
+Resolve from observed source evidence:
 
-```text
-owner   = application
-package = quant_platform.application
-```
+- versioned L1 schema/identity/ordering/coverage/provenance;
+- versioned L2 snapshot/increment semantics;
+- reconstruction ordering, gap detection/recovery and duplicate rules.
 
-Current ownership permits `application` to compose the existing `access`,
-`producer`, `source`, `physical` and `shared` owners while no existing runtime
-owner may depend on `application`. The owner graph remains acyclic.
+Do not require a second venue merely to implement a first L1/L2 source.
 
-Verification composition is intentionally asymmetric:
+Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
 
-```text
-runtime !-> tools/tests
-tools   !-> tests
-tests   -> tools/runtime/test-support is permitted
-```
+## DG-D — Application configuration / ASS-03
 
-Existing historical tool bypasses are not silently accepted: they are recorded
-as finite exact-edge, self-cleaning ASS-03 debt. New executable orchestration
-must go through the application seam. Dynamic import/code-execution bypasses
-are fail-closed consistently with the runtime dependency analyzer.
+Blocks: `C05`, therefore full ASS-03 convergence.
 
-ASS-01 does not implement an application use case. The following remain separate
-future work:
+Current facts:
 
-- ASS-02: first canonical application-service vertical, including semantic
-  request resolution and the already-frozen application result/error semantics;
-- ASS-03: convergence of existing executable orchestration and configuration
-  resolution behind the application seam;
-- Canonical API transport/runtime, Job runtime and product clients at their
-  later roadmap milestones.
+- runtime/domain owners accept resolved dependencies/values rather than discovering configuration;
+- existing executable/test tooling has divergent configuration conventions;
+- ASS-01 records finite exact-edge orchestration debt.
 
-The following decision is newly explicit and intentionally **OPEN**:
+Before ASS-03, choose one explicit application configuration-resolution convention and entry-point boundary sufficient to migrate the existing tools behind real application services.
 
-- **multi-venue / multi-representation capability resolution** inside the
-  application composition layer. The first vertical may compose currently
-  available source-specific semantics directly; the general mechanism
-  (registry, capability lookup, explicit composition or another design) must
-  not be frozen before a real second venue/representation provides evidence.
+Do not introduce a general dependency-injection, plugin or configuration framework merely for cleanup.
 
-No next implementation slice is selected by this closeout.
+## DG-E — Validation semantics
 
-[PRODUCER_CONSUMER_CONFORMITY.md](../contracts/PRODUCER_CONSUMER_CONFORMITY.md)
-freezes the bounded-read property, `RecordTimeBounds`, the ordering contract,
-the DataGateway/CandleDefinition ordering-identity mapping, the Bybit
-first-vertical eligibility profile (non-null, unique `trade_id` — distinct
-from generic `trade-v1` nullability, which is unchanged), the physical
-`trade-v1` Parquet contract, the `CanonicalContentHashV1` algorithm, the
-physical-vs-semantic-vs-result identity matrix, the first-vertical
-certification rule (including the durable evidence model and
-certification/publication sequencing), semantic catalog-rebuild equality, and
-the manifest+coverage-to-catalog mapping. The following remain explicitly
-open even after that freeze, as implementation choices deliberately left
-tunable or future generalizations beyond the first implemented vertical:
+Blocks: `F06,F07,F08`.
 
-- transport for a bounded historical read (HTTP streaming, gRPC, Arrow
-  Flight, WebSocket, network pagination) — the contract freezes only the
-  memory-bounded property, not a transport;
-- the concrete Python type/method name for the bounded `scan()` capability and
-  for `RecordTimeBounds`;
-- Parquet writer implementation/library, compression, row-group size and
-  page/dictionary settings;
-- generalization of the current S13/S14 catalog transaction and publication
-  mechanics beyond the first Bybit `trade-v1` vertical; the first-vertical
-  implementation itself is no longer an open decision;
-- second-venue ordering-identity integration (the mapping mechanism is frozen
-  in `PRODUCER_CONSUMER_CONFORMITY.md` §8.2 OI2, including that a second venue
-  needs its own eligibility profile analogous to §10; no second venue is added
-  by this pass);
-- the general quality-report-to-lifecycle-state formula beyond the first
-  Bybit `trade-v1` vertical (the first-vertical minimum evidence rule is
-  frozen in `PRODUCER_CONSUMER_CONFORMITY.md` §13; a general formula for
-  other data kinds remains open per `MARKET_DATA_INGEST_CONTRACTS.md` §10);
-- a file-durable `certification-evidence-v1` artifact (§13.3 CE5 explicitly
-  does not design one; certification is instead treated as a reproducible
-  operation, re-run on catalog loss).
+Resolve before claiming canonical validation / labeling / robust comparison:
 
-## Must resolve before relevant implementation
+- temporal availability rule used by Feature/Research/Validation;
+- purge/embargo/warmup semantics at fold boundaries;
+- Label/Outcome horizon and censoring semantics;
+- lockbox/hidden-evaluation boundary;
+- exact DSR/PBO estimator definitions, input return series, trial population, comparable-fold semantics and pinned numeric vectors.
 
-### Application services
+H14 DSR/PBO remains isolated: it does not block unrelated H01/Feature work before this gate is activated.
 
-ASS-02 may use the already-frozen Consumer API semantic selector/result/error
-rules without choosing transport. Before broader multi-venue or
-multi-representation application composition is generalized, resolve the exact
-capability-resolution mechanism using observed second-provider evidence.
+## DG-F — Strategy / Execution semantics
 
-ASS-03 must converge the finite pre-ASS-01 tool-domain/tool-test debt and the
-currently divergent configuration-resolution conventions without introducing a
-general dependency-injection or plugin framework merely for cleanup.
+Blocks: `G04,H03` and therefore the complete deterministic replay vertical.
 
-### DataGateway and representations
+Resolve with pinned/adversarial vectors:
 
-- precise candle materialization identity;
+- session calendars, DST and session-boundary behavior;
+- cooldown/eligibility semantics;
+- stop/target/bracket/OCO behavior;
+- same-bar/intrabar conflicts;
+- partial fills and conflict ordering.
 
-DataGateway logical boundary and first implementation slice are resolved by
-ADR-0019 and `docs/contracts/DATA_GATEWAY.md`. The following remain open for
-the relevant implementation work:
+Keep Strategy upstream of Execution. Do not let execution simulation redefine strategy semantics.
 
-- whether `DatasetSnapshot` should become a first-class public contract; if so,
-  whether it should use an immutable partition/content reference or an
-  independently materialized snapshot artifact. Catalog-query replay alone is
-  explicitly insufficient for durable reproducibility;
-- the concrete logical row/columnar batch return representation;
-- the live stream interface and identity/cursor semantics;
-- schema compatibility and evolution policy beyond the accepted
-  `dataset-manifest-v2` decision.
+## DG-G — Experiment / RL / Jobs
 
-### Market Data Ingest
+Blocks: `I02,I06,I07,J03`.
 
-The producer-side capability is inside the Data Plane; it does not replace the
-DataGateway consumer boundary.
+These decisions are independent sub-gates and should be activated separately:
 
-Declared coverage versus observed first/last event bounds is resolved by
-ADR-0022 and `docs/contracts/DECLARED_COVERAGE.md`. The following remain open
-for implementation:
+### Experiment persistence (`I02`)
 
-- a catalog coverage relation plus the DataGateway change needed to read
-  non-contiguous partition coverage. Until then such a partition cannot be
-  published at all: `degraded` is not an option, because lifecycle state gates
-  which partitions are read and never narrows their declared span;
-- physical placement of a dataset's `_coverage/` directory when its partitions
-  span hot, cold and deep-cold storage roots;
-- crash-safe sealing, manifest publication, catalog reconciliation, and
-  idempotent retry details beyond the bridge invariants (idempotency, natural
-  identity keying, revision handling, storage-root mapping, hash provenance,
-  fail-closed failure behavior) frozen in `PRODUCER_CONSUMER_CONFORMITY.md`
-  §11.3;
-- the mapping from quality reports to `valid`, `degraded`, and `invalid` for
-  data kinds and vertical slices beyond the first Bybit `trade-v1` day (the
-  first-vertical minimum evidence rule is frozen in
-  `PRODUCER_CONSUMER_CONFORMITY.md` §10);
-- live/backfill overlap, source precedence, repair triggering, and duplicate
-  resolution;
-- deduplication when the source provides no native identity;
-- deterministic ordering integration for a second venue;
-- future live consumer stream, cursor, and identity semantics;
-- versioned L1, L2, and L3/MBO contracts.
+Resolve one canonical Study/Trial/Run/Artifact persistence model. Avoid competing persistence stores/models. Restart/query/resume must preserve identity and idempotency.
 
-See [Market Data Ingest](MARKET_DATA_INGEST.md),
-[Market Data Ingest Contracts](../contracts/MARKET_DATA_INGEST_CONTRACTS.md) and
-[Declared Coverage](../contracts/DECLARED_COVERAGE.md).
+### Strategic RL (`I06`)
 
-### Storage Lifecycle
+Freeze StrategicState/StrategicAction/StrategicReward only when the strategic-RL runtime is selected. It must not absorb execution-control variables/objectives.
 
-Storage roots, placement, tiering, data protection, backups, capacity, health,
-and storage-pressure behavior are operational Data Plane concerns. Their
-implementation remains open:
+### Execution RL (`I07`)
 
-- hot/cold/deep-cold migration thresholds and relocation protocol;
-- retention and deletion authority;
-- backup destination, topology, frequency, and restore validation;
-- capacity thresholds, time-to-full estimation, and pressure actions;
-- checkpoint-state protection and monitoring technology.
+Freeze ExecutionState/ExecutionAction/ExecutionReward only when execution RL is selected. It must remain structurally separate from the strategic task.
 
-See [Storage Lifecycle](STORAGE_LIFECYCLE.md).
+### Job runtime (`J03`)
 
-### Execution
+Before durable long-running operations, freeze submission identity, status/lifecycle, retry/idempotency, result identity and failure semantics. Do not infer transport/process topology from the Job contract.
 
-- Order/Fill lifecycle;
-- stop, target, bracket and OCO semantics;
-- same-bar/intrabar conflict resolution;
-- partial-fill model;
-- multi-asset scope;
-- session semantics.
+## DG-H — Operational safety
 
-### RL
+Blocks operationally sensitive atoms `K02,K03,K05,K06,K07,K08,K09,K10` and dependent live/product work.
 
-- StrategicState, StrategicAction and StrategicReward;
-- ExecutionState, ExecutionAction and ExecutionReward;
-- structural isolation of the two tasks.
+This is progressive, not monolithic.
 
-### Experiment persistence
+### Runtime identity (`K02`)
 
-- canonical Study/Trial/Run/Artifact storage schema.
+Before production runtime identities are created/changed, resolve service identities, database roles, filesystem ACLs, credential disposition and least-privilege boundaries. Human/bootstrap E2E privilege is not production authorization.
 
-## Safe to defer
+### Observability (`K03`)
 
-- exact L3 contract until a real L3 feed is selected;
-- calibration-method choice;
-- full custom/reward-code sandbox until user-authored code is supported;
-- complete paper/live operational mechanics until their roadmap phases;
-- transport, remote host and product-client implementation while application
-  work remains in-process and does not require them.
+Before paper/live claims, define the minimum externally observable health/provenance/failure transitions required by the selected runtime. Exact technology/SLOs remain implementation-local until needed.
 
-FeatureDefinition versus FeatureSetDefinition and candle runtime/materialization are resolved by ADR-0016 and ADR-0017.
+### Pressure/protection/relocation (`K05-K07`)
+
+Resolve capacity thresholds/time-to-full actions, source-data protection authority and crash-safe relocation protocol before activating those control actions. No silent deletion.
+
+### Backup/restore/deletion (`K08-K09`)
+
+Restore proof must precede deletion authority. Resolve backup destination/topology/frequency only against the selected recovery objective. No protected or sole recoverable evidence may be deleted.
+
+### Checkpoint/recovery (`K10`)
+
+Requires live acquisition plus observability and restore evidence. Freeze cursor/checkpoint crash/restart semantics before implementation.
+
+## Explicitly deferable decisions
+
+The following are classified and therefore not roadmap unknowns:
+
+### Second provider / multi-capability resolution (`A12`,`C06`)
+
+Wait for a real second venue or second representation. The future mechanism may be explicit composition, capability lookup, registry or another design; do not freeze it from first-provider symmetry.
+
+### L3/MBO (`A15`)
+
+Wait for a real L3/MBO feed and map its semantics without invention.
+
+### Durable DatasetSnapshot (`B05`)
+
+Wait for a concrete durable replay/reproduction requirement. Catalog-query replay alone remains insufficient; reference-vs-artifact shape is not frozen now.
+
+### Schema evolution beyond accepted versions (`B08`)
+
+Wait for a real next schema/version requirement.
+
+### Feature provider extension (`E07`)
+
+Wait for a real second provider/capability need; no generic plugin framework now.
+
+### Multi-asset execution (`H06`)
+
+Wait for explicit multi-asset product scope.
+
+### Canonical API transport (`J02`)
+
+Consumer API semantics are already frozen. Concrete HTTP/gRPC/Arrow Flight/WebSocket/other transport, serialization, pagination/streaming and runtime host remain deferred until a real remote/client need exists.
+
+## Implementation-local choices — not governance blockers
+
+Unless a future accepted contract says otherwise, these remain local choices:
+
+- internal helper/class names;
+- concrete bounded-batch Python class/method naming where semantics are already frozen;
+- Parquet writer library/compression/row-group/page/dictionary settings;
+- client presentation details;
+- observability implementation technology after required signals are known;
+- local reversible code organization within established ownership/dependency boundaries.
+
+## Future package / process topology
+
+ADR-0024 intentionally does not freeze:
+
+- package names beyond currently exercised/implemented owners;
+- future `apps/`/host layout;
+- independently installable API/worker/client packages;
+- microservice/service split;
+- deployment/process topology.
+
+Resolve these only when a concrete runtime/deployment proposition requires them. The default remains the current modular monolith.
+
+## Activation rule
+
+Before a decision gate is opened:
+
+1. identify the selected dependent atom in `CAPABILITY_DAG.md`;
+2. verify its other dependencies are satisfied;
+3. scope only the exact unresolved decision proposition(s);
+4. credit accepted authority/evidence;
+5. resolve the minimum semantics needed for that atom;
+6. leave unrelated gates/deferable decisions untouched.
