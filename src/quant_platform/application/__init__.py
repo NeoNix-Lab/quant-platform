@@ -5,9 +5,28 @@ capabilities without owning their domain semantics.  It is an in-process
 seam: it is not an API, a transport, a runtime host, a job runtime or a
 client.
 
-ASS-01 establishes ownership and enforcement only.  No application service,
-selector resolution, result envelope, error translation or configuration
-resolution is implemented here yet; those are ASS-02 and ASS-03.
+ASS-01 established ownership and enforcement.  C02 adds semantic selector
+resolution for the frozen ``trades@1`` reference representation.  Result
+envelopes, stable error translation, read execution and configuration
+resolution remain C03 and ASS-03.
 """
 
-__all__: list[str] = []
+from .market_data import (
+    ApplicationRequestError,
+    ConsumerMarketDataQuery,
+    RepresentationRef,
+    UnsupportedOption,
+    UnsupportedRepresentation,
+    UnsupportedVenue,
+    resolve_market_data_request,
+)
+
+__all__ = [
+    "ApplicationRequestError",
+    "ConsumerMarketDataQuery",
+    "RepresentationRef",
+    "UnsupportedOption",
+    "UnsupportedRepresentation",
+    "UnsupportedVenue",
+    "resolve_market_data_request",
+]

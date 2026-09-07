@@ -40,6 +40,7 @@ OWNERS = {
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
     "quant_platform.application": "application",
+    "quant_platform.application.market_data": "application",
 }
 ALLOWED = {
     "shared": {"shared"},
