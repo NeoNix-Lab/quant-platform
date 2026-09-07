@@ -14,11 +14,11 @@ from consumer selectors, canonical source dataset identity and physical
 materialization details, while allowing historical and future incremental/live
 construction to converge.
 
-## Decision proposed
+## Decision
 
-Adopt the normative candidate in
-[CandleDefinition v1 Contract](../contracts/CANDLE_DEFINITION.md) for
-independent review, with these central decisions:
+Adopt the normative contract in
+[CandleDefinition v1 Contract](../contracts/CANDLE_DEFINITION.md), with these
+central decisions:
 
 1. A definition identity is a SHA-256 of canonical UTF-8 JSON containing only
    versioned semantic source, duration, alignment, boundary, aggregation,
@@ -49,11 +49,10 @@ independent review, with these central decisions:
    definition, source revision/evidence, support/coverage and canonical
    records are equivalent; physical placement is not semantic identity.
 
-The proposed closed-record schema is `schemas/candle-v1.json`. State and
-provenance remain in an envelope/materialization metadata, not in the row.
-The canonical five-minute definition payload, serialization and hash are
-protected by `fixtures/candle-definition-v1/golden-5m.json` and its focused
-contract test.
+The closed-record schema is `schemas/candle-v1.json`. State and provenance
+remain in an envelope/materialization metadata, not in the row. The canonical
+five-minute definition payload, serialization and hash are protected by
+`fixtures/candle-definition-v1/golden-5m.json` and its focused contract test.
 
 ## Consequences
 
@@ -68,9 +67,9 @@ contract test.
 - The existing DataGateway, frozen `trade-v1`, catalog and producer contracts
   remain unchanged.
 
-## Review gate
+## Review outcome
 
-This ADR must remain `PROPOSED` until an independent reviewer confirms the
-contract and its semantic fixtures/schema. A separate implementation mandate
-may begin only after that review; this ADR does not authorize candle runtime
-code by itself.
+The independent semantic review gate has passed and this ADR is `ACCEPTED`.
+Acceptance freezes the CandleDefinition v1 contract but does not itself
+authorize Candle runtime implementation; runtime work still requires an
+explicit bounded scope.
