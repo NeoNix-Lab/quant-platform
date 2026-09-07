@@ -16,6 +16,8 @@ implementation authorized  = NO
 
 The Roadmap vNext materialization is already integrated through PR #28. This slice does not reopen that review, alter the 87-atom graph, or activate any implementation atom.
 
+The completed Producer–Consumer Conformity cycle remains credited under ADR-0023: **Contract Freeze Gate = PASSED** and **Conformity Implementation Gate = PASSED**. This closeout does not reopen either gate.
+
 ## Scope
 
 Included:
