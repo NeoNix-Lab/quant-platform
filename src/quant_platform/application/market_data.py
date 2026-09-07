@@ -25,6 +25,7 @@ structurally satisfiable one layer up.
 
 from __future__ import annotations
 
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -178,12 +179,16 @@ def _require_supported_representation(representation: RepresentationRef) -> None
         )
 
 
-def _require_no_unsupported_options(options: Mapping[str, Any], what: str) -> None:
+def _require_no_unsupported_options(options: Mapping[str, Any] | None, what: str) -> None:
+    if options is None:
+        return
+    if not isinstance(options, MappingABC):
+        raise InvalidRequest(f"{what} must be a mapping")
     if not options:
         return
     raise UnsupportedOption(
         f"trades@1 defines no {what}",
-        context={"unsupported": sorted(options)},
+        context={"unsupported": sorted(str(name) for name in options)},
     )
 
 

@@ -281,6 +281,23 @@ class ErrorTranslationTests(unittest.TestCase):
                 # C02-stage failures legitimately have no consumer identity.
                 self.assertIsNone(caught.exception.request_identity)
 
+    def test_malformed_option_shapes_are_invalid_request_not_raw_type_error(self):
+        cases = [
+            query(options=1),
+            query(representation=RepresentationRef("trades", 1, definition=1)),
+        ]
+        for bad in cases:
+            with self.subTest(query=bad):
+                with self.assertRaises(ConsumerApiError) as caught:
+                    execute_market_data_query(bad, gateway=covered_gateway())
+                error = caught.exception
+                self.assertEqual(ConsumerErrorCode.INVALID_REQUEST, error.code)
+                self.assertIsInstance(error.__cause__, InvalidRequest)
+                self.assertEqual({}, error.context)
+                rendered = collect_strings(error.message) + collect_strings(error.context)
+                self.assertNotIn("'int' object is not iterable", rendered)
+                self.assertNotIn("TypeError", rendered)
+
     def test_gateway_phase_mapping(self):
         cases = [
             (DatasetNotFound("x"), ConsumerErrorCode.SOURCE_NOT_FOUND),
