@@ -27,6 +27,8 @@ implementation authorized  = NO
 
 ASS-01 remains COMPLETE. ASS-02, ASS-03, H01 and all other implementation atoms remain NOT ACTIVE.
 
+The completed Producer–Consumer Conformity cycle governed by ADR-0023 remains credited: **Contract Freeze Gate = PASSED** and **Conformity Implementation Gate = PASSED**. This governance slice does not reopen either gate.
+
 ## Roadmap model
 
 The corrected inventory is:
