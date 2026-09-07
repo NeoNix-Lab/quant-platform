@@ -124,9 +124,14 @@ def resolve_market_data_request(query: ConsumerMarketDataQuery) -> DataRequest:
     composed rather than reimplemented.
     """
 
+    # Both shapes are validated before either is interpreted, so a semantic
+    # refusal on one field can never leave the other unchecked for anything
+    # downstream -- including the error-context builder -- to iterate.
     _require_supported_representation(query.representation)
-    _require_no_unsupported_options(query.representation.definition, "representation definition")
-    _require_no_unsupported_options(query.options, "request options")
+    definition = _require_mapping_shape(query.representation.definition, "representation definition")
+    options = _require_mapping_shape(query.options, "request options")
+    _require_no_unsupported_options(definition, "representation definition")
+    _require_no_unsupported_options(options, "request options")
 
     # DatasetIdentity normalises the venue (strip + lowercase) and validates
     # the instrument, so the ordering-policy lookup uses the normalised venue
@@ -179,11 +184,23 @@ def _require_supported_representation(representation: RepresentationRef) -> None
         )
 
 
-def _require_no_unsupported_options(options: Mapping[str, Any] | None, what: str) -> None:
-    if options is None:
-        return
-    if not isinstance(options, MappingABC):
+def _require_mapping_shape(value: Mapping[str, Any] | None, what: str) -> Mapping[str, Any]:
+    """Admit only an absent or mapping-shaped value, and never coerce one.
+
+    A list, tuple, string or number is refused rather than converted, so its
+    elements can never later be reported as option names.
+    """
+
+    if value is None:
+        return {}
+    if not isinstance(value, MappingABC):
         raise InvalidRequest(f"{what} must be a mapping")
+    return value
+
+
+def _require_no_unsupported_options(options: Mapping[str, Any], what: str) -> None:
+    """Refuse a non-empty mapping.  The shape is already validated."""
+
     if not options:
         return
     raise UnsupportedOption(
@@ -464,11 +481,18 @@ def _request_phase_context(
             "representation": f"{TRADES_V1_KIND}@{TRADES_V1_VERSION}",
         }
     if code is ConsumerErrorCode.INVALID_REQUEST and isinstance(exc, UnsupportedOption):
-        unsupported = set(query.options or {})
-        definition = getattr(query.representation, "definition", None)
-        unsupported |= set(definition or {})
+        # UnsupportedOption is raised only after both shapes are validated, so
+        # these are mappings.  The guard keeps this builder non-raising by
+        # construction rather than relying on that ordering; it is not the
+        # primary validator and does not affect precedence.
+        unsupported = _option_names(query.options)
+        unsupported |= _option_names(getattr(query.representation, "definition", None))
         return {"unsupported_options": sorted(str(name) for name in unsupported)}
     return {}
+
+
+def _option_names(value: Any) -> set[Any]:
+    return set(value) if isinstance(value, MappingABC) else set()
 
 
 def _gateway_phase_context(

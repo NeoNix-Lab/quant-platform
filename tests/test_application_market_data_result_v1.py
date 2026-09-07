@@ -298,6 +298,31 @@ class ErrorTranslationTests(unittest.TestCase):
                 self.assertNotIn("'int' object is not iterable", rendered)
                 self.assertNotIn("TypeError", rendered)
 
+    def test_malformed_option_shape_is_caught_even_when_the_other_field_refuses_first(self):
+        # A valid non-empty definition would refuse first on semantics.  The
+        # malformed options shape must still be validated before that refusal
+        # is interpreted, or the context builder iterates an unchecked value.
+        cases = [
+            ("scalar", query(representation=RepresentationRef("trades", 1, {"a": 1}), options=1)),
+            ("iterable", query(representation=RepresentationRef("trades", 1, {"a": 1}), options=["x"])),
+        ]
+        for label, bad in cases:
+            with self.subTest(shape=label):
+                with self.assertRaises(ConsumerApiError) as caught:
+                    execute_market_data_query(bad, gateway=covered_gateway())
+                error = caught.exception
+                self.assertEqual(ConsumerErrorCode.INVALID_REQUEST, error.code)
+                self.assertIsInstance(error.__cause__, InvalidRequest)
+                self.assertEqual({}, error.context)
+                rendered = collect_strings(error.message) + collect_strings(error.context)
+                self.assertNotIn("'int' object is not iterable", rendered)
+                self.assertNotIn("TypeError", rendered)
+                # Elements of a malformed list are never option names, and the
+                # valid field's keys are not reported for a shape failure.
+                for value in rendered:
+                    self.assertNotIn("x", value)
+                    self.assertNotIn("unsupported_options", value)
+
     def test_gateway_phase_mapping(self):
         cases = [
             (DatasetNotFound("x"), ConsumerErrorCode.SOURCE_NOT_FOUND),
