@@ -1,6 +1,6 @@
 # Open Decisions
 
-This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a gate is activated.
+This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
 ## Resolved foundation — reference only
 
@@ -31,64 +31,90 @@ Legacy repositories remain evidence/reference only and are never runtime depende
 
 ## Decision-gate policy
 
-An `OPEN_BLOCKING` decision is not automatically a current project. It becomes active only when a selected dependent atom reaches its gate. An `OPEN_DEFERABLE` decision remains deliberately unresolved until the stated real-world evidence trigger exists.
+An `OPEN_BLOCKING` decision is not automatically a current project. It becomes active only when a selected dependent atom reaches that proposition on its transitive dependency path.
 
-No decision is frozen merely to improve a roadmap-completeness percentage.
+A gate-family name groups related decisions for navigation; it is **not** a requirement to resolve every sibling proposition in the family.
+
+An `OPEN_DEFERABLE` decision remains deliberately unresolved until its stated real-world evidence trigger exists. No decision is frozen merely to improve a completeness percentage.
 
 ## DG-A — Representation / Feature integration
 
-Blocks: `D05,D06,E02,E04,E06`.
+This family has independent branches.
 
-Must resolve before canonical Feature runtime / H01 integration:
+### Candle materialization (`D05`)
 
-- precise Candle materialization identity: how persisted Candle results bind RepresentationDefinition/CandleDefinition, source dataset/partition evidence, temporal support and implementation identity;
-- canonical Footprint representation/grain for order-flow features, including validated tick grid, price-level ordering/adjacency and temporal availability;
-- canonical `FeatureDefinition` identity/fields/versioning and availability semantics;
-- canonical `FeatureArtifact` identity/provenance/materialization semantics;
-- H01 integration rule binding the pure imbalance kernel to canonical Footprint input and FeatureDefinition/FeatureArtifact provenance.
+Activate only when persisted Candle results are selected. Resolve how a persisted Candle binds CandleDefinition/Representation identity, source dataset/partition evidence, temporal support and implementation identity.
 
-Does **not** block:
+`D05` is not a prerequisite of canonical H01 integration.
 
-- ASS-02 in-process historical application service;
-- on-demand historical Candle computation (`D03`);
-- pure H01 kernel (`E05`).
+### FeatureDefinition (`E02`)
 
-Do not create a generic provider/plugin framework as part of this gate.
+Activate before FeatureDefinition-dependent work. Freeze the minimum canonical identity/fields/versioning/availability semantics.
+
+### FeatureArtifact (`E04`)
+
+Activate only after the FeatureDefinition path is selected and artifact/materialization behavior is needed. Resolve artifact identity/provenance and equivalence of cached vs recomputed output.
+
+### Footprint + canonical H01 (`D06`,`E06`)
+
+For canonical H01, resolve only its actual path:
+
+```text
+D06 footprint representation
+E02 FeatureDefinition
+E04 FeatureArtifact
+E05 pure H01 kernel (already RESOLVED)
+E06 canonical H01 integration
+```
+
+Freeze canonical price-level grain, validated tick grid, ordering/adjacency, temporal availability and provenance binding.
+
+Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework.
 
 ## DG-B — Historical / Live data convergence
 
-Blocks: `A10,A11,A16,B04,B06`.
+This family also has separate repair and live branches.
 
-Must resolve before live/backfill convergence:
+### Repair branch (`A16`,`B04`,`A10` as required)
 
-- general quality-report -> lifecycle mapping beyond the accepted first Bybit `trade-v1` vertical;
-- explicit representation and DataGateway semantics for non-contiguous covered intervals;
-- live/backfill overlap and source precedence;
-- repair triggering and idempotent revision/retry behavior;
-- duplicate resolution, including sources without native identity;
-- live DataGateway stream/cursor identity and deterministic resume/replay semantics.
+Activate only the propositions needed by the selected repair slice:
 
-Historical first-vertical publication/read remains authoritative and does not need re-proof.
+- general quality-report -> lifecycle mapping beyond the accepted first vertical;
+- explicit non-contiguous coverage semantics where required;
+- repair triggering, precedence and idempotent revision/retry behavior;
+- duplicate resolution where required by repair semantics.
 
-## DG-C — Market-data depth (L1/L2)
+Historical repair does not activate live-cursor semantics by default.
 
-Blocks: `A13,A14`.
+### Live branch (`A11`,`B06` + only required shared decisions)
 
-Trigger: a concrete source/feed is selected for L1 or L2 implementation.
+Before live acquisition/cursor implementation, resolve:
 
-Resolve from observed source evidence:
+- historical/live overlap and source precedence;
+- duplicate rules for the selected source;
+- deterministic live cursor identity and resume/replay semantics;
+- only those repair/shared quality/coverage propositions that are on the selected live path;
+- the relevant DG-H operational prerequisites on that path.
 
-- versioned L1 schema/identity/ordering/coverage/provenance;
-- versioned L2 snapshot/increment semantics;
-- reconstruction ordering, gap detection/recovery and duplicate rules.
+Implemented checkpoint/recovery (`K10`) follows the live acquisition capability it checkpoints; it is not an implementation prerequisite of `A11`.
 
-Do not require a second venue merely to implement a first L1/L2 source.
+## DG-C — Market-data depth
+
+### L1 branch (`A13`)
+
+Activate when a concrete L1 feed is selected. Resolve versioned L1 schema, identity, ordering, coverage and provenance from observed source evidence.
+
+Selecting L1 does **not** activate L2.
+
+### L2 branch (`A14`)
+
+Activate only when L2 is selected, after the declared L1 dependency. Resolve snapshot/increment semantics, deterministic reconstruction ordering, gap handling and duplicate rules.
 
 Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
 
 ## DG-D — Application configuration / ASS-03
 
-Blocks: `C05`, therefore full ASS-03 convergence.
+Blocks `C05`, therefore full ASS-03 convergence.
 
 Current facts:
 
@@ -102,21 +128,24 @@ Do not introduce a general dependency-injection, plugin or configuration framewo
 
 ## DG-E — Validation semantics
 
-Blocks: `F06,F07,F08`.
+### Validation / labeling branch (`F06`,`F07`)
 
-Resolve before claiming canonical validation / labeling / robust comparison:
+Activate for the Validation -> Strategy/ML path. Resolve:
 
 - temporal availability rule used by Feature/Research/Validation;
 - purge/embargo/warmup semantics at fold boundaries;
 - Label/Outcome horizon and censoring semantics;
-- lockbox/hidden-evaluation boundary;
-- exact DSR/PBO estimator definitions, input return series, trial population, comparable-fold semantics and pinned numeric vectors.
+- lockbox/hidden-evaluation boundary.
 
-H14 DSR/PBO remains isolated: it does not block unrelated H01/Feature work before this gate is activated.
+### DSR/PBO branch (`F08`)
+
+Activate only when robust-comparison/DSR-PBO capability is selected. Resolve exact estimator definitions, input return series, trial population, comparable-fold semantics and pinned numeric vectors.
+
+`F08` does **not** block Strategy or supervised-input paths whose dependency chain runs through `F07` rather than `F08`.
 
 ## DG-F — Strategy / Execution semantics
 
-Blocks: `G04,H03` and therefore the complete deterministic replay vertical.
+Blocks `G04,H03` when their Strategy/Replay path is selected.
 
 Resolve with pinned/adversarial vectors:
 
@@ -130,13 +159,11 @@ Keep Strategy upstream of Execution. Do not let execution simulation redefine st
 
 ## DG-G — Experiment / RL / Jobs
 
-Blocks: `I02,I06,I07,J03`.
-
-These decisions are independent sub-gates and should be activated separately:
+Independent branches:
 
 ### Experiment persistence (`I02`)
 
-Resolve one canonical Study/Trial/Run/Artifact persistence model. Avoid competing persistence stores/models. Restart/query/resume must preserve identity and idempotency.
+Resolve one canonical Study/Trial/Run/Artifact persistence model. Restart/query/resume must preserve identity and idempotency; avoid competing persistence stores/models.
 
 ### Strategic RL (`I06`)
 
@@ -152,9 +179,7 @@ Before durable long-running operations, freeze submission identity, status/lifec
 
 ## DG-H — Operational safety
 
-Blocks operationally sensitive atoms `K02,K03,K05,K06,K07,K08,K09,K10` and dependent live/product work.
-
-This is progressive, not monolithic.
+This family is progressive and non-monolithic.
 
 ### Runtime identity (`K02`)
 
@@ -162,19 +187,31 @@ Before production runtime identities are created/changed, resolve service identi
 
 ### Observability (`K03`)
 
-Before paper/live claims, define the minimum externally observable health/provenance/failure transitions required by the selected runtime. Exact technology/SLOs remain implementation-local until needed.
+Before paper/live claims or checkpoint/recovery runtime, define the minimum externally observable health/provenance/failure transitions required by the selected runtime. Exact technology/SLOs remain local until needed.
 
-### Pressure/protection/relocation (`K05-K07`)
+### Pressure (`K05`)
 
-Resolve capacity thresholds/time-to-full actions, source-data protection authority and crash-safe relocation protocol before activating those control actions. No silent deletion.
+After observational capacity `K04`, resolve thresholds/time-to-full and explicit safe actions. No silent deletion.
 
-### Backup/restore/deletion (`K08-K09`)
+### Source protection (`K06`)
 
-Restore proof must precede deletion authority. Resolve backup destination/topology/frequency only against the selected recovery objective. No protected or sole recoverable evidence may be deleted.
+Resolve protection authority and reconstruction guarantees. `K06` depends on the selected source and pressure policy; it does not depend on backup/restore.
+
+### Tier relocation (`K07`)
+
+If relocation is selected, freeze crash-safe old-or-new-valid placement semantics. This is a sibling downstream use of source protection, not a prerequisite of backup/restore.
+
+### Backup/restore (`K08`)
+
+After source protection, resolve recovery objective, destination/topology/frequency as required, and prove independent restoration of required identities. Tier relocation need not be implemented first.
+
+### Retention/deletion (`K09`)
+
+Restore proof must precede deletion authority. No protected or sole recoverable evidence may be deleted.
 
 ### Checkpoint/recovery (`K10`)
 
-Requires live acquisition plus observability and restore evidence. Freeze cursor/checkpoint crash/restart semantics before implementation.
+`K10` implementation requires live acquisition `A11`, observability `K03` and restore evidence `K08`. Freeze cursor/checkpoint crash/restart semantics before implementing K10. It follows, rather than cyclically precedes, A11 implementation.
 
 ## Explicitly deferable decisions
 
@@ -182,7 +219,7 @@ The following are classified and therefore not roadmap unknowns:
 
 ### Second provider / multi-capability resolution (`A12`,`C06`)
 
-Wait for a real second venue or second representation. The future mechanism may be explicit composition, capability lookup, registry or another design; do not freeze it from first-provider symmetry.
+Wait for a real second venue or second representation. Do not freeze a generic resolver from first-provider symmetry.
 
 ### L3/MBO (`A15`)
 
@@ -213,31 +250,8 @@ Consumer API semantics are already frozen. Concrete HTTP/gRPC/Arrow Flight/WebSo
 Unless a future accepted contract says otherwise, these remain local choices:
 
 - internal helper/class names;
-- concrete bounded-batch Python class/method naming where semantics are already frozen;
+- concrete bounded-batch Python class/method naming where semantics are frozen;
 - Parquet writer library/compression/row-group/page/dictionary settings;
 - client presentation details;
 - observability implementation technology after required signals are known;
 - local reversible code organization within established ownership/dependency boundaries.
-
-## Future package / process topology
-
-ADR-0024 intentionally does not freeze:
-
-- package names beyond currently exercised/implemented owners;
-- future `apps/`/host layout;
-- independently installable API/worker/client packages;
-- microservice/service split;
-- deployment/process topology.
-
-Resolve these only when a concrete runtime/deployment proposition requires them. The default remains the current modular monolith.
-
-## Activation rule
-
-Before a decision gate is opened:
-
-1. identify the selected dependent atom in `CAPABILITY_DAG.md`;
-2. verify its other dependencies are satisfied;
-3. scope only the exact unresolved decision proposition(s);
-4. credit accepted authority/evidence;
-5. resolve the minimum semantics needed for that atom;
-6. leave unrelated gates/deferable decisions untouched.
