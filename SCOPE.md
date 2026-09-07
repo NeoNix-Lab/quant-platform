@@ -1,152 +1,132 @@
-# Scope: Application Service Seam v1 — ASS-01 COMPLETE
+# Scope: Roadmap vNext Capability DAG v1 — GOVERNANCE MATERIALIZATION
 
 ## Goal
 
-Close the first implementation atom of the Application Service Seam v1 after independent review, exact-head CI and merge, while preserving the separation between the in-process application-service boundary and later API/runtime/client work.
+Materialize the accepted architecture-roadmap atomization audit into repository governance without authorizing runtime implementation or prematurely freezing deferable future semantics.
 
-## Integrated state
-
-```text
-pre-ASS-01 baseline        = e2991bbd3dcd5f25d35148add76abfbc1e0b72b3
-ASS-01 candidate           = 6d71f68d9a322487840688e13fe89387842e0029
-PR                         = #27
-CI                         = Quant Platform integrity #73 — SUCCESS
-merge                      = 066e7cd577104fb2c8f657430402b79cd58ba9aa
-scope state                = COMPLETE
-```
-
-ASS-01 introduced no quantitative runtime behavior.
-
-## Architecture outcome
-
-The canonical in-process application-service owner is now:
+This slice establishes a layered planning model:
 
 ```text
-quant_platform.application
-owner = application
+ROADMAP.md                 = macro product progression (phases 0–15)
+CAPABILITY_DAG.md          = atomic dependency/execution authority
+CAPABILITY_MAP.md          = compact canonical-state snapshot
+OPEN_DECISIONS.md          = live decision gates / unresolved decisions
+ADRs + contracts           = semantic authority
 ```
 
-Its role is composition of application use cases. It does not own quantitative semantics.
-
-Current enforced owner direction permits:
+## Baseline
 
 ```text
-application -> application
-application -> access
-application -> producer
-application -> source
-application -> physical
-application -> shared
+base main                  = 8ae5b1ca36e6ca0e23b330fbf26d7dc529af7dc5
+branch                     = governance/roadmap-vnext-capability-dag-v1
+mutation class             = governance/docs only
+runtime implementation     = NONE
+implementation authorized  = NO
 ```
 
-and no existing runtime owner is permitted to depend on `application`.
+ASS-01 remains COMPLETE. ASS-02, ASS-03, H01 and all other implementation atoms remain NOT ACTIVE.
 
-The owner graph remains acyclic.
+## Roadmap model
 
-## Executable orchestration governance
-
-`tools/` is now governed as executable orchestration source code rather than only appearing as a possible dependency target.
-
-New executable orchestration must not bypass the application seam to depend directly on runtime/domain owners.
-
-The verified composition rule is:
+The audit classified the full planning inventory:
 
 ```text
-runtime !-> tools/tests
-tools   !-> tests
-tests   -> tools/runtime/test-support is allowed
+TOTAL_ATOMS                     = 87
+CLASSIFIED_ATOMS                = 87
+UNCLASSIFIED_GAPS               = 0
+SEMANTIC_FROZEN_OR_RESOLVED     = 49 / 87 = 56.3%
+OPEN_BLOCKING                   = 30
+OPEN_DEFERABLE                  = 8
+ROADMAP_PLANNING_COMPLETENESS   = >= 90%
 ```
 
-Existing pre-ASS-01 violations are retained only as exact-edge, self-cleaning debt for later convergence:
+The semantic-freeze percentage is intentionally not used as a requirement to freeze future choices early. A deferable decision is planning-complete when its trigger/evidence boundary is explicit.
+
+The canonical proposed atom/dependency model is `docs/product/CAPABILITY_DAG.md`.
+
+## Decision gates
+
+Thirty blocking future decisions are grouped by activation boundary rather than scheduled as an up-front design program:
 
 ```text
-tool -> domain debt = 13 exact edges across conformity_e2e and import_bybit_trades
-tool -> tests debt  = 1 exact edge: conformity_e2e -> golden_conformity_support
+DG-A  Representation / Feature integration
+DG-B  Historical / Live data convergence
+DG-C  Market-data depth (L1/L2)
+DG-D  Application configuration / ASS-03
+DG-E  Validation semantics
+DG-F  Strategy / Execution semantics
+DG-G  Experiment / RL / Jobs
+DG-H  Operational safety
 ```
 
-New dependencies inside those tools receive no wildcard exemption. Stale debt entries fail architecture verification. Dynamic import/code-execution bypasses are fail-closed consistently with the runtime analyzer.
+A gate is activated only when a selected dependent atom requires it.
 
-## Evidence
+Eight explicitly deferable decisions remain open until real evidence exists, including second-provider capability resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, provider-extension mechanism, multi-asset execution and concrete API transport.
 
-Credited final evidence:
+## Execution frontier
+
+The current classified frontier is:
 
 ```text
-python tests/test_package_boundaries_v1.py = 15/15 PASS
-python tools/run_tests.py                  = 29/29 PASS
-git diff --check                           = PASS
-independent re-review                      = APPROVE
-BLOCKERS / IMPORTANT / MINOR               = NONE / NONE / NONE
-exact-head CI                              = SUCCESS
+C02  ASS-02 semantic selector resolution
+D03  historical Candle runtime (on-demand only)
+E05  H01 pure imbalance kernel
+F05  deterministic walk-forward schedule
+I01  Study/Trial/Run/Artifact semantic model
+K04  observational capacity monitoring
+K11  governance-state consistency
 ```
 
-No Golden E2E, PostgreSQL integration or DataGateway re-proof was required for this architecture-only atom.
+This list is **not implementation authorization** and does not select a next atom.
 
-## Application Service Seam maturity
+## Macro roadmap
+
+Phases 0–15 remain the product-progression view and are not renumbered.
 
 ```text
-ASS-01 — ownership + architecture enforcement     = COMPLETE
-ASS-02 — first canonical application service      = NOT ACTIVE
-ASS-03 — executable orchestration/config convergence = NOT ACTIVE
+Phase          = product progression
+Atom           = executable capability proposition
+Decision Gate  = semantic/architecture authorization
+Vertical       = cross-spine integration proof
+Wave           = planning grouping
 ```
 
-ASS-01 does **not** implement:
+The DAG, not phase numbering, determines executable dependency order.
 
-- `MarketDataService` or another application use case;
-- semantic-selector resolution;
-- Consumer API result-envelope/error translation runtime;
-- canonical configuration resolution;
-- migration of existing executable orchestration behind the seam;
-- API transport or server runtime;
-- Job runtime;
-- CLI/TUI/App clients;
-- H01 / Feature runtime.
+## Governance-only scope
 
-## Deferred runtime decisions
+Included:
 
-The following remain intentionally open and are not implied by ASS-01:
+- add `docs/product/CAPABILITY_DAG.md`;
+- link the macro roadmap to the DAG and replace false linear dependencies with DAG semantics;
+- keep `CAPABILITY_MAP.md` concise while separating decision state from implementation state where the aggregate view was misleading;
+- organize open decisions by DG-A…DG-H and explicit deferable triggers;
+- record the roadmap-readiness model and execution frontier;
+- correct directly relevant non-semantic governance drift when safe.
 
-```text
-HTTP / gRPC / Arrow Flight / WebSocket
-wire serialization
-streaming / pagination / cursors
-remote reachability
-authentication / TLS
-runtime host / process topology / deployment
-Job runtime
-product CLI / TUI / App
-client SDK / service supervision
-multi-venue capability-resolution mechanism
-```
+Excluded:
 
-The later roadmap capability `Canonical API and job runtime` remains a separate product/runtime milestone.
+- runtime/source/test/tool/schema/DB/fixture changes;
+- ASS-02/ASS-03/H01 implementation;
+- new package ownership for future bounded contexts;
+- transport or service-topology decisions;
+- speculative DI/plugin/provider frameworks;
+- freezing L1/L2/L3, RL, live, storage or execution semantics without the decision gate trigger/evidence.
 
-## Legacy harvest state
+## Acceptance
 
-Legacy Capability Harvest Audit v1 remains COMPLETE.
+This governance slice is ready for review when:
 
-H01 — Diagonal / Stacked Imbalance Core remains the selected **first harvest candidate**, with the same narrow ADOPT boundary and unresolved production integration proposition. ASS-01 does not activate or implement H01.
+1. the 87-atom inventory is finite and all atoms are classified;
+2. every atom has owner, dependency state, implementation state and acceptance proposition;
+3. the DAG has no planning-level circular dependency;
+4. DG-A…DG-H cover the open blockers without forcing premature resolution;
+5. all deferable decisions have an explicit evidence trigger;
+6. phases 0–15 remain the macro roadmap;
+7. `ROADMAP.md`, `CAPABILITY_MAP.md`, `OPEN_DECISIONS.md` and this scope reference one atomic authority rather than duplicating it;
+8. no implementation atom is activated;
+9. no accepted ADR/contract semantics are changed.
 
-## Next planning gate
+## Next action after merge
 
-This closeout intentionally selects **no next implementation slice**.
-
-The next project decision must evaluate the dependency/value ordering among at least:
-
-```text
-ASS-02 — first canonical application-service vertical
-ASS-03 — orchestration/configuration convergence
-H01    — first legacy quantitative harvest implementation
-roadmap/capability atomization of the broader architecture spine
-```
-
-Any selected implementation requires its own explicit bounded scope.
-
-## Out of scope for this closeout
-
-- further runtime implementation;
-- ASS-02 or ASS-03 implementation;
-- H01 implementation;
-- transport/deployment decisions;
-- Feature/Representation redesign;
-- broad roadmap rewrite or phase renumbering;
-- changes to accepted ADR/contract semantics.
+If independent review approves this governance model and it is merged, Roadmap vNext becomes canonical. Only then select together one bounded atom or decision gate from the current frontier based on value, dependency and risk.
