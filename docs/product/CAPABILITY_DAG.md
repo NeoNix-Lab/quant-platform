@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL on `main` after PR #28**.
+Status: **CANONICAL; post-C03 state reconciled after PR #41 integration**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,20 +10,20 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after graph/gate correction:
+Current audited inventory after post-C03 reconciliation:
 
 ```text
 TOTAL_ATOMS                     = 87
 CLASSIFIED_ATOMS                = 87
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 49 / 87 = 56.3%
-OPEN_BLOCKING                   = 30
+SEMANTIC_FROZEN_OR_RESOLVED     = 50 / 87 = 57.5%
+OPEN_BLOCKING                   = 29
 OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 49 + 30 + 8 = 87
+ROADMAP_DEFINED                 = 50 + 29 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
 ```
 
-The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 56.3% semantic-freeze score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
+The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 57.5% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
 
 Decision states:
 
@@ -94,9 +94,9 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 |---|---|---|---|---|---|---|---|
 | C01 | Application ownership | Application | B01 | C02-C05 | RESOLVED | COMPLETE | `quant_platform.application`; ASS-01/ADR-0024 |
 | C02 | ASS-02 semantic selector resolution | Application | C01,B02,D01,J01 | C03 | FROZEN | COMPLETE | Semantic request resolves without storage identity; Consumer API |
-| C03 | ASS-02 result/error translation | Application | C02 | C04,J02,J04-J06 | FROZEN | MISSING | Stable envelope/error semantics; Consumer API |
-| C04 | Tool orchestration convergence | Application | C02,C03,C05 | governed entry points | RESOLVED | MISSING | Exact ASS-03 debt reaches zero |
-| C05 | Configuration convergence | Engineering/Application | C01 | C04,K02 | OPEN_BLOCKING | MISSING | One explicit resolution convention; DG-D |
+| C03 | ASS-02 result/error translation | Application | C02 | C04,J02,J04-J06 | FROZEN | COMPLETE | PR #41; stable envelope/error semantics; exact-head integrity #91 PASS |
+| C04 | Tool orchestration convergence | Application | C02,C03,C05 | governed entry points | RESOLVED | MISSING | Exact ASS-03 debt reaches zero; blocked until C05 implementation |
+| C05 | Configuration convergence | Engineering/Application | C01 | C04,K02 | RESOLVED | MISSING | CLI > env > declared default > fail; typed immutable capability-specific config; Application owns composition |
 | C06 | Multi-capability resolution | Application | second venue/representation evidence | general application service | OPEN_DEFERABLE | MISSING | Unsupported combinations explicit; no speculative registry |
 
 ### D — Representation
@@ -194,7 +194,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | K08 | Backup/restore proof | Operations | K06 | K09,J08,K10,A11 | OPEN_BLOCKING | MISSING | Independent restore reproduces required identities; DG-H backup branch |
 | K09 | Retention/deletion authority | Operations | K08 | sustainable live | OPEN_BLOCKING | MISSING | Never delete protected/sole recoverable evidence; DG-H deletion branch |
 | K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | OPEN_BLOCKING | MISSING | Crash/restart preserves cursor/publication invariants; DG-H recovery branch; follows live acquisition rather than blocking its implementation |
-| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; Roadmap vNext integrated via PR #28 |
+| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; post-C03 reconciliation maintains coherence |
 
 ## Dependency integrity
 
@@ -210,7 +210,7 @@ A11 does not require implemented K10; recovery semantics must be resolved throug
 
 ## Decision gates
 
-The 30 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path.
+The 29 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
 
 ### DG-A — Representation / Feature integration
 
@@ -221,7 +221,7 @@ Atom-specific branches:
 - `E04` FeatureArtifact: activate after E02/E03 when feature artifact/materialization is selected;
 - `D06` + `E02` + `E04` + `E06`: canonical H01 path.
 
-`D05` is **not** a prerequisite of `E06`. DG-A does not block C02/C03, D03 or pure H01 kernel E05.
+`D05` is **not** a prerequisite of `E06`. DG-A does not block D03 or pure H01 kernel E05.
 
 ### DG-B — Historical / Live data convergence
 
@@ -241,11 +241,25 @@ Atom-specific branches:
 
 L1 does not activate L2. L3/MBO remains deferable until real L3 evidence exists.
 
-### DG-D — Application configuration
+### DG-D — Application configuration — RESOLVED
 
 Atom: `C05`.
 
-Trigger: before ASS-03. Resolve one explicit convention only; do not create a DI/plugin framework for symmetry.
+The C05 semantic/ownership decision is frozen:
+
+```text
+CLI / environment
+      ↓
+executable boundary: acquire + resolve input only
+      ↓
+typed immutable capability-specific Application config
+      ↓
+quant_platform.application: concrete composition owner
+```
+
+Resolution precedence is **explicit CLI > environment > declared default > explicit failure**. Application receives resolved values only, owns concrete composition, and does not read process arguments/environment directly. No generic DI container, service locator, provider registry or plugin/config framework is introduced.
+
+C05 implementation remains `MISSING`. C04/ASS-03 remains blocked until that implementation exists.
 
 ### DG-E — Validation semantics
 
@@ -288,14 +302,14 @@ Only operational prerequisites of the selected atom are activated.
 | ID | Path | Proposition | State |
 |---|---|---|---|
 | V1 | Source -> canonical -> catalog -> DataGateway | First published data vertical is deterministically readable through canonical access | COMPLETE |
-| V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | C03 READY (C02 COMPLETE) |
+| V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | COMPLETE (`C02 + C03`) |
 | V3 | DataGateway -> historical Candle | Bounded trades yield reproducible CLOSED candles | READY (`D03`) |
 | V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | BLOCKED by DG-A canonical-H01 branch |
 | V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies | BLOCKED by E04 |
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | BLOCKED by DG-E validation branch |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |
 | V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | BLOCKED by DG-B live branch + relevant DG-H branches; acyclic |
-| V9 | Application -> API -> Client | One application semantic implementation serves thin clients | APPLICATION READY; transport deferred |
+| V9 | Application -> API -> Client | One application semantic implementation serves thin clients | APPLICATION SERVICE COMPLETE; transport deferred |
 | V10 | Paper -> Live | Full canonical stack crosses explicit operational authorization gate | BLOCKED |
 
 ## Execution frontier
@@ -303,7 +317,7 @@ Only operational prerequisites of the selected atom are activated.
 Decision-complete, missing atoms whose declared dependencies are currently satisfied:
 
 ```text
-C03  ASS-02 result/error translation
+C05  configuration convergence for the Application service
 D03  historical Candle runtime (on-demand only)
 E05  H01 pure imbalance kernel
 F05  deterministic walk-forward schedule
@@ -319,17 +333,17 @@ The waves are dependency/value groupings, not a new linear phase numbering.
 
 ```text
 Wave 0  Architecture foundation                           COMPLETE
-Wave 1  First canonical computation verticals             frontier above
+Wave 1  First canonical computation/application slices    frontier above
 Wave 2  Representation / Feature vertical                 atom-specific DG-A branches
 Wave 3  Research / Validation                             F01-F04 then DG-E validation branch
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01, DG-G experiment branch, I03-I05
 Wave 6  Live Data Plane                                   K04 + relevant DG-H, then DG-B repair/live branches
-Wave 7  Runtime / Clients                                 C03 -> J02 -> J04/J05/J06 when real client need exists
+Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 when real client need exists
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C03, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently.
+Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C05, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently. C04 follows only after C05 implementation.
 
 ## Macro roadmap relationship
 
