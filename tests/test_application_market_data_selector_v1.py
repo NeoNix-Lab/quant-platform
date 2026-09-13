@@ -184,12 +184,23 @@ class SemanticSelectorResolutionTests(unittest.TestCase):
                 with self.assertRaises(InvalidRequest):
                     resolve_market_data_request(query(venue=venue, instrument=instrument))
 
-    def test_resolution_does_not_execute_or_construct_a_gateway(self):
+    def test_resolution_does_not_construct_access_or_configuration(self):
+        # The module now also hosts C03, which legitimately *names* gateway
+        # types (DataGatewayError) and calls scan() on an injected capability.
+        # The invariant that must hold is that nothing here CONSTRUCTS a
+        # gateway, catalog, connection or configuration -- that is C05.
         import quant_platform.application.market_data as module
 
         source = Path(module.__file__).read_text(encoding="utf-8")
-        for forbidden in ("DataGateway", "Catalog", "psycopg", "os.environ", "connect("):
-            self.assertNotIn(forbidden, source, f"C02 must not reach {forbidden}")
+        for forbidden in (
+            "DataGateway(", "Catalog(", "psycopg", "os.environ", "getenv",
+            "sys.argv", "argparse", "connect(",
+        ):
+            self.assertNotIn(forbidden, source, f"application must not construct {forbidden}")
+
+    def test_resolution_alone_needs_no_gateway(self):
+        # Resolution is pure: it produces a request without any access capability.
+        self.assertIsNotNone(resolve_market_data_request(query()).dataset_selector)
 
 
 if __name__ == "__main__":

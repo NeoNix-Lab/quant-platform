@@ -47,13 +47,14 @@ Candle Ordering Compatibility                        PASS
 Package Boundary / Modular Monolith Foundation v1   COMPLETE
 Legacy Capability Harvest Audit v1                   COMPLETE
 ASS-01 Application ownership/enforcement             COMPLETE
+ASS-02 C02 semantic selector resolution              COMPLETE
 K11 Governance-state consistency                     COMPLETE
 Broad independent Producer/Consumer expansion        UNLOCKED
 ```
 
 The two-stage Producer–Consumer Conformity Gate is governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md): the **Contract Freeze Gate** and **Conformity Implementation Gate** remain PASSED. The gate pair is concluded and is referenced here as credited foundation evidence, not reopened work.
 
-Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients. Roadmap vNext governance-state consistency is complete after PR #28 established the coherent canonical authority set on `main`.
+Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients. C02 then established the frozen `trades@1` semantic selector-resolution seam through PR #30; C03 result/error translation remains the missing half of ASS-02. Roadmap vNext governance-state consistency is complete after PR #28 established the coherent canonical authority set on `main`.
 
 Completed checkpoints are credited and must not be re-proved absent a concrete invalidating change.
 
@@ -117,7 +118,7 @@ Implemented recovery is therefore not a prerequisite of implementing the live ca
 
 ```text
 V1  Source -> canonical -> catalog -> DataGateway         COMPLETE
-V2  DataGateway -> Application service                   READY_CHAIN
+V2  DataGateway -> Application service                   C03 READY (C02 COMPLETE)
 V3  DataGateway -> historical Candle                     READY
 V4  Representation -> Feature -> canonical H01           BLOCKED by DG-A canonical-H01 branch
 V5  Feature -> Research                                  BLOCKED by FeatureArtifact
@@ -128,14 +129,14 @@ V9  Application -> API -> Client                         application-ready; tran
 V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
 ```
 
-V1 is the accepted Bybit BTCUSDT first vertical; its detailed evidence remains in existing conformity/integration documentation.
+V1 is the accepted Bybit BTCUSDT first vertical; its detailed evidence remains in existing conformity/integration documentation. V2 is not complete: C02 is integrated, while C03 remains the ready missing atom.
 
 ## Current execution frontier
 
 Decision-complete, missing atoms whose declared planning dependencies are satisfied:
 
 ```text
-C02  ASS-02 semantic selector resolution
+C03  ASS-02 result/error translation
 D03  historical Candle runtime (on-demand only)
 E05  H01 pure imbalance kernel
 F05  deterministic walk-forward schedule
@@ -161,7 +162,7 @@ Wave 7  Runtime / Clients                                 C03 -> J02 -> thin cli
 Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. In particular, ASS-02, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently.
+Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C03, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently.
 
 ## Producer / storage interpretation
 

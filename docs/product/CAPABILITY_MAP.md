@@ -32,8 +32,8 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Access | Live access/cursor | OPEN_BLOCKING | MISSING | Data Access | B06 | DG-B live branch only. |
 | Access | Schema evolution beyond accepted versions | OPEN_DEFERABLE | MISSING | Data Access | B08 | Resolve against real next-version evidence. |
 | Application | ASS-01 ownership/enforcement | RESOLVED | COMPLETE | Application | C01 | `quant_platform.application` is the canonical in-process composition owner; PR #27 merged. |
-| Application | ASS-02 semantic selector resolution | FROZEN | MISSING | Application | C02 | Current execution frontier; no transport required. |
-| Application | ASS-02 result/error translation | FROZEN | MISSING | Application | C03 | Follows C02 and frozen Consumer API semantics. |
+| Application | ASS-02 semantic selector resolution | FROZEN | COMPLETE | Application | C02 | PR #30 integrated the reviewed `trades@1` semantic selector resolution. |
+| Application | ASS-02 result/error translation | FROZEN | MISSING | Application | C03 | Current execution frontier; C02 prerequisite complete; frozen Consumer API semantics. |
 | Application | ASS-03 tool convergence | RESOLVED | MISSING | Application | C04 | Finite exact-edge orchestration debt; requires real application service target. |
 | Application | Configuration convergence | OPEN_BLOCKING | MISSING | Application/Engineering | C05 | DG-D; one convention only, no speculative DI framework. |
 | Application | Multi-capability resolver | OPEN_DEFERABLE | MISSING | Application | C06 | Triggered by a real second venue/representation. |
@@ -105,12 +105,13 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Package Boundary / Modular Monolith Foundation v1 | COMPLETE | Ownership/dependency enforcement established. |
 | Legacy Capability Harvest Audit v1 | COMPLETE | 31 capabilities classified; H01 selected as harvest candidate, H14 retained as REVIEW. |
 | ASS-01 Application ownership/enforcement | COMPLETE | PR #27 integrated. |
+| ASS-02 C02 semantic selector resolution | COMPLETE | PR #30 integrated; reviewed exact-head CI passed. |
 | K11 Governance-state consistency | COMPLETE | Roadmap vNext authority set integrated by PR #28 and post-merge state reconciled. |
 
 ## Current frontier
 
 ```text
-C02  D03  E05  F05  I01  K04
+C03  D03  E05  F05  I01  K04
 ```
 
 Frontier membership means planning dependencies are satisfied; it does not authorize implementation.
