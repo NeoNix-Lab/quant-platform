@@ -47,14 +47,14 @@ Candle Ordering Compatibility                        PASS
 Package Boundary / Modular Monolith Foundation v1   COMPLETE
 Legacy Capability Harvest Audit v1                   COMPLETE
 ASS-01 Application ownership/enforcement             COMPLETE
-ASS-02 C02 semantic selector resolution              COMPLETE
+ASS-02 in-process Application service (C02 + C03)    COMPLETE
 K11 Governance-state consistency                     COMPLETE
 Broad independent Producer/Consumer expansion        UNLOCKED
 ```
 
 The two-stage Producer–Consumer Conformity Gate is governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md): the **Contract Freeze Gate** and **Conformity Implementation Gate** remain PASSED. The gate pair is concluded and is referenced here as credited foundation evidence, not reopened work.
 
-Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients. C02 then established the frozen `trades@1` semantic selector-resolution seam through PR #30; C03 result/error translation remains the missing half of ASS-02. Roadmap vNext governance-state consistency is complete after PR #28 established the coherent canonical authority set on `main`.
+Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients. C02 established the frozen `trades@1` semantic selector-resolution seam through PR #30; C03 completed the frozen result/error translation seam through PR #41 after exact-head `Quant Platform integrity #91` PASS. Together C02 + C03 complete the current in-process ASS-02 Application vertical. C05 configuration semantics are now resolved, but C05 implementation and C04/ASS-03 tool convergence remain missing. Roadmap vNext governance-state consistency remains a credited foundation capability after the post-C03 reconciliation.
 
 Completed checkpoints are credited and must not be re-proved absent a concrete invalidating change.
 
@@ -66,26 +66,26 @@ The corrected architecture-roadmap inventory is:
 TOTAL_ATOMS                     87
 CLASSIFIED_ATOMS                87
 UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     49 / 87 = 56.3%
-OPEN_BLOCKING                   30
+SEMANTIC_FROZEN_OR_RESOLVED     50 / 87 = 57.5%
+OPEN_BLOCKING                   29
 OPEN_DEFERABLE                  8
-ROADMAP_DEFINED                 49 + 30 + 8 = 87
+ROADMAP_DEFINED                 50 + 29 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
 ```
 
 The 100% planning score means every roadmap atom is classified: frozen/resolved, assigned to an atom-specific blocking gate, or explicitly deferable with a real evidence trigger. It does **not** mean every future semantic choice is frozen.
 
-The 56.3% value remains the semantic-freeze metric. Future provider, live, RL, transport and operational choices are not frozen merely to increase it.
+The 57.5% value is the current semantic-freeze/resolution metric. Future provider, live, RL, transport and operational choices are not frozen merely to increase it.
 
 ## Decision-gate model
 
-Open blockers are grouped into gate families, but activation is **atom-path specific**:
+Open blockers are grouped into gate families, while resolved gates remain as historical references. Activation is **atom-path specific**:
 
 ```text
 DG-A  Representation / Feature integration
 DG-B  Historical / Live data convergence
 DG-C  Market-data depth (L1/L2)
-DG-D  Application configuration / ASS-03
+DG-D  Application configuration / ASS-03      RESOLVED for C05 semantics
 DG-E  Validation semantics
 DG-F  Strategy / Execution semantics
 DG-G  Experiment / RL / Jobs
@@ -97,6 +97,7 @@ Important non-monolithic boundaries:
 - DG-A: Candle materialization `D05` is independent from the canonical-H01 path `D06/E02/E04/E06`.
 - DG-B: repair semantics do not automatically activate live cursor semantics.
 - DG-C: L1 may be selected without activating L2.
+- DG-D: C05 semantics are resolved; implementation remains missing and C04 remains blocked on that implementation.
 - DG-E: DSR/PBO `F08` does not block Strategy/ML paths that depend on `F07`.
 - DG-G and DG-H retain independent/progressive branches.
 
@@ -118,25 +119,25 @@ Implemented recovery is therefore not a prerequisite of implementing the live ca
 
 ```text
 V1  Source -> canonical -> catalog -> DataGateway         COMPLETE
-V2  DataGateway -> Application service                   C03 READY (C02 COMPLETE)
+V2  DataGateway -> Application service                   COMPLETE (C02 + C03)
 V3  DataGateway -> historical Candle                     READY
 V4  Representation -> Feature -> canonical H01           BLOCKED by DG-A canonical-H01 branch
 V5  Feature -> Research                                  BLOCKED by FeatureArtifact
 V6  Research -> Validation                               BLOCKED by DG-E validation branch
 V7  Strategy -> deterministic Replay                     BLOCKED by DG-F
 V8  Historical -> Live                                   BLOCKED by DG-B live branch + relevant DG-H; DAG acyclic
-V9  Application -> API -> Client                         application-ready; transport deferred
+V9  Application -> API -> Client                         application service complete; transport deferred
 V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
 ```
 
-V1 is the accepted Bybit BTCUSDT first vertical; its detailed evidence remains in existing conformity/integration documentation. V2 is not complete: C02 is integrated, while C03 remains the ready missing atom.
+V1 is the accepted Bybit BTCUSDT first vertical; its detailed evidence remains in existing conformity/integration documentation. V2 is complete at the in-process semantic service boundary: C02 resolves the consumer selector and C03 returns the canonical result/error envelope. V2 completion does not imply C05, C04/ASS-03, API transport, jobs or clients.
 
 ## Current execution frontier
 
 Decision-complete, missing atoms whose declared planning dependencies are satisfied:
 
 ```text
-C03  ASS-02 result/error translation
+C05  configuration convergence for the Application service
 D03  historical Candle runtime (on-demand only)
 E05  H01 pure imbalance kernel
 F05  deterministic walk-forward schedule
@@ -152,23 +153,23 @@ Waves are dependency/value groupings, not a new linear phase numbering.
 
 ```text
 Wave 0  Architecture foundation                           COMPLETE
-Wave 1  First canonical computation verticals             current frontier
+Wave 1  First canonical computation/application slices    current frontier
 Wave 2  Representation / Feature                          atom-specific DG-A branches
 Wave 3  Research / Validation                             F01-F04 then DG-E validation path
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01, DG-G experiment branch, I03-I05
 Wave 6  Live Data Plane                                   K04 + relevant DG-H, then DG-B repair/live paths
-Wave 7  Runtime / Clients                                 C03 -> J02 -> thin clients when real client need exists
+Wave 7  Runtime / Clients                                 J02 -> thin clients when real client need exists
 Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C03, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently.
+Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C05, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently. C04 follows only after C05 implementation establishes the canonical composition seam.
 
 ## Producer / storage interpretation
 
 The former producer-side narrative was too linear. Capacity observation, application work, historical representation work, backup design and other independent capabilities may advance in parallel when their declared dependencies are met.
 
-Backfill/repair does not require the entire storage-tiering program. Backup/restore must precede deletion authority but need not wait for tier relocation. L1/L2 contract work requires real feed evidence, not a second venue. API transport does not precede in-process ASS-02.
+Backfill/repair does not require the entire storage-tiering program. Backup/restore must precede deletion authority but need not wait for tier relocation. L1/L2 contract work requires real feed evidence, not a second venue. API transport does not precede the completed in-process ASS-02 service.
 
 ## Planning rule
 
