@@ -13,6 +13,8 @@ Human / Golden Bybit BTCUSDT E2E                     PASS
 Package Boundary / Modular Monolith Foundation v1   COMPLETE
 Legacy Capability Harvest Audit v1                   COMPLETE
 ASS-01 Application ownership/enforcement             COMPLETE
+ASS-02 in-process Application service                COMPLETE
+DG-D Application configuration semantics             RESOLVED
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -27,9 +29,37 @@ Resolved architecture includes:
 - current runtime owner DAG and executable-orchestration enforcement;
 - API-first direction: clients/API transport -> application services -> domain/DataGateway;
 - Consumer API semantic selector/result/error boundary;
+- completed ASS-02 in-process path: C02 semantic selector resolution + C03 result/error translation;
 - `trade-v1`, Declared Coverage, CandleDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
+
+### Resolved DG-D / C05 configuration semantics
+
+The Application configuration decision is frozen as:
+
+```text
+CLI / environment
+      ↓
+executable boundary: acquire + resolve input only
+      ↓
+typed immutable capability-specific Application config
+      ↓
+quant_platform.application: concrete composition owner
+      ↓
+Catalog / DataGateway / source / producer capabilities
+```
+
+Rules:
+
+- executable tooling owns CLI/environment acquisition and parsing;
+- precedence is **explicit CLI > environment > declared default > explicit failure**;
+- Application receives resolved values only and does not know their acquisition source;
+- Application-facing config is typed, immutable and capability-specific;
+- `quant_platform.application` owns concrete composition and does not read process arguments/environment directly;
+- no generic DI container, service locator, provider registry or plugin/config framework is introduced.
+
+This resolves the C05 decision state only. C05 implementation remains missing, and C04/ASS-03 remains blocked until that implementation exists.
 
 ## Decision-gate policy
 
@@ -113,20 +143,6 @@ Selecting L1 does **not** activate L2.
 Activate only when L2 is selected, after the declared L1 dependency. Resolve snapshot/increment semantics, deterministic reconstruction ordering, gap handling and duplicate rules.
 
 Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
-
-## DG-D — Application configuration / ASS-03
-
-Blocks `C05`, therefore full ASS-03 convergence.
-
-Current facts:
-
-- runtime/domain owners accept resolved dependencies/values rather than discovering configuration;
-- existing executable/test tooling has divergent configuration conventions;
-- ASS-01 records finite exact-edge orchestration debt.
-
-Before ASS-03, choose one explicit application configuration-resolution convention and entry-point boundary sufficient to migrate the existing tools behind real application services.
-
-Do not introduce a general dependency-injection, plugin or configuration framework merely for cleanup.
 
 ## DG-E — Validation semantics
 
