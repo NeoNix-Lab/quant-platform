@@ -33,9 +33,9 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Access | Schema evolution beyond accepted versions | OPEN_DEFERABLE | MISSING | Data Access | B08 | Resolve against real next-version evidence. |
 | Application | ASS-01 ownership/enforcement | RESOLVED | COMPLETE | Application | C01 | `quant_platform.application` is the canonical in-process composition owner; PR #27 merged. |
 | Application | ASS-02 semantic selector resolution | FROZEN | COMPLETE | Application | C02 | PR #30 integrated the reviewed `trades@1` semantic selector resolution. |
-| Application | ASS-02 result/error translation | FROZEN | MISSING | Application | C03 | Current execution frontier; C02 prerequisite complete; frozen Consumer API semantics. |
-| Application | ASS-03 tool convergence | RESOLVED | MISSING | Application | C04 | Finite exact-edge orchestration debt; requires real application service target. |
-| Application | Configuration convergence | OPEN_BLOCKING | MISSING | Application/Engineering | C05 | DG-D; one convention only, no speculative DI framework. |
+| Application | ASS-02 result/error translation | FROZEN | COMPLETE | Application | C03 | PR #41 integrated reviewed candidate `f382a2e6...`; exact-head integrity #91 PASS. |
+| Application | ASS-03 tool convergence | RESOLVED | MISSING | Application | C04 | Finite exact-edge orchestration debt; requires C05 implementation. |
+| Application | Configuration convergence | RESOLVED | MISSING | Application/Engineering | C05 | Frozen convention: CLI > env > declared default > fail; typed immutable capability-specific config; Application owns composition. |
 | Application | Multi-capability resolver | OPEN_DEFERABLE | MISSING | Application | C06 | Triggered by a real second venue/representation. |
 | Representation | Representation identity | RESOLVED | PARTIAL | Representation | D01 | Distinct from DatasetIdentity. |
 | Representation | CandleDefinition v1 | FROZEN | COMPLETE | Representation | D02 | Accepted semantic contract; runtime is a separate capability. |
@@ -93,7 +93,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Backup/restore proof | OPEN_BLOCKING | MISSING | Operations | K08 | DG-H backup branch; depends on K06, not K07; restore proof precedes deletion authority. |
 | Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
 | Operations | Checkpoint/recovery | OPEN_BLOCKING | MISSING | Operations/Data Plane | K10 | DG-H recovery branch; implementation follows A11 and requires K03/K08. |
-| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Roadmap vNext integrated through PR #28; canonical authority set is coherent on `main`. |
+| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Roadmap vNext authority set remains coherent after post-C03 reconciliation. |
 
 ## Gate / evidence state
 
@@ -105,13 +105,15 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Package Boundary / Modular Monolith Foundation v1 | COMPLETE | Ownership/dependency enforcement established. |
 | Legacy Capability Harvest Audit v1 | COMPLETE | 31 capabilities classified; H01 selected as harvest candidate, H14 retained as REVIEW. |
 | ASS-01 Application ownership/enforcement | COMPLETE | PR #27 integrated. |
-| ASS-02 C02 semantic selector resolution | COMPLETE | PR #30 integrated; reviewed exact-head CI passed. |
-| K11 Governance-state consistency | COMPLETE | Roadmap vNext authority set integrated by PR #28 and post-merge state reconciled. |
+| ASS-02 semantic selector resolution (C02) | COMPLETE | PR #30 integrated; reviewed exact-head CI passed. |
+| ASS-02 result/error translation (C03) | COMPLETE | PR #41 integrated reviewed head `f382a2e6...`; integrity #91 passed on exact head. |
+| ASS-02 in-process Application vertical | COMPLETE | C02 + C03 complete; does not imply C05/C04/API/jobs/clients. |
+| K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled after C03 integration. |
 
 ## Current frontier
 
 ```text
-C03  D03  E05  F05  I01  K04
+C05  D03  E05  F05  I01  K04
 ```
 
 Frontier membership means planning dependencies are satisfied; it does not authorize implementation.
