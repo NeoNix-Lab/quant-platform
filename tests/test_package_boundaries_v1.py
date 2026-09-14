@@ -40,6 +40,8 @@ OWNERS = {
     "quant_platform.representation.candles": "representation",
     "quant_platform.operations": "operations",
     "quant_platform.operations.capacity": "operations",
+    "quant_platform.validation": "validation",
+    "quant_platform.validation.walk_forward": "validation",
     "quant_platform.source_adapters": "source",
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
@@ -57,11 +59,13 @@ ALLOWED = {
     "access": {"access", "physical", "shared"},
     "representation": {"representation", "shared"},
     "operations": {"operations", "shared"},
+    "validation": {"validation", "shared"},
     "source": {"source", "producer", "shared"},
     # The application seam composes capabilities and owns no domain semantics.
     # Nothing may depend on it: it is the top of the owner graph.
     "application": {
-        "application", "access", "representation", "producer", "operations", "source", "physical", "shared"
+        "application", "access", "representation", "producer", "operations", "validation",
+        "source", "physical", "shared"
     },
 }
 SHARED_STDLIB = {
