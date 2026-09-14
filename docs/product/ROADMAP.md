@@ -51,6 +51,7 @@ ASS-02 in-process Application service (C02 + C03)    COMPLETE
 C05 Application configuration convergence            COMPLETE
 ASS-03 tool orchestration convergence (C04)           COMPLETE
 D03 historical Candle computation                    COMPLETE
+E05 H01 pure imbalance kernel                        COMPLETE
 F05 deterministic walk-forward schedule              COMPLETE
 I01 experiment semantic identity model               COMPLETE
 K04 observational capacity                           COMPLETE
@@ -60,13 +61,13 @@ Broad independent Producer/Consumer expansion        UNLOCKED
 
 The two-stage Producer–Consumer Conformity Gate is governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md): the **Contract Freeze Gate** and **Conformity Implementation Gate** remain PASSED. The gate pair is concluded and is referenced here as credited foundation evidence, not reopened work.
 
-Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner. C02 and C03 completed the frozen ASS-02 semantic Application vertical. PR #43 then integrated C05's typed immutable configuration/composition seam, and PR #44 removed the finite ASS-03 tool-orchestration debt through that canonical Application seam. PRs #46–#49 integrated K04, D03, F05 and I01 respectively. These implementation results are credited and must not be re-proved absent a concrete invalidating change.
+Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate**. ASS-01 established `quant_platform.application` as the in-process composition owner. C02 and C03 completed the frozen ASS-02 semantic Application vertical. PR #43 integrated C05's typed immutable configuration/composition seam, and PR #44 removed the finite ASS-03 tool-orchestration debt through that canonical Application seam. PRs #46–#49 integrated K04, D03, F05 and I01 respectively. PR #50 / E05 is treated as closed for sequencing by explicit operator instruction; this governance state must not merge into `main` until actual E05 integration is verified.
 
-E05 remains `RESOLVED / MISSING` at the current canonical baseline because its PR #50 candidate is not yet integrated in `main`.
+Completed checkpoints are CREDIT and must not be re-proved absent a concrete invalidating change.
 
 ## Roadmap vNext planning state
 
-The corrected architecture-roadmap inventory is:
+The architecture-roadmap inventory remains:
 
 ```text
 TOTAL_ATOMS                     87
@@ -81,7 +82,7 @@ ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
 
 The 100% planning score means every roadmap atom is classified: frozen/resolved, assigned to an atom-specific blocking gate, or explicitly deferable with a real evidence trigger. It does **not** mean every future semantic choice is frozen.
 
-The 57.5% value is the current semantic-freeze/resolution metric. The implementation completions recorded by this reconciliation do not alter that metric because no decision-state changes occurred.
+The 57.5% value is the current semantic-freeze/resolution metric. The implementation completions recorded by this closeout do not alter that metric because no decision-state changes occurred.
 
 ## Decision-gate model
 
@@ -127,7 +128,7 @@ Implemented recovery is therefore not a prerequisite of implementing the live ca
 V1  Source -> canonical -> catalog -> DataGateway         COMPLETE
 V2  DataGateway -> Application service                   COMPLETE (C02 + C03)
 V3  DataGateway -> historical Candle                     COMPLETE (D03)
-V4  Representation -> Feature -> canonical H01           BLOCKED by DG-A canonical-H01 branch
+V4  Representation -> Feature -> canonical H01           BLOCKED by D06 + E02 + E04 + E06; E05 kernel COMPLETE
 V5  Feature -> Research                                  BLOCKED by FeatureArtifact
 V6  Research -> Validation                               BLOCKED by DG-E validation branch
 V7  Strategy -> deterministic Replay                     BLOCKED by DG-F
@@ -136,19 +137,35 @@ V9  Application -> API -> Client                         application + executabl
 V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
 ```
 
-V1 is the accepted Bybit BTCUSDT first vertical; its detailed evidence remains in existing conformity/integration documentation. V2 is complete at the in-process semantic service boundary. C05 and C04/ASS-03 additionally establish the canonical executable-to-Application composition path, but do not imply API transport, Job runtime or clients. V3 is complete because bounded canonical trades now produce reproducible CLOSED candles through D03.
+V1 is the accepted Bybit BTCUSDT first vertical. V2 is complete at the in-process semantic service boundary. C05 and C04/ASS-03 establish the canonical executable-to-Application composition path, but do not imply API transport, Job runtime or clients. V3 is complete because bounded canonical trades produce reproducible CLOSED candles through D03. E05 completes only the pure accepted H01 quantitative kernel; canonical H01 remains blocked on its Representation/Feature integration path.
 
-## Current execution frontier
+## Current implementation frontier
 
-Decision-complete, missing atoms whose declared planning dependencies are satisfied at the current baseline:
+The original decision-complete ready-slice frontier is exhausted:
 
 ```text
-E05  H01 pure imbalance kernel
+IMPLEMENTATION_FRONTIER = empty
 ```
 
-PR #50 is a merge-ready implementation candidate for E05, but canonical implementation state follows `main`; E05 remains on the frontier until that candidate is integrated.
+There is no additional implementation atom to route merely because coding capacity is available. New implementation supply must first come from bounded resolution of selected `OPEN_BLOCKING` propositions.
 
-Frontier membership is **not implementation authorization** and does not select or credit an unmerged atom.
+## Selected next decision backlog
+
+The next decision work selected for issue materialization is:
+
+```text
+E02  FeatureDefinition v1 semantics                 DG-A
+D06  Footprint representation semantics             DG-A
+K05  Health / pressure policy                       DG-H
+A16  General quality lifecycle                      DG-B
+B04  Non-contiguous coverage read                   DG-B
+I02  Experiment persistence model                   DG-G
+K03  Minimum observability contract                 DG-H
+```
+
+These atoms remain `OPEN_BLOCKING`. Selection means they are the next propositions to resolve; it does not change their state and does not authorize implementation before their individual decision is frozen.
+
+Likely downstream supply after those decisions includes E04/E06/F06, A10/K06 and I03/J03 according to the declared DAG. Those downstream atoms are not pre-authorized.
 
 ## Execution waves
 
@@ -156,21 +173,21 @@ Waves are dependency/value groupings, not a new linear phase numbering.
 
 ```text
 Wave 0  Architecture foundation                           COMPLETE
-Wave 1  First canonical computation/application slices    C04/C05/D03/F05/I01/K04 complete; E05 remaining
-Wave 2  Representation / Feature                          atom-specific DG-A branches
-Wave 3  Research / Validation                             F01-F04 then DG-E validation path
+Wave 1  First canonical computation/application slices    COMPLETE
+Wave 2  Representation / Feature                          E02 + D06 decisions, then E04/E06 path
+Wave 3  Research / Validation                             F01-F04 and DG-E validation path
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
-Wave 5  Experiment / Supervised ML                       I01 complete; DG-G experiment branch, then I03-I05
-Wave 6  Live Data Plane                                   K04 complete; relevant DG-H, then DG-B repair/live paths
+Wave 5  Experiment / Supervised ML                       I01 complete; I02 decision next, then I03-I05
+Wave 6  Live Data Plane                                   K04 complete; K05/A16/B04 next, then protection/repair/live
 Wave 7  Runtime / Clients                                 J02 -> thin clients when real client need exists
 Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. With the original ready-slice wave largely consumed, future issue supply should come from bounded resolution of the specific `OPEN_BLOCKING` branches on selected paths rather than speculative implementation.
+Parallelism is allowed whenever DAG dependencies are satisfied. The next supply wave deliberately mixes independent DG-A, DG-B, DG-G and DG-H decisions so implementation agents can be fed as soon as each branch is frozen, without waiting for an unrelated branch.
 
 ## Producer / storage interpretation
 
-The former producer-side narrative was too linear. Capacity observation, application work, historical representation work, backup design and other independent capabilities may advance in parallel when their declared dependencies are met.
+The producer/server path is intentionally progressive rather than monolithic. K05 pressure policy can advance from completed K04 while A16/B04 resolve only the repair/coverage semantics needed for A10. K06 then follows the selected source plus K05; K08 follows K06. This preserves the acyclic direction toward A11 live acquisition.
 
 Backfill/repair does not require the entire storage-tiering program. Backup/restore must precede deletion authority but need not wait for tier relocation. L1/L2 contract work requires real feed evidence, not a second venue. API transport does not precede the completed in-process ASS-02/ASS-03 Application path.
 
@@ -179,12 +196,12 @@ Backfill/repair does not require the entire storage-tiering program. Backup/rest
 Before opening implementation:
 
 1. verify `origin/main`;
-2. select one atom from the current frontier or one required decision branch;
+2. select one atom from a frozen implementation frontier or one required decision branch;
 3. verify its transitive `Requires` path;
 4. activate only unresolved decisions on that path;
 5. credit existing evidence;
 6. define minimum acceptance/proof;
-7. create a bounded scope/branch;
-8. keep unrelated frontier atoms inactive.
+7. create a bounded scope/issue/branch;
+8. keep unrelated branches inactive.
 
 Roadmap state never authorizes production/runtime mutation by itself.
