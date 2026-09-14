@@ -1,3 +1,3 @@
 """Canonical quantitative platform runtime package."""
 
-__all__ = ["data"]
+__all__ = ["data", "experiments"]
