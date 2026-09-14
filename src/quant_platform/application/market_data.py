@@ -364,6 +364,7 @@ def execute_market_data_query(
     query: ConsumerMarketDataQuery,
     *,
     gateway: Any,
+    batch_size: int = 65_536,
 ) -> ConsumerMarketDataResult:
     """Resolve, read and translate one semantic market-data query.
 
@@ -389,7 +390,7 @@ def execute_market_data_query(
     request_identity = normalized.request_identity
 
     try:
-        scan = gateway.scan(data_request)
+        scan = gateway.scan(data_request, batch_size=batch_size)
         records: list[TradeRecord] = []
         # Consume the finite batch seam directly rather than requiring a
         # pre-materialised DataSlice, so the bounded read property is preserved

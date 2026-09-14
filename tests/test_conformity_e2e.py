@@ -151,6 +151,58 @@ class ConformityE2ETest(unittest.TestCase):
         self.assertFalse(ordinary_config.legacy_source)
         self.assertTrue(legacy_config.legacy_source)
 
+    def test_config_resolution_is_cli_then_env_then_declared_default(self):
+        with tempfile.TemporaryDirectory() as holder, \
+             patch.dict(
+                 harness.os.environ,
+                 {
+                     "CONFORMITY_E2E_SQLITE": str(Path(holder) / "env.sqlite"),
+                     "CONFORMITY_E2E_DSN": "env-dsn",
+                     "CONFORMITY_E2E_STORAGE_ROOT": str(Path(holder) / "env-storage"),
+                     "CONFORMITY_E2E_STORAGE_ROOT_ID": "env-hot",
+                 },
+                 clear=True,
+             ):
+            env_config = harness._config_from_namespace(
+                harness.build_parser().parse_args(["preflight"])
+            )
+            cli_config = harness._config_from_namespace(
+                harness.build_parser().parse_args(
+                    [
+                        "preflight",
+                        "--sqlite", str(Path(holder) / "cli.sqlite"),
+                        "--dsn", "cli-dsn",
+                        "--storage-root", str(Path(holder) / "cli-storage"),
+                        "--storage-root-id", "cli-hot",
+                        "--batch-size", "7",
+                    ]
+                )
+            )
+
+        self.assertEqual(Path(holder) / "env.sqlite", env_config.sqlite_path)
+        self.assertEqual("env-dsn", env_config.dsn)
+        self.assertEqual(Path(holder) / "env-storage", env_config.storage_root)
+        self.assertEqual("env-hot", env_config.storage_root_id)
+        self.assertEqual(65_536, env_config.batch_size)
+
+        self.assertEqual(Path(holder) / "cli.sqlite", cli_config.sqlite_path)
+        self.assertEqual("cli-dsn", cli_config.dsn)
+        self.assertEqual(Path(holder) / "cli-storage", cli_config.storage_root)
+        self.assertEqual("cli-hot", cli_config.storage_root_id)
+        self.assertEqual(7, cli_config.batch_size)
+
+    def test_config_resolution_uses_declared_defaults_before_command_failure(self):
+        with patch.dict(harness.os.environ, {}, clear=True):
+            config = harness._config_from_namespace(
+                harness.build_parser().parse_args(["preflight"])
+            )
+
+        self.assertIsNone(config.sqlite_path)
+        self.assertEqual("", config.dsn)
+        self.assertIsNone(config.storage_root)
+        self.assertEqual("hot", config.storage_root_id)
+        self.assertEqual(65_536, config.batch_size)
+
     def test_preflight_success_is_bounded_and_does_not_mutate_source(self):
         with tempfile.TemporaryDirectory() as holder:
             root = Path(holder)

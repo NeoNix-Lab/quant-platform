@@ -94,6 +94,7 @@ DATASET_ORIGIN = "source_acquired"
 DATASET_TRANSFORM = "canonicalize-trades-v1"
 PRODUCER_ID = "human-e2e-operator-harness-v1"
 CERTIFIER_CODE_REF = "human-e2e-operator-harness-v1"
+_MISSING = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,17 +184,64 @@ def _env_value(*names: str) -> str | None:
     return None
 
 
+def _resolved_input(
+    cli_value: Any,
+    *,
+    env_names: tuple[str, ...] = (),
+    default: Any = _MISSING,
+    field: str,
+) -> Any:
+    if cli_value is not None:
+        return cli_value
+    value = _env_value(*env_names)
+    if value is not None:
+        return value
+    if default is not _MISSING:
+        return default
+    raise HarnessFailure(f"{field} is not configured")
+
+
 def _config_from_namespace(args: argparse.Namespace) -> HarnessConfig:
-    sqlite_value = args.sqlite
-    dsn_value = args.dsn
-    storage_value = args.storage_root
+    sqlite_value = _resolved_input(
+        args.sqlite,
+        env_names=("CONFORMITY_E2E_SQLITE", "BYBIT_HISTORICAL_SQLITE"),
+        default=None,
+        field="sqlite",
+    )
+    dsn_value = _resolved_input(
+        args.dsn,
+        env_names=("CONFORMITY_E2E_DSN", "DATA_GATEWAY_TEST_DSN"),
+        default="",
+        field="dsn",
+    )
+    storage_value = _resolved_input(
+        args.storage_root,
+        env_names=("CONFORMITY_E2E_STORAGE_ROOT", "MARKETDATA_STORAGE_ROOT"),
+        default=None,
+        field="storage_root",
+    )
     return HarnessConfig(
         sqlite_path=None if sqlite_value is None else Path(sqlite_value),
         dsn=dsn_value,
         storage_root=None if storage_value is None else Path(storage_value),
-        storage_root_id=args.storage_root_id,
-        golden_path=Path(args.golden),
-        batch_size=args.batch_size,
+        storage_root_id=_resolved_input(
+            args.storage_root_id,
+            env_names=("CONFORMITY_E2E_STORAGE_ROOT_ID",),
+            default="hot",
+            field="storage_root_id",
+        ),
+        golden_path=Path(
+            _resolved_input(
+                args.golden,
+                default=str(ROOT / "fixtures" / "conformity" / "golden-bybit-btcusdt-2024-01-15.json"),
+                field="golden",
+            )
+        ),
+        batch_size=_resolved_input(
+            args.batch_size,
+            default=65_536,
+            field="batch_size",
+        ),
         legacy_source=args.legacy_source,
     )
 
@@ -766,30 +814,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("command", choices=("preflight", "run", "inspect", "verify"))
     parser.add_argument(
         "--sqlite",
-        default=_env_value("CONFORMITY_E2E_SQLITE", "BYBIT_HISTORICAL_SQLITE"),
+        default=None,
         help="read-only Bybit historical SQLite source",
     )
     parser.add_argument(
         "--dsn",
-        default=_env_value("CONFORMITY_E2E_DSN", "DATA_GATEWAY_TEST_DSN"),
+        default=None,
         help="PostgreSQL DSN; otherwise standard PG environment is used",
     )
     parser.add_argument(
         "--storage-root",
-        default=_env_value("CONFORMITY_E2E_STORAGE_ROOT", "MARKETDATA_STORAGE_ROOT"),
+        default=None,
         help="absolute storage root registered in the catalog",
     )
     parser.add_argument(
         "--storage-root-id",
-        default=_env_value("CONFORMITY_E2E_STORAGE_ROOT_ID") or "hot",
+        default=None,
         help="catalog storage_root_id (default: hot)",
     )
     parser.add_argument(
         "--golden",
-        default=str(ROOT / "fixtures" / "conformity" / "golden-bybit-btcusdt-2024-01-15.json"),
+        default=None,
         help="Golden expectation fixture",
     )
-    parser.add_argument("--batch-size", type=int, default=65_536, help="bounded DataGateway batch size")
+    parser.add_argument("--batch-size", type=int, default=None, help="bounded DataGateway batch size")
     parser.add_argument(
         "--legacy-source",
         action="store_true",
