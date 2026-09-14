@@ -38,6 +38,8 @@ OWNERS = {
     "quant_platform.access.gateway": "access",
     "quant_platform.representation": "representation",
     "quant_platform.representation.candles": "representation",
+    "quant_platform.features": "feature",
+    "quant_platform.features.imbalance": "feature",
     "quant_platform.operations": "operations",
     "quant_platform.operations.capacity": "operations",
     "quant_platform.validation": "validation",
@@ -60,6 +62,7 @@ ALLOWED = {
     "producer": {"producer", "physical", "shared"},
     "access": {"access", "physical", "shared"},
     "representation": {"representation", "shared"},
+    "feature": {"feature", "shared"},
     "operations": {"operations", "shared"},
     "validation": {"validation", "shared"},
     "experiment": {"experiment", "shared"},
@@ -67,7 +70,7 @@ ALLOWED = {
     # The application seam composes capabilities and owns no domain semantics.
     # Nothing may depend on it: it is the top of the owner graph.
     "application": {
-        "application", "access", "representation", "producer", "operations", "validation",
+        "application", "access", "representation", "feature", "producer", "operations", "validation",
         "source", "physical", "shared"
     },
 }
