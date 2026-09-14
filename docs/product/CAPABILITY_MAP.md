@@ -34,12 +34,12 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Application | ASS-01 ownership/enforcement | RESOLVED | COMPLETE | Application | C01 | `quant_platform.application` is the canonical in-process composition owner; PR #27 merged. |
 | Application | ASS-02 semantic selector resolution | FROZEN | COMPLETE | Application | C02 | PR #30 integrated the reviewed `trades@1` semantic selector resolution. |
 | Application | ASS-02 result/error translation | FROZEN | COMPLETE | Application | C03 | PR #41 integrated reviewed candidate `f382a2e6...`; exact-head integrity #91 PASS. |
-| Application | ASS-03 tool convergence | RESOLVED | MISSING | Application | C04 | Finite exact-edge orchestration debt; requires C05 implementation. |
-| Application | Configuration convergence | RESOLVED | MISSING | Application/Engineering | C05 | Frozen convention: CLI > env > declared default > fail; typed immutable capability-specific config; Application owns composition. |
+| Application | ASS-03 tool convergence | RESOLVED | COMPLETE | Application | C04 | PR #44 removed the finite governed tool-orchestration debt through the canonical Application seam. |
+| Application | Configuration convergence | RESOLVED | COMPLETE | Application/Engineering | C05 | PR #43 established typed immutable capability-specific config and Application-owned composition. |
 | Application | Multi-capability resolver | OPEN_DEFERABLE | MISSING | Application | C06 | Triggered by a real second venue/representation. |
 | Representation | Representation identity | RESOLVED | PARTIAL | Representation | D01 | Distinct from DatasetIdentity. |
 | Representation | CandleDefinition v1 | FROZEN | COMPLETE | Representation | D02 | Accepted semantic contract; runtime is a separate capability. |
-| Representation | Historical Candle computation | FROZEN | MISSING | Representation | D03 | Current execution frontier; on-demand CLOSED candles. |
+| Representation | Historical Candle computation | FROZEN | COMPLETE | Representation | D03 | PR #47 integrated reproducible on-demand CLOSED Candle computation. |
 | Representation | Incremental/live Candle computation | FROZEN | MISSING | Representation | D04 | Runtime blocked by live access implementation, not by Candle semantics. |
 | Representation | Candle materialization identity | OPEN_BLOCKING | MISSING | Representation | D05 | DG-A candle-materialization branch; not a prerequisite of canonical H01. |
 | Representation | Footprint representation | OPEN_BLOCKING | MISSING | Representation | D06 | DG-A canonical-H01 branch: grain/tick-grid/adjacency/availability. |
@@ -47,14 +47,14 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Features | FeatureDefinition v1 | OPEN_BLOCKING | MISSING | Feature Engine | E02 | DG-A FeatureDefinition branch. |
 | Features | FeatureSet catalog/provider | RESOLVED | PARTIAL | Feature Engine | E03 | Existing catalog foundation retained. |
 | Features | FeatureArtifact/materialization | OPEN_BLOCKING | MISSING | Feature Engine | E04 | DG-A FeatureArtifact branch. |
-| Features | H01 pure imbalance kernel | RESOLVED | MISSING | Feature Engine | E05 | Current execution frontier; narrow Legacy Harvest ADOPT boundary only. |
+| Features | H01 pure imbalance kernel | RESOLVED | MISSING | Feature Engine | E05 | Current execution frontier; PR #50 candidate is not yet integrated in `main`. |
 | Features | H01 canonical integration | OPEN_BLOCKING | MISSING | Feature Engine | E06 | Requires D06/E02/E04; D05 is not on this path. |
 | Features | Generic provider extension | OPEN_DEFERABLE | MISSING | Feature Engine | E07 | Wait for a real second provider. |
 | Research | HypothesisSpec | RESOLVED | MISSING | Research | F01 | Depends on FeatureDefinition for the canonical vertical. |
 | Research | EventSpec/detection | RESOLVED | MISSING | Research | F02 | Requires FeatureArtifact for the full vertical. |
 | Research | OutcomeSpec/Outcome | RESOLVED | MISSING | Research | F03 | Future-window identity and availability separated from labels. |
 | Research | Event studies/sweeps | RESOLVED | MISSING | Research | F04 | Reproducible study population/aggregates. |
-| Validation | Walk-forward schedule | RESOLVED | MISSING | Validation | F05 | Current execution frontier; deterministic pure temporal atom. |
+| Validation | Walk-forward schedule | RESOLVED | COMPLETE | Validation | F05 | PR #48 integrated the deterministic expanding half-open temporal schedule. |
 | Validation | Availability/purge/embargo | OPEN_BLOCKING | MISSING | Validation | F06 | DG-E validation branch. |
 | Validation | Labels/censoring/lockbox | OPEN_BLOCKING | MISSING | Validation | F07 | DG-E validation branch. |
 | Validation | DSR/PBO | OPEN_BLOCKING | MISSING | Research/Validation | F08 | Separate DG-E DSR/PBO branch; does not block Strategy/ML paths that depend on F07. |
@@ -68,7 +68,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Portfolio | Portfolio/ledger | RESOLVED | MISSING | Portfolio | H04 | Deterministic accounting. |
 | Execution | Deterministic replay | RESOLVED | MISSING | Execution | H05 | Uses canonical data/access; no storage bypass. |
 | Portfolio | Multi-asset execution | OPEN_DEFERABLE | MISSING | Portfolio | H06 | Wait for concrete product scope. |
-| Experiments | Study/Trial/Run/Artifact semantic model | RESOLVED | MISSING | Experiment System | I01 | Current execution frontier. |
+| Experiments | Study/Trial/Run/Artifact semantic model | RESOLVED | COMPLETE | Experiment System | I01 | PR #49 integrated the canonical deterministic experiment identity family. |
 | Experiments | Canonical experiment persistence | OPEN_BLOCKING | MISSING | Experiment System | I02 | DG-G experiment branch; avoid competing persistence. |
 | Experiments | Trial accounting/comparison | RESOLVED | MISSING | Experiment System | I03 | Requires persistence/replay. |
 | ML | Supervised input/selection | RESOLVED | MISSING | Learning | I04 | Depends on Feature + Validation semantics. |
@@ -86,14 +86,14 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Provisioning/fixtures/CI | RESOLVED | COMPLETE | Engineering | K01 | Repository validation foundation complete. |
 | Operations | Server/runtime identity | OPEN_BLOCKING | MISSING | Operations | K02 | DG-H identity branch. |
 | Operations | Observability | OPEN_BLOCKING | MISSING | Operations | K03 | DG-H observability branch. |
-| Operations | Capacity observation | RESOLVED | MISSING | Operations | K04 | Current execution frontier; observational only. |
+| Operations | Capacity observation | RESOLVED | COMPLETE | Operations | K04 | PR #46 integrated observational-only exact capacity reporting. |
 | Operations | Health/pressure policy | OPEN_BLOCKING | MISSING | Operations | K05 | DG-H pressure branch. |
 | Operations | RAW/source protection | OPEN_BLOCKING | MISSING | Operations/Data Plane | K06 | DG-H protection branch; no backup dependency. |
 | Operations | Tier relocation | OPEN_BLOCKING | MISSING | Operations/Data Plane | K07 | DG-H relocation branch; sibling of backup after source protection. |
 | Operations | Backup/restore proof | OPEN_BLOCKING | MISSING | Operations | K08 | DG-H backup branch; depends on K06, not K07; restore proof precedes deletion authority. |
 | Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
 | Operations | Checkpoint/recovery | OPEN_BLOCKING | MISSING | Operations/Data Plane | K10 | DG-H recovery branch; implementation follows A11 and requires K03/K08. |
-| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Roadmap vNext authority set remains coherent after post-C03 reconciliation. |
+| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Canonical authority set remains coherent after the post-wave-1 implementation reconciliation. |
 
 ## Gate / evidence state
 
@@ -107,15 +107,21 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | ASS-01 Application ownership/enforcement | COMPLETE | PR #27 integrated. |
 | ASS-02 semantic selector resolution (C02) | COMPLETE | PR #30 integrated; reviewed exact-head CI passed. |
 | ASS-02 result/error translation (C03) | COMPLETE | PR #41 integrated reviewed head `f382a2e6...`; integrity #91 passed on exact head. |
-| ASS-02 in-process Application vertical | COMPLETE | C02 + C03 complete; does not imply C05/C04/API/jobs/clients. |
-| K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled after C03 integration. |
+| ASS-02 in-process Application vertical | COMPLETE | C02 + C03 complete. |
+| C05 configuration convergence | COMPLETE | PR #43 integrated the canonical typed config/composition seam. |
+| ASS-03 tool orchestration convergence (C04) | COMPLETE | PR #44 removed the finite governed orchestration debt. |
+| D03 historical Candle computation | COMPLETE | PR #47 integrated the on-demand CLOSED Candle runtime. |
+| F05 walk-forward schedule | COMPLETE | PR #48 integrated deterministic expanding temporal folds. |
+| I01 experiment semantic identity model | COMPLETE | PR #49 integrated Study/Trial/Run/Artifact identity semantics. |
+| K04 observational capacity | COMPLETE | PR #46 integrated observation-only capacity reporting. |
+| K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled to `main` through PR #49. |
 
 ## Current frontier
 
 ```text
-C05  D03  E05  F05  I01  K04
+E05
 ```
 
-Frontier membership means planning dependencies are satisfied; it does not authorize implementation.
+E05 remains `MISSING` until PR #50 is integrated. Frontier membership means planning dependencies are satisfied; it does not authorize or credit an unmerged implementation.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.
