@@ -17,6 +17,7 @@ ASS-02 in-process Application service                COMPLETE
 DG-D Application configuration semantics             RESOLVED
 C05 Application configuration implementation         COMPLETE
 ASS-03 executable/tool orchestration convergence     COMPLETE
+E05 H01 pure imbalance kernel                        COMPLETE
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -33,6 +34,7 @@ Resolved architecture includes:
 - Consumer API semantic selector/result/error boundary;
 - completed ASS-02 in-process path: C02 semantic selector resolution + C03 result/error translation;
 - completed C05 configuration/composition seam and C04/ASS-03 tool convergence;
+- completed E05 pure H01 quantitative kernel, without implying canonical H01 integration;
 - `trade-v1`, Declared Coverage, CandleDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
@@ -72,6 +74,22 @@ A gate-family name groups related decisions for navigation; it is **not** a requ
 
 An `OPEN_DEFERABLE` decision remains deliberately unresolved until its stated real-world evidence trigger exists. No decision is frozen merely to improve a completeness percentage.
 
+## Selected next decision backlog
+
+Post-Wave-1 implementation supply is exhausted. The next bounded decision propositions selected for active resolution are:
+
+```text
+E02  FeatureDefinition v1 semantics
+D06  Footprint representation semantics
+K05  Health / pressure policy
+A16  General quality lifecycle
+B04  Non-contiguous coverage read
+I02  Experiment persistence model
+K03  Minimum observability contract
+```
+
+Selection here is prioritization only. All seven remain `OPEN_BLOCKING` until their individual proposition is frozen and materialized into canonical authority. Their downstream implementation work remains unauthorized until then.
+
 ## DG-A — Representation / Feature integration
 
 This family has independent branches.
@@ -82,15 +100,15 @@ Activate only when persisted Candle results are selected. Resolve how a persiste
 
 `D05` is not a prerequisite of canonical H01 integration.
 
-### FeatureDefinition (`E02`)
+### FeatureDefinition (`E02`) — SELECTED
 
-Activate before FeatureDefinition-dependent work. Freeze the minimum canonical identity/fields/versioning/availability semantics.
+Freeze the minimum canonical identity/fields/versioning/availability semantics needed by FeatureDefinition-dependent work. Do not design future provider extension or artifact persistence here.
 
 ### FeatureArtifact (`E04`)
 
 Activate only after the FeatureDefinition path is selected and artifact/materialization behavior is needed. Resolve artifact identity/provenance and equivalence of cached vs recomputed output.
 
-### Footprint + canonical H01 (`D06`,`E06`)
+### Footprint + canonical H01 (`D06`,`E06`) — D06 SELECTED
 
 For canonical H01, resolve only its actual path:
 
@@ -98,7 +116,7 @@ For canonical H01, resolve only its actual path:
 D06 footprint representation
 E02 FeatureDefinition
 E04 FeatureArtifact
-E05 pure H01 kernel (already RESOLVED)
+E05 pure H01 kernel (COMPLETE)
 E06 canonical H01 integration
 ```
 
@@ -110,13 +128,13 @@ Do not activate Candle materialization merely because it is in DG-A. Do not crea
 
 This family also has separate repair and live branches.
 
-### Repair branch (`A16`,`B04`,`A10` as required)
+### Repair branch (`A16`,`B04`,`A10` as required) — A16/B04 SELECTED
 
-Activate only the propositions needed by the selected repair slice:
+Resolve only the propositions needed by the selected repair slice:
 
 - general quality-report -> lifecycle mapping beyond the accepted first vertical;
 - explicit non-contiguous coverage semantics where required;
-- repair triggering, precedence and idempotent revision/retry behavior;
+- repair triggering, precedence and idempotent revision/retry behavior only when A10 is activated;
 - duplicate resolution where required by repair semantics.
 
 Historical repair does not activate live-cursor semantics by default.
@@ -158,6 +176,8 @@ Activate for the Validation -> Strategy/ML path. Resolve:
 - Label/Outcome horizon and censoring semantics;
 - lockbox/hidden-evaluation boundary.
 
+F06 remains downstream of E02 and is not selected ahead of that dependency.
+
 ### DSR/PBO branch (`F08`)
 
 Activate only when robust-comparison/DSR-PBO capability is selected. Resolve exact estimator definitions, input return series, trial population, comparable-fold semantics and pinned numeric vectors.
@@ -182,7 +202,7 @@ Keep Strategy upstream of Execution. Do not let execution simulation redefine st
 
 Independent branches:
 
-### Experiment persistence (`I02`)
+### Experiment persistence (`I02`) — SELECTED
 
 Resolve one canonical Study/Trial/Run/Artifact persistence model. Restart/query/resume must preserve identity and idempotency; avoid competing persistence stores/models.
 
@@ -206,17 +226,17 @@ This family is progressive and non-monolithic.
 
 Before production runtime identities are created/changed, resolve service identities, database roles, filesystem ACLs, credential disposition and least-privilege boundaries. Human/bootstrap E2E privilege is not production authorization.
 
-### Observability (`K03`)
+### Observability (`K03`) — SELECTED
 
-Before paper/live claims or checkpoint/recovery runtime, define the minimum externally observable health/provenance/failure transitions required by the selected runtime. Exact technology/SLOs remain local until needed.
+Define the minimum externally observable health/provenance/failure transitions required by the selected runtime path. Exact technology/SLOs remain local until needed.
 
-### Pressure (`K05`)
+### Pressure (`K05`) — SELECTED
 
-After observational capacity `K04`, resolve thresholds/time-to-full and explicit safe actions. No silent deletion.
+After completed observational capacity `K04`, resolve thresholds/time-to-full and explicit safe actions. No silent deletion.
 
 ### Source protection (`K06`)
 
-Resolve protection authority and reconstruction guarantees. `K06` depends on the selected source and pressure policy; it does not depend on backup/restore.
+Resolve protection authority and reconstruction guarantees after K05. `K06` depends on the selected source and pressure policy; it does not depend on backup/restore.
 
 ### Tier relocation (`K07`)
 
