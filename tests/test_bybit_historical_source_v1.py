@@ -488,12 +488,18 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
             )
             self.assertIn(expected, encode_record(record))
 
-    def test_architecture_keeps_source_ownership_in_production(self):
+    def test_architecture_keeps_source_ownership_behind_application_seam(self):
         importer = (ROOT / "tools" / "import_bybit_trades.py").read_text(encoding="utf-8")
         importer_tree = ast.parse(importer)
         function_names = {node.name for node in ast.walk(importer_tree) if isinstance(node, ast.FunctionDef)}
         self.assertNotIn("canonicalize_trade", function_names)
-        self.assertIn("quant_platform.source_adapters.bybit_historical", importer)
+        self.assertIn("from quant_platform.application import", importer)
+        self.assertNotIn("quant_platform.source_adapters.bybit_historical", importer)
+
+        application_importer = (
+            ROOT / "src" / "quant_platform" / "application" / "bybit_import.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("quant_platform.source_adapters.bybit_historical", application_importer)
 
         source_root = ROOT / "src"
         for path in source_root.rglob("*.py"):

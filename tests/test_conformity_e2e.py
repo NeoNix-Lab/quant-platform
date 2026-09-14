@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "src"))
 
 import conformity_e2e as harness  # noqa: E402
+import quant_platform.application.conformity as app_harness  # noqa: E402
 from quant_platform.data.models import DatasetNotFound  # noqa: E402
 
 
@@ -70,8 +71,8 @@ def _make_source(path: Path) -> None:
 
 @contextmanager
 def _preflight_dependencies():
-    with patch.object(harness, "_connect_catalog", return_value=_CatalogConnection()), \
-         patch.object(harness, "Catalog", _PreflightCatalog):
+    with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
+         patch.object(app_harness, "Catalog", _PreflightCatalog):
         yield
 
 
@@ -85,11 +86,11 @@ class ConformityE2ETest(unittest.TestCase):
             config.storage_root.mkdir()
             with _preflight_dependencies(), \
                  patch.object(
-                     harness,
+                     app_harness,
                      "open_bybit_historical_source",
-                     wraps=harness.open_bybit_historical_source,
+                     wraps=app_harness.open_bybit_historical_source,
                  ) as ordinary, \
-                 patch.object(harness, "open_bybit_historical_legacy_source") as legacy:
+                 patch.object(app_harness, "open_bybit_historical_legacy_source") as legacy:
                 result = harness.collect_preflight(config)
 
             self.assertTrue(result.passed)
@@ -105,11 +106,11 @@ class ConformityE2ETest(unittest.TestCase):
             config.storage_root.mkdir()
             with _preflight_dependencies(), \
                  patch.object(
-                     harness,
+                     app_harness,
                      "open_bybit_historical_legacy_source",
-                     wraps=harness.open_bybit_historical_legacy_source,
+                     wraps=app_harness.open_bybit_historical_legacy_source,
                  ) as legacy, \
-                 patch.object(harness, "open_bybit_historical_source") as ordinary:
+                 patch.object(app_harness, "open_bybit_historical_source") as ordinary:
                 result = harness.collect_preflight(config)
 
             self.assertTrue(result.passed)
@@ -134,8 +135,8 @@ class ConformityE2ETest(unittest.TestCase):
                     resolved.append(identity)
                     raise DatasetNotFound("target is absent")
 
-            with patch.object(harness, "_connect_catalog", return_value=_CatalogConnection()), \
-                 patch.object(harness, "Catalog", Catalog):
+            with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
+                 patch.object(app_harness, "Catalog", Catalog):
                 result = harness.collect_preflight(config)
 
         self.assertTrue(result.passed)
@@ -215,7 +216,7 @@ class ConformityE2ETest(unittest.TestCase):
 
             self.assertTrue(result.passed)
             self.assertFalse((config.storage_root / "canonical").exists())
-            connection = harness.open_bybit_historical_source(source)
+            connection = app_harness.open_bybit_historical_source(source)
             try:
                 with self.assertRaises(sqlite3.OperationalError):
                     connection.execute("CREATE TABLE must_remain_read_only (x INTEGER)")
@@ -246,7 +247,7 @@ class ConformityE2ETest(unittest.TestCase):
                 target,
                 (harness.Check("rerun", True, "controlled"),),
             )
-            with patch.object(harness, "collect_preflight", return_value=passed):
+            with patch.object(app_harness, "collect_preflight", return_value=passed):
                 with self.assertRaises(harness.HarnessRunFailure) as caught:
                     harness.run_vertical(config)
             self.assertEqual(caught.exception.phase, "PREFLIGHT")
@@ -332,24 +333,24 @@ class ConformityE2ETest(unittest.TestCase):
                 calls.append("coverage-manifest")
                 return Emission()
 
-            with patch.object(harness, "collect_preflight", return_value=passed), \
-                 patch.object(harness, "BybitHistoricalExtractAccumulator", Accumulator), \
+            with patch.object(app_harness, "collect_preflight", return_value=passed), \
+                 patch.object(app_harness, "BybitHistoricalExtractAccumulator", Accumulator), \
                  patch.object(
-                     harness,
+                     app_harness,
                      "open_bybit_historical_source",
                      return_value=FakeSourceConnection(),
                  ) as ordinary_opener, \
-                 patch.object(harness, "open_bybit_historical_legacy_source") as legacy_opener, \
-                 patch.object(harness, "iter_bybit_historical_trade_rows", fake_iterator), \
-                 patch.object(harness, "canonicalize_bybit_historical_trade_v1", lambda row: row), \
-                 patch.object(harness, "materialize_bybit_trade_v1", fake_materialize), \
-                 patch.object(harness, "emit_dataset_manifest", fake_emit_dataset), \
-                 patch.object(harness, "emit_partition_manifest", fake_emit_partition), \
-                 patch.object(harness, "build_bybit_trade_v1_source_extract_coverage", fake_build_coverage), \
-                 patch.object(harness, "emit_coverage_manifest", fake_emit_coverage), \
-                 patch.object(harness, "_connect_catalog", return_value=FakeSourceConnection()), \
-                 patch.object(harness, "PublicationCertification", FakeS13), \
-                 patch.object(harness, "PublicationEligibilityBridge", FakeS14):
+                 patch.object(app_harness, "open_bybit_historical_legacy_source") as legacy_opener, \
+                 patch.object(app_harness, "iter_bybit_historical_trade_rows", fake_iterator), \
+                 patch.object(app_harness, "canonicalize_bybit_historical_trade_v1", lambda row: row), \
+                 patch.object(app_harness, "materialize_bybit_trade_v1", fake_materialize), \
+                 patch.object(app_harness, "emit_dataset_manifest", fake_emit_dataset), \
+                 patch.object(app_harness, "emit_partition_manifest", fake_emit_partition), \
+                 patch.object(app_harness, "build_bybit_trade_v1_source_extract_coverage", fake_build_coverage), \
+                 patch.object(app_harness, "emit_coverage_manifest", fake_emit_coverage), \
+                 patch.object(app_harness, "_connect_catalog", return_value=FakeSourceConnection()), \
+                 patch.object(app_harness, "PublicationCertification", FakeS13), \
+                 patch.object(app_harness, "PublicationEligibilityBridge", FakeS14):
                 report = harness.run_vertical(config)
 
             self.assertEqual(report.eligibility.state, "valid")
@@ -456,20 +457,20 @@ class ConformityE2ETest(unittest.TestCase):
                     calls.append("s14-publish")
                     return SimpleNamespace(state="valid")
 
-            with patch.object(harness, "collect_preflight", return_value=passed), \
-                 patch.object(harness, "BybitHistoricalExtractAccumulator", Accumulator), \
-                 patch.object(harness, "bybit_historical_legacy_read", return_value=LegacyContext()) as legacy_read, \
-                 patch.object(harness, "open_bybit_historical_source") as ordinary_opener, \
-                 patch.object(harness, "iter_bybit_historical_trade_rows", source_iterator), \
-                 patch.object(harness, "canonicalize_bybit_historical_trade_v1", lambda row: row), \
-                 patch.object(harness, "materialize_bybit_trade_v1", materialize), \
-                 patch.object(harness, "emit_dataset_manifest", lambda *a, **k: Emission()), \
-                 patch.object(harness, "emit_partition_manifest", lambda *a, **k: Emission()), \
-                 patch.object(harness, "build_bybit_trade_v1_source_extract_coverage", build_coverage), \
-                 patch.object(harness, "emit_coverage_manifest", lambda *a, **k: Emission()), \
-                 patch.object(harness, "_connect_catalog", return_value=Connection()), \
-                 patch.object(harness, "PublicationCertification", FakeS13), \
-                 patch.object(harness, "PublicationEligibilityBridge", FakeS14):
+            with patch.object(app_harness, "collect_preflight", return_value=passed), \
+                 patch.object(app_harness, "BybitHistoricalExtractAccumulator", Accumulator), \
+                 patch.object(app_harness, "bybit_historical_legacy_read", return_value=LegacyContext()) as legacy_read, \
+                 patch.object(app_harness, "open_bybit_historical_source") as ordinary_opener, \
+                 patch.object(app_harness, "iter_bybit_historical_trade_rows", source_iterator), \
+                 patch.object(app_harness, "canonicalize_bybit_historical_trade_v1", lambda row: row), \
+                 patch.object(app_harness, "materialize_bybit_trade_v1", materialize), \
+                 patch.object(app_harness, "emit_dataset_manifest", lambda *a, **k: Emission()), \
+                 patch.object(app_harness, "emit_partition_manifest", lambda *a, **k: Emission()), \
+                 patch.object(app_harness, "build_bybit_trade_v1_source_extract_coverage", build_coverage), \
+                 patch.object(app_harness, "emit_coverage_manifest", lambda *a, **k: Emission()), \
+                 patch.object(app_harness, "_connect_catalog", return_value=Connection()), \
+                 patch.object(app_harness, "PublicationCertification", FakeS13), \
+                 patch.object(app_harness, "PublicationEligibilityBridge", FakeS14):
                 report = harness.run_vertical(config)
 
             self.assertEqual(report.eligibility.state, "valid")
@@ -506,7 +507,7 @@ class ConformityE2ETest(unittest.TestCase):
                     return Connection()
 
                 def __exit__(self, exc_type, exc_value, traceback):
-                    raise harness.BybitHistoricalSourceError("controlled source drift")
+                    raise app_harness.BybitHistoricalSourceError("controlled source drift")
 
             class Materialization:
                 path = target.artifact_path
@@ -520,16 +521,16 @@ class ConformityE2ETest(unittest.TestCase):
                 tuple(records)
                 return Materialization()
 
-            with patch.object(harness, "collect_preflight", return_value=passed), \
-                 patch.object(harness, "BybitHistoricalExtractAccumulator", Accumulator), \
-                 patch.object(harness, "bybit_historical_legacy_read", return_value=DriftingContext()), \
-                 patch.object(harness, "iter_bybit_historical_trade_rows", source_iterator), \
-                 patch.object(harness, "canonicalize_bybit_historical_trade_v1", lambda row: row), \
-                 patch.object(harness, "materialize_bybit_trade_v1", materialize), \
-                 patch.object(harness, "emit_dataset_manifest", lambda *a, **k: downstream_calls.append("manifest")), \
-                 patch.object(harness, "build_bybit_trade_v1_source_extract_coverage", lambda *a, **k: downstream_calls.append("coverage")), \
-                 patch.object(harness, "PublicationCertification", lambda *a, **k: downstream_calls.append("s13")), \
-                 patch.object(harness, "PublicationEligibilityBridge", lambda *a, **k: downstream_calls.append("s14")):
+            with patch.object(app_harness, "collect_preflight", return_value=passed), \
+                 patch.object(app_harness, "BybitHistoricalExtractAccumulator", Accumulator), \
+                 patch.object(app_harness, "bybit_historical_legacy_read", return_value=DriftingContext()), \
+                 patch.object(app_harness, "iter_bybit_historical_trade_rows", source_iterator), \
+                 patch.object(app_harness, "canonicalize_bybit_historical_trade_v1", lambda row: row), \
+                 patch.object(app_harness, "materialize_bybit_trade_v1", materialize), \
+                 patch.object(app_harness, "emit_dataset_manifest", lambda *a, **k: downstream_calls.append("manifest")), \
+                 patch.object(app_harness, "build_bybit_trade_v1_source_extract_coverage", lambda *a, **k: downstream_calls.append("coverage")), \
+                 patch.object(app_harness, "PublicationCertification", lambda *a, **k: downstream_calls.append("s13")), \
+                 patch.object(app_harness, "PublicationEligibilityBridge", lambda *a, **k: downstream_calls.append("s14")):
                 with self.assertRaises(harness.HarnessRunFailure) as caught:
                     harness.run_vertical(config)
 
@@ -546,13 +547,13 @@ class ConformityE2ETest(unittest.TestCase):
             config.storage_root.mkdir()
             with _preflight_dependencies(), \
                  patch.object(
-                     harness,
+                     app_harness,
                      "open_bybit_historical_legacy_source",
-                     side_effect=harness.BybitHistoricalSourceError(
+                     side_effect=app_harness.BybitHistoricalSourceError(
                          "controlled legacy open failure"
                      ),
                  ) as legacy, \
-                 patch.object(harness, "open_bybit_historical_source") as ordinary:
+                 patch.object(app_harness, "open_bybit_historical_source") as ordinary:
                 result = harness.collect_preflight(config)
 
             self.assertFalse(result.passed)
@@ -633,19 +634,19 @@ class ConformityE2ETest(unittest.TestCase):
                     "code_ref": "controlled",
                 }
 
-            with patch.object(harness, "collect_preflight", return_value=passed), \
-                 patch.object(harness, "BybitHistoricalExtractAccumulator", Accumulator), \
-                 patch.object(harness, "open_bybit_historical_source", return_value=Connection()), \
-                 patch.object(harness, "iter_bybit_historical_trade_rows", source_iterator), \
-                 patch.object(harness, "canonicalize_bybit_historical_trade_v1", lambda row: row), \
-                 patch.object(harness, "materialize_bybit_trade_v1", materialize), \
-                 patch.object(harness, "emit_dataset_manifest", lambda *a, **k: Emission()), \
-                 patch.object(harness, "emit_partition_manifest", lambda *a, **k: Emission()), \
-                 patch.object(harness, "build_bybit_trade_v1_source_extract_coverage", build_coverage), \
-                 patch.object(harness, "emit_coverage_manifest", lambda *a, **k: Emission()), \
-                 patch.object(harness, "_connect_catalog", return_value=Connection()), \
-                 patch.object(harness, "PublicationCertification", FakeS13), \
-                 patch.object(harness, "PublicationEligibilityBridge", FakeS14):
+            with patch.object(app_harness, "collect_preflight", return_value=passed), \
+                 patch.object(app_harness, "BybitHistoricalExtractAccumulator", Accumulator), \
+                 patch.object(app_harness, "open_bybit_historical_source", return_value=Connection()), \
+                 patch.object(app_harness, "iter_bybit_historical_trade_rows", source_iterator), \
+                 patch.object(app_harness, "canonicalize_bybit_historical_trade_v1", lambda row: row), \
+                 patch.object(app_harness, "materialize_bybit_trade_v1", materialize), \
+                 patch.object(app_harness, "emit_dataset_manifest", lambda *a, **k: Emission()), \
+                 patch.object(app_harness, "emit_partition_manifest", lambda *a, **k: Emission()), \
+                 patch.object(app_harness, "build_bybit_trade_v1_source_extract_coverage", build_coverage), \
+                 patch.object(app_harness, "emit_coverage_manifest", lambda *a, **k: Emission()), \
+                 patch.object(app_harness, "_connect_catalog", return_value=Connection()), \
+                 patch.object(app_harness, "PublicationCertification", FakeS13), \
+                 patch.object(app_harness, "PublicationEligibilityBridge", FakeS14):
                 try:
                     result = harness.run_vertical(config)
                 except harness.HarnessRunFailure as exc:
@@ -687,11 +688,11 @@ class ConformityE2ETest(unittest.TestCase):
             config = _config(root / "storage", root / "source.sqlite")
             target = harness._target_from_golden(config)
             passed = harness.PreflightResult(target, (harness.Check("all", True, "controlled"),))
-            with patch.object(harness, "collect_preflight", return_value=passed), \
-                 patch.object(harness, "BybitHistoricalExtractAccumulator"), \
-                 patch.object(harness, "open_bybit_historical_source", return_value=_CatalogConnection()), \
-                 patch.object(harness, "materialize_bybit_trade_v1", side_effect=ValueError("controlled materializer failure")), \
-                 patch.object(harness, "emit_dataset_manifest") as emit_dataset:
+            with patch.object(app_harness, "collect_preflight", return_value=passed), \
+                 patch.object(app_harness, "BybitHistoricalExtractAccumulator"), \
+                 patch.object(app_harness, "open_bybit_historical_source", return_value=_CatalogConnection()), \
+                 patch.object(app_harness, "materialize_bybit_trade_v1", side_effect=ValueError("controlled materializer failure")), \
+                 patch.object(app_harness, "emit_dataset_manifest") as emit_dataset:
                 with self.assertRaises(harness.HarnessRunFailure) as caught:
                     harness.run_vertical(config)
             self.assertEqual(caught.exception.phase, "MATERIALIZE")
@@ -716,11 +717,11 @@ class ConformityE2ETest(unittest.TestCase):
                 return Scan()
 
         observation = object()
-        with patch.object(harness, "_connect_catalog", return_value=_CatalogConnection()), \
-             patch.object(harness, "DataGateway", FakeGateway), \
-             patch.object(harness, "observe_scan", return_value=observation), \
-             patch.object(harness, "format_observation", return_value="controlled observation"), \
-             patch.object(harness, "golden_field_mismatches", return_value=("row_count",)):
+        with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
+             patch.object(app_harness, "DataGateway", FakeGateway), \
+             patch.object(app_harness, "observe_scan", return_value=observation), \
+             patch.object(app_harness, "format_observation", return_value="controlled observation"), \
+             patch.object(app_harness, "golden_field_mismatches", return_value=("row_count",)):
             with self.assertRaises(harness.VerificationMismatch) as caught:
                 harness.verify_vertical(config)
         self.assertEqual(calls, ["gateway-scan"])
@@ -741,11 +742,11 @@ class ConformityE2ETest(unittest.TestCase):
                 calls.append("gateway-scan")
                 return Scan()
 
-        with patch.object(harness, "_connect_catalog", return_value=_CatalogConnection()), \
-             patch.object(harness, "DataGateway", FakeGateway), \
-             patch.object(harness, "observe_scan", return_value=object()), \
-             patch.object(harness, "format_observation", return_value="controlled observation"), \
-             patch.object(harness, "golden_field_mismatches", return_value=()):
+        with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
+             patch.object(app_harness, "DataGateway", FakeGateway), \
+             patch.object(app_harness, "observe_scan", return_value=object()), \
+             patch.object(app_harness, "format_observation", return_value="controlled observation"), \
+             patch.object(app_harness, "golden_field_mismatches", return_value=()):
             _target, _observation, rendered = harness.verify_vertical(config)
         self.assertEqual(rendered, "controlled observation")
         self.assertEqual(calls, ["gateway-scan"])
@@ -792,11 +793,11 @@ class ConformityE2ETest(unittest.TestCase):
                 def select_partitions(self, *args):
                     return [partition]
 
-            with patch.object(harness, "_connect_catalog", return_value=_CatalogConnection()), \
-                 patch.object(harness, "Catalog", FakeCatalog), \
-                 patch.object(harness, "emit_dataset_manifest") as emit_dataset, \
-                 patch.object(harness, "emit_partition_manifest") as emit_partition, \
-                 patch.object(harness, "emit_coverage_manifest") as emit_coverage:
+            with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
+                 patch.object(app_harness, "Catalog", FakeCatalog), \
+                 patch.object(app_harness, "emit_dataset_manifest") as emit_dataset, \
+                 patch.object(app_harness, "emit_partition_manifest") as emit_partition, \
+                 patch.object(app_harness, "emit_coverage_manifest") as emit_coverage:
                 _target, _dataset, partitions, _manifests = harness.inspect_vertical(config)
             self.assertEqual(len(partitions), 1)
             self.assertEqual({item["kind"] for item in _manifests}, {"dataset", "partition", "coverage"})
@@ -844,8 +845,8 @@ class ConformityE2ETest(unittest.TestCase):
                 def select_partitions(self, *args):
                     return [partition]
 
-            with patch.object(harness, "_connect_catalog", return_value=_CatalogConnection()), \
-                 patch.object(harness, "Catalog", FakeCatalog):
+            with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
+                 patch.object(app_harness, "Catalog", FakeCatalog):
                 _target, _dataset, _partitions, manifests = harness.inspect_vertical(config)
             self.assertEqual(manifests, ())
 
@@ -894,8 +895,8 @@ class ConformityE2ETest(unittest.TestCase):
 
             stdout = StringIO()
             stderr = StringIO()
-            with patch.object(harness, "_connect_catalog", return_value=_CatalogConnection()), \
-                 patch.object(harness, "Catalog", FakeCatalog), \
+            with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
+                 patch.object(app_harness, "Catalog", FakeCatalog), \
                  redirect_stdout(stdout), redirect_stderr(stderr):
                 exit_code = harness.main(
                     ["inspect", "--storage-root", str(root / "storage"), "--dsn", "controlled"]
@@ -907,7 +908,7 @@ class ConformityE2ETest(unittest.TestCase):
             self.assertNotIn("INSPECT: PASS", stdout.getvalue() + stderr.getvalue())
 
     def test_harness_has_no_duplicate_semantics_or_physical_verify_reader(self):
-        path = ROOT / "tools" / "conformity_e2e.py"
+        path = ROOT / "src" / "quant_platform" / "application" / "conformity.py"
         source = path.read_text(encoding="utf-8")
         ast.parse(source)
         self.assertIn("quant_platform.source_adapters.bybit_historical", source)
@@ -919,10 +920,10 @@ class ConformityE2ETest(unittest.TestCase):
             self.assertNotIn(golden_literal, source)
 
     def test_read_only_commands_do_not_name_mutating_emitters(self):
-        tree = ast.parse((ROOT / "tools" / "conformity_e2e.py").read_text(encoding="utf-8"))
+        tree = ast.parse((ROOT / "src" / "quant_platform" / "application" / "conformity.py").read_text(encoding="utf-8"))
         command_functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
         for name in ("collect_preflight", "inspect_vertical", "verify_vertical"):
-            text = ast.get_source_segment((ROOT / "tools" / "conformity_e2e.py").read_text(encoding="utf-8"), command_functions[name])
+            text = ast.get_source_segment((ROOT / "src" / "quant_platform" / "application" / "conformity.py").read_text(encoding="utf-8"), command_functions[name])
             self.assertIsNotNone(text)
             self.assertNotIn("emit_dataset_manifest", text)
             self.assertNotIn("emit_partition_manifest", text)
@@ -931,3 +932,6 @@ class ConformityE2ETest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+
