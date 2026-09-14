@@ -40,7 +40,10 @@ OWNERS = {
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
     "quant_platform.application": "application",
+    "quant_platform.application.bybit_import": "application",
     "quant_platform.application.composition": "application",
+    "quant_platform.application.conformity": "application",
+    "quant_platform.application.golden_conformity": "application",
     "quant_platform.application.market_data": "application",
 }
 ALLOWED = {
@@ -182,28 +185,9 @@ APPLICATION = "quant_platform.application"
 # third-party libraries it links.
 THIRD_PARTY = {"psycopg", "pyarrow"}
 
-# ASS-01 establishes the invariant; ASS-03 migrates these exact existing edges
-# behind the application seam.  New edges from the same tools remain governed.
-TOOLS_PENDING_ASS03 = {
-    ("conformity_e2e", "quant_platform.access.catalog"),
-    ("conformity_e2e", "quant_platform.data.publication_catalog"),
-    ("conformity_e2e", "quant_platform.access.gateway"),
-    ("conformity_e2e", "quant_platform.access.models"),
-    ("conformity_e2e", "quant_platform.data"),
-    ("conformity_e2e", "quant_platform.data.publication"),
-    ("conformity_e2e", "quant_platform.data.publication_eligibility"),
-    ("conformity_e2e", "quant_platform.data.publication_eligibility_catalog"),
-    ("conformity_e2e", "quant_platform.data.manifests"),
-    ("conformity_e2e", "quant_platform.source_adapters.bybit"),
-    ("conformity_e2e", "quant_platform.source_adapters.bybit_historical"),
-    ("import_bybit_trades", "quant_platform.data.models"),
-    ("import_bybit_trades", "quant_platform.source_adapters.bybit_historical"),
-}
-# The single tools -> tests edge in the repository.  It is the cycle-making
-# direction: an executable doing production work through test-only support.
-# ASS-03 must remove it; relocating golden_conformity_support here would change
-# the Golden acceptance path, which ASS-01 may not do.
-TOOLS_TESTS_PENDING_ASS03 = {("conformity_e2e", "golden_conformity_support")}
+# ASS-03 is complete when no tools bypass the application seam.
+TOOLS_PENDING_ASS03 = set()
+TOOLS_TESTS_PENDING_ASS03 = set()
 # The rule is deliberately one-directional.  Forbidding tools -> tests is what
 # makes a tools/tests cycle impossible, so tests -> tools needs no restriction:
 # a test importing the executable it tests is verification, not a bypass.
