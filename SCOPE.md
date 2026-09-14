@@ -1,25 +1,27 @@
-# Scope: Post-Wave-1 Implementation Reconciliation
+# Scope: Post-Wave-1 Closeout / Next Decision Supply
 
 ## Objective
 
-Reconcile canonical governance with the implementation state already integrated in `main` after the first ready-slice wave, without changing any frozen semantic contract or prematurely crediting unmerged work.
+Reconcile canonical governance to the accepted post-Wave-1 target state and materialize the next bounded decision backlog without changing any frozen semantic contract.
 
-This reconciliation records the integrated completion of C05, C04/ASS-03, K04, D03, F05 and I01. E05 remains `RESOLVED / MISSING` because PR #50 is merge-ready but not integrated in `main` at this baseline.
+This closeout records C05, C04/ASS-03, K04, D03, F05, I01 and E05 as complete for planning/sequencing purposes. The operator has explicitly instructed governance to treat PR #50 / E05 as closed. At the time this governance branch was prepared, GitHub still reported PR #50 as open; therefore this branch must not merge into `main` until the actual authoritative `main` contains the accepted E05 implementation.
 
 The completed Producer–Consumer Conformity cycle remains credited under ADR-0023: **Contract Freeze Gate = PASSED** and **Conformity Implementation Gate = PASSED**. This slice does not reopen either gate.
 
-## Baseline
+## Baseline and closeout guard
 
 ```text
-base main                  = 35109010e19b31bd480dc87a377453ff22ee5474
-latest integrated slice    = PR #49 / I01
-mutation class             = governance docs only
-source/tests/runtime       = NO
-contracts/ADRs             = NO
-unmerged candidate credit  = NO
+observed main                = 35109010e19b31bd480dc87a377453ff22ee5474
+latest integrated slice      = PR #49 / I01
+accepted E05 candidate       = PR #50 head 6c6d961f1119847e2ad2cf6d8fb29893c28bbb4b
+operator disposition         = treat PR #50 / E05 as closed for sequencing
+governance merge precondition= actual main contains accepted E05 implementation
+mutation class               = governance docs only
+source/tests/runtime         = NO
+contracts/ADRs               = NO
 ```
 
-Integrated implementation evidence credited by this reconciliation:
+Integrated/accepted implementation evidence credited by this closeout:
 
 ```text
 PR #43  C05  Configuration convergence                 merge fb87a021c7134078b2a39f48ceb5f831b016e8ed
@@ -28,11 +30,12 @@ PR #46  K04  Observational capacity                    merge a19662411f6ce125bcf
 PR #47  D03  Historical Candle computation             merge 652affcd9be573aca0f4103018ea02eda153b64a
 PR #48  F05  Deterministic walk-forward schedule       merge 08fce020836a934a649c29a2fcb1ede74fe72856
 PR #49  I01  Study/Trial/Run/Artifact identities       merge 35109010e19b31bd480dc87a377453ff22ee5474
+PR #50  E05  H01 pure imbalance kernel                 accepted head 6c6d961f1119847e2ad2cf6d8fb29893c28bbb4b
 ```
 
-The corresponding reviewed candidates and exact-head CI are credited and must not be re-proved absent a concrete invalidating change. F05's integration drift was reconciled before merge; its final candidate included D03 and passed exact-head integrity.
+Already-reviewed candidates and exact-head CI are CREDIT. They must not be re-proved absent a concrete invalidating change.
 
-## Accepted state
+## Accepted target state
 
 ```text
 C01  Application ownership                    COMPLETE
@@ -42,58 +45,62 @@ C05  Configuration convergence                COMPLETE
 C04  Tool orchestration convergence           COMPLETE
 ASS-03 executable orchestration convergence   COMPLETE
 D03  Historical Candle computation            COMPLETE
+E05  H01 pure imbalance kernel                COMPLETE
 F05  Walk-forward schedule                    COMPLETE
 I01  Study/Trial/Run/Artifact semantic model  COMPLETE
 K04  Capacity observation                     COMPLETE
-E05  H01 pure imbalance kernel                RESOLVED / implementation MISSING
 ```
 
-C04 completion means the finite governed `tools -> runtime/domain/tests` ASS-03 debt has converged through the canonical Application seam. It does not imply API transport, Job runtime, clients, live ingest or any downstream quantitative capability.
+C04 completion means the finite governed `tools -> runtime/domain/tests` ASS-03 debt has converged through the canonical Application seam. E05 completion is only the pure quantitative H01 kernel; it does not imply D06 footprint semantics, E02 FeatureDefinition, E04 FeatureArtifact, or E06 canonical H01 integration.
 
-## Current execution frontier
+## Execution frontier
 
-Decision-complete, missing atoms whose declared planning dependencies are satisfied at this baseline:
+After E05 closeout there is **no remaining decision-complete implementation atom in the previously selected ready-slice frontier**.
 
 ```text
-E05  H01 pure imbalance kernel
+IMPLEMENTATION_FRONTIER = empty
 ```
 
-PR #50 is an implementation candidate for E05 and is merge-ready, but frontier/canonical implementation state follows `main`; therefore E05 remains `MISSING` until that PR is integrated.
+This is intentional. New implementation supply must be produced by resolving only the `OPEN_BLOCKING` propositions on selected dependency paths.
 
-The next useful orchestration supply comes from bounded decision branches, not from pretending their implementations are already ready. High-value branches include:
+## Selected next decision backlog
+
+The next bounded decision work is selected as:
 
 ```text
-DG-A  E02 / D06 / E04 toward canonical H01 integration
-DG-E  F06 availability / purge / embargo
-DG-G  I02 experiment persistence
-DG-H  K05 pressure policy, then K06 / K08
-DG-B  A16 / B04 / A10 repair path as required
+DG-A  E02  FeatureDefinition v1 semantics
+DG-A  D06  Footprint representation semantics
+DG-H  K05  Health / pressure policy
+DG-B  A16  General quality lifecycle
+DG-B  B04  Non-contiguous coverage read
+DG-G  I02  Experiment persistence model
+DG-H  K03  Minimum observability contract
 ```
 
-This list is prioritization guidance only. Each `OPEN_BLOCKING` atom still requires its own decision freeze before implementation authorization.
+These items remain `OPEN_BLOCKING`; selecting them for decision work does **not** mark them resolved and does not authorize their production implementation.
+
+Downstream tasks such as E04, E06, F06, A10, K06, I03 or J03 remain blocked until their declared prerequisite decisions/capabilities are satisfied.
 
 ## Scope
 
 Included:
 
-- record C05 as `RESOLVED / COMPLETE`;
-- record C04 as `RESOLVED / COMPLETE` and ASS-03 as complete;
-- record D03 as `FROZEN / COMPLETE` and V3 as complete;
-- record F05 as `RESOLVED / COMPLETE`;
-- record I01 as `RESOLVED / COMPLETE`;
-- record K04 as `RESOLVED / COMPLETE`;
-- reduce every current-frontier representation to E05 only;
-- update DG-D from resolved-but-unimplemented to resolved-and-complete historical reference;
-- preserve E05 as `RESOLVED / MISSING` until PR #50 is actually merged;
-- preserve all unrelated dependency edges, decision states, gate semantics and deferable triggers.
+- record E05 as `RESOLVED / COMPLETE` in the accepted post-Wave-1 target state;
+- record the original ready-slice Wave 1 as complete;
+- replace the exhausted implementation frontier with an empty implementation frontier;
+- identify the bounded next decision backlog `E02,D06,K05,A16,B04,I02,K03` without changing their decision states;
+- preserve C04/C05/D03/F05/I01/K04 completion from the previous reconciliation;
+- preserve all unrelated dependency edges, gate semantics, deferable triggers and frozen contracts;
+- preserve a hard merge guard requiring actual E05 integration before this governance state lands in `main`.
 
 Excluded:
 
 - any source, test, runtime, schema, DDL or fixture mutation;
 - any ADR/contract semantic change;
-- crediting or merging PR #50;
-- resolving E02, D06, E04, F06, I02, K05, K06, K08, A16, B04 or A10;
-- API transport, Job runtime, client or live-ingest implementation;
+- merging or closing PR #50 through this governance task;
+- resolving or implementing E02,D06,K05,A16,B04,I02,K03;
+- prematurely activating E04,E06,F06,A10,K06,I03,J03 or unrelated downstream work;
+- API transport, client, paper/live or production mutation;
 - re-review or re-execution of already-credited implementation proof.
 
 ## Preserved planning invariants
@@ -110,21 +117,21 @@ REQUIRES_EDGES                  = 157
 CYCLES                          = 0
 ```
 
-No decision-state movement occurs in this reconciliation. The changes above are implementation-state transitions only.
+No decision-state movement occurs in this closeout. E05 changes implementation state only; the next-decision list is prioritization/activation planning, not semantic resolution.
 
 ## Acceptance
 
 DONE means all of the following are true:
 
-1. C04, C05, D03, F05, I01 and K04 are `COMPLETE` everywhere canonical governance represents implementation state;
-2. ASS-03 is recorded complete without implying API/jobs/clients/live capability;
-3. V3 is `COMPLETE` because D03 is integrated;
-4. every current-frontier list is exactly `E05` at baseline `35109010...`;
-5. E05 remains `RESOLVED / MISSING` because PR #50 is not yet in `main`;
-6. DG-D is a resolved/completed historical reference, not a live blocker;
-7. planning metrics remain exactly `50 resolved/frozen`, `29 open-blocking`, `8 open-deferable`, total `87`;
-8. no unrelated decision, contract, dependency edge or runtime behavior changes.
+1. C04, C05, D03, E05, F05, I01 and K04 are represented as complete in the accepted post-Wave-1 target state;
+2. E05 completion is explicitly limited to the pure H01 kernel and does not imply E06;
+3. the old implementation frontier is exhausted/empty;
+4. the selected next decision backlog is exactly `E02,D06,K05,A16,B04,I02,K03`;
+5. those seven atoms remain `OPEN_BLOCKING` until separately resolved;
+6. planning metrics remain exactly `50 resolved/frozen`, `29 open-blocking`, `8 open-deferable`, total `87`;
+7. no dependency edge, contract, ADR or runtime behavior changes;
+8. governance cannot merge into `main` before actual E05 integration is verified.
 
 ## Next action
 
-After this reconciliation is integrated, PR #50 can be merged independently when its own review/CI gate is satisfied. A later governance update may then record E05 complete and replace the exhausted implementation frontier with newly frozen decision-derived issues.
+Create bounded GitHub issues for the selected decision backlog. Resolve each proposition independently, materialize canonical authority, and only then create/route the minimum implementation issue unlocked by that decision.
