@@ -15,6 +15,8 @@ Legacy Capability Harvest Audit v1                   COMPLETE
 ASS-01 Application ownership/enforcement             COMPLETE
 ASS-02 in-process Application service                COMPLETE
 DG-D Application configuration semantics             RESOLVED
+C05 Application configuration implementation         COMPLETE
+ASS-03 executable/tool orchestration convergence     COMPLETE
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -30,6 +32,7 @@ Resolved architecture includes:
 - API-first direction: clients/API transport -> application services -> domain/DataGateway;
 - Consumer API semantic selector/result/error boundary;
 - completed ASS-02 in-process path: C02 semantic selector resolution + C03 result/error translation;
+- completed C05 configuration/composition seam and C04/ASS-03 tool convergence;
 - `trade-v1`, Declared Coverage, CandleDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
@@ -59,7 +62,7 @@ Rules:
 - `quant_platform.application` owns concrete composition and does not read process arguments/environment directly;
 - no generic DI container, service locator, provider registry or plugin/config framework is introduced.
 
-This resolves the C05 decision state only. C05 implementation remains missing, and C04/ASS-03 remains blocked until that implementation exists.
+C05 implementation is complete through PR #43. C04/ASS-03 is complete through PR #44, with governed executable orchestration converged through the canonical Application seam. DG-D therefore remains historical reference only and is no longer an implementation blocker.
 
 ## Decision-gate policy
 
