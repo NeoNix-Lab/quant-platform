@@ -192,10 +192,7 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
             ("price", "41731.10"), ("price", "41731.1"), ("price", "1"),
             ("size", "0.004"), ("size", "0.00400"),
             ("size", "123456.789012345678901234567890"),
-            # Exact decimal expansion of the float 0.1: a single IEEE-754
-            # round trip would collapse it back to '0.1'.
             ("size", "0.1000000000000000055511151231257827"),
-            # Beyond 2^53 with a fractional part: float would lose it.
             ("price", "9007199254740993.1"),
         ):
             with self.subTest(field=field, value=value):
@@ -233,19 +230,19 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
                     canonicalize_bybit_historical_trade_v1(source_row(trade_id=trade_id))
                 self.assertEqual(caught.exception.field, "trade_id")
 
-        # trade_time_ms is authoritative; trade_time_utc only corroborates it.
-        # Writing the same instant with three or six decimals is accepted.
         for utc in ("2024-01-15T00:00:00.490Z", "2024-01-15T00:00:00.490000Z"):
             with self.subTest(utc=utc):
                 record = canonicalize_bybit_historical_trade_v1(
                     source_row(trade_time_utc=utc))
                 self.assertEqual(record.exchange_ts.epoch_ns, 1705276800490 * 1_000_000)
-        for bad_utc in ("2024-01-15T00:00:00.491000Z",   # one millisecond
-                        "2024-01-15T00:00:00.490001Z",   # one microsecond
-                        "2024-01-15T01:00:00.490000Z",   # one hour
-                        "2024-01-15T00:00:00.490000",    # no timezone
-                        "2024-13-45T00:00:00.490000Z",   # impossible date
-                        ""):
+        for bad_utc in (
+            "2024-01-15T00:00:00.491000Z",
+            "2024-01-15T00:00:00.490001Z",
+            "2024-01-15T01:00:00.490000Z",
+            "2024-01-15T00:00:00.490000",
+            "2024-13-45T00:00:00.490000Z",
+            "",
+        ):
             with self.subTest(utc=bad_utc):
                 with self.assertRaises(BybitHistoricalSourceError) as caught:
                     canonicalize_bybit_historical_trade_v1(
@@ -309,13 +306,9 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
         self.assertFalse(accumulator.exhausted)
         with self.assertRaises(BybitHistoricalSourceError):
             accumulator.evidence("2024-01-15", 1, 2)
-        # The old public completion API no longer exists. Completion can only
-        # be reached by the production source iterator reaching EOF.
         self.assertFalse(hasattr(accumulator, "mark_source_exhausted"))
         with self.assertRaises(AttributeError):
             accumulator.mark_source_exhausted()  # type: ignore[attr-defined]
-
-    # -- extract completion: partial evidence must be impossible -----------
 
     def _extract_db(self, directory: Path) -> tuple[Path, int, int]:
         start, end = utc_day_bounds_ms("2024-01-15")
@@ -330,8 +323,6 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
     def test_evidence_is_refused_until_natural_source_exhaustion(self):
         with tempfile.TemporaryDirectory() as temporary:
             database, start, end = self._extract_db(Path(temporary))
-
-            # 1. stream opened but never advanced
             accumulator = BybitHistoricalExtractAccumulator()
             connection = open_bybit_historical_source(database)
             try:
@@ -340,8 +331,6 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
                 self.assertFalse(accumulator.exhausted)
                 with self.assertRaises(BybitHistoricalSourceError):
                     accumulator.evidence("2024-01-15", start, end)
-
-                # 2. partially consumed, then abandoned with break
                 for index, _row in enumerate(stream):
                     if index == 2:
                         break
@@ -354,7 +343,6 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
             finally:
                 connection.close()
 
-            # 3. consumer raises mid-iteration
             accumulator = BybitHistoricalExtractAccumulator()
             connection = open_bybit_historical_source(database)
             try:
@@ -402,12 +390,9 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
             self.assertEqual(evidence.requested_start_ms, start)
             self.assertEqual(evidence.requested_end_ms, end)
             self.assertEqual(len(evidence.source_fingerprint_sha256), 64)
-            # Evidence is final: a sealed extract cannot absorb further rows,
-            # so the published count and fingerprint cannot drift afterwards.
             with self.assertRaises(BybitHistoricalSourceError):
                 first.observe(source_row())
-            self.assertEqual(
-                first.evidence("2024-01-15", start, end), evidence)
+            self.assertEqual(first.evidence("2024-01-15", start, end), evidence)
 
     def test_sqlite_row_reaches_the_materializer_without_a_conversion_bridge(self):
         identity = DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v1")
@@ -417,9 +402,6 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
             accumulator = BybitHistoricalExtractAccumulator()
             connection = open_bybit_historical_source(database)
             try:
-                # The generator handed to the materializer yields exactly what
-                # the production canonicalizer returns: no dict, no JSON, no
-                # second mapping between the source seam and materialization.
                 def records():
                     for row in iter_bybit_historical_trade_rows(
                             connection, start, end, accumulator=accumulator):
@@ -488,12 +470,21 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
             )
             self.assertIn(expected, encode_record(record))
 
-    def test_architecture_keeps_source_ownership_in_production(self):
+    def test_architecture_keeps_source_ownership_behind_application_seam(self):
         importer = (ROOT / "tools" / "import_bybit_trades.py").read_text(encoding="utf-8")
         importer_tree = ast.parse(importer)
-        function_names = {node.name for node in ast.walk(importer_tree) if isinstance(node, ast.FunctionDef)}
+        function_names = {
+            node.name for node in ast.walk(importer_tree)
+            if isinstance(node, ast.FunctionDef)
+        }
         self.assertNotIn("canonicalize_trade", function_names)
-        self.assertIn("quant_platform.source_adapters.bybit_historical", importer)
+        self.assertIn("from quant_platform.application import", importer)
+        self.assertNotIn("quant_platform.source_adapters.bybit_historical", importer)
+
+        application_importer = (
+            ROOT / "src" / "quant_platform" / "application" / "bybit_import.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("quant_platform.source_adapters.bybit_historical", application_importer)
 
         source_root = ROOT / "src"
         for path in source_root.rglob("*.py"):
@@ -505,7 +496,7 @@ class BybitHistoricalSourceV1Tests(unittest.TestCase):
 class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
     """Access-mechanics tests for the legacy archive entry points.
 
-    These prove connection behaviour only.  Nothing here claims anything about
+    These prove connection behaviour only. Nothing here claims anything about
     archive completeness, preservation, or Golden acceptance.
     """
 
@@ -528,8 +519,6 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
         return database, start, end
 
     def _block_shm(self, database: Path) -> None:
-        """Place a sentinel that an immutable reader must not touch."""
-
         Path(str(database) + "-shm").mkdir()
 
     def test_ordinary_access_never_becomes_immutable(self):
@@ -542,8 +531,6 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
             for node in tree.body
             if isinstance(node, ast.FunctionDef)
         }
-        # The default reader keeps plain mode=ro; only the explicitly named
-        # legacy opener carries the immutable access mode.
         self.assertIn("mode=ro", bodies["open_bybit_historical_source"])
         self.assertNotIn("immutable", bodies["open_bybit_historical_source"])
         self.assertIn("mode=ro&immutable=1", bodies["open_bybit_historical_legacy_source"])
@@ -560,9 +547,6 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             database, start, end = self._legacy_db(directory, wal=True)
-            # Closing the WAL-setting connection leaves no writer. Remove any
-            # cleanly disposable sidecars before making their directory
-            # non-writable, matching the deployed legacy archive condition.
             for suffix in ("-wal", "-shm", "-journal"):
                 sidecar = Path(str(database) + suffix)
                 if sidecar.exists():
@@ -630,8 +614,6 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
                 stable = list(iter_bybit_historical_trade_rows(connection, start, end))
             self.assertEqual(len(stable), 6)
 
-            # A source rewritten under the reader must not yield a usable
-            # result, even though the rows themselves were read without error.
             produced = []
             with self.assertRaises(BybitHistoricalSourceError) as caught:
                 with bybit_historical_legacy_read(database) as connection:
@@ -659,7 +641,6 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
             self.assertEqual(
                 replace(identity, size=identity.size + 1).drift_against(identity),
                 (f"size: {identity.size + 1!r} -> {identity.size!r}",))
-            # Unknown device/inode on either side is not reported as drift.
             unknown = replace(identity, device=None, inode=None)
             self.assertEqual(unknown.drift_against(identity), ())
 
@@ -671,9 +652,6 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
             self._block_shm(database)
             accumulator = BybitHistoricalExtractAccumulator()
 
-            # legacy SQLite -> production adapter -> TradeRecord stream ->
-            # the existing canonical materializer.  No bridge, no copy, no
-            # legacy-specific materialization path.
             with bybit_historical_legacy_read(database) as connection:
                 def records():
                     for row in iter_bybit_historical_trade_rows(
