@@ -27,3 +27,8 @@ data/
 !src/quant_platform/data/*.py
 artifacts/
 cache/
+/orchestrator.toml
+/.orchestrator.db
+.worktrees/
+.claude/settings.local.json
+.claude/.settings.local.json.lock
