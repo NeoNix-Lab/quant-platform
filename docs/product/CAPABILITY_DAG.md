@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; post-C03 state reconciled after PR #41 integration**.
+Status: **CANONICAL; implementation state reconciled through `main` @ `35109010e19b31bd480dc87a377453ff22ee5474`**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,7 +10,7 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after post-C03 reconciliation:
+Current audited inventory after post-wave-1 implementation reconciliation:
 
 ```text
 TOTAL_ATOMS                     = 87
@@ -95,8 +95,8 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | C01 | Application ownership | Application | B01 | C02-C05 | RESOLVED | COMPLETE | `quant_platform.application`; ASS-01/ADR-0024 |
 | C02 | ASS-02 semantic selector resolution | Application | C01,B02,D01,J01 | C03 | FROZEN | COMPLETE | Semantic request resolves without storage identity; Consumer API |
 | C03 | ASS-02 result/error translation | Application | C02 | C04,J02,J04-J06 | FROZEN | COMPLETE | PR #41; stable envelope/error semantics; exact-head integrity #91 PASS |
-| C04 | Tool orchestration convergence | Application | C02,C03,C05 | governed entry points | RESOLVED | MISSING | Exact ASS-03 debt reaches zero; blocked until C05 implementation |
-| C05 | Configuration convergence | Engineering/Application | C01 | C04,K02 | RESOLVED | MISSING | CLI > env > declared default > fail; typed immutable capability-specific config; Application owns composition |
+| C04 | Tool orchestration convergence | Application | C02,C03,C05 | governed entry points | RESOLVED | COMPLETE | PR #44; exact ASS-03 debt reached zero through the canonical Application seam |
+| C05 | Configuration convergence | Engineering/Application | C01 | C04,K02 | RESOLVED | COMPLETE | PR #43; typed immutable capability-specific config; Application owns composition |
 | C06 | Multi-capability resolution | Application | second venue/representation evidence | general application service | OPEN_DEFERABLE | MISSING | Unsupported combinations explicit; no speculative registry |
 
 ### D — Representation
@@ -105,7 +105,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 |---|---|---|---|---|---|---|---|
 | D01 | Representation identity | Representation | — | C02,D02,E02 | RESOLVED | PARTIAL | Separate from DatasetIdentity; Consumer/Core |
 | D02 | CandleDefinition v1 | Representation | A01,D01 | D03,D04 | FROZEN | COMPLETE | Accepted definition/hash/schema semantics; ADR-0021 |
-| D03 | Historical candle computation | Representation | B02,D02 | D05,E03 | FROZEN | MISSING | Reproducible CLOSED candles on demand |
+| D03 | Historical candle computation | Representation | B02,D02 | D05,E03 | FROZEN | COMPLETE | PR #47; reproducible CLOSED candles on demand |
 | D04 | Incremental/live candles | Representation | B06,D02 | J07 | FROZEN | MISSING | PARTIAL converges to historical-equivalent CLOSED output |
 | D05 | Candle materialization identity | Representation | D02,D03,A02,A03 | research reuse | OPEN_BLOCKING | MISSING | Persisted series binds definition/source/support; DG-A candle-materialization branch |
 | D06 | Footprint representation | Representation | A01,D01 | E06 | OPEN_BLOCKING | MISSING | Explicit grain/tick grid/adjacency/availability; DG-A feature/H01 branch |
@@ -118,7 +118,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | E02 | FeatureDefinition v1 | Feature Engine | E01,D01 | E03,E04,E06 | OPEN_BLOCKING | MISSING | Versioned semantics + availability + identity; DG-A feature-definition branch |
 | E03 | FeatureSet catalog/provider | Feature Engine | E01,E02 | E04 | RESOLVED | PARTIAL | Ordered provider resolution; ADR-0016/CM |
 | E04 | FeatureArtifact/materialization | Feature Engine | E02,E03,A02 | F01,I04,E06 | OPEN_BLOCKING | MISSING | Artifact binds definitions/source/implementation; DG-A feature-artifact branch |
-| E05 | H01 pure imbalance kernel | Feature Engine | Legacy Harvest audit | E06 | RESOLVED | MISSING | Narrow ADOPT numeric/edge semantics |
+| E05 | H01 pure imbalance kernel | Feature Engine | Legacy Harvest audit | E06 | RESOLVED | MISSING | Narrow ADOPT numeric/edge semantics; PR #50 candidate not yet integrated |
 | E06 | H01 canonical integration | Feature Engine | D06,E02,E04,E05 | F02 | OPEN_BLOCKING | MISSING | Canonical footprint + provenance; DG-A canonical-H01 branch; D05 is not a prerequisite |
 | E07 | Custom/provider extension | Feature Engine | E02,real second-provider need | broader library | OPEN_DEFERABLE | MISSING | Let second provider drive minimum extension seam |
 
@@ -130,7 +130,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | F02 | EventSpec/detection | Research | F01,E04 | F04 | RESOLVED | MISSING | Traceable event rule + availability evidence |
 | F03 | OutcomeSpec/Outcome | Research | F01 | F04,F07 | RESOLVED | MISSING | Horizon/censoring/availability explicit |
 | F04 | Event study/sweeps | Research | F02,F03,B03 | I01,F08 | RESOLVED | MISSING | Re-run preserves population and aggregates |
-| F05 | Walk-forward schedule | Validation | shared time primitives | F06,F08 | RESOLVED | MISSING | Deterministic temporal fold boundaries |
+| F05 | Walk-forward schedule | Validation | shared time primitives | F06,F08 | RESOLVED | COMPLETE | PR #48; deterministic expanding half-open temporal folds |
 | F06 | Availability/purge/embargo | Validation | F05,E02 | F07,I04 | OPEN_BLOCKING | MISSING | Adversarial leakage rejected; DG-E validation branch |
 | F07 | Labels/censoring/lockbox | Validation | F03,F06 | G01,I04 | OPEN_BLOCKING | MISSING | Explicit boundary/censoring/hidden evaluation; DG-E validation branch |
 | F08 | DSR/PBO | Research/Validation | F04,F05 | robust comparison | OPEN_BLOCKING | MISSING | Pinned estimator/input/numeric vectors; DG-E DSR/PBO branch only |
@@ -159,7 +159,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
-| I01 | Study/Trial/Run/Artifact semantic model | Experiment System | Core concepts | I02,I03 | RESOLVED | MISSING | One canonical experiment identity family |
+| I01 | Study/Trial/Run/Artifact semantic model | Experiment System | Core concepts | I02,I03 | RESOLVED | COMPLETE | PR #49; canonical deterministic experiment identity family |
 | I02 | Experiment persistence | Experiment System | I01,A05 | I03,J03 | OPEN_BLOCKING | MISSING | One restart-safe canonical persistence model; DG-G experiment branch |
 | I03 | Trial accounting/comparison | Experiment System | I01,I02,H05 | model selection | RESOLVED | MISSING | Resume idempotent; comparable population identity |
 | I04 | Supervised input/selection | Learning | E04,F06,F07 | I05 | RESOLVED | MISSING | Durable split/provenance/anti-leakage evidence |
@@ -187,14 +187,14 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | K01 | Provisioning/fixtures/CI | Engineering | — | all spines | RESOLVED | COMPLETE | Reproducible validation environment |
 | K02 | Server access/runtime identity | Operations | C05,K01 | J08 | OPEN_BLOCKING | MISSING | Least privilege + explicit credential disposition; DG-H identity branch |
 | K03 | Observability | Operations | K01 | J07,J08,K10 | OPEN_BLOCKING | MISSING | Critical transitions externally observable; DG-H observability branch |
-| K04 | Capacity observation | Operations | A05,K01 | K05 | RESOLVED | MISSING | Report exact usage/free space without control action |
+| K04 | Capacity observation | Operations | A05,K01 | K05 | RESOLVED | COMPLETE | PR #46; exact observation-only usage/free-space reporting |
 | K05 | Health/pressure policy | Operations | K04 | A11,K06,K07 | OPEN_BLOCKING | MISSING | Explicit threshold/time-to-full action; DG-H pressure branch |
 | K06 | RAW/source protection | Operations/Data Plane | A07,K05 | A11,K07,K08 | OPEN_BLOCKING | MISSING | Protected evidence reconstructs canonical data; DG-H protection branch |
 | K07 | Tier relocation | Operations/Data Plane | K05,K06 | storage lifecycle | OPEN_BLOCKING | MISSING | Crash yields old or new valid placement; DG-H relocation branch |
 | K08 | Backup/restore proof | Operations | K06 | K09,J08,K10,A11 | OPEN_BLOCKING | MISSING | Independent restore reproduces required identities; DG-H backup branch |
 | K09 | Retention/deletion authority | Operations | K08 | sustainable live | OPEN_BLOCKING | MISSING | Never delete protected/sole recoverable evidence; DG-H deletion branch |
 | K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | OPEN_BLOCKING | MISSING | Crash/restart preserves cursor/publication invariants; DG-H recovery branch; follows live acquisition rather than blocking its implementation |
-| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; post-C03 reconciliation maintains coherence |
+| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; post-wave-1 reconciliation maintains coherence |
 
 ## Dependency integrity
 
@@ -210,7 +210,7 @@ A11 does not require implemented K10; recovery semantics must be resolved throug
 
 ## Decision gates
 
-The 29 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
+The 29 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved/completed historical reference.
 
 ### DG-A — Representation / Feature integration
 
@@ -241,9 +241,9 @@ Atom-specific branches:
 
 L1 does not activate L2. L3/MBO remains deferable until real L3 evidence exists.
 
-### DG-D — Application configuration — RESOLVED
+### DG-D — Application configuration — RESOLVED / COMPLETE
 
-Atom: `C05`.
+Atoms: `C05,C04`.
 
 The C05 semantic/ownership decision is frozen:
 
@@ -259,7 +259,7 @@ quant_platform.application: concrete composition owner
 
 Resolution precedence is **explicit CLI > environment > declared default > explicit failure**. Application receives resolved values only, owns concrete composition, and does not read process arguments/environment directly. No generic DI container, service locator, provider registry or plugin/config framework is introduced.
 
-C05 implementation remains `MISSING`. C04/ASS-03 remains blocked until that implementation exists.
+PR #43 completed C05 implementation. PR #44 then completed C04/ASS-03 tool convergence through that seam. DG-D has no remaining live blocker at this baseline.
 
 ### DG-E — Validation semantics
 
@@ -303,13 +303,13 @@ Only operational prerequisites of the selected atom are activated.
 |---|---|---|---|
 | V1 | Source -> canonical -> catalog -> DataGateway | First published data vertical is deterministically readable through canonical access | COMPLETE |
 | V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | COMPLETE (`C02 + C03`) |
-| V3 | DataGateway -> historical Candle | Bounded trades yield reproducible CLOSED candles | READY (`D03`) |
+| V3 | DataGateway -> historical Candle | Bounded trades yield reproducible CLOSED candles | COMPLETE (`D03`) |
 | V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | BLOCKED by DG-A canonical-H01 branch |
 | V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies | BLOCKED by E04 |
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | BLOCKED by DG-E validation branch |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |
 | V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | BLOCKED by DG-B live branch + relevant DG-H branches; acyclic |
-| V9 | Application -> API -> Client | One application semantic implementation serves thin clients | APPLICATION SERVICE COMPLETE; transport deferred |
+| V9 | Application -> API -> Client | One application semantic implementation serves thin clients | APPLICATION + EXECUTABLE CONVERGENCE COMPLETE; transport deferred |
 | V10 | Paper -> Live | Full canonical stack crosses explicit operational authorization gate | BLOCKED |
 
 ## Execution frontier
@@ -317,13 +317,10 @@ Only operational prerequisites of the selected atom are activated.
 Decision-complete, missing atoms whose declared dependencies are currently satisfied:
 
 ```text
-C05  configuration convergence for the Application service
-D03  historical Candle runtime (on-demand only)
 E05  H01 pure imbalance kernel
-F05  deterministic walk-forward schedule
-I01  Study/Trial/Run/Artifact semantic model
-K04  observational capacity monitoring
 ```
+
+PR #50 is a merge-ready E05 candidate but is not part of canonical implementation state until integrated in `main`.
 
 This is a **frontier, not authorization**. `SCOPE.md` must activate exactly one bounded implementation or decision slice before mutation.
 
@@ -333,17 +330,17 @@ The waves are dependency/value groupings, not a new linear phase numbering.
 
 ```text
 Wave 0  Architecture foundation                           COMPLETE
-Wave 1  First canonical computation/application slices    frontier above
+Wave 1  First canonical computation/application slices    C04/C05/D03/F05/I01/K04 complete; E05 remaining
 Wave 2  Representation / Feature vertical                 atom-specific DG-A branches
 Wave 3  Research / Validation                             F01-F04 then DG-E validation branch
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
-Wave 5  Experiment / Supervised ML                       I01, DG-G experiment branch, I03-I05
-Wave 6  Live Data Plane                                   K04 + relevant DG-H, then DG-B repair/live branches
+Wave 5  Experiment / Supervised ML                       I01 complete; DG-G experiment branch, I03-I05
+Wave 6  Live Data Plane                                   K04 complete; relevant DG-H, then DG-B repair/live branches
 Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 when real client need exists
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C05, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently. C04 follows only after C05 implementation.
+Parallelism is allowed whenever DAG dependencies are satisfied. With the original ready-slice wave largely consumed, new implementation issue supply should come from atom-specific decision resolution on selected paths, not from speculative semantics.
 
 ## Macro roadmap relationship
 
