@@ -1,28 +1,36 @@
-# Scope: Post-C03 Governance Reconciliation / ASS-02 Closeout
+# Scope: Post-Wave-1 Implementation Reconciliation
 
 ## Objective
 
-Reconcile canonical governance with the repository state after C03 integration, close the ASS-02 in-process Application vertical, and materialize the already-decided C05 configuration semantics without implementing C05 or ASS-03.
+Reconcile canonical governance with the implementation state already integrated in `main` after the first ready-slice wave, without changing any frozen semantic contract or prematurely crediting unmerged work.
 
-C02 and C03 are both integrated. This reconciliation does not reopen their implementation/review evidence and does not authorize C04, API transport, Job runtime, clients or any other missing capability.
+This reconciliation records the integrated completion of C05, C04/ASS-03, K04, D03, F05 and I01. E05 remains `RESOLVED / MISSING` because PR #50 is merge-ready but not integrated in `main` at this baseline.
 
 The completed Producer–Consumer Conformity cycle remains credited under ADR-0023: **Contract Freeze Gate = PASSED** and **Conformity Implementation Gate = PASSED**. This slice does not reopen either gate.
 
 ## Baseline
 
 ```text
-base main                  = 066eaf6984fca9d863bc53c9c7fa07c08a1f464c
-source integration         = PR #41
-reviewed C03 head          = f382a2e6f97ce95f143eed866e602ebf0c5f3acb
-exact-head CI              = Quant Platform integrity #91 PASS
+base main                  = 35109010e19b31bd480dc87a377453ff22ee5474
+latest integrated slice    = PR #49 / I01
 mutation class             = governance docs only
 source/tests/runtime       = NO
 contracts/ADRs             = NO
+unmerged candidate credit  = NO
 ```
 
-PR #41 integrated the reviewed C03 candidate `f382a2e6f97ce95f143eed866e602ebf0c5f3acb` into `main` as merge commit `066eaf6984fca9d863bc53c9c7fa07c08a1f464c`. The pull-request workflow `Quant Platform integrity #91` passed on that exact candidate head.
+Integrated implementation evidence credited by this reconciliation:
 
-C02 evidence from PR #30 and C03 review/CI evidence are credited and must not be re-proved absent a concrete invalidating change.
+```text
+PR #43  C05  Configuration convergence                 merge fb87a021c7134078b2a39f48ceb5f831b016e8ed
+PR #44  C04  Tool orchestration convergence / ASS-03   merge b25e6be0cea1403b233664c7fea90adcd2e33ace
+PR #46  K04  Observational capacity                    merge a19662411f6ce125bcf19ce176f6373736b583d5
+PR #47  D03  Historical Candle computation             merge 652affcd9be573aca0f4103018ea02eda153b64a
+PR #48  F05  Deterministic walk-forward schedule       merge 08fce020836a934a649c29a2fcb1ede74fe72856
+PR #49  I01  Study/Trial/Run/Artifact identities       merge 35109010e19b31bd480dc87a377453ff22ee5474
+```
+
+The corresponding reviewed candidates and exact-head CI are credited and must not be re-proved absent a concrete invalidating change. F05's integration drift was reconciled before merge; its final candidate included D03 and passed exact-head integrity.
 
 ## Accepted state
 
@@ -30,78 +38,65 @@ C02 evidence from PR #30 and C03 review/CI evidence are credited and must not be
 C01  Application ownership                    COMPLETE
 C02  ASS-02 semantic selector resolution      COMPLETE
 C03  ASS-02 result/error translation          COMPLETE
-V2   DataGateway -> Application               COMPLETE
-C05  Configuration convergence decision       RESOLVED / implementation MISSING
-C04  Tool orchestration convergence           RESOLVED / implementation MISSING; requires C05 implementation
+C05  Configuration convergence                COMPLETE
+C04  Tool orchestration convergence           COMPLETE
+ASS-03 executable orchestration convergence   COMPLETE
+D03  Historical Candle computation            COMPLETE
+F05  Walk-forward schedule                    COMPLETE
+I01  Study/Trial/Run/Artifact semantic model  COMPLETE
+K04  Capacity observation                     COMPLETE
+E05  H01 pure imbalance kernel                RESOLVED / implementation MISSING
 ```
 
-ASS-02 means the current in-process Application service vertical only. It does not imply API transport, Job runtime, clients, C05 implementation or ASS-03 completion.
-
-## Frozen C05 decision recorded by this reconciliation
-
-The Application configuration boundary is:
-
-```text
-CLI / environment
-      ↓
-executable boundary: acquire + resolve input only
-      ↓
-typed immutable capability-specific Application config
-      ↓
-quant_platform.application: concrete composition owner
-      ↓
-Catalog / DataGateway / source / producer capabilities
-```
-
-Rules:
-
-1. `tools/` owns CLI/environment acquisition and parsing.
-2. Resolution precedence is **explicit CLI > environment > declared default > explicit failure**.
-3. Application receives resolved values only and does not know their acquisition source.
-4. Application-facing config is typed, immutable and capability-specific.
-5. `quant_platform.application` owns concrete composition and does not read `sys.argv`, `argparse` or environment variables directly.
-6. No generic DI container, service locator, provider registry or plugin/config framework is introduced.
-7. C05 implementation remains missing; C04 remains blocked until that implementation exists.
+C04 completion means the finite governed `tools -> runtime/domain/tests` ASS-03 debt has converged through the canonical Application seam. It does not imply API transport, Job runtime, clients, live ingest or any downstream quantitative capability.
 
 ## Current execution frontier
 
-Decision-complete, missing atoms whose declared planning dependencies are satisfied:
+Decision-complete, missing atoms whose declared planning dependencies are satisfied at this baseline:
 
 ```text
-C05  configuration convergence for the Application service
-D03  historical Candle runtime (on-demand only)
 E05  H01 pure imbalance kernel
-F05  deterministic walk-forward schedule
-I01  Study/Trial/Run/Artifact semantic model
-K04  observational capacity monitoring
 ```
 
-Frontier membership remains planning readiness only; it is not implementation authorization.
+PR #50 is an implementation candidate for E05 and is merge-ready, but frontier/canonical implementation state follows `main`; therefore E05 remains `MISSING` until that PR is integrated.
+
+The next useful orchestration supply comes from bounded decision branches, not from pretending their implementations are already ready. High-value branches include:
+
+```text
+DG-A  E02 / D06 / E04 toward canonical H01 integration
+DG-E  F06 availability / purge / embargo
+DG-G  I02 experiment persistence
+DG-H  K05 pressure policy, then K06 / K08
+DG-B  A16 / B04 / A10 repair path as required
+```
+
+This list is prioritization guidance only. Each `OPEN_BLOCKING` atom still requires its own decision freeze before implementation authorization.
 
 ## Scope
 
 Included:
 
-- record C03 as `FROZEN / COMPLETE` in the canonical DAG and capability map;
-- record `C02 + C03 = ASS-02 in-process Application vertical COMPLETE`;
-- record V2 as COMPLETE;
-- remove C03 from every current-frontier representation;
-- record C05 as `RESOLVED / MISSING` with the frozen configuration convention above;
-- update planning metrics from `49/30/8` to `50/29/8` while preserving 87 classified atoms;
-- expose C05 as the next Application atom and preserve C04 as blocked on C05 implementation;
-- preserve all unrelated dependency edges, gate semantics, deferable triggers and macro phases.
+- record C05 as `RESOLVED / COMPLETE`;
+- record C04 as `RESOLVED / COMPLETE` and ASS-03 as complete;
+- record D03 as `FROZEN / COMPLETE` and V3 as complete;
+- record F05 as `RESOLVED / COMPLETE`;
+- record I01 as `RESOLVED / COMPLETE`;
+- record K04 as `RESOLVED / COMPLETE`;
+- reduce every current-frontier representation to E05 only;
+- update DG-D from resolved-but-unimplemented to resolved-and-complete historical reference;
+- preserve E05 as `RESOLVED / MISSING` until PR #50 is actually merged;
+- preserve all unrelated dependency edges, decision states, gate semantics and deferable triggers.
 
 Excluded:
 
 - any source, test, runtime, schema, DDL or fixture mutation;
 - any ADR/contract semantic change;
-- C05 implementation;
-- C04 implementation or tool-debt migration;
-- API transport, Job runtime or client implementation;
-- unrelated decision resolution;
-- re-review or re-execution of already-credited C02/C03 proof.
+- crediting or merging PR #50;
+- resolving E02, D06, E04, F06, I02, K05, K06, K08, A16, B04 or A10;
+- API transport, Job runtime, client or live-ingest implementation;
+- re-review or re-execution of already-credited implementation proof.
 
-## Preserved invariants
+## Preserved planning invariants
 
 ```text
 TOTAL_ATOMS                     = 87
@@ -115,21 +110,21 @@ REQUIRES_EDGES                  = 157
 CYCLES                          = 0
 ```
 
-The only decision-state movement is `C05: OPEN_BLOCKING -> RESOLVED`. C03 changes implementation state only (`MISSING -> COMPLETE`). No dependency edge, frozen Consumer API semantic, phase numbering or deferable trigger changes.
+No decision-state movement occurs in this reconciliation. The changes above are implementation-state transitions only.
 
 ## Acceptance
 
 DONE means all of the following are true:
 
-1. C03 is `FROZEN / COMPLETE` in canonical governance;
-2. C02 + C03 are recorded as ASS-02 COMPLETE and V2 COMPLETE;
-3. C05 is `RESOLVED / MISSING` with the exact configuration boundary and precedence above;
-4. every current-frontier list is exactly `C05,D03,E05,F05,I01,K04`;
-5. C04 remains `RESOLVED / MISSING` and blocked on C05 implementation;
-6. planning metrics are exactly `50 resolved/frozen`, `29 open-blocking`, `8 open-deferable`, total `87`;
-7. no source/test/runtime/contract/ADR/schema/DDL/fixture mutation is included;
-8. credited C03 review and exact-head CI are referenced rather than re-proved.
+1. C04, C05, D03, F05, I01 and K04 are `COMPLETE` everywhere canonical governance represents implementation state;
+2. ASS-03 is recorded complete without implying API/jobs/clients/live capability;
+3. V3 is `COMPLETE` because D03 is integrated;
+4. every current-frontier list is exactly `E05` at baseline `35109010...`;
+5. E05 remains `RESOLVED / MISSING` because PR #50 is not yet in `main`;
+6. DG-D is a resolved/completed historical reference, not a live blocker;
+7. planning metrics remain exactly `50 resolved/frozen`, `29 open-blocking`, `8 open-deferable`, total `87`;
+8. no unrelated decision, contract, dependency edge or runtime behavior changes.
 
 ## Next action
 
-After this governance reconciliation is integrated, issue #33 can close as completed and #34 (`C05 — Configuration convergence`) becomes the next Application atom eligible for the implementation router. #35–#39 remain independent implementation-ready slices according to their existing issue mandates.
+After this reconciliation is integrated, PR #50 can be merged independently when its own review/CI gate is satisfied. A later governance update may then record E05 complete and replace the exhausted implementation frontier with newly frozen decision-derived issues.
