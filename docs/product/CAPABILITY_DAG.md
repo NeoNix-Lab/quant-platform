@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; post-E02 FeatureDefinition v1 foundation**.
+Status: **CANONICAL; post-D06 FootprintDefinition v1 foundation**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,20 +10,20 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after post-C03 reconciliation:
+Current audited inventory after post-D06 reconciliation:
 
 ```text
 TOTAL_ATOMS                     = 87
 CLASSIFIED_ATOMS                = 87
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 51 / 87 = 58.6%
-OPEN_BLOCKING                   = 28
+SEMANTIC_FROZEN_OR_RESOLVED     = 52 / 87 = 59.8%
+OPEN_BLOCKING                   = 27
 OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 51 + 28 + 8 = 87
+ROADMAP_DEFINED                 = 52 + 27 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
 ```
 
-The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 58.6% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
+The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 59.8% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
 
 Decision states:
 
@@ -108,7 +108,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | D03 | Historical candle computation | Representation | B02,D02 | D05,E03 | FROZEN | MISSING | Reproducible CLOSED candles on demand |
 | D04 | Incremental/live candles | Representation | B06,D02 | J07 | FROZEN | MISSING | PARTIAL converges to historical-equivalent CLOSED output |
 | D05 | Candle materialization identity | Representation | D02,D03,A02,A03 | research reuse | OPEN_BLOCKING | MISSING | Persisted series binds definition/source/support; DG-A candle-materialization branch |
-| D06 | Footprint representation | Representation | A01,D01 | E06 | OPEN_BLOCKING | MISSING | Explicit grain/tick grid/adjacency/availability; DG-A feature/H01 branch |
+| D06 | Footprint representation | Representation | A01,D01 | E06 | FROZEN | COMPLETE | FootprintDefinition v1 exact duration/tick grid/sparse levels/finality; ADR-0027 |
 
 ### E — Feature
 
@@ -210,7 +210,7 @@ A11 does not require implemented K10; recovery semantics must be resolved throug
 
 ## Decision gates
 
-The 28 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
+The 27 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
 
 ### DG-A — Representation / Feature integration
 
@@ -220,7 +220,9 @@ Atom-specific branches:
 - `E04` FeatureArtifact: activate after E02/E03 when feature artifact/materialization is selected;
 - `D06` + `E02` + `E04` + `E06`: canonical H01 path.
 
-`E02` FeatureDefinition v1 is frozen and complete under ADR-0026. `D05` is **not** a prerequisite of `E06`. DG-A does not block D03 or pure H01 kernel E05.
+`D06` FootprintDefinition v1 is frozen and complete under ADR-0027. `E02`
+FeatureDefinition v1 is frozen and complete under ADR-0026. `D05` is **not** a
+prerequisite of `E06`. DG-A does not block D03 or pure H01 kernel E05.
 
 ### DG-B — Historical / Live data convergence
 
@@ -303,7 +305,7 @@ Only operational prerequisites of the selected atom are activated.
 | V1 | Source -> canonical -> catalog -> DataGateway | First published data vertical is deterministically readable through canonical access | COMPLETE |
 | V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | COMPLETE (`C02 + C03`) |
 | V3 | DataGateway -> historical Candle | Bounded trades yield reproducible CLOSED candles | READY (`D03`) |
-| V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | BLOCKED by D06/E04/E06 DG-A branches |
+| V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | BLOCKED by E04/E06 DG-A branches |
 | V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies | BLOCKED by E04 |
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | BLOCKED by DG-E validation branch |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |

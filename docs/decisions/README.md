@@ -16,5 +16,6 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0024 | Package Boundary / Modular Monolith Foundation v1 | Accepted |
 | 0025 | Source-Acquired Canonical Dataset Lineage v2 | Accepted |
 | 0026 | FeatureDefinition v1 semantic foundation | Accepted |
+| 0027 | FootprintDefinition v1 representation foundation | Accepted |
 
 See the individual ADR files for context and consequences.
