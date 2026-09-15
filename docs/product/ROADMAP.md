@@ -51,14 +51,12 @@ ASS-02 in-process Application service (C02 + C03)    COMPLETE
 K11 Governance-state consistency                     COMPLETE
 E02 FeatureDefinition v1 semantic foundation         COMPLETE
 D06 FootprintDefinition v1 representation           COMPLETE
-K04 Capacity observation                             COMPLETE
-K05 PressurePolicyDefinition v1                     COMPLETE
 Broad independent Producer/Consumer expansion        UNLOCKED
 ```
 
 The two-stage Producer–Consumer Conformity Gate is governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md): the **Contract Freeze Gate** and **Conformity Implementation Gate** remain PASSED. The gate pair is concluded and is referenced here as credited foundation evidence, not reopened work.
 
-Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients. C02 established the frozen `trades@1` semantic selector-resolution seam through PR #30; C03 completed the frozen result/error translation seam through PR #41 after exact-head `Quant Platform integrity #91` PASS. Together C02 + C03 complete the current in-process ASS-02 Application vertical. C05 configuration semantics are now resolved, but C05 implementation and C04/ASS-03 tool convergence remain missing. Roadmap vNext governance-state consistency remains a credited foundation capability after the post-C03 reconciliation. E02 FeatureDefinition v1 is now frozen and complete under ADR-0026, with its bounded runtime semantic model implemented under `quant_platform.features`. D06 FootprintDefinition v1 is frozen and complete under ADR-0027, with its bounded historical FINAL representation runtime implemented under `quant_platform.representation`. K04 capacity observation is complete under `quant_platform.operations`. K05 PressurePolicyDefinition v1 is frozen and complete under ADR-0028, with its pure pressure evaluator implemented under `quant_platform.operations`.
+Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients. C02 established the frozen `trades@1` semantic selector-resolution seam through PR #30; C03 completed the frozen result/error translation seam through PR #41 after exact-head `Quant Platform integrity #91` PASS. Together C02 + C03 complete the current in-process ASS-02 Application vertical. C05 configuration semantics are now resolved, but C05 implementation and C04/ASS-03 tool convergence remain missing. Roadmap vNext governance-state consistency remains a credited foundation capability after the post-C03 reconciliation. E02 FeatureDefinition v1 is now frozen and complete under ADR-0026, with its bounded runtime semantic model implemented under `quant_platform.features`. D06 FootprintDefinition v1 is frozen and complete under ADR-0027, with its bounded historical FINAL representation runtime implemented under `quant_platform.representation`.
 
 Completed checkpoints are credited and must not be re-proved absent a concrete invalidating change.
 
@@ -70,16 +68,16 @@ The corrected architecture-roadmap inventory is:
 TOTAL_ATOMS                     87
 CLASSIFIED_ATOMS                87
 UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     53 / 87 = 60.9%
-OPEN_BLOCKING                   26
+SEMANTIC_FROZEN_OR_RESOLVED     52 / 87 = 59.8%
+OPEN_BLOCKING                   27
 OPEN_DEFERABLE                  8
-ROADMAP_DEFINED                 53 + 26 + 8 = 87
+ROADMAP_DEFINED                 52 + 27 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
 ```
 
 The 100% planning score means every roadmap atom is classified: frozen/resolved, assigned to an atom-specific blocking gate, or explicitly deferable with a real evidence trigger. It does **not** mean every future semantic choice is frozen.
 
-The 60.9% value is the current semantic-freeze/resolution metric. Future provider, live, RL, transport and operational choices are not frozen merely to increase it.
+The 59.8% value is the current semantic-freeze/resolution metric. Future provider, live, RL, transport and operational choices are not frozen merely to increase it.
 
 ## Decision-gate model
 
@@ -147,6 +145,7 @@ E05  H01 pure imbalance kernel
 F01  HypothesisSpec
 F05  deterministic walk-forward schedule
 I01  Study/Trial/Run/Artifact semantic model
+K04  observational capacity monitoring
 ```
 
 Frontier membership is **not implementation authorization** and does not select the next atom.
@@ -162,7 +161,7 @@ Wave 2  Representation / Feature                          atom-specific DG-A bra
 Wave 3  Research / Validation                             F01-F04 then DG-E validation path
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01, DG-G experiment branch, I03-I05
-Wave 6  Live Data Plane                                   K05 + remaining relevant DG-H, then DG-B repair/live paths
+Wave 6  Live Data Plane                                   K04 + relevant DG-H, then DG-B repair/live paths
 Wave 7  Runtime / Clients                                 J02 -> thin clients when real client need exists
 Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates
 ```

@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; post-K05 PressurePolicyDefinition v1 foundation**.
+Status: **CANONICAL; post-D06 FootprintDefinition v1 foundation**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,20 +10,20 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after post-K05 reconciliation:
+Current audited inventory after post-D06 reconciliation:
 
 ```text
 TOTAL_ATOMS                     = 87
 CLASSIFIED_ATOMS                = 87
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 53 / 87 = 60.9%
-OPEN_BLOCKING                   = 26
+SEMANTIC_FROZEN_OR_RESOLVED     = 52 / 87 = 59.8%
+OPEN_BLOCKING                   = 27
 OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 53 + 26 + 8 = 87
+ROADMAP_DEFINED                 = 52 + 27 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
 ```
 
-The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 60.9% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
+The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 59.8% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
 
 Decision states:
 
@@ -187,8 +187,8 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | K01 | Provisioning/fixtures/CI | Engineering | — | all spines | RESOLVED | COMPLETE | Reproducible validation environment |
 | K02 | Server access/runtime identity | Operations | C05,K01 | J08 | OPEN_BLOCKING | MISSING | Least privilege + explicit credential disposition; DG-H identity branch |
 | K03 | Observability | Operations | K01 | J07,J08,K10 | OPEN_BLOCKING | MISSING | Critical transitions externally observable; DG-H observability branch |
-| K04 | Capacity observation | Operations | A05,K01 | K05 | RESOLVED | COMPLETE | Report exact usage/free space without control action; observational K04 runtime implemented |
-| K05 | Health/pressure policy | Operations | K04 | A11,K06,K07 | FROZEN | COMPLETE | PressurePolicyDefinition v1 and pure pressure evaluator; ADR-0028 |
+| K04 | Capacity observation | Operations | A05,K01 | K05 | RESOLVED | MISSING | Report exact usage/free space without control action |
+| K05 | Health/pressure policy | Operations | K04 | A11,K06,K07 | OPEN_BLOCKING | MISSING | Explicit threshold/time-to-full action; DG-H pressure branch |
 | K06 | RAW/source protection | Operations/Data Plane | A07,K05 | A11,K07,K08 | OPEN_BLOCKING | MISSING | Protected evidence reconstructs canonical data; DG-H protection branch |
 | K07 | Tier relocation | Operations/Data Plane | K05,K06 | storage lifecycle | OPEN_BLOCKING | MISSING | Crash yields old or new valid placement; DG-H relocation branch |
 | K08 | Backup/restore proof | Operations | K06 | K09,J08,K10,A11 | OPEN_BLOCKING | MISSING | Independent restore reproduces required identities; DG-H backup branch |
@@ -210,7 +210,7 @@ A11 does not require implemented K10; recovery semantics must be resolved throug
 
 ## Decision gates
 
-The 26 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
+The 27 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
 
 ### DG-A — Representation / Feature integration
 
@@ -285,19 +285,16 @@ Independent branches: experiment persistence before experiment runtime; Strategi
 
 ### DG-H — Operational safety
 
-Atoms: `K02,K03,K06,K07,K08,K09,K10`.
+Atoms: `K02,K03,K05,K06,K07,K08,K09,K10`.
 
 Progressive independent branches. Important order relationships are:
 
 ```text
+K04 -> K05
 K06 -> K07
 K06 -> K08 -> K09
 A11 + K03 + K08 -> K10
 ```
-
-K05 pressure policy is frozen and complete under ADR-0028. It remains a
-restriction-only pressure seam: no telemetry collection, protection,
-relocation, backup, recovery or deletion authority is implied.
 
 Only operational prerequisites of the selected atom are activated.
 
@@ -327,6 +324,7 @@ E05  H01 pure imbalance kernel
 F01  HypothesisSpec
 F05  deterministic walk-forward schedule
 I01  Study/Trial/Run/Artifact semantic model
+K04  observational capacity monitoring
 ```
 
 This is a **frontier, not authorization**. `SCOPE.md` must activate exactly one bounded implementation or decision slice before mutation.
@@ -342,7 +340,7 @@ Wave 2  Representation / Feature vertical                 atom-specific DG-A bra
 Wave 3  Research / Validation                             F01-F04 then DG-E validation branch
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01, DG-G experiment branch, I03-I05
-Wave 6  Live Data Plane                                   K05 + remaining relevant DG-H, then DG-B repair/live branches
+Wave 6  Live Data Plane                                   K04 + relevant DG-H, then DG-B repair/live branches
 Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 when real client need exists
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```

@@ -86,8 +86,8 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Provisioning/fixtures/CI | RESOLVED | COMPLETE | Engineering | K01 | Repository validation foundation complete. |
 | Operations | Server/runtime identity | OPEN_BLOCKING | MISSING | Operations | K02 | DG-H identity branch. |
 | Operations | Observability | OPEN_BLOCKING | MISSING | Operations | K03 | DG-H observability branch. |
-| Operations | Capacity observation | RESOLVED | COMPLETE | Operations | K04 | Observational capacity runtime implemented; no pressure classification or storage mutation. |
-| Operations | Health/pressure policy | FROZEN | COMPLETE | Operations | K05 | ADR-0028; immutable PressurePolicyDefinition v1 and pure evaluator implemented. |
+| Operations | Capacity observation | RESOLVED | MISSING | Operations | K04 | Current execution frontier; observational only. |
+| Operations | Health/pressure policy | OPEN_BLOCKING | MISSING | Operations | K05 | DG-H pressure branch. |
 | Operations | RAW/source protection | OPEN_BLOCKING | MISSING | Operations/Data Plane | K06 | DG-H protection branch; no backup dependency. |
 | Operations | Tier relocation | OPEN_BLOCKING | MISSING | Operations/Data Plane | K07 | DG-H relocation branch; sibling of backup after source protection. |
 | Operations | Backup/restore proof | OPEN_BLOCKING | MISSING | Operations | K08 | DG-H backup branch; depends on K06, not K07; restore proof precedes deletion authority. |
@@ -111,13 +111,11 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled after C03 integration. |
 | E02 FeatureDefinition v1 semantic foundation | COMPLETE | ADR-0026 accepted; immutable runtime model and targeted tests implemented. |
 | D06 FootprintDefinition v1 representation foundation | COMPLETE | ADR-0027 accepted; immutable historical FINAL Footprint v1 runtime implemented. |
-| K04 Capacity observation | COMPLETE | Observational `CapacityObservation` / `CapacityUnavailable` runtime implemented under `quant_platform.operations`. |
-| K05 PressurePolicyDefinition v1 | COMPLETE | ADR-0028 accepted; deterministic pressure-policy evaluator implemented under `quant_platform.operations`. |
 
 ## Current frontier
 
 ```text
-C05  D03  E05  F01  F05  I01
+C05  D03  E05  F01  F05  I01  K04
 ```
 
 Frontier membership means planning dependencies are satisfied; it does not authorize implementation.
