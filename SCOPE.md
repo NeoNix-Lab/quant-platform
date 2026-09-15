@@ -70,6 +70,9 @@ historical aggregation functions in
 
 ## Credited evidence
 
+- Producer-Consumer Conformity `Contract Freeze Gate` and `Conformity
+  Implementation Gate` remain PASSED under ADR-0023 and are not reopened by
+  this slice.
 - `trade-v1` keeps exact price/size strings and explicit `aggressor_side`.
 - `CandleDefinitionV1` demonstrates deterministic Representation definition
   identity, aligned half-open support and availability evidence separation.
