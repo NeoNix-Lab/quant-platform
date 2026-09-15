@@ -200,7 +200,14 @@ staging, temporary files, and relocation copies, not only final artifact size.
 
 ## 10. Capacity states and pressure
 
-The runtime may eventually expose configurable operational states:
+K05 freezes `PressurePolicyDefinition v1` under
+[ADR-0028](../decisions/ADR-0028-pressure-policy-v1.md). Pressure is
+deterministic policy over explicit K04 capacity evidence, optional caller
+supplied write-rate evidence and an explicit UTC `as_of` evaluation instant.
+It is not capacity observation, telemetry collection, remediation or deletion
+authority.
+
+The canonical pressure states are:
 
 | State | Meaning |
 |---|---|
@@ -209,12 +216,15 @@ The runtime may eventually expose configurable operational states:
 | `CRITICAL` | Continued acquisition threatens safe persistence |
 | `EXHAUSTED` | Safe persistence cannot be guaranteed |
 
-Numeric thresholds are not frozen.
+Numeric threshold values are deployment policy configuration, not
+repository-global constants.
 
-Potential pressure responses include tier migration, pausing optional
-historical backfill, rejecting new bulk jobs, prioritizing live acquisition,
-reclaiming cache, reclaiming reconstructible derived materializations, alerting,
-or an emergency halt. These are future policy options, not automatic behavior.
+K05 restrictions are upper bounds on downstream admission. Potential downstream
+responses such as tier migration, pausing optional historical backfill,
+rejecting new bulk jobs, prioritizing live acquisition, reclaiming cache,
+reclaiming reconstructible derived materializations, alerting or an emergency
+halt remain owned by their future capabilities. K05 does not implement or
+authorize them.
 
 Unique RAW/source data must never be silently deleted merely to free space.
 Any destructive action must eventually be explicit, policy-based, auditable,
@@ -250,7 +260,8 @@ No generic scheduler or DAG is required by this architecture.
 - retention periods and deletion authority;
 - backup destination, frequency, and topology;
 - restore-validation procedure and evidence;
-- capacity thresholds and forecasting method;
-- pressure-state transitions and operator actions;
+- concrete deployment capacity thresholds;
+- forecasting beyond caller-supplied K05 v1 rate evidence;
+- downstream operator actions for pressure states;
 - checkpoint-state protection;
 - monitoring and alerting technology.
