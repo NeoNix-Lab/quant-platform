@@ -1,23 +1,23 @@
-# Scope: K05 PressurePolicyDefinition v1 Operations Foundation
+# Scope: D06 FootprintDefinition v1 Representation Foundation
 
 ## Objective
 
-Materialize and implement `K05 - Health/pressure policy` so the repository has
-accepted canonical authority and a bounded executable
-`PressurePolicyDefinition v1` foundation under `quant_platform.operations`.
+Materialize and implement `D06 - Footprint representation` so the repository
+has accepted canonical authority and a bounded executable historical
+`FootprintDefinition v1` foundation under `quant_platform.representation`.
 
-This slice owns only Operations-level pressure policy meaning: immutable policy
-identity, explicit evaluation instant, capacity/rate freshness, exact pressure
-state classification, unavailable decisions, deterministic decision evidence
-and restriction-only action semantics.
+This slice owns only Representation-level Footprint meaning: definition
+identity, fixed bucket support, exact tick-grid validation, sparse price-level
+aggregation, explicit aggression evidence, finalized historical result binding
+and provenance.
 
 ## Baseline
 
 ```text
 base main = 32e750fad6276ecd81f6870c1b41d4738176abc8
-branch    = agent/issue-53-10
-atom      = K05
-owner     = Operations
+branch    = agent/issue-52-9
+atom      = D06
+owner     = Representation
 ```
 
 At work start, local `origin/main` was verified as exactly
@@ -26,101 +26,94 @@ At work start, local `origin/main` was verified as exactly
 ## Accepted state after this slice
 
 ```text
-K01  Provisioning/fixtures/CI       RESOLVED / COMPLETE
-K02  Server access/runtime identity OPEN_BLOCKING / MISSING
-K03  Observability                  OPEN_BLOCKING / MISSING
-K04  Capacity observation           RESOLVED / COMPLETE
-K05  Health/pressure policy         FROZEN / COMPLETE
-K06  RAW/source protection          OPEN_BLOCKING / MISSING
-K07  Tier relocation                OPEN_BLOCKING / MISSING
-K08  Backup/restore proof           OPEN_BLOCKING / MISSING
-K09  Retention/deletion authority   OPEN_BLOCKING / MISSING
-K10  Checkpoint/recovery            OPEN_BLOCKING / MISSING
+D01  Representation identity                 RESOLVED / PARTIAL
+D02  CandleDefinition v1                      FROZEN / COMPLETE
+D03  Historical Candle computation            FROZEN / MISSING
+D04  Incremental/live Candle computation      FROZEN / MISSING
+D05  Candle materialization identity          OPEN_BLOCKING / MISSING
+D06  Footprint representation                 FROZEN / COMPLETE
+E02  FeatureDefinition v1                     FROZEN / COMPLETE
+E04  FeatureArtifact/materialization          OPEN_BLOCKING / MISSING
+E05  H01 pure imbalance kernel                RESOLVED / MISSING in governance; pure kernel present
+E06  H01 canonical integration                OPEN_BLOCKING / MISSING
 ```
 
-K04 is reconciled to complete based on the existing
-`src/quant_platform/operations/capacity.py` runtime and
-`tests/test_operations_capacity_v1.py` proof.
-
-K05 is frozen by ADR-0028 and implemented as immutable typed values and a pure
-deterministic evaluator in `src/quant_platform/operations/pressure.py`.
+`D06` is frozen by ADR-0027 and implemented as immutable typed values and pure
+historical aggregation functions in
+`src/quant_platform/representation/footprints.py`.
 
 ## Included
 
-- Create accepted ADR-0028 for PressurePolicyDefinition v1.
-- Update directly affected governance so K04/K05 are no longer stale or
-  unresolved.
-- Add immutable `PressurePolicyDefinition` with deterministic semantic payload
+- Create accepted ADR-0027 for FootprintDefinition v1.
+- Update directly affected governance so D06 is no longer unresolved.
+- Add immutable `FootprintDefinitionV1` with deterministic semantic payload
   and content-derived identity.
-- Add canonical `NORMAL`, `PRESSURE`, `CRITICAL` and `EXHAUSTED` states.
-- Add caller-supplied immutable write-rate evidence for the optional
-  time-to-full path.
-- Add explicit `PressureDecision` and `PressureDecisionUnavailable` values.
-- Add pure deterministic pressure evaluation over K04 capacity evidence,
-  optional rate evidence and explicit UTC `as_of`.
-- Preserve unavailable behavior for missing, stale, future-dated and malformed
-  required evidence.
-- Add restriction facts proving K05 is non-authorizing and never grants
-  deletion.
+- Add exact UTC epoch-aligned half-open bucket support selection.
+- Add exact zero-origin tick-grid validation with no rounding or tolerance.
+- Add deterministic sparse level aggregation from canonical `TradeRecord`
+  input into buy/sell volume by explicit aggressor side.
+- Refuse unknown, missing or unsupported aggression fail-closed.
+- Add finalized historical result, bucket, level, coverage and source evidence
+  values that distinguish covered empty buckets from insufficient support.
+- Preserve E05 pure H01 kernel semantics.
 
 ## Excluded
 
-- Filesystem polling or capacity observation beyond consuming K04.
-- Concrete deployment threshold values.
-- Telemetry history, smoothing, forecasting or rate sampling beyond consuming
-  caller-supplied evidence.
-- Hysteresis/state machines.
-- Silent or automatic deletion.
-- K06 source protection and reconstruction guarantees.
-- K07 relocation mechanics.
-- K08 backup topology or restore proof.
-- K09 deletion authority.
-- K10 checkpoint/recovery.
-- A11 source-specific live semantics.
-- Monitoring/dashboard/exporter technology.
-- Generic admission-control or policy orchestration frameworks.
+- FeatureDefinition runtime/identity changes.
+- FeatureArtifact identity, materialization, caching or durable persistence.
+- H01 canonical orchestration/integration/adapters.
+- DataGateway/catalog/Application redesign or mutation.
+- Live incremental/PARTIAL Footprint topology.
+- Durable Footprint file/schema publication or catalog mutation.
+- Non-zero-origin grid semantics.
+- Generic representation framework, provider registry or feature DAG.
 
 ## Credited evidence
 
-- K04 capacity observation returns complete immutable observations or explicit
-  unavailable results and performs no pressure classification or storage
-  mutation.
-- K04 tests prove unavailable behavior and no `total == used + available`
-  assumption.
-- `db/init/001_catalog.sql::storage_roots` owns storage-root identity/tier
-  topology but not pressure policy.
-- `docs/architecture/STORAGE_LIFECYCLE.md` forbids pressure from becoming
-  implicit deletion authority.
+- Producer-Consumer Conformity `Contract Freeze Gate` and `Conformity
+  Implementation Gate` remain PASSED under ADR-0023 and are not reopened by
+  this slice.
+- `trade-v1` keeps exact price/size strings and explicit `aggressor_side`.
+- `CandleDefinitionV1` demonstrates deterministic Representation definition
+  identity, aligned half-open support and availability evidence separation.
+- `src/quant_platform/features/imbalance.py` is a pure H01 kernel over
+  caller-supplied integer price-level rows and does not own Footprint
+  construction.
+- `tests/test_feature_imbalance_v1.py` proves duplicate-level refusal,
+  integer-grid adjacency, sparse-gap stack breaking and bar separation.
+- `db/init/001_catalog.sql` distinguishes `canonical/footprint` from
+  `features/footprint_microstructure`.
 
 ## Acceptance
 
 DONE means:
 
-1. ADR-0028 is accepted and K05 is removed from unresolved governance.
-2. K04 governance state is reconciled to actual merged runtime evidence.
-3. `quant_platform.operations` exposes the PressurePolicy v1 runtime model.
-4. Policy identity includes threshold, freshness and rate-participation
-   semantics while excluding runtime/mount/observation values.
-5. Evaluation requires explicit UTC `as_of` and uses no implicit host clock.
-6. Freshness boundaries, future-dated evidence and unavailable behavior are
-   exact.
-7. Optional rate evidence and finite/unbounded time-to-full semantics are exact.
-8. State boundaries, equality and byte/time disagreement precedence are exact.
-9. Exhausted byte evidence is decided without a time-to-full forecast.
-10. Successful and unavailable decisions have deterministic structured
-    evidence/identity.
-11. K05 restrictions are non-authorizing upper bounds and
-    `delete_authorized == false`.
-12. No telemetry/scheduler/storage mutation runtime is absorbed into K05.
-13. No separate K05 runtime implementation issue is needed for this foundation.
+1. ADR-0027 is accepted and D06 is removed from unresolved governance.
+2. `quant_platform.representation` exposes the FootprintDefinition v1 runtime
+   model.
+3. Definition identity includes semantic duration/tick/source/grid/bucket
+   semantics and excludes runtime binding/materialization context.
+4. Historical support is UTC epoch-aligned, half-open and FINAL-only.
+5. Tick-grid validation is exact and zero-origin with no binary-float
+   tolerance.
+6. Same-level trades aggregate deterministically and exactly.
+7. Missing/unknown/unsupported aggressor side fails closed.
+8. Missing grid levels remain absent and realized levels are strictly ordered.
+9. Covered zero-trade buckets are explicit empty buckets, distinct from
+   insufficient support.
+10. Source/support/provenance binding is explicit without durable artifact
+    semantics.
+11. E05 kernel behavior remains unchanged and compatible.
+12. Live/PARTIAL topology remains deferred.
 
 ## Verification
 
 Targeted checks for this slice:
 
 ```text
-python tests/test_operations_pressure_v1.py
-python tests/test_operations_capacity_v1.py
+python tests/test_historical_footprints_v1.py
+python tests/test_feature_imbalance_v1.py
+python tests/test_candle_definition_v1.py
 python tests/test_package_boundaries_v1.py
 python -m compileall -q src tests
 python tools/check_markdown_links.py
@@ -129,21 +122,18 @@ git diff --check
 
 ## Downstream state
 
-Unblocked by K05:
+Unblocked by D06:
 
 ```text
-K06  RAW/source protection can consume a deterministic pressure restriction seam
-K07  Tier relocation can later consume K05 after K06 source protection
+E06  H01 canonical integration can bind to canonical Footprint semantics after E04
 ```
 
 Still blocked:
 
 ```text
-A11  Live trades acquisition still requires DG-B live semantics plus K06/K08
-K06  Source protection authority and reconstruction guarantees
-K07  Crash-safe relocation mechanics
-K08  Backup/restore proof
-K09  Retention/deletion authority
-K10  Checkpoint/recovery after A11/K03/K08
-J08  Live product mode operational authorization gates
+E04  FeatureArtifact/materialization
+E06  H01 canonical integration
+D05  Candle materialization identity (independent branch)
+Live/PARTIAL Footprint topology
+Durable Representation artifact infrastructure
 ```
