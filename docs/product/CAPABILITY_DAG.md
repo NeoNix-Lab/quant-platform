@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; post-C03 state reconciled after PR #41 integration**.
+Status: **CANONICAL; post-E02 FeatureDefinition v1 foundation**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -16,14 +16,14 @@ Current audited inventory after post-C03 reconciliation:
 TOTAL_ATOMS                     = 87
 CLASSIFIED_ATOMS                = 87
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 50 / 87 = 57.5%
-OPEN_BLOCKING                   = 29
+SEMANTIC_FROZEN_OR_RESOLVED     = 51 / 87 = 58.6%
+OPEN_BLOCKING                   = 28
 OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 50 + 29 + 8 = 87
+ROADMAP_DEFINED                 = 51 + 28 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
 ```
 
-The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 57.5% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
+The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 58.6% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
 
 Decision states:
 
@@ -115,7 +115,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
 | E01 | Definition/set/artifact separation | Feature Engine | D01 | E02-E04 | FROZEN | COMPLETE | Distinct lifecycle identities; ADR-0016 |
-| E02 | FeatureDefinition v1 | Feature Engine | E01,D01 | E03,E04,E06 | OPEN_BLOCKING | MISSING | Versioned semantics + availability + identity; DG-A feature-definition branch |
+| E02 | FeatureDefinition v1 | Feature Engine | E01,D01 | E03,E04,E06 | FROZEN | COMPLETE | Versioned semantics + availability + identity; ADR-0026 |
 | E03 | FeatureSet catalog/provider | Feature Engine | E01,E02 | E04 | RESOLVED | PARTIAL | Ordered provider resolution; ADR-0016/CM |
 | E04 | FeatureArtifact/materialization | Feature Engine | E02,E03,A02 | F01,I04,E06 | OPEN_BLOCKING | MISSING | Artifact binds definitions/source/implementation; DG-A feature-artifact branch |
 | E05 | H01 pure imbalance kernel | Feature Engine | Legacy Harvest audit | E06 | RESOLVED | MISSING | Narrow ADOPT numeric/edge semantics |
@@ -210,18 +210,17 @@ A11 does not require implemented K10; recovery semantics must be resolved throug
 
 ## Decision gates
 
-The 29 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
+The 28 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
 
 ### DG-A — Representation / Feature integration
 
 Atom-specific branches:
 
 - `D05` candle-materialization identity: activate only when persisted Candle results are selected;
-- `E02` FeatureDefinition: activate before FeatureDefinition-dependent work;
 - `E04` FeatureArtifact: activate after E02/E03 when feature artifact/materialization is selected;
 - `D06` + `E02` + `E04` + `E06`: canonical H01 path.
 
-`D05` is **not** a prerequisite of `E06`. DG-A does not block D03 or pure H01 kernel E05.
+`E02` FeatureDefinition v1 is frozen and complete under ADR-0026. `D05` is **not** a prerequisite of `E06`. DG-A does not block D03 or pure H01 kernel E05.
 
 ### DG-B — Historical / Live data convergence
 
@@ -304,7 +303,7 @@ Only operational prerequisites of the selected atom are activated.
 | V1 | Source -> canonical -> catalog -> DataGateway | First published data vertical is deterministically readable through canonical access | COMPLETE |
 | V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | COMPLETE (`C02 + C03`) |
 | V3 | DataGateway -> historical Candle | Bounded trades yield reproducible CLOSED candles | READY (`D03`) |
-| V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | BLOCKED by DG-A canonical-H01 branch |
+| V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | BLOCKED by D06/E04/E06 DG-A branches |
 | V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies | BLOCKED by E04 |
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | BLOCKED by DG-E validation branch |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |
@@ -320,6 +319,7 @@ Decision-complete, missing atoms whose declared dependencies are currently satis
 C05  configuration convergence for the Application service
 D03  historical Candle runtime (on-demand only)
 E05  H01 pure imbalance kernel
+F01  HypothesisSpec
 F05  deterministic walk-forward schedule
 I01  Study/Trial/Run/Artifact semantic model
 K04  observational capacity monitoring
@@ -343,7 +343,7 @@ Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 whe
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C05, historical Candle, pure H01, walk-forward semantics, experiment identity and observational capacity can be scoped independently. C04 follows only after C05 implementation.
+Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C05, historical Candle, pure H01, HypothesisSpec, walk-forward semantics, experiment identity and observational capacity can be scoped independently. C04 follows only after C05 implementation.
 
 ## Macro roadmap relationship
 
