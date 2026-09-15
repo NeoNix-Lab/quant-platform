@@ -725,7 +725,36 @@ For any derived value, the platform must be able to explain which source events 
 
 ---
 
-## 34. Contract evolution
+## 34. PressurePolicyDefinition
+
+Operational pressure policy is deterministic policy over explicit evidence, not
+capacity observation. `PressurePolicyDefinition v1` is governed by
+[ADR-0028](../decisions/ADR-0028-pressure-policy-v1.md).
+
+Required concepts:
+
+- immutable/versioned policy definition;
+- deterministic content-derived policy identity;
+- explicit UTC `as_of` evaluation instant;
+- fresh K04 capacity evidence;
+- optional caller-supplied write-rate evidence when time-to-full participates;
+- `NORMAL`, `PRESSURE`, `CRITICAL` and `EXHAUSTED` states;
+- explicit unavailable decisions for missing, stale, future-dated or malformed
+  required evidence;
+- deterministic decision evidence and identity;
+- pressure restrictions as upper bounds only.
+
+Invariants:
+
+- K05 does not observe filesystems, collect telemetry history, mutate storage,
+  schedule work or authorize deletion;
+- the evaluator does not read an implicit host clock;
+- `available_bytes` is consumed as reported by K04 and is not recomputed;
+- zero write rate means unbounded time-to-full, not a finite sentinel;
+- equality enters the more severe threshold state;
+- `delete_authorized` is false for every successful K05 decision.
+
+## 35. Contract evolution
 
 Breaking semantic changes require:
 

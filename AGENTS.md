@@ -21,28 +21,24 @@ The `quant-platform` repository is the authoritative product codebase. Before ar
 - Do not use `git add .` or `git add -A`; stage explicit paths only.
 - If code conflicts with an accepted ADR or contract, stop and report the conflict.
 
-## Governance mutation boundary
+## Governance boundary
 
-Governance documents are cumulative authority/current-state projections, not per-task scratchpads.
+Implementation and semantic-materialization agents are **not responsible for repository governance reconciliation**.
 
-An implementation agent MAY mutate governance only when the change is a direct, mechanically supported projection of evidence produced or credited by its issue. Allowed examples are:
+They MAY read governance/planning documents as authority and context, but MUST NOT mutate them as part of ordinary implementation work. In particular, do not edit:
 
-- mark the issue's own capability decision/implementation state to the exact level proven;
-- add/index the accepted ADR or contract produced by the issue;
-- update an already-defined blocker/unblock statement when the issue's proven result directly changes it;
-- recompute derived planning counts from the actual repository state after those bounded changes;
-- correct a stale fact for a directly affected prerequisite only when the issue explicitly authorizes reconciliation and merged evidence proves the correction.
+- `SCOPE.md`;
+- `docs/product/ROADMAP.md`;
+- `docs/product/CAPABILITY_MAP.md`;
+- `docs/product/CAPABILITY_DAG.md`;
+- `docs/architecture/OPEN_DECISIONS.md`;
+- derived planning metrics, frontier lists, blocker projections, or capability-state counts.
 
-An implementation agent MUST NOT, unless the issue explicitly grants that authority:
+If implementation reveals that governance is stale, inconsistent, or should change, report the exact finding in the issue/PR output and leave the governance files untouched.
 
-- rewrite `SCOPE.md`, roadmap, capability map/DAG or open-decision sections as a task-specific narrative;
-- delete or weaken accepted historical foundations, gate states, invariants, ADR references or cumulative governance evidence;
-- change capability ownership, dependency edges, priorities, architecture direction, accepted semantics or another capability's state;
-- perform opportunistic governance cleanup/reconciliation outside the issue's directly affected surface.
+Canonical semantic authority owned by the task is different from planning governance: an issue may still add or update its explicitly authorized ADR, normative contract, schema, code and tests when those are part of the task acceptance.
 
-`SCOPE.md` is cumulative project scope/state. When it must change, patch only the minimum current-state facts required by the issue and preserve accepted historical invariants (including completed conformity gates). Keep task-specific objective/scope/verification detail in the issue/PR rather than replacing cumulative project scope with it.
-
-If a correct implementation appears to require governance mutation beyond this boundary, stop and report the exact inconsistency/proposed change instead of making it. Prefer reporting an unrelated stale fact as a finding over fixing it speculatively.
+Only an issue explicitly designated as **governance-only / governance-reconciliation work** may authorize mutation of governance/planning files. That authority must be stated in the issue; it is never implied by implementation completion.
 
 ## Legacy adoption
 
