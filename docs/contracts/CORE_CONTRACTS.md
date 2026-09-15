@@ -246,6 +246,50 @@ Temporal invariant:
 
 ---
 
+## 10.1 FootprintDefinition / Footprint
+
+A footprint is a Representation-owned price-level aggregation of canonical
+trades. It is not a FeatureDefinition and does not contain imbalance
+thresholds, labels, strategy semantics or FeatureArtifact materialization.
+
+`FootprintDefinition v1` is governed by
+[ADR-0027](../decisions/ADR-0027-footprint-definition-v1.md).
+
+Required definition concepts:
+
+- source contract `trades@1` / `trade-v1`;
+- fixed positive duration;
+- UTC Unix-epoch alignment;
+- half-open bucket support `[bucket_start,bucket_end)`;
+- positive exact-decimal `tick_size`;
+- zero-origin exact integer tick grid;
+- sparse level policy;
+- explicit aggression evidence requirement;
+- finalized historical-only lifecycle for v1.
+
+Required finalized Footprint concepts:
+
+- definition identity;
+- bucket support interval;
+- integer `level_index`;
+- canonical price `level_index * tick_size`;
+- exact buy/sell volume sums by aggressor side;
+- concrete source venue/instrument binding;
+- authoritative source coverage/finality/provenance evidence.
+
+Invariants:
+
+- source price is valid only when `price / tick_size` is an exact integer;
+- no rounding, snapping, epsilon tolerance or inferred side is allowed;
+- `aggressor_side == "unknown"` fails closed for the affected bucket;
+- missing grid levels remain absent and are never synthesized as zero rows;
+- complete zero-trade bucket support produces no level rows and is distinct
+  from missing source support;
+- finalized Footprints require complete authoritative source support and are
+  immutable for a fixed definition and source revision/content evidence.
+
+---
+
 ## 11. FeatureDefinition
 
 Canonical definition of a derived observable.
