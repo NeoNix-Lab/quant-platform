@@ -252,18 +252,16 @@ Canonical definition of a derived observable.
 
 Required concepts:
 
-- `feature_id`
-- `name`
-- `version`
-- `provider`
-- `input_requirements`
-- `parameters`
-- `input_grain`
-- `output_grain`
-- `output_schema`
-- `availability_semantics`
-- `implementation_identity`
-- `materialization_policy`
+- deterministic `feature_definition_id`
+- governed canonical `feature_key`
+- explicit `semantic_version`
+- declared typed semantic-parameter schema
+- canonical normalized semantic parameters
+- exactly one versioned `InputContract`
+- declarative support/reference semantics
+- input maturity and availability/finality semantics
+- initialization/history semantics when output-affecting
+- minimal `OutputContract`
 
 Provider families may include:
 
@@ -278,15 +276,26 @@ Provider families may include:
 
 Invariants:
 
-- feature identity must change when semantics or relevant parameters change;
-- implementation identity must be reproducible;
-- input and output grain must both be explicit and MAY differ;
-- availability semantics must be explicit.
+- feature identity changes when semantic meaning, identity-bearing parameters,
+  input contract, support, availability/finality, initialization/history or
+  output-equivalence semantics change;
+- feature identity does not depend on registry order, implementation
+  build/SHA/backend, cache/materialization strategy, concrete dataset, venue,
+  instrument, time range, physical locator, execution provenance or concrete
+  representation grain unless that grain/duration is intrinsic feature
+  semantics;
+- temporal availability and finality are explicit and distinguish causal floors
+  from nullable observed runtime evidence;
+- undefined/insufficient support is a non-observation outcome, not a
+  canonical null/NaN/zero sentinel value.
 
 `FeatureDefinition` identifies one semantic observable, such as `delta@1` or
 `vwap@1`, and is distinct from a bundle or materialization. Valid examples
 include `trade -> candle`, `price_level -> candle`, `L1_update -> candle`,
 `trade -> trade` and `candle -> candle`.
+
+FeatureDefinition v1 is governed by
+[ADR-0026](../decisions/ADR-0026-feature-definition-v1-semantic-foundation.md).
 
 ---
 

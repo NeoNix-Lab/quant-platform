@@ -44,7 +44,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Representation | Candle materialization identity | OPEN_BLOCKING | MISSING | Representation | D05 | DG-A candle-materialization branch; not a prerequisite of canonical H01. |
 | Representation | Footprint representation | OPEN_BLOCKING | MISSING | Representation | D06 | DG-A canonical-H01 branch: grain/tick-grid/adjacency/availability. |
 | Features | Definition/set/artifact separation | FROZEN | COMPLETE | Feature Engine | E01 | Architectural identity separation accepted. |
-| Features | FeatureDefinition v1 | OPEN_BLOCKING | MISSING | Feature Engine | E02 | DG-A FeatureDefinition branch. |
+| Features | FeatureDefinition v1 | FROZEN | COMPLETE | Feature Engine | E02 | ADR-0026 accepted; runtime semantic foundation implemented. |
 | Features | FeatureSet catalog/provider | RESOLVED | PARTIAL | Feature Engine | E03 | Existing catalog foundation retained. |
 | Features | FeatureArtifact/materialization | OPEN_BLOCKING | MISSING | Feature Engine | E04 | DG-A FeatureArtifact branch. |
 | Features | H01 pure imbalance kernel | RESOLVED | MISSING | Feature Engine | E05 | Current execution frontier; narrow Legacy Harvest ADOPT boundary only. |
@@ -109,11 +109,12 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | ASS-02 result/error translation (C03) | COMPLETE | PR #41 integrated reviewed head `f382a2e6...`; integrity #91 passed on exact head. |
 | ASS-02 in-process Application vertical | COMPLETE | C02 + C03 complete; does not imply C05/C04/API/jobs/clients. |
 | K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled after C03 integration. |
+| E02 FeatureDefinition v1 semantic foundation | COMPLETE | ADR-0026 accepted; immutable runtime model and targeted tests implemented. |
 
 ## Current frontier
 
 ```text
-C05  D03  E05  F05  I01  K04
+C05  D03  E05  F01  F05  I01  K04
 ```
 
 Frontier membership means planning dependencies are satisfied; it does not authorize implementation.

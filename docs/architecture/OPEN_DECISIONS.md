@@ -15,6 +15,7 @@ Legacy Capability Harvest Audit v1                   COMPLETE
 ASS-01 Application ownership/enforcement             COMPLETE
 ASS-02 in-process Application service                COMPLETE
 DG-D Application configuration semantics             RESOLVED
+DG-A FeatureDefinition v1 semantics                  FROZEN / COMPLETE
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -30,7 +31,7 @@ Resolved architecture includes:
 - API-first direction: clients/API transport -> application services -> domain/DataGateway;
 - Consumer API semantic selector/result/error boundary;
 - completed ASS-02 in-process path: C02 semantic selector resolution + C03 result/error translation;
-- `trade-v1`, Declared Coverage, CandleDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
+- `trade-v1`, Declared Coverage, CandleDefinition v1, FeatureDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
@@ -79,10 +80,6 @@ Activate only when persisted Candle results are selected. Resolve how a persiste
 
 `D05` is not a prerequisite of canonical H01 integration.
 
-### FeatureDefinition (`E02`)
-
-Activate before FeatureDefinition-dependent work. Freeze the minimum canonical identity/fields/versioning/availability semantics.
-
 ### FeatureArtifact (`E04`)
 
 Activate only after the FeatureDefinition path is selected and artifact/materialization behavior is needed. Resolve artifact identity/provenance and equivalence of cached vs recomputed output.
@@ -93,7 +90,7 @@ For canonical H01, resolve only its actual path:
 
 ```text
 D06 footprint representation
-E02 FeatureDefinition
+E02 FeatureDefinition (FROZEN / COMPLETE by ADR-0026)
 E04 FeatureArtifact
 E05 pure H01 kernel (already RESOLVED)
 E06 canonical H01 integration
@@ -101,7 +98,7 @@ E06 canonical H01 integration
 
 Freeze canonical price-level grain, validated tick grid, ordering/adjacency, temporal availability and provenance binding.
 
-Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework.
+Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework. FeatureDefinition v1 itself is no longer open; ADR-0026 is the accepted authority for its semantic foundation.
 
 ## DG-B — Historical / Live data convergence
 
