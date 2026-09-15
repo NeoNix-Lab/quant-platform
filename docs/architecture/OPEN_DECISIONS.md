@@ -17,8 +17,6 @@ ASS-02 in-process Application service                COMPLETE
 DG-D Application configuration semantics             RESOLVED
 DG-A FeatureDefinition v1 semantics                  FROZEN / COMPLETE
 DG-A FootprintDefinition v1 semantics                FROZEN / COMPLETE
-DG-H Capacity observation                            RESOLVED / COMPLETE
-DG-H PressurePolicyDefinition v1                     FROZEN / COMPLETE
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -34,7 +32,7 @@ Resolved architecture includes:
 - API-first direction: clients/API transport -> application services -> domain/DataGateway;
 - Consumer API semantic selector/result/error boundary;
 - completed ASS-02 in-process path: C02 semantic selector resolution + C03 result/error translation;
-- `trade-v1`, Declared Coverage, CandleDefinition v1, FeatureDefinition v1, FootprintDefinition v1, PressurePolicyDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
+- `trade-v1`, Declared Coverage, CandleDefinition v1, FeatureDefinition v1, FootprintDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
@@ -209,6 +207,10 @@ Before production runtime identities are created/changed, resolve service identi
 ### Observability (`K03`)
 
 Before paper/live claims or checkpoint/recovery runtime, define the minimum externally observable health/provenance/failure transitions required by the selected runtime. Exact technology/SLOs remain local until needed.
+
+### Pressure (`K05`)
+
+After observational capacity `K04`, resolve thresholds/time-to-full and explicit safe actions. No silent deletion.
 
 ### Source protection (`K06`)
 
