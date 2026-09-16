@@ -69,6 +69,10 @@ coverage policy using the existing coverage/provenance model.
 
 ## Credited evidence
 
+The completed Producer–Consumer Conformity cycle remains credited under
+ADR-0023: **Contract Freeze Gate = PASSED** and **Conformity Implementation
+Gate = PASSED**. This slice does not reopen either gate.
+
 - B02 bounded `DataScan` and B03 provenance/result identity semantics are
   already accepted.
 - ADR-0022 declared coverage remains authoritative and distinct from observed
