@@ -49,6 +49,7 @@ OWNERS = {
     "quant_platform.validation.walk_forward": "validation",
     "quant_platform.experiments": "experiment",
     "quant_platform.experiments.identities": "experiment",
+    "quant_platform.experiments.persistence": "experiment",
     "quant_platform.source_adapters": "source",
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
