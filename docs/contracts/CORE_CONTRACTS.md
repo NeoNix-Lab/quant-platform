@@ -69,6 +69,40 @@ Invariants:
 - partition boundaries must be explicit;
 - overlapping partitions are either forbidden or explicitly modeled.
 
+## 3.1 QualityAssessmentLifecycle
+
+General Quality Lifecycle v1 is governed by
+[ADR-0029](../decisions/ADR-0029-general-quality-lifecycle-v1.md).
+
+Required concepts:
+
+- immutable target-bound quality evidence;
+- explicit partition natural identity and durable evidence identities;
+- selected assessment scope (`certification_profile` / `check_suite`);
+- status in `pass | warn | fail`;
+- deterministic semantic assessment signature;
+- optional explicit `metrics.supersedes_assessment_signature`;
+- current authoritative assessment selection by supersession graph, never by
+  timestamp;
+- exact partition lifecycle mapping `pass -> valid`, `warn -> degraded`,
+  `fail -> invalid`;
+- lifecycle decision provenance with prior/result state and lifecycle code
+  identity.
+
+Invariants:
+
+- quality evidence, assessment, lifecycle application, publication eligibility
+  and repair policy are separate concepts;
+- reassessment creates new evidence and never rewrites prior evidence;
+- unresolved, foreign, self-referential or cyclic supersession fails closed;
+- semantically identical repeated evidence is idempotent;
+- multiple distinct unsuperseded leaves are ambiguous;
+- lifecycle application is bounded to the current live sealed non-superseded
+  partition revision;
+- `superseded` is topology-owned and absorbing;
+- dataset-level quality reports do not implicitly fan out into partition
+  lifecycle transitions.
+
 ---
 
 ## 4. MarketEvent

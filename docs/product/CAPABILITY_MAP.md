@@ -23,7 +23,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Data | L1 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A13 | DG-C L1 branch, triggered by a concrete feed; does not activate L2. |
 | Data | L2 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A14 | DG-C L2 branch, only when L2 is selected. |
 | Data | L3/MBO contract | OPEN_DEFERABLE | MISSING | Data Plane | A15 | Explicitly wait for a real L3 feed. |
-| Data | General quality lifecycle | OPEN_BLOCKING | PARTIAL | Data Plane | A16 | First vertical frozen; general lifecycle belongs to the relevant DG-B branch. |
+| Data | General quality lifecycle | FROZEN | COMPLETE | Data Plane | A16 | ADR-0029 freezes and implements bounded partition lifecycle reassessment. |
 | Access | Data Access owner/boundary | RESOLVED | COMPLETE | Data Access | B01 | Canonical `quant_platform.access`; dependency direction mechanically enforced. |
 | Access | Bounded historical scan | FROZEN | COMPLETE | Data Access | B02,B07 | `DataGateway.scan()` is the canonical bounded historical seam. |
 | Access | Result identity/provenance | FROZEN | COMPLETE | Data Access | B03 | Semantic/source identity distinct from physical locator. |
@@ -111,6 +111,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled after C03 integration. |
 | E02 FeatureDefinition v1 semantic foundation | COMPLETE | ADR-0026 accepted; immutable runtime model and targeted tests implemented. |
 | D06 FootprintDefinition v1 representation foundation | COMPLETE | ADR-0027 accepted; immutable historical FINAL Footprint v1 runtime implemented. |
+| A16 General Quality Lifecycle v1 foundation | COMPLETE | ADR-0029 accepted; deterministic current-assessment selection and partition lifecycle application implemented. |
 
 ## Current frontier
 

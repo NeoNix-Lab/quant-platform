@@ -17,6 +17,7 @@ ASS-02 in-process Application service                COMPLETE
 DG-D Application configuration semantics             RESOLVED
 DG-A FeatureDefinition v1 semantics                  FROZEN / COMPLETE
 DG-A FootprintDefinition v1 semantics                FROZEN / COMPLETE
+DG-B A16 General Quality Lifecycle v1                FROZEN / COMPLETE
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -108,14 +109,16 @@ Do not activate Candle materialization merely because it is in DG-A. Do not crea
 
 This family also has separate repair and live branches.
 
-### Repair branch (`A16`,`B04`,`A10` as required)
+### Repair branch (`B04`,`A10` as required)
 
 Activate only the propositions needed by the selected repair slice:
 
-- general quality-report -> lifecycle mapping beyond the accepted first vertical;
 - explicit non-contiguous coverage semantics where required;
 - repair triggering, precedence and idempotent revision/retry behavior;
 - duplicate resolution where required by repair semantics.
+
+A16 general quality-report -> lifecycle mapping is no longer open. It is
+frozen and implemented by [ADR-0029](../decisions/ADR-0029-general-quality-lifecycle-v1.md).
 
 Historical repair does not activate live-cursor semantics by default.
 

@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; post-D06 FootprintDefinition v1 foundation**.
+Status: **CANONICAL; post-A16 General Quality Lifecycle v1 foundation**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,20 +10,20 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after post-D06 reconciliation:
+Current audited inventory after post-A16 reconciliation:
 
 ```text
 TOTAL_ATOMS                     = 87
 CLASSIFIED_ATOMS                = 87
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 52 / 87 = 59.8%
-OPEN_BLOCKING                   = 27
+SEMANTIC_FROZEN_OR_RESOLVED     = 53 / 87 = 60.9%
+OPEN_BLOCKING                   = 26
 OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 52 + 27 + 8 = 87
+ROADMAP_DEFINED                 = 53 + 26 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
 ```
 
-The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 59.8% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
+The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 60.9% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
 
 Decision states:
 
@@ -73,7 +73,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | A13 | L1 contract/acquisition | Data Plane | A01,A04,real feed | A14 | OPEN_BLOCKING | MISSING | Versioned schema/ordering/provenance; DG-C L1 branch |
 | A14 | L2 contract/acquisition | Data Plane | A13,real feed | A15 | OPEN_BLOCKING | MISSING | Snapshot/increment/gap semantics; DG-C L2 branch |
 | A15 | L3/MBO contract | Data Plane | real L3 feed | advanced research | OPEN_DEFERABLE | MISSING | Map real feed without semantic invention |
-| A16 | General quality lifecycle | Data Plane | A04,A08 | A10,A11 | OPEN_BLOCKING | PARTIAL | Deterministic lifecycle beyond first vertical; DG-B repair/live shared branch |
+| A16 | General quality lifecycle | Data Plane | A04,A08 | A10,A11 | FROZEN | COMPLETE | Deterministic partition lifecycle reassessment; ADR-0029 |
 
 ### B — Data Access
 
@@ -210,7 +210,7 @@ A11 does not require implemented K10; recovery semantics must be resolved throug
 
 ## Decision gates
 
-The 27 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
+The 26 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
 
 ### DG-A — Representation / Feature integration
 
@@ -228,7 +228,7 @@ prerequisite of `E06`. DG-A does not block D03 or pure H01 kernel E05.
 
 Atom-specific branches:
 
-- repair branch: `A16` quality lifecycle + `B04` disjoint coverage + `A10` repair/reconciliation as required by the selected repair slice;
+- repair branch: `B04` disjoint coverage + `A10` repair/reconciliation as required by the selected repair slice; `A16` quality lifecycle is frozen and complete by ADR-0029;
 - live branch: `A11` live acquisition + `B06` live cursor, plus only the repair/shared semantics and DG-H prerequisites actually present on that path.
 
 Historical repair does not activate live-cursor semantics merely because both belong to DG-B.
