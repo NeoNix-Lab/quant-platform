@@ -38,6 +38,7 @@ from .pressure import (
 from .protection import (
     PROTECTION_ASSESSMENT_IDENTITY_DOMAIN,
     PROTECTION_UNIT_IDENTITY_DOMAIN,
+    AcceptedReconstructionContract,
     ArtifactAssessmentResult,
     ArtifactProtectionIdentity,
     ArtifactReadOutcome,
@@ -56,6 +57,7 @@ __all__ = [
     "PROTECTION_ASSESSMENT_IDENTITY_DOMAIN",
     "PROTECTION_UNIT_IDENTITY_DOMAIN",
     "OPERATIONAL_SIGNAL_V1_SCHEMA_VERSION",
+    "AcceptedReconstructionContract",
     "ArtifactAssessmentResult",
     "ArtifactProtectionIdentity",
     "ArtifactReadOutcome",
