@@ -44,6 +44,7 @@ OWNERS = {
     "quant_platform.features.imbalance": "feature",
     "quant_platform.operations": "operations",
     "quant_platform.operations.capacity": "operations",
+    "quant_platform.operations.observability": "operations",
     "quant_platform.operations.pressure": "operations",
     "quant_platform.validation": "validation",
     "quant_platform.validation.walk_forward": "validation",
