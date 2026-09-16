@@ -260,7 +260,7 @@ class OperationalSignalV1:
     correlation_id: str | None = None
     sequence: int | None = None
     evidence: tuple[EvidenceReference, ...] = ()
-    diagnostics: Mapping[str, str] = MappingProxyType({})
+    diagnostics: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     schema_version: str = field(init=False, default=OPERATIONAL_SIGNAL_V1_SCHEMA_VERSION)
     signal_id: str = field(init=False, default="")
 
