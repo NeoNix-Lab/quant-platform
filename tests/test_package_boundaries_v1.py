@@ -48,6 +48,7 @@ OWNERS = {
     "quant_platform.operations.observability": "operations",
     "quant_platform.operations.pressure": "operations",
     "quant_platform.validation": "validation",
+    "quant_platform.validation.availability": "validation",
     "quant_platform.validation.walk_forward": "validation",
     "quant_platform.experiments": "experiment",
     "quant_platform.experiments.identities": "experiment",
