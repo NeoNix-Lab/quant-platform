@@ -379,14 +379,83 @@ class ValidationAvailabilityV1Tests(unittest.TestCase):
                 observed_finalized="2024-01-01T00:00:02Z",
             )
 
-    def test_observed_available_cannot_precede_causal_floor(self):
-        with self.assertRaises(InvalidRequest):
-            dep(
-                "f",
-                ("2024-01-01T00:00:00Z", "2024-01-01T00:00:01Z"),
-                "2024-01-01T00:00:05Z",
-                observed_available="2024-01-01T00:00:01Z",
-            )
+    def test_observed_available_before_causal_floor_uses_the_floor(self):
+        # An observed timestamp earlier than the semantic floor is accepted
+        # as evidence but never advances effective availability ahead of the
+        # floor: it can only ever delay admissibility, never bring it
+        # forward. Here the floor (00:00:06) is after d (00:00:05) even
+        # though the observed evidence claims 00:00:01, so the dependency
+        # must still be UNAVAILABLE by the floor's own instant.
+        d = dep(
+            "f",
+            ("2024-01-01T00:00:00Z", "2024-01-01T00:00:01Z"),
+            "2024-01-01T00:00:06Z",
+            observed_available="2024-01-01T00:00:01Z",
+        )
+        result = classify_candidate(
+            fold(), Embargo(0), candidate("2024-01-01T00:00:05Z", (d,))
+        )
+        self.assertEqual(CandidateClassification.UNAVAILABLE, result.classification)
+
+        # When the floor itself is already admissible by d, an earlier
+        # observed timestamp does not additionally block admission either:
+        # max(floor, observed) still resolves to the floor.
+        admitted_dep = dep(
+            "f",
+            ("2024-01-01T00:00:00Z", "2024-01-01T00:00:01Z"),
+            "2024-01-01T00:00:04Z",
+            observed_available="2024-01-01T00:00:01Z",
+        )
+        admitted = classify_candidate(
+            fold(), Embargo(0), candidate("2024-01-01T00:00:05Z", (admitted_dep,))
+        )
+        self.assertEqual(CandidateClassification.ADMITTED, admitted.classification)
+
+    # Review finding: AVAILABLE + FINAL evidence must not let a later final
+    # value be retroactively substituted for the exact contemporaneous
+    # provisional value at the candidate instant.
+    def test_available_requirement_fails_closed_without_contemporaneous_version_proof(self):
+        unproven = DependencyEvidence(
+            identity="f",
+            cutoff_role=DependencyCutoffRole.DECISION_TIME,
+            support=CoverageInterval(
+                Instant.parse("2024-01-01T00:00:00Z"), Instant.parse("2024-01-01T00:00:01Z")
+            ),
+            required_maturity=DependencyMaturity.AVAILABLE,
+            lifecycle=DependencyLifecycle.FINAL,
+            causal_available_at=Instant.parse(TRAIN_START),
+            observed_available_at=Instant.parse("2024-01-01T00:00:01Z"),
+            observed_finalized_at=Instant.parse("2024-01-01T00:00:06Z"),
+        )
+        rejected = classify_candidate(
+            fold(), Embargo(0), candidate("2024-01-01T00:00:05Z", (unproven,))
+        )
+        self.assertEqual(CandidateClassification.UNAVAILABLE, rejected.classification)
+
+        proven = DependencyEvidence(
+            identity="f",
+            cutoff_role=DependencyCutoffRole.DECISION_TIME,
+            support=CoverageInterval(
+                Instant.parse("2024-01-01T00:00:00Z"), Instant.parse("2024-01-01T00:00:01Z")
+            ),
+            required_maturity=DependencyMaturity.AVAILABLE,
+            lifecycle=DependencyLifecycle.FINAL,
+            causal_available_at=Instant.parse(TRAIN_START),
+            observed_available_at=Instant.parse("2024-01-01T00:00:01Z"),
+            observed_finalized_at=Instant.parse("2024-01-01T00:00:06Z"),
+            contemporaneous_version_proven=True,
+        )
+        admitted = classify_candidate(
+            fold(), Embargo(0), candidate("2024-01-01T00:00:05Z", (proven,))
+        )
+        self.assertEqual(CandidateClassification.ADMITTED, admitted.classification)
+
+        # Once the candidate is at or after the proven finalization instant,
+        # the value is trivially the immutable final value: no proof needed.
+        already_final = classify_candidate(
+            fold(), Embargo(0), candidate("2024-01-01T00:00:06Z", (unproven,))
+        )
+        self.assertEqual(CandidateClassification.ADMITTED, already_final.classification)
 
     def test_classify_candidate_rejects_unvalidated_inputs(self):
         with self.assertRaises(InvalidRequest):

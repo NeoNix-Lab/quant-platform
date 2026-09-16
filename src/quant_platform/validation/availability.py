@@ -73,6 +73,22 @@ class DependencyEvidence:
     ``sufficient=False`` represents explicit E02-style non-observation
     (insufficient declared support/history): every availability field must be
     left unset, so absence is never padded, synthesized or inferred.
+
+    An observed timestamp is evidence, not a redefinition of the semantic
+    floor: it may only delay admissibility, never advance it ahead of
+    ``causal_available_at``.  A timestamp earlier than the floor is therefore
+    accepted as construction input and simply has no effect on the computed
+    effective availability/finality instant (see ``max(...)`` in
+    ``_effective``), rather than being rejected.
+
+    ``contemporaneous_version_proven`` attests that the exact value observed
+    available since ``observed_available_at`` is provably the same value that
+    later finalizes (no intervening revision).  Absent that proof, a
+    ``FINAL``-lifecycle dependency evaluated under an ``AVAILABLE``
+    requirement fails closed for any candidate before the proven
+    finalization instant, because the seam cannot otherwise prove that the
+    contemporaneous value at that candidate is the later final value rather
+    than a retroactively substituted one.
     """
 
     identity: str
@@ -84,6 +100,7 @@ class DependencyEvidence:
     causal_available_at: Instant | datetime | str | None = None
     observed_available_at: Instant | datetime | str | None = None
     observed_finalized_at: Instant | datetime | str | None = None
+    contemporaneous_version_proven: bool = False
     detail: str = ""
 
     def __post_init__(self) -> None:
@@ -94,6 +111,8 @@ class DependencyEvidence:
         )
         if type(self.sufficient) is not bool:
             raise InvalidRequest("dependency sufficient must be a boolean")
+        if type(self.contemporaneous_version_proven) is not bool:
+            raise InvalidRequest("contemporaneous_version_proven must be a boolean")
 
         if not self.sufficient:
             if (
@@ -103,6 +122,7 @@ class DependencyEvidence:
                 or self.causal_available_at is not None
                 or self.observed_available_at is not None
                 or self.observed_finalized_at is not None
+                or self.contemporaneous_version_proven
             ):
                 raise InvalidRequest(
                     "insufficient dependency evidence must not carry support or "
@@ -134,19 +154,14 @@ class DependencyEvidence:
             if self.observed_finalized_at is None
             else _parse_instant(self.observed_finalized_at, "observed_finalized_at")
         )
-        if observed_available_at is not None and observed_available_at < causal_available_at:
-            raise InvalidRequest(
-                "observed availability cannot precede the causal availability floor"
-            )
         if lifecycle == DependencyLifecycle.PROVISIONAL and observed_finalized_at is not None:
             raise InvalidRequest("PROVISIONAL dependency evidence cannot carry finalization evidence")
-        if observed_finalized_at is not None:
-            if observed_finalized_at < causal_available_at:
-                raise InvalidRequest(
-                    "observed finalization cannot precede the causal availability floor"
-                )
-            if observed_available_at is not None and observed_finalized_at < observed_available_at:
-                raise InvalidRequest("observed finalization cannot precede observed availability")
+        if (
+            observed_finalized_at is not None
+            and observed_available_at is not None
+            and observed_finalized_at < observed_available_at
+        ):
+            raise InvalidRequest("observed finalization cannot precede observed availability")
         object.__setattr__(self, "observed_available_at", observed_available_at)
         object.__setattr__(self, "observed_finalized_at", observed_finalized_at)
 
@@ -247,6 +262,19 @@ def classify_candidate(
     return CandidateClassificationResult(CandidateClassification.ADMITTED)
 
 
+def _effective(causal_available_at: Instant, observed: Instant | None) -> Instant:
+    """The frozen ``max(causal_floor, observed_when_known)`` computation.
+
+    An observed timestamp may delay admissibility but can never make
+    information available earlier than the semantic floor, regardless of
+    whether the observed timestamp itself precedes the floor.
+    """
+
+    if observed is None:
+        return causal_available_at
+    return max(causal_available_at, observed)
+
+
 def _evaluate_dependency(
     dependency: DependencyEvidence, cutoff: Instant
 ) -> tuple[str, str]:
@@ -257,18 +285,36 @@ def _evaluate_dependency(
     if dependency.required_maturity == DependencyMaturity.FINAL_ONLY:
         if dependency.observed_finalized_at is None:
             return "unavailable", f"{dependency.identity}: finality not proven by cutoff"
-        if dependency.observed_finalized_at <= cutoff:
+        effective_finalized_at = _effective(
+            dependency.causal_available_at, dependency.observed_finalized_at
+        )
+        if effective_finalized_at <= cutoff:
             return "ok", ""
         return "unavailable", f"{dependency.identity}: finality proven after cutoff"
 
-    effective_available_at = (
-        dependency.causal_available_at
-        if dependency.observed_available_at is None
-        else dependency.observed_available_at
+    effective_available_at = _effective(
+        dependency.causal_available_at, dependency.observed_available_at
     )
-    if effective_available_at <= cutoff:
-        return "ok", ""
-    return "unavailable", f"{dependency.identity}: not available by cutoff"
+    if effective_available_at > cutoff:
+        return "unavailable", f"{dependency.identity}: not available by cutoff"
+
+    if dependency.lifecycle == DependencyLifecycle.FINAL:
+        effective_finalized_at = (
+            None
+            if dependency.observed_finalized_at is None
+            else _effective(dependency.causal_available_at, dependency.observed_finalized_at)
+        )
+        already_final_by_cutoff = (
+            effective_finalized_at is not None and effective_finalized_at <= cutoff
+        )
+        if not already_final_by_cutoff and not dependency.contemporaneous_version_proven:
+            return (
+                "unavailable",
+                f"{dependency.identity}: cannot prove the contemporaneous value by "
+                "cutoff is the eventual final value without revision evidence",
+            )
+
+    return "ok", ""
 
 
 def _overlaps(support: CoverageInterval, held_out: CoverageInterval) -> bool:

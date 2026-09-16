@@ -179,7 +179,16 @@ The accepted runtime foundation is implemented under
   Validation-owned mirror of the E02 causal-floor/observed-evidence/
   `PROVISIONAL -> FINAL` shape (`DependencyMaturity`, `DependencyLifecycle`),
   or an explicit `sufficient=False` non-observation with no availability
-  fields;
+  fields. The effective availability/finality instant is always
+  `max(causal_floor, observed_when_known)`: an observed timestamp earlier
+  than the floor is accepted as evidence but has no effect, never rejected,
+  since it can only delay admissibility, not advance it. A `FINAL`-lifecycle
+  dependency evaluated under an `AVAILABLE` requirement additionally fails
+  closed for any candidate before its proven finalization instant unless the
+  evidence carries `contemporaneous_version_proven=True`, because absent
+  that proof the seam cannot establish that the contemporaneously available
+  value is the later final value rather than a retroactively substituted
+  one;
 - `ValidationCandidate` — one candidate decision/reference instant plus its
   dependency evidence;
 - `CandidateClassification` / `CandidateClassificationResult` — the six
