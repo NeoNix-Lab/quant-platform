@@ -49,6 +49,7 @@ from .protection import (
     ProtectionUnitIdentity,
     ProtectionWriteAuthorization,
     ProtectionWriteDecision,
+    SafetyRelevanceAssertion,
     assess_protection,
     authorize_protection_write,
 )
@@ -82,6 +83,7 @@ __all__ = [
     "ProtectionUnitIdentity",
     "ProtectionWriteAuthorization",
     "ProtectionWriteDecision",
+    "SafetyRelevanceAssertion",
     "SignalKind",
     "SignalRelation",
     "SignalStreamConflict",
