@@ -49,6 +49,7 @@ from .pressure import (
 
 PROTECTION_UNIT_IDENTITY_DOMAIN = "protection-unit-identity-v1"
 PROTECTION_ASSESSMENT_IDENTITY_DOMAIN = "protection-assessment-v1"
+PROTECTION_WRITE_ACTION_IDENTITY_DOMAIN = "protection-write-action-v1"
 
 _ROLE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -418,6 +419,51 @@ class ArtifactAssessmentResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ProtectionObligationEvidence:
+    """Structured, attributable evidence that one K06-local protection obligation is unmet.
+
+    This describes a K06-local action or state only -- for example, a
+    verification/re-check obligation this capability itself owns that
+    pressure or capacity currently prevents from being completed safely.  It
+    must never describe K08 backup/replica freshness, K07 relocation
+    backlog or any other downstream capability's obligation: K06's local
+    ``AT_RISK`` classification is never a function of another capability's
+    state.  Bound to the exact ``protection_identity`` it concerns, an
+    explicit requesting authority and an explicit instant -- never an
+    anonymous boolean.
+    """
+
+    protection_identity: str
+    obligation_id: str
+    requesting_authority_id: str
+    identified_at: Instant
+    detail: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "protection_identity", _non_empty_text(self.protection_identity, "protection_identity")
+        )
+        object.__setattr__(self, "obligation_id", _non_empty_text(self.obligation_id, "obligation_id"))
+        object.__setattr__(
+            self,
+            "requesting_authority_id",
+            _non_empty_text(self.requesting_authority_id, "requesting_authority_id"),
+        )
+        if not isinstance(self.identified_at, Instant):
+            raise ProtectionError("identified_at must be a canonical Instant")
+        object.__setattr__(self, "detail", _non_empty_text(self.detail, "detail"))
+
+    def stable_dict(self) -> dict[str, Any]:
+        return {
+            "protection_identity": self.protection_identity,
+            "obligation_id": self.obligation_id,
+            "requesting_authority_id": self.requesting_authority_id,
+            "identified_at": self.identified_at.isoformat(),
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ProtectionAssessment:
     """One immutable K06 protection assessment, bound to one validated unit.
 
@@ -431,10 +477,15 @@ class ProtectionAssessment:
     role) -- so a caller cannot bind unrelated or incomplete results to a
     real unit's identity to obtain a spurious ``PROTECTED`` state.
 
+    ``protection_obligation``, when supplied, must be a
+    :class:`ProtectionObligationEvidence` bound to this same
+    ``protection_identity``: a bare boolean can no longer manufacture
+    ``AT_RISK`` without an attributable, K06-local obligation record.
+
     ``state`` and ``delete_authorized`` are both ``field(init=False)``:
     ``state`` is recomputed here from ``artifact_results`` and
-    ``protection_obligation_unmet`` (never accepted as a caller-supplied
-    value), and ``delete_authorized`` is fixed ``False`` because K06 never
+    ``protection_obligation`` (never accepted as a caller-supplied value),
+    and ``delete_authorized`` is fixed ``False`` because K06 never
     authorizes destructive removal of source evidence, regardless of state
     or pressure.
     """
@@ -443,8 +494,7 @@ class ProtectionAssessment:
     verified_at: Instant
     verifier_identity: str
     artifact_results: tuple[ArtifactAssessmentResult, ...]
-    protection_obligation_unmet: bool = False
-    obligation_detail: str = ""
+    protection_obligation: ProtectionObligationEvidence | None = None
     state: ProtectionState = field(init=False)
     delete_authorized: bool = field(init=False, default=False)
 
@@ -489,15 +539,17 @@ class ProtectionAssessment:
             self, "artifact_results", tuple(sorted(artifact_results, key=lambda result: result.declared.role))
         )
 
-        if type(self.protection_obligation_unmet) is not bool:
-            raise ProtectionError("protection_obligation_unmet must be a boolean")
-        if not isinstance(self.obligation_detail, str):
-            raise ProtectionError("obligation_detail must be a string")
-        if not self.protection_obligation_unmet and self.obligation_detail:
-            raise ProtectionError("obligation_detail requires protection_obligation_unmet")
+        if self.protection_obligation is not None:
+            if not isinstance(self.protection_obligation, ProtectionObligationEvidence):
+                raise ProtectionError("protection_obligation must be ProtectionObligationEvidence")
+            if self.protection_obligation.protection_identity != self.unit.protection_identity:
+                raise ProtectionError(
+                    "protection_obligation is bound to a different protection_identity than this unit"
+                )
+        protection_obligation_unmet = self.protection_obligation is not None
 
         base_severity = max(_STATE_SEVERITY[result.state] for result in artifact_results)
-        if base_severity == _STATE_SEVERITY[ProtectionState.PROTECTED] and self.protection_obligation_unmet:
+        if base_severity == _STATE_SEVERITY[ProtectionState.PROTECTED] and protection_obligation_unmet:
             final_severity = _STATE_SEVERITY[ProtectionState.AT_RISK]
         else:
             final_severity = base_severity
@@ -538,9 +590,10 @@ class ProtectionAssessment:
             "verified_at": self.verified_at.isoformat(),
             "verifier_identity": self.verifier_identity,
             "artifact_results": [result.stable_dict() for result in self.artifact_results],
-            "protection_obligation_unmet": self.protection_obligation_unmet,
+            "protection_obligation": (
+                None if self.protection_obligation is None else self.protection_obligation.stable_dict()
+            ),
             "state": self.state.value,
-            "obligation_detail": self.obligation_detail,
             "delete_authorized": self.delete_authorized,
         }
 
@@ -552,28 +605,63 @@ class ProtectionAssessment:
 
 
 @dataclass(frozen=True, slots=True)
+class ProtectionWriteAction:
+    """A deterministic, bounded identity for one candidate protection-producing write.
+
+    Binds the validated ``unit`` and the exact bounded ``write_size_bytes``
+    into one composite identity, so a safety assertion made for one action
+    can never be reused -- whole, understated or for an unrelated unit -- to
+    authorize a differently sized or differently scoped write.
+    """
+
+    unit: ProtectionUnitIdentity
+    write_size_bytes: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.unit, ProtectionUnitIdentity):
+            raise ProtectionError("unit must be a ProtectionUnitIdentity")
+        object.__setattr__(
+            self, "write_size_bytes", _non_negative_int(self.write_size_bytes, "write_size_bytes")
+        )
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return {
+            "identity_domain": PROTECTION_WRITE_ACTION_IDENTITY_DOMAIN,
+            "protection_identity": self.unit.protection_identity,
+            "write_size_bytes": self.write_size_bytes,
+        }
+
+    @property
+    def action_identity(self) -> str:
+        return f"{PROTECTION_WRITE_ACTION_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(self.canonical_payload())}"
+
+    def stable_dict(self) -> dict[str, Any]:
+        return {"action_identity": self.action_identity, "canonical_payload": self.canonical_payload()}
+
+
+@dataclass(frozen=True, slots=True)
 class SafetyRelevanceAssertion:
-    """Attributed caller evidence that one bounded write is safety-relevant.
+    """Attributed caller evidence that one bounded write action is safety-relevant.
 
     K06 cannot independently derive "is this write protecting unique,
     non-reconstructible source evidence" from pressure evidence alone --
     that is inherent to what the write is *for*, not to available bytes.
     Rather than accept a bare unattributed boolean, this binds the claim to
     an explicit accountable authority, an explicit instant and a rationale,
-    and -- critically -- to the exact ``protection_identity`` it is about,
-    so a safety claim for one action can never be silently reused to
-    authorize an unrelated one.
+    and -- critically -- to the exact :class:`ProtectionWriteAction` (unit
+    *and* bounded write size) it is about, so a safety claim for one action
+    can never be reused, whole or understated, to authorize a differently
+    sized or unrelated write.
     """
 
-    protection_identity: str
+    action: ProtectionWriteAction
     asserting_authority_id: str
     asserted_at: Instant
     rationale: str
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "protection_identity", _non_empty_text(self.protection_identity, "protection_identity")
-        )
+        if not isinstance(self.action, ProtectionWriteAction):
+            raise ProtectionError("action must be a ProtectionWriteAction")
         object.__setattr__(
             self,
             "asserting_authority_id",
@@ -585,7 +673,7 @@ class SafetyRelevanceAssertion:
 
     def stable_dict(self) -> dict[str, Any]:
         return {
-            "protection_identity": self.protection_identity,
+            "action": self.action.stable_dict(),
             "asserting_authority_id": self.asserting_authority_id,
             "asserted_at": self.asserted_at.isoformat(),
             "rationale": self.rationale,
@@ -596,24 +684,29 @@ class SafetyRelevanceAssertion:
 class ProtectionWriteAuthorization:
     """One K06 admission decision for a bounded protection-producing write.
 
-    Every derived field below is ``field(init=False)``, recomputed here from
-    ``protection_identity``, ``write_size_bytes``, ``pressure`` and
-    ``safety_assertion``: nothing about the decision, pressure state,
-    restrictions or capacity result can be supplied directly, so a caller
-    cannot construct an arbitrary ``PERMITTED`` record disconnected from real
-    evidence.  ``fits_evidenced_capacity`` is computed from ``pressure``'s
-    own capacity evidence; ``is_safety_relevant`` is true only when
-    ``safety_assertion`` is present and is bound to this same
-    ``protection_identity``.
+    Bound to one :class:`ProtectionWriteAction` (a validated protection unit
+    *and* its exact bounded write size), not to a bare identifier string, so
+    the decision can never be confused with a different action.  Every other
+    derived field below is ``field(init=False)``, recomputed here from
+    ``action``, ``pressure`` and ``safety_assertion``: nothing about the
+    decision, pressure state, restrictions or capacity result can be
+    supplied directly, so a caller cannot construct an arbitrary
+    ``PERMITTED`` record disconnected from real evidence.
+    ``fits_evidenced_capacity`` is computed from ``pressure``'s own capacity
+    evidence against ``action.write_size_bytes``; ``is_safety_relevant`` is
+    true only when ``safety_assertion`` is present and bound to this exact
+    ``action``.
 
     ``delete_authorized`` is fixed ``False`` for the same reason as on
     :class:`ProtectionAssessment`.
     """
 
-    protection_identity: str
-    write_size_bytes: int
+    action: ProtectionWriteAction
     pressure: PressureDecision | PressureDecisionUnavailable
     safety_assertion: SafetyRelevanceAssertion | None = None
+    action_identity: str = field(init=False)
+    protection_identity: str = field(init=False)
+    write_size_bytes: int = field(init=False)
     pressure_decision_identity: str = field(init=False)
     pressure_state: PressureState | None = field(init=False)
     restrictions: PressureRestrictions | None = field(init=False)
@@ -625,21 +718,22 @@ class ProtectionWriteAuthorization:
     delete_authorized: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "protection_identity", _non_empty_text(self.protection_identity, "protection_identity")
-        )
-        object.__setattr__(
-            self, "write_size_bytes", _non_negative_int(self.write_size_bytes, "write_size_bytes")
-        )
+        if not isinstance(self.action, ProtectionWriteAction):
+            raise ProtectionError("action must be a ProtectionWriteAction")
         if not isinstance(self.pressure, (PressureDecision, PressureDecisionUnavailable)):
             raise ProtectionError("pressure must be a PressureDecision or PressureDecisionUnavailable")
+
+        object.__setattr__(self, "action_identity", self.action.action_identity)
+        object.__setattr__(self, "protection_identity", self.action.unit.protection_identity)
+        object.__setattr__(self, "write_size_bytes", self.action.write_size_bytes)
 
         if self.safety_assertion is not None:
             if not isinstance(self.safety_assertion, SafetyRelevanceAssertion):
                 raise ProtectionError("safety_assertion must be SafetyRelevanceAssertion")
-            if self.safety_assertion.protection_identity != self.protection_identity:
+            if self.safety_assertion.action.action_identity != self.action_identity:
                 raise ProtectionError(
-                    "safety_assertion is bound to a different protection_identity than this write"
+                    "safety_assertion is bound to a different write action (unit and/or "
+                    "write_size_bytes) than this write"
                 )
         is_safety_relevant = self.safety_assertion is not None
         object.__setattr__(self, "is_safety_relevant", is_safety_relevant)
@@ -700,6 +794,8 @@ class ProtectionWriteAuthorization:
 
     def stable_dict(self) -> dict[str, Any]:
         return {
+            "action": self.action.stable_dict(),
+            "action_identity": self.action_identity,
             "protection_identity": self.protection_identity,
             "write_size_bytes": self.write_size_bytes,
             "pressure_decision_identity": self.pressure_decision_identity,
@@ -724,8 +820,7 @@ def assess_protection(
     verified_at: Instant,
     verifier_identity: str,
     local_instances_exhaustively_checked: bool = False,
-    protection_obligation_unmet: bool = False,
-    obligation_detail: str = "",
+    protection_obligation: ProtectionObligationEvidence | None = None,
 ) -> ProtectionAssessment:
     """Deterministically classify one protection unit from caller-supplied evidence.
 
@@ -735,7 +830,10 @@ def assess_protection(
     substitution.  ``local_instances_exhaustively_checked`` must be true for
     an all-``ABSENT`` role to resolve to ``LOST`` rather than fail closed to
     ``UNAVAILABLE``: a single absence observation never overclaims that no
-    other K06-local verified instance exists.
+    other K06-local verified instance exists.  ``protection_obligation``, when
+    supplied, must be a :class:`ProtectionObligationEvidence` bound to this
+    unit's ``protection_identity``: a bare boolean can no longer manufacture
+    ``AT_RISK``.
     """
 
     if not isinstance(unit, ProtectionUnitIdentity):
@@ -745,10 +843,8 @@ def assess_protection(
     verifier_identity = _non_empty_text(verifier_identity, "verifier_identity")
     if type(local_instances_exhaustively_checked) is not bool:
         raise ProtectionError("local_instances_exhaustively_checked must be a boolean")
-    if type(protection_obligation_unmet) is not bool:
-        raise ProtectionError("protection_obligation_unmet must be a boolean")
-    if not isinstance(obligation_detail, str):
-        raise ProtectionError("obligation_detail must be a string")
+    if protection_obligation is not None and not isinstance(protection_obligation, ProtectionObligationEvidence):
+        raise ProtectionError("protection_obligation must be ProtectionObligationEvidence")
 
     verification_list = tuple(verifications)
     for index, verification in enumerate(verification_list):
@@ -782,8 +878,7 @@ def assess_protection(
         verified_at=verified_at,
         verifier_identity=verifier_identity,
         artifact_results=artifact_results,
-        protection_obligation_unmet=protection_obligation_unmet,
-        obligation_detail=obligation_detail if protection_obligation_unmet else "",
+        protection_obligation=protection_obligation,
     )
 
 
@@ -823,7 +918,7 @@ def _classify_role(
 
 def authorize_protection_write(
     *,
-    protection_identity: str,
+    unit: ProtectionUnitIdentity,
     write_size_bytes: int,
     pressure: PressureDecision | PressureDecisionUnavailable,
     safety_assertion: SafetyRelevanceAssertion | None = None,
@@ -832,14 +927,16 @@ def authorize_protection_write(
 
     A thin, documented entry point over :class:`ProtectionWriteAuthorization`,
     whose own ``__post_init__`` performs and recomputes the entire decision;
-    constructing that dataclass directly is equally safe.  ``safety_assertion``
-    replaces a bare trusted boolean: presence of a validated, identity-bound
-    assertion is what "independently proven safety-relevant" means here.
+    constructing that dataclass directly is equally safe.  ``unit`` and
+    ``write_size_bytes`` are combined into one :class:`ProtectionWriteAction`
+    identity, so ``safety_assertion`` (a bound, attributed replacement for a
+    bare trusted boolean) can never be reused for a differently sized or
+    unrelated write.
     """
 
+    action = ProtectionWriteAction(unit=unit, write_size_bytes=write_size_bytes)
     return ProtectionWriteAuthorization(
-        protection_identity=protection_identity,
-        write_size_bytes=write_size_bytes,
+        action=action,
         pressure=pressure,
         safety_assertion=safety_assertion,
     )
@@ -899,6 +996,7 @@ def _canonical_fingerprint(payload: Any) -> str:
 __all__ = [
     "PROTECTION_ASSESSMENT_IDENTITY_DOMAIN",
     "PROTECTION_UNIT_IDENTITY_DOMAIN",
+    "PROTECTION_WRITE_ACTION_IDENTITY_DOMAIN",
     "AcceptedReconstructionContract",
     "ArtifactAssessmentResult",
     "ArtifactProtectionIdentity",
@@ -906,8 +1004,10 @@ __all__ = [
     "ArtifactVerificationEvidence",
     "ProtectionAssessment",
     "ProtectionError",
+    "ProtectionObligationEvidence",
     "ProtectionState",
     "ProtectionUnitIdentity",
+    "ProtectionWriteAction",
     "ProtectionWriteAuthorization",
     "ProtectionWriteDecision",
     "SafetyRelevanceAssertion",

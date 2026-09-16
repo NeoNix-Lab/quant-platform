@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""K06 RAW/source protection v1 proof."""
+"""K06 RAW/source protection v1 proof.
+
+The truncated-extract-cannot-produce-completed-evidence proposition is CREDITED
+to A07's own suite (notably
+``tests/test_bybit_historical_source_v1.py::BybitHistoricalSourceV1Tests
+::test_evidence_is_refused_until_natural_source_exhaustion``) and is not
+duplicated here.  Where an opaque extract fingerprint is needed as K06 input
+evidence, a fixed valid-shaped constant is used instead of constructing real
+A07 runtime objects, keeping these tests isolated to K06's own concern.
+"""
 
 from __future__ import annotations
 
@@ -22,8 +31,10 @@ from quant_platform.operations.protection import (  # noqa: E402
     ArtifactVerificationEvidence,
     ProtectionAssessment,
     ProtectionError,
+    ProtectionObligationEvidence,
     ProtectionState,
     ProtectionUnitIdentity,
+    ProtectionWriteAction,
     ProtectionWriteAuthorization,
     ProtectionWriteDecision,
     SafetyRelevanceAssertion,
@@ -39,16 +50,12 @@ from quant_platform.operations.pressure import (  # noqa: E402
     TimeToFullKind,
     restrictions_for_state,
 )
-from quant_platform.source_adapters.bybit_historical import (  # noqa: E402
-    BybitHistoricalExtractAccumulator,
-    BybitHistoricalSourceError,
-    BybitHistoricalTradeRow,
-)
 
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
 HASH_C = "c" * 64
+OPAQUE_EXTRACT_FINGERPRINT = "d" * 64
 VERIFIED_AT = Instant.parse("2024-01-16T00:00:00Z")
 ACCEPTED_AT = Instant.parse("2024-01-01T00:00:00Z")
 ACCEPTING_AUTHORITY = "adr:k06-test-authority-v1"
@@ -57,7 +64,7 @@ MAPPING_ID = "bybit-sqlite-day-extract-v1"
 RECONSTRUCTION_CONTRACT_ID = "trade-v1"
 INSTANCE_HOT = "hot"
 INSTANCE_MIRROR = "mirror"
-PROTECTION_ID = "protection-unit-identity-v1:sha256:" + "1" * 64
+PLACEHOLDER_PROTECTION_ID = "protection-unit-identity-v1:sha256:" + "1" * 64
 
 
 def artifact(role: str, content_hash: str = HASH_A, size_bytes: int = 100) -> ArtifactProtectionIdentity:
@@ -133,6 +140,26 @@ def artifact_result(
     )
 
 
+def obligation(
+    protection_identity: str = PLACEHOLDER_PROTECTION_ID,
+    *,
+    obligation_id: str = "k06-reverify-2024-01-16",
+    requesting_authority_id: str = ACCEPTING_AUTHORITY,
+    identified_at: Instant = ACCEPTED_AT,
+    detail: str = (
+        "scheduled local re-verification pass could not complete within the "
+        "current pressure-restricted window"
+    ),
+) -> ProtectionObligationEvidence:
+    return ProtectionObligationEvidence(
+        protection_identity=protection_identity,
+        obligation_id=obligation_id,
+        requesting_authority_id=requesting_authority_id,
+        identified_at=identified_at,
+        detail=detail,
+    )
+
+
 def pressure_decision(state: PressureState, *, available_bytes: int = 1_000_000) -> PressureDecision:
     return PressureDecision(
         storage_root_id="hot",
@@ -146,9 +173,9 @@ def pressure_decision(state: PressureState, *, available_bytes: int = 1_000_000)
     )
 
 
-def safety(protection_identity: str = PROTECTION_ID) -> SafetyRelevanceAssertion:
+def safety(action: ProtectionWriteAction) -> SafetyRelevanceAssertion:
     return SafetyRelevanceAssertion(
-        protection_identity=protection_identity,
+        action=action,
         asserting_authority_id=ACCEPTING_AUTHORITY,
         asserted_at=ACCEPTED_AT,
         rationale="protects unique non-reconstructible source evidence",
@@ -383,6 +410,73 @@ class ProtectionForgeryResistanceV1Tests(unittest.TestCase):
             )
 
 
+class ProtectionObligationV1Tests(unittest.TestCase):
+    """Review finding: AT_RISK requires structured, attributable K06-local evidence."""
+
+    def test_protection_obligation_requires_attributed_provenance(self):
+        with self.assertRaises(ProtectionError):
+            obligation(obligation_id="")
+        with self.assertRaises(ProtectionError):
+            obligation(requesting_authority_id="")
+        with self.assertRaises(ProtectionError):
+            ProtectionObligationEvidence(
+                protection_identity=PLACEHOLDER_PROTECTION_ID,
+                obligation_id="ob-1",
+                requesting_authority_id=ACCEPTING_AUTHORITY,
+                identified_at="2024-01-01T00:00:00Z",  # not an Instant
+                detail="x",
+            )
+        with self.assertRaises(ProtectionError):
+            obligation(detail="")
+
+    def test_protection_obligation_must_be_bound_to_the_assessed_unit(self):
+        u = unit(artifacts=(artifact("primary", HASH_A, 100),))
+        mismatched = obligation("protection-unit-identity-v1:sha256:" + "9" * 64)
+        with self.assertRaises(ProtectionError):
+            assess_protection(
+                u,
+                (matched_evidence("primary", HASH_A, 100),),
+                verified_at=VERIFIED_AT,
+                verifier_identity="k06-test-verifier",
+                protection_obligation=mismatched,
+            )
+
+    def test_bound_obligation_is_at_risk_only_when_otherwise_verified(self):
+        u = unit(artifacts=(artifact("primary", HASH_A, 100),))
+        bound_obligation = obligation(u.protection_identity)
+
+        at_risk = assess_protection(
+            u,
+            (matched_evidence("primary", HASH_A, 100),),
+            verified_at=VERIFIED_AT,
+            verifier_identity="k06-test-verifier",
+            protection_obligation=bound_obligation,
+        )
+        self.assertEqual(ProtectionState.AT_RISK, at_risk.state)
+        self.assertEqual(bound_obligation, at_risk.protection_obligation)
+
+        # A bound obligation never masks a worse underlying failure.
+        still_lost = assess_protection(
+            u,
+            (absent_evidence("primary"),),
+            verified_at=VERIFIED_AT,
+            verifier_identity="k06-test-verifier",
+            local_instances_exhaustively_checked=True,
+            protection_obligation=bound_obligation,
+        )
+        self.assertEqual(ProtectionState.LOST, still_lost.state)
+
+    # Review finding: local K06 obligations must never describe a K08
+    # backup/replica or K07 relocation concern.
+    def test_obligation_evidence_never_references_backup_or_relocation_concepts(self):
+        field_names = {f.name for f in fields(ProtectionObligationEvidence)}
+        for forbidden in ("backup", "restore", "replica", "second_copy", "relocation", "tier"):
+            self.assertFalse(
+                any(forbidden in name for name in field_names),
+                f"ProtectionObligationEvidence unexpectedly couples to {forbidden!r}: {field_names}",
+            )
+
+
 class ProtectionAssessmentV1Tests(unittest.TestCase):
     # 11. exact protected replay -> positive reconstruction proof
     def test_all_matched_evidence_is_protected(self):
@@ -433,26 +527,14 @@ class ProtectionAssessmentV1Tests(unittest.TestCase):
 
     # 9 & 10. fingerprint/canonical-output survival never substitutes for
     # the required source artifact itself; an exhaustively-absent required
-    # artifact is LOST.
+    # artifact is LOST.  An opaque, valid-shaped fingerprint constant is used
+    # here rather than real A07 runtime objects -- K06's own concern is only
+    # that *some* bound fingerprint value never substitutes for the artifact
+    # evidence itself, not how A07 computes one (CREDIT A07's own suite).
     def test_retained_fingerprint_does_not_grant_protection_when_source_is_absent(self):
-        accumulator = BybitHistoricalExtractAccumulator()
-        row = BybitHistoricalTradeRow(
-            category="linear",
-            symbol="BTCUSDT",
-            trade_id="1",
-            trade_time_ms=0,
-            trade_time_utc="2024-01-15T00:00:00Z",
-            side="Buy",
-            size="1",
-            price="1",
-        )
-        accumulator.observe(row)
-        accumulator._mark_source_exhausted()
-        extract_evidence = accumulator.evidence("2024-01-15", 0, 1)
-
         u = unit(
             artifacts=(artifact("primary", HASH_A, 100),),
-            extract_fingerprint_sha256=extract_evidence.source_fingerprint_sha256,
+            extract_fingerprint_sha256=OPAQUE_EXTRACT_FINGERPRINT,
         )
         # Neither "canonical output survives" nor "fingerprint retained" is
         # even representable as verification input; only artifact evidence is.
@@ -464,24 +546,7 @@ class ProtectionAssessmentV1Tests(unittest.TestCase):
             local_instances_exhaustively_checked=True,
         )
         self.assertEqual(ProtectionState.LOST, result.state)
-        self.assertEqual(extract_evidence.source_fingerprint_sha256, u.extract_fingerprint_sha256)
-
-    # 8. truncated A07 extract -> cannot produce completed extract proof (CREDIT A07)
-    def test_truncated_extract_cannot_produce_completed_evidence(self):
-        accumulator = BybitHistoricalExtractAccumulator()
-        row = BybitHistoricalTradeRow(
-            category="linear",
-            symbol="BTCUSDT",
-            trade_id="1",
-            trade_time_ms=0,
-            trade_time_utc="2024-01-15T00:00:00Z",
-            side="Buy",
-            size="1",
-            price="1",
-        )
-        accumulator.observe(row)
-        with self.assertRaises(BybitHistoricalSourceError):
-            accumulator.evidence("2024-01-15", 0, 1)
+        self.assertEqual(OPAQUE_EXTRACT_FINGERPRINT, u.extract_fingerprint_sha256)
 
     def test_unreadable_evidence_is_unavailable(self):
         u = unit(artifacts=(artifact("primary", HASH_A, 100),))
@@ -492,31 +557,6 @@ class ProtectionAssessmentV1Tests(unittest.TestCase):
             verifier_identity="k06-test-verifier",
         )
         self.assertEqual(ProtectionState.UNAVAILABLE, result.state)
-
-    def test_unmet_protection_obligation_is_at_risk_only_when_otherwise_verified(self):
-        u = unit(artifacts=(artifact("primary", HASH_A, 100),))
-        at_risk = assess_protection(
-            u,
-            (matched_evidence("primary", HASH_A, 100),),
-            verified_at=VERIFIED_AT,
-            verifier_identity="k06-test-verifier",
-            protection_obligation_unmet=True,
-            obligation_detail="second copy overdue",
-        )
-        self.assertEqual(ProtectionState.AT_RISK, at_risk.state)
-        self.assertEqual("second copy overdue", at_risk.obligation_detail)
-
-        # An unmet obligation never masks a worse underlying failure.
-        still_lost = assess_protection(
-            u,
-            (absent_evidence("primary"),),
-            verified_at=VERIFIED_AT,
-            verifier_identity="k06-test-verifier",
-            local_instances_exhaustively_checked=True,
-            protection_obligation_unmet=True,
-            obligation_detail="second copy overdue",
-        )
-        self.assertEqual(ProtectionState.LOST, still_lost.state)
 
     # multi-failure precedence: LOST > CORRUPT > UNAVAILABLE > AT_RISK > PROTECTED
     def test_lost_wins_over_corrupt(self):
@@ -655,7 +695,7 @@ class ProtectionAssessmentV1Tests(unittest.TestCase):
 
     # 17. local K06 protection valid while K08 independent restore remains unproven
     def test_protection_never_references_backup_or_restore_evidence(self):
-        for cls in (ProtectionAssessment, ArtifactAssessmentResult, ProtectionUnitIdentity):
+        for cls in (ProtectionAssessment, ArtifactAssessmentResult, ProtectionUnitIdentity, ProtectionObligationEvidence):
             field_names = {f.name for f in fields(cls)}
             for forbidden in ("backup", "restore", "replica", "second_copy"):
                 self.assertFalse(
@@ -756,15 +796,17 @@ class ProtectionInstanceScopeV1Tests(unittest.TestCase):
 
 
 class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
-    PROTECTION_ID = PROTECTION_ID
+    def setUp(self) -> None:
+        self.unit = unit(artifacts=(artifact("primary", HASH_A, 100),))
 
     # 13. CRITICAL pressure + bounded safe protection write proven -> may proceed
     def test_critical_pressure_with_proven_safety_permits_write(self):
+        action = ProtectionWriteAction(unit=self.unit, write_size_bytes=100)
         result = authorize_protection_write(
-            protection_identity=self.PROTECTION_ID,
+            unit=self.unit,
             write_size_bytes=100,
             pressure=pressure_decision(PressureState.CRITICAL, available_bytes=1_000),
-            safety_assertion=safety(self.PROTECTION_ID),
+            safety_assertion=safety(action),
         )
         self.assertEqual(ProtectionWriteDecision.PERMITTED, result.decision)
         self.assertTrue(result.is_safety_relevant)
@@ -774,7 +816,7 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
     # 14. CRITICAL pressure + safety unproven -> deferred + AT_RISK
     def test_critical_pressure_without_safety_proof_is_deferred(self):
         result = authorize_protection_write(
-            protection_identity=self.PROTECTION_ID,
+            unit=self.unit,
             write_size_bytes=100,
             pressure=pressure_decision(PressureState.CRITICAL, available_bytes=1_000),
             safety_assertion=None,
@@ -783,27 +825,44 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
         self.assertFalse(result.is_safety_relevant)
         self.assertEqual(ProtectionState.AT_RISK, result.resulting_obligation_state)
 
-    # Review finding: a safety claim cannot be reused for an unrelated action.
-    def test_safety_assertion_must_be_bound_to_the_same_protection_identity(self):
+    # Review finding: a safety claim cannot be reused for a differently
+    # sized write on the same unit, nor for an unrelated unit.
+    def test_safety_assertion_cannot_be_reused_for_a_differently_sized_write(self):
+        small_action = ProtectionWriteAction(unit=self.unit, write_size_bytes=100)
         with self.assertRaises(ProtectionError):
             authorize_protection_write(
-                protection_identity=self.PROTECTION_ID,
-                write_size_bytes=100,
-                pressure=pressure_decision(PressureState.CRITICAL, available_bytes=1_000),
-                safety_assertion=safety("protection-unit-identity-v1:sha256:" + "9" * 64),
+                unit=self.unit,
+                write_size_bytes=1_000_000,  # understated relative to the assertion's action
+                pressure=pressure_decision(PressureState.CRITICAL, available_bytes=2_000_000),
+                safety_assertion=safety(small_action),
             )
 
+    def test_safety_assertion_cannot_be_reused_for_an_unrelated_unit(self):
+        action = ProtectionWriteAction(unit=self.unit, write_size_bytes=100)
+        other_unit = unit(artifacts=(artifact("primary", HASH_B, 10),), protected_support="2024-02-01")
+        with self.assertRaises(ProtectionError):
+            authorize_protection_write(
+                unit=other_unit,
+                write_size_bytes=100,
+                pressure=pressure_decision(PressureState.CRITICAL, available_bytes=1_000),
+                safety_assertion=safety(action),
+            )
+
+    def test_protection_write_action_requires_validated_unit_and_bounded_size(self):
+        with self.assertRaises(ProtectionError):
+            ProtectionWriteAction(unit=object(), write_size_bytes=100)  # type: ignore[arg-type]
+        with self.assertRaises(ProtectionError):
+            ProtectionWriteAction(unit=self.unit, write_size_bytes=-1)
+
     def test_safety_assertion_requires_attributed_provenance(self):
+        action = ProtectionWriteAction(unit=self.unit, write_size_bytes=100)
         with self.assertRaises(ProtectionError):
             SafetyRelevanceAssertion(
-                protection_identity=self.PROTECTION_ID,
-                asserting_authority_id="",
-                asserted_at=ACCEPTED_AT,
-                rationale="x",
+                action=action, asserting_authority_id="", asserted_at=ACCEPTED_AT, rationale="x"
             )
         with self.assertRaises(ProtectionError):
             SafetyRelevanceAssertion(
-                protection_identity=self.PROTECTION_ID,
+                action=action,
                 asserting_authority_id=ACCEPTING_AUTHORITY,
                 asserted_at="2024-01-01T00:00:00Z",  # not an Instant
                 rationale="x",
@@ -812,11 +871,12 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
     # Review finding: capacity fit is computed from real pressure evidence,
     # never trusted as a bare caller assertion.
     def test_critical_pressure_with_insufficient_evidenced_capacity_is_deferred(self):
+        action = ProtectionWriteAction(unit=self.unit, write_size_bytes=1_000)
         result = authorize_protection_write(
-            protection_identity=self.PROTECTION_ID,
+            unit=self.unit,
             write_size_bytes=1_000,
             pressure=pressure_decision(PressureState.CRITICAL, available_bytes=50),
-            safety_assertion=safety(self.PROTECTION_ID),
+            safety_assertion=safety(action),
         )
         self.assertEqual(ProtectionWriteDecision.DEFERRED, result.decision)
         self.assertFalse(result.fits_evidenced_capacity)
@@ -824,20 +884,20 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
 
     # 15. EXHAUSTED -> new write refused (even with proof), read-only verification unaffected
     def test_exhausted_pressure_always_refuses_new_writes(self):
+        action = ProtectionWriteAction(unit=self.unit, write_size_bytes=1)
         result = authorize_protection_write(
-            protection_identity=self.PROTECTION_ID,
+            unit=self.unit,
             write_size_bytes=1,
             pressure=pressure_decision(PressureState.EXHAUSTED, available_bytes=1_000_000),
-            safety_assertion=safety(self.PROTECTION_ID),
+            safety_assertion=safety(action),
         )
         self.assertEqual(ProtectionWriteDecision.REFUSED, result.decision)
         self.assertEqual(ProtectionState.AT_RISK, result.resulting_obligation_state)
 
         # assess_protection takes no pressure input at all: read-only
         # verification is structurally unaffected by any pressure state.
-        u = unit(artifacts=(artifact("primary", HASH_A, 100),))
         verified = assess_protection(
-            u,
+            self.unit,
             (matched_evidence("primary", HASH_A, 100),),
             verified_at=VERIFIED_AT,
             verifier_identity="k06-test-verifier",
@@ -847,7 +907,7 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
     def test_normal_and_pressure_states_permit_the_write_regardless_of_capacity(self):
         for state in (PressureState.NORMAL, PressureState.PRESSURE):
             result = authorize_protection_write(
-                protection_identity=self.PROTECTION_ID,
+                unit=self.unit,
                 write_size_bytes=1_000,
                 pressure=pressure_decision(state, available_bytes=1),  # would not fit
                 safety_assertion=None,
@@ -856,6 +916,7 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
 
     # 16. K05 unavailable -> never treated as NORMAL
     def test_unavailable_pressure_is_never_treated_as_normal(self):
+        action = ProtectionWriteAction(unit=self.unit, write_size_bytes=100)
         unavailable = PressureDecisionUnavailable(
             reason=PressureDecisionUnavailableReason.MISSING_CAPACITY,
             storage_root_id="hot",
@@ -864,10 +925,10 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
             evidence={},
         )
         result = authorize_protection_write(
-            protection_identity=self.PROTECTION_ID,
+            unit=self.unit,
             write_size_bytes=100,
             pressure=unavailable,
-            safety_assertion=safety(self.PROTECTION_ID),
+            safety_assertion=safety(action),
         )
         self.assertNotEqual(ProtectionWriteDecision.PERMITTED, result.decision)
         self.assertEqual(ProtectionWriteDecision.DEFERRED, result.decision)
@@ -876,15 +937,17 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
 
     # Review finding: the decision must bind protection/action identity, write
     # size, pressure evidence identity and applicable restrictions.
-    def test_write_authorization_binds_protection_and_pressure_evidence(self):
+    def test_write_authorization_binds_action_and_pressure_evidence(self):
+        action = ProtectionWriteAction(unit=self.unit, write_size_bytes=100)
         pressure = pressure_decision(PressureState.CRITICAL, available_bytes=1_000)
         result = authorize_protection_write(
-            protection_identity=self.PROTECTION_ID,
+            unit=self.unit,
             write_size_bytes=100,
             pressure=pressure,
-            safety_assertion=safety(self.PROTECTION_ID),
+            safety_assertion=safety(action),
         )
-        self.assertEqual(self.PROTECTION_ID, result.protection_identity)
+        self.assertEqual(action.action_identity, result.action_identity)
+        self.assertEqual(self.unit.protection_identity, result.protection_identity)
         self.assertEqual(100, result.write_size_bytes)
         self.assertEqual(pressure.decision_identity, result.pressure_decision_identity)
         self.assertEqual(pressure.restrictions, result.restrictions)
@@ -893,17 +956,16 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
     # Review finding: no derived field of the authorization can be supplied
     # directly, so a caller cannot construct an arbitrary PERMITTED record.
     def test_write_authorization_derived_fields_cannot_be_supplied(self):
+        action = ProtectionWriteAction(unit=self.unit, write_size_bytes=1)
         with self.assertRaises(TypeError):
             ProtectionWriteAuthorization(  # type: ignore[call-arg]
-                protection_identity=self.PROTECTION_ID,
-                write_size_bytes=1,
+                action=action,
                 pressure=pressure_decision(PressureState.EXHAUSTED),
                 decision=ProtectionWriteDecision.PERMITTED,
             )
         with self.assertRaises(TypeError):
             ProtectionWriteAuthorization(  # type: ignore[call-arg]
-                protection_identity=self.PROTECTION_ID,
-                write_size_bytes=1,
+                action=action,
                 pressure=pressure_decision(PressureState.NORMAL),
                 pressure_state=PressureState.NORMAL,
             )
@@ -911,21 +973,21 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
     def test_authorize_protection_write_rejects_malformed_inputs(self):
         with self.assertRaises(ProtectionError):
             authorize_protection_write(
-                protection_identity=self.PROTECTION_ID,
+                unit=self.unit,
                 write_size_bytes=1,
                 pressure=object(),  # type: ignore[arg-type]
                 safety_assertion=None,
             )
         with self.assertRaises(ProtectionError):
             authorize_protection_write(
-                protection_identity="",
+                unit=object(),  # type: ignore[arg-type]
                 write_size_bytes=1,
                 pressure=pressure_decision(PressureState.NORMAL),
                 safety_assertion=None,
             )
         with self.assertRaises(ProtectionError):
             authorize_protection_write(
-                protection_identity=self.PROTECTION_ID,
+                unit=self.unit,
                 write_size_bytes=-1,
                 pressure=pressure_decision(PressureState.NORMAL),
                 safety_assertion=None,
@@ -934,7 +996,7 @@ class ProtectionWriteAuthorizationV1Tests(unittest.TestCase):
             malformed_pressure = pressure_decision(PressureState.CRITICAL)
             object.__setattr__(malformed_pressure, "capacity_evidence", {})
             authorize_protection_write(
-                protection_identity=self.PROTECTION_ID,
+                unit=self.unit,
                 write_size_bytes=1,
                 pressure=malformed_pressure,
                 safety_assertion=None,
