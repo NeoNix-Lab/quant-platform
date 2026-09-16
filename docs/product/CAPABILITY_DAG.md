@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; post-D06 FootprintDefinition v1 foundation**.
+Status: **CANONICAL; post-B04 non-contiguous coverage reads v1 foundation**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,20 +10,20 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after post-D06 reconciliation:
+Current audited inventory after post-B04 reconciliation:
 
 ```text
 TOTAL_ATOMS                     = 87
 CLASSIFIED_ATOMS                = 87
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 52 / 87 = 59.8%
-OPEN_BLOCKING                   = 27
+SEMANTIC_FROZEN_OR_RESOLVED     = 53 / 87 = 60.9%
+OPEN_BLOCKING                   = 26
 OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 52 + 27 + 8 = 87
+ROADMAP_DEFINED                 = 53 + 26 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
 ```
 
-The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 59.8% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
+The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 60.9% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
 
 Decision states:
 
@@ -82,7 +82,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | B01 | Data Access boundary | Data Access | A05 | B02 | RESOLVED | COMPLETE | Canonical `quant_platform.access`; ADR-0019/24 |
 | B02 | Bounded historical scan | Data Access | A09,B01 | C02,D03 | FROZEN | COMPLETE | Ordered memory-bounded scan; DATA_GATEWAY/ADR-0023 |
 | B03 | Result identity/provenance | Data Access | B02 | B05,F04,B06 | FROZEN | COMPLETE | Semantic/source change changes identity; DATA_GATEWAY |
-| B04 | Non-contiguous coverage read | Data Access | A04,A09 | A10,A11 | OPEN_BLOCKING | MISSING | Explicit disjoint coverage; DG-B repair branch |
+| B04 | Non-contiguous coverage read | Data Access | A04,A09 | A10,A11 | FROZEN | COMPLETE | Explicit `ALLOW_PARTIAL` coverage reads; ADR-0029 |
 | B05 | Durable DatasetSnapshot | Data Access | B03 | experiment replay | OPEN_DEFERABLE | MISSING | Immutable reproducible reference; trigger on durable replay need |
 | B06 | Live access/cursor | Data Access | A11,B03 | D04,J07 | OPEN_BLOCKING | MISSING | Deterministic resume/replay; DG-B live branch |
 | B07 | In-process batch surface | Data Access | B02 | C02,D03 | RESOLVED | COMPLETE | Existing bounded `DataScan`; concrete naming local |
@@ -210,7 +210,7 @@ A11 does not require implemented K10; recovery semantics must be resolved throug
 
 ## Decision gates
 
-The 27 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
+The 26 open blockers are grouped into **gate families**. A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path. DG-D is retained below as a resolved reference because its implementation atom C05 remains missing.
 
 ### DG-A — Representation / Feature integration
 
@@ -228,7 +228,7 @@ prerequisite of `E06`. DG-A does not block D03 or pure H01 kernel E05.
 
 Atom-specific branches:
 
-- repair branch: `A16` quality lifecycle + `B04` disjoint coverage + `A10` repair/reconciliation as required by the selected repair slice;
+- repair branch: `A16` quality lifecycle + `A10` repair/reconciliation as required by the selected repair slice; `B04` disjoint coverage is frozen and complete under ADR-0029;
 - live branch: `A11` live acquisition + `B06` live cursor, plus only the repair/shared semantics and DG-H prerequisites actually present on that path.
 
 Historical repair does not activate live-cursor semantics merely because both belong to DG-B.
