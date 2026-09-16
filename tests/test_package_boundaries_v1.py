@@ -32,6 +32,7 @@ OWNERS = {
     "quant_platform.data.publication_catalog": "producer",
     "quant_platform.data.publication_eligibility": "producer",
     "quant_platform.data.publication_eligibility_catalog": "producer",
+    "quant_platform.data.quality_lifecycle": "producer",
     "quant_platform.access": "access",
     "quant_platform.access.models": "access",
     "quant_platform.access.catalog": "access",
