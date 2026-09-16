@@ -1,6 +1,8 @@
 # DataGateway Contract v1
 
-**Status:** Contract v1 — narrow catalog-backed implementation present
+**Status:** Contract v1 — narrow catalog-backed implementation present; B04
+`ALLOW_PARTIAL` addendum accepted by
+[ADR-0029](../decisions/ADR-0029-non-contiguous-coverage-reads-v1.md)
 
 **Related:** [Producer–Consumer Conformity Contract](PRODUCER_CONSUMER_CONFORMITY.md)
 freezes, additively and without changing any rule below: the bounded-read
@@ -137,7 +139,7 @@ request. Its inputs are exactly the applicable:
 - exact schema requirement or compatible-schema policy;
 - normalized UTC `[start, end)` interval;
 - named partition/read-state policy;
-- strict or future partial-coverage policy;
+- strict or explicit allow-partial coverage policy;
 - ordering-policy version;
 - projection, only once projection is supported by this contract version.
 
@@ -329,13 +331,45 @@ unreadable; `invalid` is unusable; `superseded` is replaced and remains
 excluded. Any relaxed policy must be visible in request semantics and returned
 metadata and must affect `request_identity`.
 
-### Strict v1 coverage policy
+### Coverage policy
 
-DataGateway v1 is **STRICT**: the full requested interval must have eligible
-coverage. Under this policy `NoCoverage` includes zero eligible coverage and
-any incomplete requested coverage or internal gap. The available subset is not
-silently returned. Future `ALLOW_PARTIAL` semantics require a later contract
-revision.
+DataGateway supports exactly two request-level coverage policies:
+
+```text
+STRICT
+ALLOW_PARTIAL
+```
+
+`STRICT` remains the default and preserves the accepted v1 behavior: the full
+requested interval must have eligible coverage. Under this policy `NoCoverage`
+includes zero eligible coverage and any incomplete requested coverage,
+including leading, trailing or internal gaps. The available subset is not
+silently returned.
+
+`ALLOW_PARTIAL` is an explicit opt-in. It succeeds only when the request
+intersects at least one non-empty eligible authoritative coverage interval and
+all other dataset/catalog/manifest/schema/order evidence is valid. It permits
+leading, trailing and internal gaps, returning only records sourced from
+eligible covered support intersecting the request. It never interpolates,
+fills, carries forward, inserts sentinel rows or infers continuity from event
+spacing, partition paths or quiet records.
+
+For every successful read under either policy:
+
+- `requested_interval` is the original request interval;
+- `eligible_coverage` is the normalized, sorted, merged union of eligible
+  declared coverage intersected with the request;
+- `coverage_gaps` is the exact complement of that union inside the request;
+- `coverage_complete` is true iff `coverage_gaps` is empty;
+- half-open adjacency where `A.end == B.start` is contiguous support, not a
+  gap.
+
+`coverage_policy` is part of normalized request identity. Therefore otherwise
+identical `STRICT` and `ALLOW_PARTIAL` requests have distinct
+`request_identity` values. The existing result identity remains authoritative:
+coverage policy, eligible coverage, gaps, completeness, returned record bounds
+and row count participate in the support shape rather than using a second
+partial-read identity scheme.
 
 The distinctions are:
 
@@ -344,12 +378,14 @@ FULL COVERAGE + ZERO RECORDS  -> success; row_count=0,
                                  coverage_complete=true,
                                  returned_record_bounds=null
 ZERO COVERAGE                 -> NoCoverage
-PARTIAL / INTERNAL GAP        -> NoCoverage under v1 STRICT
+PARTIAL / INTERNAL GAP        -> NoCoverage under STRICT
+PARTIAL / INTERNAL GAP        -> success under explicit ALLOW_PARTIAL
+                                 only when at least one eligible covered
+                                 interval intersects the request
 ```
 
 Structured `NoCoverage` context should identify uncovered ranges where the
-implementation can do so. `partial-coverage policy` is part of the request
-identity.
+implementation can do so.
 
 The gateway must define and test behavior for:
 

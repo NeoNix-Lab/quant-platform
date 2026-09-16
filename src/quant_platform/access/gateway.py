@@ -11,6 +11,7 @@ from .catalog import Catalog
 from .models import (
     CatalogDataset,
     CatalogPartition,
+    CoveragePolicy,
     DataRequest,
     DataSlice,
     DataSliceMetadata,
@@ -66,7 +67,7 @@ class DataScanOpenMetadata:
     coverage_complete: bool
     ordering_policy: str
     lifecycle_policy: LifecyclePolicy
-    coverage_policy: str
+    coverage_policy: CoveragePolicy
     catalog_dataset_id: str
     catalog_partition_ids: tuple[str, ...]
     storage_root_ids: tuple[str, ...]
@@ -194,6 +195,7 @@ class DataScan(Iterator[tuple[Any, ...]]):
     ) -> None:
         previous_end = previous_partition.coverage.end if previous_partition and previous_partition.coverage else None
         next_start = next_partition.coverage.start if next_partition and next_partition.coverage else None
+        coverage = partition.coverage
 
         for record in batch:
             if record.venue != self.dataset.identity.venue or record.instrument != self.dataset.identity.instrument:
@@ -209,6 +211,11 @@ class DataScan(Iterator[tuple[Any, ...]]):
             if next_start is not None and record.exchange_ts >= next_start:
                 raise DataIntegrityError(
                     "record crosses forward over the next partition boundary",
+                    context={"partition": partition.natural_identity.stable_dict()},
+                )
+            if coverage is not None and (record.exchange_ts < coverage.start or record.exchange_ts >= coverage.end):
+                raise DataIntegrityError(
+                    "record is outside partition declared coverage",
                     context={"partition": partition.natural_identity.stable_dict()},
                 )
 
@@ -343,7 +350,15 @@ class DataGateway:
         )
         eligible_union = merge_intervals(eligible)
         gaps = gaps_for(request_interval, eligible_union)
-        if gaps:
+        if request.start < request.end and not eligible_union:
+            raise NoCoverage(
+                "no eligible coverage intersects requested interval",
+                context={
+                    "requested_interval": request_interval.stable_dict(),
+                    "eligible_coverage": [],
+                },
+            )
+        if gaps and request.coverage_policy is CoveragePolicy.STRICT:
             raise NoCoverage(
                 "requested interval is not fully covered by eligible partitions",
                 context={
@@ -498,7 +513,7 @@ class DataGateway:
             "schema_hash": dataset.schema_hash,
             "ordering_policy": request.ordering_policy,
             "lifecycle_policy": request.lifecycle_policy.value,
-            "coverage_policy": request.coverage_policy,
+            "coverage_policy": request.coverage_policy.value,
             "eligible_coverage": [item.stable_dict() for item in eligible_coverage],
             "coverage_gaps": [item.stable_dict() for item in coverage_gaps],
             "coverage_complete": not coverage_gaps,

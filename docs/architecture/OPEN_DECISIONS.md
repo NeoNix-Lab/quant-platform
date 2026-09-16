@@ -17,6 +17,7 @@ ASS-02 in-process Application service                COMPLETE
 DG-D Application configuration semantics             RESOLVED
 DG-A FeatureDefinition v1 semantics                  FROZEN / COMPLETE
 DG-A FootprintDefinition v1 semantics                FROZEN / COMPLETE
+DG-B B04 non-contiguous coverage reads v1            FROZEN / COMPLETE
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -32,7 +33,7 @@ Resolved architecture includes:
 - API-first direction: clients/API transport -> application services -> domain/DataGateway;
 - Consumer API semantic selector/result/error boundary;
 - completed ASS-02 in-process path: C02 semantic selector resolution + C03 result/error translation;
-- `trade-v1`, Declared Coverage, CandleDefinition v1, FeatureDefinition v1, FootprintDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
+- `trade-v1`, Declared Coverage, CandleDefinition v1, FeatureDefinition v1, FootprintDefinition v1, B04 non-contiguous coverage reads v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
@@ -108,14 +109,19 @@ Do not activate Candle materialization merely because it is in DG-A. Do not crea
 
 This family also has separate repair and live branches.
 
-### Repair branch (`A16`,`B04`,`A10` as required)
+### Repair branch (`A16`,`A10` as required; `B04` resolved)
 
 Activate only the propositions needed by the selected repair slice:
 
 - general quality-report -> lifecycle mapping beyond the accepted first vertical;
-- explicit non-contiguous coverage semantics where required;
 - repair triggering, precedence and idempotent revision/retry behavior;
 - duplicate resolution where required by repair semantics.
+
+B04 explicit non-contiguous coverage reads are frozen and complete under
+[ADR-0029](../decisions/ADR-0029-non-contiguous-coverage-reads-v1.md). B04
+reports requested support, eligible support, exact gaps and returned rows; it
+does not decide repair triggering, retry, replacement revision or live cursor
+policy.
 
 Historical repair does not activate live-cursor semantics by default.
 

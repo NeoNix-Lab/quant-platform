@@ -1,23 +1,24 @@
-# Scope: D06 FootprintDefinition v1 Representation Foundation
+# Scope: B04 Non-contiguous Coverage Reads v1
 
 ## Objective
 
-Materialize and implement `D06 - Footprint representation` so the repository
-has accepted canonical authority and a bounded executable historical
-`FootprintDefinition v1` foundation under `quant_platform.representation`.
+Materialize and implement `B04 - Non-contiguous coverage read` so the
+DataGateway contract has accepted authority for explicit partial historical
+reads and the runtime supports an additive `ALLOW_PARTIAL` coverage policy
+inside `quant_platform.access`.
 
-This slice owns only Representation-level Footprint meaning: definition
-identity, fixed bucket support, exact tick-grid validation, sparse price-level
-aggregation, explicit aggression evidence, finalized historical result binding
-and provenance.
+This slice owns only historical DataGateway coverage-read semantics:
+request-level `STRICT | ALLOW_PARTIAL`, exact declared support/gap projection,
+zero-support refusal, unchanged canonical ordering/conflict behavior and
+existing result identity/provenance reuse.
 
 ## Baseline
 
 ```text
 base main = 32e750fad6276ecd81f6870c1b41d4738176abc8
-branch    = agent/issue-52-9
-atom      = D06
-owner     = Representation
+branch    = agent/issue-55-12
+atom      = B04
+owner     = Data Access
 ```
 
 At work start, local `origin/main` was verified as exactly
@@ -26,95 +27,83 @@ At work start, local `origin/main` was verified as exactly
 ## Accepted state after this slice
 
 ```text
-D01  Representation identity                 RESOLVED / PARTIAL
-D02  CandleDefinition v1                      FROZEN / COMPLETE
-D03  Historical Candle computation            FROZEN / MISSING
-D04  Incremental/live Candle computation      FROZEN / MISSING
-D05  Candle materialization identity          OPEN_BLOCKING / MISSING
-D06  Footprint representation                 FROZEN / COMPLETE
-E02  FeatureDefinition v1                     FROZEN / COMPLETE
-E04  FeatureArtifact/materialization          OPEN_BLOCKING / MISSING
-E05  H01 pure imbalance kernel                RESOLVED / MISSING in governance; pure kernel present
-E06  H01 canonical integration                OPEN_BLOCKING / MISSING
+A04  Declared coverage                       FROZEN / COMPLETE
+A09  S14 publication                         FROZEN / COMPLETE
+A10  Backfill and repair                     OPEN_BLOCKING / MISSING
+A11  Live trades acquisition                 OPEN_BLOCKING / MISSING
+A16  General quality lifecycle               OPEN_BLOCKING / PARTIAL
+B02  Bounded historical scan                 FROZEN / COMPLETE
+B03  Result identity/provenance              FROZEN / COMPLETE
+B04  Non-contiguous coverage read            FROZEN / COMPLETE
+B05  Durable DatasetSnapshot                 OPEN_DEFERABLE / MISSING
+B06  Live access/cursor                      OPEN_BLOCKING / MISSING
 ```
 
-`D06` is frozen by ADR-0027 and implemented as immutable typed values and pure
-historical aggregation functions in
-`src/quant_platform/representation/footprints.py`.
+`B04` is frozen by ADR-0029 and implemented as an explicit DataGateway
+coverage policy using the existing coverage/provenance model.
 
 ## Included
 
-- Create accepted ADR-0027 for FootprintDefinition v1.
-- Update directly affected governance so D06 is no longer unresolved.
-- Add immutable `FootprintDefinitionV1` with deterministic semantic payload
-  and content-derived identity.
-- Add exact UTC epoch-aligned half-open bucket support selection.
-- Add exact zero-origin tick-grid validation with no rounding or tolerance.
-- Add deterministic sparse level aggregation from canonical `TradeRecord`
-  input into buy/sell volume by explicit aggressor side.
-- Refuse unknown, missing or unsupported aggression fail-closed.
-- Add finalized historical result, bucket, level, coverage and source evidence
-  values that distinguish covered empty buckets from insufficient support.
-- Preserve E05 pure H01 kernel semantics.
+- Update `docs/contracts/DATA_GATEWAY.md` with accepted B04 coverage policy
+  semantics.
+- Create accepted ADR-0029 for non-contiguous coverage reads v1.
+- Update directly affected governance so B04 is no longer unresolved.
+- Add canonical `CoveragePolicy` values with `STRICT` as the default.
+- Preserve `STRICT` gap refusal exactly.
+- Permit explicit `ALLOW_PARTIAL` success when non-empty eligible declared
+  support intersects the request.
+- Preserve zero-support `NoCoverage` refusal.
+- Preserve existing result metadata/fingerprint semantics and global ordering.
+- Prove exact leading, trailing and internal gap metadata without synthetic
+  rows.
 
 ## Excluded
 
-- FeatureDefinition runtime/identity changes.
-- FeatureArtifact identity, materialization, caching or durable persistence.
-- H01 canonical orchestration/integration/adapters.
-- DataGateway/catalog/Application redesign or mutation.
-- Live incremental/PARTIAL Footprint topology.
-- Durable Footprint file/schema publication or catalog mutation.
-- Non-zero-origin grid semantics.
-- Generic representation framework, provider registry or feature DAG.
+- A10 repair trigger, retry, replacement revision or backfill policy.
+- A16 general quality lifecycle implementation.
+- A11/B06 live cursor, historical/live merge or stream-resume behavior.
+- Source acquisition, duplicate resolution or interpolation/filling.
+- DatasetSnapshot public API.
+- Materialization/storage mutation.
+- Generic query planner, provider plugin or second provenance identity system.
 
 ## Credited evidence
 
-- Producer-Consumer Conformity `Contract Freeze Gate` and `Conformity
-  Implementation Gate` remain PASSED under ADR-0023 and are not reopened by
-  this slice.
-- `trade-v1` keeps exact price/size strings and explicit `aggressor_side`.
-- `CandleDefinitionV1` demonstrates deterministic Representation definition
-  identity, aligned half-open support and availability evidence separation.
-- `src/quant_platform/features/imbalance.py` is a pure H01 kernel over
-  caller-supplied integer price-level rows and does not own Footprint
-  construction.
-- `tests/test_feature_imbalance_v1.py` proves duplicate-level refusal,
-  integer-grid adjacency, sparse-gap stack breaking and bar separation.
-- `db/init/001_catalog.sql` distinguishes `canonical/footprint` from
-  `features/footprint_microstructure`.
+- B02 bounded `DataScan` and B03 provenance/result identity semantics are
+  already accepted.
+- ADR-0022 declared coverage remains authoritative and distinct from observed
+  row bounds.
+- DataGateway already computes eligible coverage and gaps from catalog
+  coverage and exposes them in metadata.
+- Existing overlap/conflict and canonical ordering behavior remain fail-closed
+  and are reused.
 
 ## Acceptance
 
 DONE means:
 
-1. ADR-0027 is accepted and D06 is removed from unresolved governance.
-2. `quant_platform.representation` exposes the FootprintDefinition v1 runtime
-   model.
-3. Definition identity includes semantic duration/tick/source/grid/bucket
-   semantics and excludes runtime binding/materialization context.
-4. Historical support is UTC epoch-aligned, half-open and FINAL-only.
-5. Tick-grid validation is exact and zero-origin with no binary-float
-   tolerance.
-6. Same-level trades aggregate deterministically and exactly.
-7. Missing/unknown/unsupported aggressor side fails closed.
-8. Missing grid levels remain absent and realized levels are strictly ordered.
-9. Covered zero-trade buckets are explicit empty buckets, distinct from
-   insufficient support.
-10. Source/support/provenance binding is explicit without durable artifact
-    semantics.
-11. E05 kernel behavior remains unchanged and compatible.
-12. Live/PARTIAL topology remains deferred.
+1. `STRICT` remains the default and preserves existing complete-coverage reads.
+2. Explicit `ALLOW_PARTIAL` produces a distinct request identity.
+3. Zero eligible support remains `NoCoverage`.
+4. Covered zero-event support remains a successful zero-row result.
+5. Leading, trailing and internal gaps are exact in existing metadata.
+6. Returned rows come only from eligible declared support with no interpolation
+   or synthetic continuity.
+7. Canonical global ordering and overlap conflict behavior are unchanged.
+8. Result identity/provenance distinguish support shape without a new identity
+   system.
+9. Aborted scans still have no final result metadata.
+10. Repair, live and client policy remain downstream.
 
 ## Verification
 
 Targeted checks for this slice:
 
 ```text
-python tests/test_historical_footprints_v1.py
-python tests/test_feature_imbalance_v1.py
-python tests/test_candle_definition_v1.py
-python tests/test_package_boundaries_v1.py
+python tests/test_b04_non_contiguous_coverage_reads_v1.py
+python tests/test_data_gateway.py
+python tests/test_bounded_datagateway_read_v1.py
+python tests/test_declared_coverage_semantics.py
 python -m compileall -q src tests
 python tools/check_markdown_links.py
 git diff --check
@@ -122,18 +111,19 @@ git diff --check
 
 ## Downstream state
 
-Unblocked by D06:
+Unblocked by B04:
 
 ```text
-E06  H01 canonical integration can bind to canonical Footprint semantics after E04
+A10 repair policy may consume explicit requested support, eligible support,
+exact gaps and returned-row facts after its other prerequisites are satisfied.
 ```
 
 Still blocked:
 
 ```text
-E04  FeatureArtifact/materialization
-E06  H01 canonical integration
-D05  Candle materialization identity (independent branch)
-Live/PARTIAL Footprint topology
-Durable Representation artifact infrastructure
+A16  General quality lifecycle beyond the accepted first vertical
+A10  Repair trigger/retry/revision semantics
+A11  Live acquisition overlap/duplicate/restart semantics
+B06  Live access/cursor semantics
+B05  Durable DatasetSnapshot shape
 ```
