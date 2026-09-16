@@ -18,12 +18,37 @@ or redefining concrete FeatureDefinition/FeatureArtifact runtime details.
 Temporal availability of each referenced observable is already pinned by
 that E02 identity; F01 declares no additional temporal window, decision
 time, horizon or embargo of its own -- those remain owned by F02/F03/F06.
+
+Design note (frozen for this PR only -- not governance-authoritative; a
+later dedicated governance pass materializes whichever of these become the
+accepted ADR text):
+
+- Semantic identity is exactly the tuple (hypothesis_key, semantic_version,
+  statement, observable_references).  No other field participates.
+- ``statement`` is unstructured free text.  F01 defines no structured
+  semantic parameter schema, no parameter defaults and no parameter
+  canonicalization convention (unlike E02's ``SemanticParameterSpec``),
+  because no accepted authority calls for a hypothesis-parameter DSL and
+  inventing one would exceed this issue's bounded scope.  A future issue
+  may add structured parameters; doing so is expected to change
+  ``canonical_payload()`` and therefore identity for specs that use them.
+- ``observable_references`` is a semantic *set*: duplicates collapse and
+  members are canonically sorted by their E02 identity string, so
+  construction order and repetition never affect identity.  F01 assigns no
+  role (trigger vs. context, cause vs. effect) to a reference; role
+  assignment is left to F02/F03, which is why a bare set -- not an ordered
+  or labelled structure -- is the frozen shape here.
+- ``notes`` is the only non-semantic field.  It is excluded from
+  ``canonical_payload()`` (and thus from ``identity``/``spec_id``) and from
+  dataclass equality/hashing, so two specs that agree on every semantic
+  field are ``==``, hash equal, and share one identity regardless of
+  ``notes``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import re
@@ -37,6 +62,7 @@ HYPOTHESIS_SPEC_MODEL_VERSION = "1"
 
 _GOVERNED_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 _VERSION_RE = re.compile(r"^[1-9][0-9]*$")
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class HypothesisSpecError(ValueError):
@@ -111,7 +137,9 @@ class HypothesisSpecId:
     def __post_init__(self) -> None:
         text = _non_empty_text(self.value, "HypothesisSpecId")
         prefix = f"{HYPOTHESIS_SPEC_IDENTITY_DOMAIN}:sha256:"
-        if not text.startswith(prefix) or len(text.removeprefix(prefix)) != 64:
+        if not text.startswith(prefix) or not _SHA256_HEX_RE.fullmatch(
+            text.removeprefix(prefix)
+        ):
             raise HypothesisSpecError("HypothesisSpecId must be a v1 sha256 identity")
         object.__setattr__(self, "value", text)
 
@@ -144,7 +172,7 @@ class HypothesisSpec:
     semantic_version: str | int
     statement: str
     observable_references: Iterable[ObservableReference]
-    notes: str | None = None
+    notes: str | None = field(default=None, compare=False)
 
     identity_type: ClassVar[str] = "hypothesis-spec"
     identity_version: ClassVar[str] = HYPOTHESIS_SPEC_MODEL_VERSION

@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+import os
 from pathlib import Path
+import subprocess
 import sys
+import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
 
 from quant_platform.features import FeatureDefinitionId  # noqa: E402
 from quant_platform.research import (  # noqa: E402
@@ -89,9 +93,80 @@ class HypothesisSpecIdentityTests(unittest.TestCase):
         )
         self.assertIsNone(plain.notes)
 
+    def test_locator_path_and_process_metadata_in_notes_is_non_semantic(self):
+        # notes stands in for exactly the kind of runtime locator/path/process
+        # metadata that must never enter semantic identity.
+        first = hypothesis(
+            notes="produced by pid=48213 on host research-worker-3 "
+            "at /var/run/notebooks/run-17.ipynb"
+        )
+        second = hypothesis(
+            notes="produced by pid=91007 on host research-worker-9 "
+            "at C:\\scratch\\run-42.ipynb"
+        )
+        self.assertEqual(first.identity, second.identity)
+        self.assertNotIn("notes", first.canonical_payload())
+        self.assertNotIn("notes", second.canonical_payload())
+
     def test_identity_excludes_from_canonical_payload(self):
         annotated = hypothesis(notes="internal only")
         self.assertNotIn("notes", annotated.canonical_payload())
+
+    def test_equality_and_hash_are_consistent_with_semantic_identity(self):
+        plain = hypothesis()
+        annotated = hypothesis(notes="internal only, differs from plain")
+
+        self.assertEqual(plain.identity, annotated.identity)
+        self.assertEqual(plain, annotated)
+        self.assertEqual(hash(plain), hash(annotated))
+        self.assertEqual({plain, annotated}, {plain})
+        self.assertEqual(1, len({plain: "a", annotated: "b"}))
+
+    def test_semantically_distinct_specs_are_unequal(self):
+        baseline = hypothesis()
+        changed = hypothesis(observable_references=(SPREAD, MID_PRICE))
+        self.assertNotEqual(baseline, changed)
+        self.assertNotEqual(baseline.identity, changed.identity)
+
+    def test_identity_is_stable_across_independent_processes(self):
+        script = textwrap.dedent(
+            f"""
+            import sys
+            sys.path.insert(0, {str(SRC)!r})
+            from quant_platform.features import FeatureDefinitionId
+            from quant_platform.research import HypothesisSpec, ObservableReference
+
+            spread = ObservableReference(FeatureDefinitionId.from_payload({{"feature_key": "spread"}}))
+            imbalance = ObservableReference(
+                FeatureDefinitionId.from_payload({{"feature_key": "book_imbalance"}})
+            )
+            spec = HypothesisSpec(
+                hypothesis_key="wide_spread_precedes_imbalance_reversal",
+                semantic_version="1",
+                statement=(
+                    "When bid-ask spread widens beyond its recent regime, book "
+                    "imbalance tends to revert within the following observations."
+                ),
+                # Deliberately reversed relative to the in-process fixture order.
+                observable_references=(imbalance, spread),
+            )
+            print(spec.identity)
+            """
+        )
+        identities = set()
+        for hash_seed in ("0", "1", "random"):
+            env = dict(os.environ, PYTHONHASHSEED=hash_seed)
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", script],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            identities.add(result.stdout.strip())
+
+        self.assertEqual(1, len(identities))
+        self.assertEqual(hypothesis().identity, next(iter(identities)))
 
 
 class HypothesisSpecValidationTests(unittest.TestCase):
@@ -143,6 +218,18 @@ class HypothesisSpecIdTests(unittest.TestCase):
     def test_id_requires_full_sha256_hex_length(self):
         with self.assertRaises(HypothesisSpecError):
             HypothesisSpecId("hypothesis-spec-v1:sha256:abc123")
+
+    def test_id_rejects_non_hex_characters_at_full_length(self):
+        with self.assertRaises(HypothesisSpecError):
+            HypothesisSpecId("hypothesis-spec-v1:sha256:" + "g" * 64)
+
+    def test_id_rejects_uppercase_hex_at_full_length(self):
+        with self.assertRaises(HypothesisSpecError):
+            HypothesisSpecId("hypothesis-spec-v1:sha256:" + "A" * 64)
+
+    def test_id_accepts_a_genuine_lowercase_sha256_digest(self):
+        valid = "hypothesis-spec-v1:sha256:" + "a" * 64
+        self.assertEqual(valid, str(HypothesisSpecId(valid)))
 
 
 if __name__ == "__main__":
