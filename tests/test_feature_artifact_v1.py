@@ -22,6 +22,7 @@ from quant_platform.features import (  # noqa: E402
     FeatureArtifact,
     FeatureArtifactContentIdentity,
     FeatureArtifactError,
+    FeatureArtifactIdentity,
     FeatureArtifactLifecycle,
     FeatureAvailabilitySemantics,
     FeatureDefinition,
@@ -205,8 +206,6 @@ class FeatureSetDefinitionIdentityTests(unittest.TestCase):
         self.assertEqual({"slug": "trade_microstructure", "version": 3}, identity.stable_dict())
 
     def test_no_uuid_field_exists_to_carry_a_surrogate(self):
-        # Adversarial vector 15: a DB UUID difference cannot alter this value
-        # because the type structurally has no field to carry one.
         identity = feature_set_identity("trade_microstructure", 1)
         self.assertEqual({"slug", "version"}, set(identity.stable_dict()))
 
@@ -241,8 +240,6 @@ class FeatureSetDefinitionIdentityTests(unittest.TestCase):
 
 
 class SupportShapeTests(unittest.TestCase):
-    """REQUEST_CHANGES finding 1: exact, possibly non-contiguous support shape."""
-
     def test_requires_at_least_one_interval(self):
         with self.assertRaises(FeatureArtifactError):
             SupportShape(intervals=())
@@ -262,7 +259,6 @@ class SupportShapeTests(unittest.TestCase):
 
 class BoundInputEvidenceTests(unittest.TestCase):
     def test_missing_sources_fails_closed(self):
-        # Adversarial vector 17: missing exact source/support provenance.
         with self.assertRaises(FeatureArtifactError):
             BoundInputEvidence(sources=(), consumed_support=support_shape(), provenance_identity="prov-1")
 
@@ -285,15 +281,11 @@ class BoundInputEvidenceTests(unittest.TestCase):
             BoundInputEvidence(sources=(dataset, dataset), consumed_support=support_shape(), provenance_identity="prov-1")
 
     def test_partition_embedded_dataset_identity_must_match_enclosing_dataset(self):
-        # REQUEST_CHANGES finding 6: a Bybit partition cannot be placed under
-        # a Kraken source dataset.
         mismatched = source_partition(dataset_identity=OTHER_DATASET_IDENTITY)
         with self.assertRaises(FeatureArtifactError):
             BoundSourceDataset(DATASET_IDENTITY, (mismatched,))
 
     def test_missing_provenance_identity_fails_closed(self):
-        # REQUEST_CHANGES finding 1: the canonical upstream result identity
-        # is required, not optional.
         with self.assertRaises(FeatureArtifactError):
             BoundInputEvidence(
                 sources=(BoundSourceDataset(DATASET_IDENTITY, (source_partition(),)),),
@@ -320,7 +312,6 @@ class BoundInputEvidenceTests(unittest.TestCase):
         self.assertEqual(first.identity, second.identity)
 
     def test_different_revision_changes_identity(self):
-        # Adversarial vector 2.
         first = bound_input_evidence(revision=1)
         second = bound_input_evidence(revision=2)
         self.assertNotEqual(first.identity, second.identity)
@@ -347,8 +338,6 @@ class BoundInputEvidenceTests(unittest.TestCase):
 
 
 class FeatureArtifactIdentityTests(unittest.TestCase):
-    """Adversarial vectors 1-4, 8, 11, 12, 14."""
-
     def test_same_everything_different_path_same_identity_and_content_identity(self):
         sealed, _ = artifact()
         relocated_a = sealed.relocated(physical_locators=("s3://bucket/a.parquet",))
@@ -357,6 +346,10 @@ class FeatureArtifactIdentityTests(unittest.TestCase):
         self.assertEqual(sealed.identity, relocated_b.identity)
         self.assertEqual(sealed.content_identity, relocated_a.content_identity)
         self.assertNotEqual(relocated_a.physical_locators, relocated_b.physical_locators)
+
+    def test_malformed_non_hex_artifact_identity_fails_closed(self):
+        with self.assertRaises(FeatureArtifactError):
+            FeatureArtifactIdentity("feature-artifact-v1:sha256:" + "z" * 64)
 
     def test_different_source_revision_is_distinct_artifact_identity(self):
         first, definition = artifact(evidence=bound_input_evidence(revision=1))
@@ -369,14 +362,12 @@ class FeatureArtifactIdentityTests(unittest.TestCase):
         self.assertNotEqual(first.identity, second.identity)
 
     def test_different_implementation_code_identity_is_distinct_identity(self):
-        # Also covers adversarial vector 12 (bug fix, unchanged FeatureDefinition).
         first, definition = artifact(code="commit-1")
         second, _ = artifact(definition=definition, code="commit-2")
         self.assertNotEqual(first.identity, second.identity)
         self.assertEqual(first.constituent_output_contracts, second.constituent_output_contracts)
 
     def test_byte_identical_content_from_different_source_revision_is_distinct_identity(self):
-        # Adversarial vector 8: content_identity held constant, only evidence differs.
         shared_content = content_identity("c")
         first, definition = artifact(evidence=bound_input_evidence(revision=1), content=shared_content)
         second, _ = artifact(definition=definition, evidence=bound_input_evidence(revision=2), content=shared_content)
@@ -384,7 +375,6 @@ class FeatureArtifactIdentityTests(unittest.TestCase):
         self.assertNotEqual(first.identity, second.identity)
 
     def test_different_feature_set_definition_identity_is_distinct_identity(self):
-        # Adversarial vector 14.
         first, definition = artifact(fsd_identity=feature_set_identity("trade_microstructure", 1))
         second, _ = artifact(definition=definition, fsd_identity=feature_set_identity("trade_microstructure", 2))
         third, _ = artifact(definition=definition, fsd_identity=feature_set_identity("other_bundle", 1))
@@ -392,7 +382,6 @@ class FeatureArtifactIdentityTests(unittest.TestCase):
         self.assertNotEqual(first.identity, third.identity)
 
     def test_corrected_source_revision_leaves_old_artifact_immutable(self):
-        # Adversarial vector 11.
         original, definition = artifact(evidence=bound_input_evidence(revision=1))
         snapshot = original.stable_dict()
         corrected, _ = artifact(definition=definition, evidence=bound_input_evidence(revision=2))
@@ -402,7 +391,6 @@ class FeatureArtifactIdentityTests(unittest.TestCase):
             original.implementation_code_identity = "tampered"  # type: ignore[misc]
 
     def test_singleton_feature_set_uses_the_same_artifact_type(self):
-        # Adversarial vector 13: no second single-feature artifact kind.
         sealed, definition = artifact()
         self.assertEqual(1, len(sealed.constituent_output_contracts))
         self.assertIsInstance(sealed, FeatureArtifact)
@@ -416,9 +404,6 @@ class FeatureArtifactIdentityTests(unittest.TestCase):
 
 
 class OutputPartitionBindingTests(unittest.TestCase):
-    """REQUEST_CHANGES finding 3: content identity bound to real feature-layer
-    dataset/partition durability."""
-
     def test_output_partition_must_belong_to_the_features_layer(self):
         non_feature_layer = NaturalPartitionIdentity(DATASET_IDENTITY, "dt=2024-01-15", 1)
         with self.assertRaises(FeatureArtifactError):
@@ -456,8 +441,6 @@ class OutputPartitionBindingTests(unittest.TestCase):
 
 
 class FinalityGateTests(unittest.TestCase):
-    """Adversarial vectors 9, 10; REQUEST_CHANGES finding 2."""
-
     def test_provisional_observation_refuses_materialization(self):
         definition = feature_definition()
         with self.assertRaises(FeatureArtifactError):
@@ -491,9 +474,6 @@ class FinalityGateTests(unittest.TestCase):
         self.assertEqual(FeatureArtifactLifecycle.FINAL, sealed.lifecycle)
 
     def test_unrelated_final_observation_cannot_stand_in_for_a_declared_constituent(self):
-        # REQUEST_CHANGES finding 2: sealing feature A using only an
-        # unrelated feature B's FINAL observation, while A itself has no
-        # evidence at all, must be refused rather than silently accepted.
         feature_a = feature_definition(feature_key="order_flow.delta")
         feature_b = feature_definition(feature_key="order_flow.other")
         with self.assertRaises(FeatureArtifactError):
@@ -508,9 +488,7 @@ class FinalityGateTests(unittest.TestCase):
         outside = feature_observation(definition=definition, causal=OTHER_SUPPORT.start)
         with self.assertRaises(FeatureArtifactError):
             require_final_observations(
-                (outside,),
-                constituent_output_contracts=(constituent(definition),),
-                declared_materialized_support=SUPPORT,
+                (outside,), constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
             )
 
     def test_observation_for_an_undeclared_feature_is_refused(self):
@@ -538,26 +516,18 @@ class FinalityGateTests(unittest.TestCase):
 
 
 class DuplicateVsConflictTests(unittest.TestCase):
-    """Adversarial vectors 5, 6."""
-
     def test_same_identity_same_content_is_idempotent_duplicate(self):
         shared_content = content_identity("d")
         first, definition = artifact(content=shared_content, code="commit-1")
         second, _ = artifact(definition=definition, content=shared_content, code="commit-1")
         self.assertEqual(first.identity, second.identity)
-        self.assertEqual(
-            ArtifactRegistrationOutcome.IDEMPOTENT_DUPLICATE,
-            classify_registration(existing=first, candidate=second),
-        )
+        self.assertEqual(ArtifactRegistrationOutcome.IDEMPOTENT_DUPLICATE, classify_registration(existing=first, candidate=second))
 
     def test_same_identity_different_content_is_conflict(self):
         first, definition = artifact(content=content_identity("d"), code="commit-1")
         second, _ = artifact(definition=definition, content=content_identity("e"), code="commit-1")
         self.assertEqual(first.identity, second.identity)
-        self.assertEqual(
-            ArtifactRegistrationOutcome.CONFLICT,
-            classify_registration(existing=first, candidate=second),
-        )
+        self.assertEqual(ArtifactRegistrationOutcome.CONFLICT, classify_registration(existing=first, candidate=second))
 
     def test_classify_registration_requires_matching_identity(self):
         first, definition = artifact(code="commit-1")
@@ -567,8 +537,6 @@ class DuplicateVsConflictTests(unittest.TestCase):
 
 
 class RelocationAndVerificationTests(unittest.TestCase):
-    """Adversarial vectors 18, 19, 21; REQUEST_CHANGES finding 4."""
-
     def test_relocation_changes_only_physical_locators(self):
         sealed, _ = artifact()
         relocated = sealed.relocated(physical_locators=("new-path.parquet",))
@@ -576,12 +544,15 @@ class RelocationAndVerificationTests(unittest.TestCase):
         self.assertEqual(sealed.stable_dict()["identity"], relocated.stable_dict()["identity"])
 
     def _verify_kwargs(self, **overrides):
+        definition = feature_definition()
         evidence = bound_input_evidence()
         base = dict(
             feature_set_definition_identity=feature_set_identity(),
             bound_input_evidence=evidence,
             declared_materialized_support=SUPPORT,
             implementation_code_identity="commit-1",
+            content_identity=content_identity(),
+            constituent_output_contracts=(constituent(definition),),
         )
         base.update(overrides)
         return base
@@ -590,6 +561,13 @@ class RelocationAndVerificationTests(unittest.TestCase):
         evidence = bound_input_evidence()
         sealed, _ = artifact(evidence=evidence, code="commit-1")
         verify_matches_request(sealed, **self._verify_kwargs(bound_input_evidence=evidence))
+
+    def test_missing_trusted_content_identity_is_not_a_valid_call(self):
+        sealed, _ = artifact()
+        kwargs = self._verify_kwargs()
+        kwargs.pop("content_identity")
+        with self.assertRaises(TypeError):
+            verify_matches_request(sealed, **kwargs)  # type: ignore[call-arg]
 
     def test_wrong_feature_set_binding_is_refused_before_payload_use(self):
         sealed, _ = artifact(fsd_identity=feature_set_identity("trade_microstructure", 1))
@@ -605,8 +583,6 @@ class RelocationAndVerificationTests(unittest.TestCase):
             verify_matches_request(sealed, **self._verify_kwargs(declared_materialized_support=OTHER_SUPPORT))
 
     def test_wrong_source_evidence_is_refused_before_payload_use(self):
-        # REQUEST_CHANGES finding 4: mismatched source evidence must be
-        # caught even when feature-set identity and support both match.
         sealed, _ = artifact(evidence=bound_input_evidence(revision=1))
         with self.assertRaises(FeatureArtifactError):
             verify_matches_request(sealed, **self._verify_kwargs(bound_input_evidence=bound_input_evidence(revision=2)))
@@ -631,10 +607,17 @@ class RelocationAndVerificationTests(unittest.TestCase):
         sealed, _ = artifact(content=trusted_content)
         verify_matches_request(sealed, **self._verify_kwargs(content_identity=trusted_content))
 
+    def test_wrong_trusted_constituent_evidence_is_refused_before_payload_use(self):
+        sealed, _ = artifact()
+        different = feature_definition(feature_key="order_flow.other")
+        with self.assertRaises(FeatureArtifactError):
+            verify_matches_request(
+                sealed,
+                **self._verify_kwargs(constituent_output_contracts=(constituent(different),)),
+            )
+
 
 class RecomputationEquivalenceTests(unittest.TestCase):
-    """Adversarial vectors 7, 20, 22, 23; REQUEST_CHANGES finding 5."""
-
     def test_exact_equivalence_ignores_decimal_string_formatting(self):
         contract = output_contract(NumericalEquivalence.exact())
         self.assertTrue(values_semantically_equivalent(contract, "1.0", "1.00"))
@@ -642,11 +625,6 @@ class RecomputationEquivalenceTests(unittest.TestCase):
         self.assertFalse(values_semantically_equivalent(contract, "1.0", "1.01"))
 
     def test_quantized_equivalence_rounds_to_a_multiple_of_the_quantum(self):
-        # REQUEST_CHANGES finding 5: Decimal.quantize(Decimal("0.05")) only
-        # adopts the operand's exponent (hundredths), it does not round to
-        # multiples of 0.05.  1.024 and 0.999 both round to the nearest
-        # multiple of 0.05 (1.00), so real multiple-of quantization must
-        # consider them equivalent even though naive .quantize() would not.
         contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.QUANTIZED, "1", {"quantum": "0.05"}))
         self.assertTrue(values_semantically_equivalent(contract, "1.024", "0.999"))
         self.assertFalse(values_semantically_equivalent(contract, "1.024", "0.90"))
@@ -667,15 +645,11 @@ class RecomputationEquivalenceTests(unittest.TestCase):
         self.assertFalse(values_semantically_equivalent(contract, "1.0000", "1.01"))
 
     def test_tolerant_equivalence_without_any_parameter_fails_closed(self):
-        # Adversarial vector 23: no generic tolerance fallback.
         contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.TOLERANT, "1", {}))
         with self.assertRaises(FeatureArtifactError):
             values_semantically_equivalent(contract, "1.0", "1.0")
 
     def test_unsupported_equivalence_version_fails_closed(self):
-        # REQUEST_CHANGES finding 5: `version` is identity-bearing on the
-        # governing FeatureDefinition; an unrecognized version must not
-        # silently reuse this module's v1 parameter interpretation.
         contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.EXACT, "2"))
         with self.assertRaises(FeatureArtifactError):
             values_semantically_equivalent(contract, "1.0", "1.0")
@@ -686,7 +660,6 @@ class RecomputationEquivalenceTests(unittest.TestCase):
         self.assertFalse(values_semantically_equivalent(contract, "buy", "sell"))
 
     def test_recomputation_equivalent_true_despite_distinct_artifact_and_content_identity(self):
-        # Adversarial vectors 7, 20.
         definition = feature_definition()
         first, _ = artifact(definition=definition, code="commit-1", content=content_identity("1"))
         second, _ = artifact(definition=definition, code="commit-2", content=content_identity("2"))
@@ -694,32 +667,19 @@ class RecomputationEquivalenceTests(unittest.TestCase):
         self.assertNotEqual(first.content_identity, second.content_identity)
         left = (feature_observation(definition=definition, value="1.0"),)
         right = (feature_observation(definition=definition, value="1.00"),)
-        self.assertTrue(
-            recomputation_equivalent(
-                output_contracts={definition.definition_id: definition.output_contract}, left=left, right=right,
-            )
-        )
+        self.assertTrue(recomputation_equivalent(output_contracts={definition.definition_id: definition.output_contract}, left=left, right=right))
 
     def test_recomputation_equivalent_false_on_differing_values(self):
         definition = feature_definition()
         left = (feature_observation(definition=definition, value="1.0"),)
         right = (feature_observation(definition=definition, value="2.0"),)
-        self.assertFalse(
-            recomputation_equivalent(
-                output_contracts={definition.definition_id: definition.output_contract}, left=left, right=right,
-            )
-        )
+        self.assertFalse(recomputation_equivalent(output_contracts={definition.definition_id: definition.output_contract}, left=left, right=right))
 
     def test_recomputation_equivalent_false_on_observation_identity_mismatch(self):
-        # Adversarial vector 22.
         definition = feature_definition()
         left = (feature_observation(definition=definition, obs="obs-1"),)
         right = (feature_observation(definition=definition, obs="obs-2"),)
-        self.assertFalse(
-            recomputation_equivalent(
-                output_contracts={definition.definition_id: definition.output_contract}, left=left, right=right,
-            )
-        )
+        self.assertFalse(recomputation_equivalent(output_contracts={definition.definition_id: definition.output_contract}, left=left, right=right))
 
     def test_recomputation_equivalent_false_on_empty_sequences(self):
         self.assertFalse(recomputation_equivalent(output_contracts={}, left=(), right=()))
