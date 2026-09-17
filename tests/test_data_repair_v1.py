@@ -35,6 +35,7 @@ from quant_platform.data.repair import (  # noqa: E402
     InvalidRevisionTrigger,
     PredecessorRef,
     REPAIR_REQUIRED,
+    RepairCutoverCatalog,
     RepairIntent,
     RepairRefusal,
     STALE_CONFLICT,
@@ -203,16 +204,37 @@ class EvidenceIdentityBindingTests(unittest.TestCase):
 
     def test_J5_quality_evidence_id_is_deterministic_over_report_content(self):
         report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
-        self.assertEqual(compute_quality_evidence_id(report), compute_quality_evidence_id(dict(report)))
+        self.assertEqual(
+            compute_quality_evidence_id(report, check_suite="suite-1"),
+            compute_quality_evidence_id(dict(report), check_suite="suite-1"),
+        )
 
     def test_J6_quality_evidence_id_changes_with_status(self):
         base = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
         changed = {**base, "status": "fail"}
-        self.assertNotEqual(compute_quality_evidence_id(base), compute_quality_evidence_id(changed))
+        self.assertNotEqual(
+            compute_quality_evidence_id(base, check_suite="suite-1"),
+            compute_quality_evidence_id(changed, check_suite="suite-1"),
+        )
 
     def test_J7_quality_evidence_id_requires_all_fields(self):
         with self.assertRaises(RepairRefusal):
-            compute_quality_evidence_id({"status": "pass", "metrics": {}, "violations": []})
+            compute_quality_evidence_id({"status": "pass", "metrics": {}, "violations": []}, check_suite="suite-1")
+
+    def test_J9_quality_evidence_id_changes_with_check_suite(self):
+        # cutover() files the report under an independently supplied
+        # expected_check_suite; binding it in prevents the same report from
+        # being re-filed under a different suite under the same candidate_id.
+        report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
+        self.assertNotEqual(
+            compute_quality_evidence_id(report, check_suite="suite-1"),
+            compute_quality_evidence_id(report, check_suite="suite-2"),
+        )
+
+    def test_J10_quality_evidence_id_requires_non_empty_check_suite(self):
+        report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
+        with self.assertRaises(RepairRefusal):
+            compute_quality_evidence_id(report, check_suite="")
 
     def test_J8_coverage_evidence_id_changes_with_any_component(self):
         base = compute_coverage_evidence_id(["c1"], ["a1"], ["e" * 64])
@@ -509,15 +531,18 @@ class CutoverResultInvariantTests(unittest.TestCase):
             CutoverResult(outcome="NOT_A_REAL_OUTCOME")
 
 
-class GapEliminationAndFreshnessTests(unittest.TestCase):
-    """The two coverage-gap-trigger re-authorization checks cutover() runs
-    before ever mutating topology: exact elimination by the candidate's own
-    declared coverage, and freshness against just-recomputed B04 evidence."""
+class GapEliminationTests(unittest.TestCase):
+    """The coverage-gap-trigger re-authorization check cutover() runs before
+    ever mutating topology: exact elimination by the candidate's own declared
+    coverage.  Freshness re-authorization for a coverage-gap trigger is owned
+    entirely by ``_reevaluate_authority``'s topology/provenance check (see
+    ``ReevaluateAuthorityTests``) -- there is no independent, caller-supplied
+    "current gaps" input, since A10 cannot integrity-bind one without
+    importing B04/quant_platform.access."""
 
     def setUp(self):
-        from quant_platform.data.repair import _verify_gaps_eliminated, _verify_gap_trigger_still_open
+        from quant_platform.data.repair import _verify_gaps_eliminated
         self._verify_gaps_eliminated = _verify_gaps_eliminated
-        self._verify_gap_trigger_still_open = _verify_gap_trigger_still_open
         self.trigger = CoverageGapTrigger(required=REQUIRED, gaps=(GAP,))
 
     def test_AJ_full_coverage_eliminates_the_gap(self):
@@ -535,24 +560,123 @@ class GapEliminationAndFreshnessTests(unittest.TestCase):
         with self.assertRaises(RepairRefusal):
             self._verify_gaps_eliminated((GAP,), GAP.end, REQUIRED.end)
 
-    def test_AN_fresh_gaps_identical_to_captured_gaps_proceeds(self):
-        self._verify_gap_trigger_still_open(self.trigger, (GAP,))
 
-    def test_AO_fresh_gaps_empty_is_already_satisfied(self):
-        with self.assertRaises(_AlreadySatisfiedSignal):
-            self._verify_gap_trigger_still_open(self.trigger, ())
+class _NoCursorConnection:
+    """Proves a refusal happens strictly before any cursor/transaction opens:
+    ``.cursor()`` raises if ever called."""
 
-    def test_AP_fresh_gaps_different_shape_is_stale(self):
-        shifted = CoverageInterval(Instant.parse("2024-01-15T07:00:00Z"), Instant.parse("2024-01-15T13:00:00Z"))
-        with self.assertRaises(_StaleConflictSignal):
-            self._verify_gap_trigger_still_open(self.trigger, (shifted,))
+    def cursor(self):
+        raise AssertionError("cutover() must refuse before opening a cursor")
 
-    def test_AQ_partial_overlap_of_multiple_captured_gaps_is_stale(self):
-        second_gap = CoverageInterval(Instant.parse("2024-01-15T14:00:00Z"), Instant.parse("2024-01-15T18:00:00Z"))
-        trigger = CoverageGapTrigger(required=REQUIRED, gaps=(GAP, second_gap))
-        # Only the first gap is still open; the second was independently filled.
-        with self.assertRaises(_StaleConflictSignal):
-            self._verify_gap_trigger_still_open(trigger, (GAP,))
+    def rollback(self):
+        pass
+
+    def commit(self):
+        pass
+
+
+class CutoverPreflightBindingTests(unittest.TestCase):
+    """cutover()'s candidate_partition <-> candidate binding checks (manifest
+    hash, code_ref, quality/coverage evidence) all run before any cursor is
+    opened.  Each negative case here is proven to be a pre-DB RepairRefusal;
+    the positive (well-formed) case is proven to reach the cursor at all
+    (raising AssertionError from the guard connection) rather than being
+    refused for the wrong reason."""
+
+    def setUp(self):
+        trigger = CoverageGapTrigger(required=REQUIRED, gaps=(GAP,))
+        self.intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
+        self.report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
+        self.coverage_ids, self.assertion_ids, self.coverage_sha = ["cov-1"], ["assert-1"], ["e" * 64]
+        self.check_suite = "suite-1"
+        self.item = CandidateAttempt(
+            repair_intent_id=self.intent.intent_id,
+            natural_identity=_natural(1),
+            content_sha256="a" * 64,
+            partition_manifest_sha256="b" * 64,
+            source_evidence_id="source-1",
+            materialization_id="materialization-1",
+            coverage_evidence_id=compute_coverage_evidence_id(self.coverage_ids, self.assertion_ids, self.coverage_sha),
+            quality_evidence_id=compute_quality_evidence_id(self.report, check_suite=self.check_suite),
+            code_ref="commit-1",
+        )
+        self.partition = {
+            "revision": 1, "state": "closed", "sha256": "a" * 64,
+            "_manifest_sha256": "b" * 64, "code_ref": "commit-1",
+        }
+
+    def _cutover(self, **overrides):
+        partition = {**self.partition, **overrides}
+        return RepairCutoverCatalog(_NoCursorConnection()).cutover(
+            repair_intent=self.intent, candidate=self.item, dataset={}, dataset_sha256="d" * 64,
+            candidate_partition=partition, candidate_quality_report=self.report,
+            coverage_start=REQUIRED.start, coverage_end=REQUIRED.end,
+            coverage_ids=self.coverage_ids, assertion_ids=self.assertion_ids, coverage_sha256=self.coverage_sha,
+            storage_root_id="hot", expected_profile="profile-1", expected_check_suite=self.check_suite,
+        )
+
+    def test_well_formed_inputs_reach_the_cursor(self):
+        # Everything binds correctly, so cutover() must proceed past every
+        # preflight check and reach the guard connection's cursor() -- proof
+        # the preceding tests below fail for the RIGHT reason, not because
+        # the fixture itself is malformed.
+        with self.assertRaises(AssertionError):
+            self._cutover()
+
+    def test_manifest_hash_mismatch_is_refused_before_cursor(self):
+        with self.assertRaises(RepairRefusal):
+            self._cutover(_manifest_sha256="f" * 64)
+
+    def test_manifest_hash_case_insensitive_match_is_accepted(self):
+        # Uppercase of the same bound digest must still match -- this is the
+        # exact bug class review found: a caller supplying a different-case
+        # manifest hash must not silently diverge from the candidate's own
+        # (already normalized) bound identity.
+        with self.assertRaises(AssertionError):
+            self._cutover(_manifest_sha256="B" * 64)
+
+    def test_code_ref_mismatch_is_refused_before_cursor(self):
+        with self.assertRaises(RepairRefusal):
+            self._cutover(code_ref="different-commit")
+
+    def test_content_sha_mismatch_is_refused_before_cursor(self):
+        with self.assertRaises(RepairRefusal):
+            self._cutover(sha256="f" * 64)
+
+    def test_quality_report_mismatch_is_refused_before_cursor(self):
+        with self.assertRaises(RepairRefusal):
+            RepairCutoverCatalog(_NoCursorConnection()).cutover(
+                repair_intent=self.intent, candidate=self.item, dataset={}, dataset_sha256="d" * 64,
+                candidate_partition=self.partition,
+                candidate_quality_report={**self.report, "code_ref": "different-cert"},
+                coverage_start=REQUIRED.start, coverage_end=REQUIRED.end,
+                coverage_ids=self.coverage_ids, assertion_ids=self.assertion_ids, coverage_sha256=self.coverage_sha,
+                storage_root_id="hot", expected_profile="profile-1", expected_check_suite=self.check_suite,
+            )
+
+    def test_quality_report_filed_under_a_different_check_suite_is_refused(self):
+        # The report/candidate binding was computed for self.check_suite;
+        # presenting it for a different expected_check_suite must be refused
+        # even though the report content itself is unchanged.
+        with self.assertRaises(RepairRefusal):
+            RepairCutoverCatalog(_NoCursorConnection()).cutover(
+                repair_intent=self.intent, candidate=self.item, dataset={}, dataset_sha256="d" * 64,
+                candidate_partition=self.partition, candidate_quality_report=self.report,
+                coverage_start=REQUIRED.start, coverage_end=REQUIRED.end,
+                coverage_ids=self.coverage_ids, assertion_ids=self.assertion_ids, coverage_sha256=self.coverage_sha,
+                storage_root_id="hot", expected_profile="profile-1", expected_check_suite="a-different-suite",
+            )
+
+    def test_coverage_evidence_mismatch_is_refused_before_cursor(self):
+        with self.assertRaises(RepairRefusal):
+            RepairCutoverCatalog(_NoCursorConnection()).cutover(
+                repair_intent=self.intent, candidate=self.item, dataset={}, dataset_sha256="d" * 64,
+                candidate_partition=self.partition, candidate_quality_report=self.report,
+                coverage_start=REQUIRED.start, coverage_end=REQUIRED.end,
+                coverage_ids=["a-different-coverage-id"], assertion_ids=self.assertion_ids,
+                coverage_sha256=self.coverage_sha,
+                storage_root_id="hot", expected_profile="profile-1", expected_check_suite=self.check_suite,
+            )
 
 
 if __name__ == "__main__":

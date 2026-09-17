@@ -229,19 +229,27 @@ class RepairIntent:
 # ---------------------------------------------------------------------------
 
 
-def compute_quality_evidence_id(report: Mapping[str, Any]) -> str:
+def compute_quality_evidence_id(report: Mapping[str, Any], *, check_suite: str) -> str:
     """Deterministic identity of the exact quality-report content a candidate binds.
 
-    A ``CandidateAttempt.quality_evidence_id`` MUST equal this value computed
-    over the report that will actually be recorded at cutover; ``cutover()``
-    re-derives and checks it, so a differently-evidenced report can never be
-    substituted under the same ``candidate_id``.
+    ``check_suite`` is bound in as well as the report content: ``cutover()``
+    files the report under an independently supplied ``expected_check_suite``,
+    so without binding it here the same report content could be re-filed
+    under a different suite (changing what A16/S14 select against) while
+    ``candidate_id`` stayed unchanged.  A ``CandidateAttempt.quality_evidence_id``
+    MUST equal this value computed over the report and suite that will
+    actually be used at cutover; ``cutover()`` re-derives and checks it, so a
+    differently-evidenced report or suite can never be substituted under the
+    same ``candidate_id``.
     """
 
     for name in ("status", "metrics", "violations", "code_ref"):
         if name not in report:
             raise RepairRefusal(f"quality report evidence is missing required field {name!r}")
+    if not isinstance(check_suite, str) or not check_suite.strip():
+        raise RepairRefusal("check_suite must be a non-empty string")
     return _canonical_hash("a10-quality-report-evidence-v1", {
+        "check_suite": check_suite.strip(),
         "status": report["status"],
         "metrics": report["metrics"],
         "violations": report["violations"],
@@ -383,8 +391,11 @@ class CandidateStaging:
         Writing different bytes for an existing (candidate, name) is refused:
         durable candidate evidence, once written, is immutable.  Creation is
         collision-safe: two concurrent writers for the same (candidate, name)
-        can never both "win" with different content -- the loser's atomic
-        link fails and it falls back to the immutability check.
+        can never both "win" with different content -- the loser's exclusive
+        creation fails and it falls back to the immutability check.  There is
+        no non-atomic fallback: if this filesystem cannot provide exclusive
+        creation, the write fails closed rather than risking a silent
+        clobber between concurrent writers.
         """
 
         safe_name = _validate_evidence_name(name)
@@ -409,14 +420,6 @@ class CandidateStaging:
                     f"candidate {candidate.candidate_id} evidence {safe_name!r} is immutable "
                     "and cannot be overwritten with different content"
                 )
-        except OSError:
-            # os.link can be unsupported on some filesystems; fall back to a
-            # non-atomic replace guarded by the existence check above -- a
-            # true concurrent race on the fallback path is exceedingly
-            # unlikely in practice (same restriction existing sibling
-            # catalog writers accept for their own local filesystem I/O).
-            temporary.replace(target)
-            return target
         finally:
             temporary.unlink(missing_ok=True)
         return target
@@ -596,7 +599,6 @@ class RepairCutoverCatalog:
         storage_root_id: str,
         expected_profile: str,
         expected_check_suite: str,
-        current_gaps: Sequence[CoverageInterval] | None = None,
         predecessor_evidence: PredecessorEvidence | None = None,
     ) -> CutoverResult:
         trigger = repair_intent.trigger
@@ -611,22 +613,24 @@ class RepairCutoverCatalog:
             raise RepairRefusal("A10 cutover requires a sealed closed candidate partition manifest")
         if _text(candidate_partition.get("sha256")) != candidate.content_sha256:
             raise RepairRefusal("candidate_partition physical hash differs from candidate identity")
+        if _manifest_sha(candidate_partition) != candidate.partition_manifest_sha256:
+            raise RepairRefusal("candidate_partition manifest hash differs from candidate identity")
+        if _text(candidate_partition.get("code_ref")) != candidate.code_ref.strip():
+            raise RepairRefusal("candidate_partition code_ref differs from candidate identity")
 
         # Candidate acceptance inputs must be exactly the evidence this
         # candidate_id is bound to -- never a substitutable, independently
-        # supplied argument (review finding).
-        if candidate.quality_evidence_id != compute_quality_evidence_id(candidate_quality_report):
+        # supplied argument (review finding).  expected_check_suite is bound
+        # into quality_evidence_id because the report is filed under it.
+        if candidate.quality_evidence_id != compute_quality_evidence_id(candidate_quality_report, check_suite=expected_check_suite):
             raise RepairRefusal("candidate_quality_report does not match the candidate's bound quality_evidence_id")
         if candidate.coverage_evidence_id != compute_coverage_evidence_id(coverage_ids, assertion_ids, coverage_sha256):
             raise RepairRefusal("coverage evidence does not match the candidate's bound coverage_evidence_id")
 
-        if isinstance(trigger, CoverageGapTrigger):
-            if current_gaps is None:
-                raise RepairRefusal("current_gaps evidence is required to re-authorize a coverage-gap trigger")
-        elif isinstance(trigger, InvalidRevisionTrigger):
+        if isinstance(trigger, InvalidRevisionTrigger):
             if predecessor_evidence is None:
                 raise RepairRefusal("predecessor_evidence is required to re-authorize an invalid-revision trigger")
-        else:  # pragma: no cover - exhaustive union
+        elif not isinstance(trigger, CoverageGapTrigger):  # pragma: no cover - exhaustive union
             raise RepairRefusal(f"unsupported repair trigger kind: {trigger!r}")
 
         try:
@@ -653,13 +657,19 @@ class RepairCutoverCatalog:
 
                 # Step 3: re-evaluate the repair trigger/current authority
                 # under lock, against durable convergence provenance -- never
-                # against a coincidental content-hash match.
+                # against a coincidental content-hash match.  For a
+                # coverage-gap trigger this IS the exact re-authorization: the
+                # topology lock proves, catalog-natively, whether an eligible
+                # row now exists for this partition_key (gap closed by
+                # someone) versus none at all (gap genuinely still open) --
+                # a caller-supplied "current gaps" argument would add no
+                # verifiable information A10 could integrity-bind without
+                # importing B04/quant_platform.access, so none is accepted.
                 predecessor_row = _reevaluate_authority(cursor, repair_intent, candidate, topology)
 
-                # Step 3b: trigger-specific freshness re-authorization.
+                # Step 3b: trigger-specific re-authorization.
                 if isinstance(trigger, CoverageGapTrigger):
                     _verify_gaps_eliminated(trigger.gaps, coverage_start, coverage_end)
-                    _verify_gap_trigger_still_open(trigger, current_gaps)
                 else:
                     _verify_invalid_revision_trigger_still_authoritative(
                         cursor,
@@ -976,30 +986,6 @@ def _verify_gaps_eliminated(
             )
 
 
-def _verify_gap_trigger_still_open(trigger: CoverageGapTrigger, current_gaps: Sequence[CoverageInterval]) -> None:
-    """Re-authorize a coverage-gap trigger against freshly recomputed B04 evidence.
-
-    Every gap the intent captured must still be present, exactly, in the
-    caller's just-recomputed gap evidence; a fabricated or stale trigger
-    whose gaps no longer reflect current B04 evidence can never authorize
-    cutover merely because the catalog topology tuple still matches.
-    """
-
-    current = set(current_gaps)
-    required = list(trigger.gaps)
-    still_open = [gap for gap in required if gap in current]
-    if len(still_open) == len(required):
-        return
-    if not current_gaps:
-        # Truly nothing left uncovered anywhere in the required support --
-        # not merely "the captured gap doesn't appear in a differently
-        # shaped current gap set", which is suspicious rather than resolved.
-        raise _AlreadySatisfiedSignal()
-    raise _StaleConflictSignal(
-        "captured gap evidence no longer exactly matches current B04 evidence; repair intent must re-evaluate"
-    )
-
-
 def _verify_invalid_revision_trigger_still_authoritative(
     cursor: Any,
     *,
@@ -1119,9 +1105,13 @@ def _timestamp(value: Any) -> Any:
 
 def _manifest_sha(document: Mapping[str, Any]) -> str:
     value = document.get("_manifest_sha256")
-    if not isinstance(value, str) or len(value) != 64:
+    if value is None:
         raise RepairRefusal("durable candidate manifest SHA is missing from catalog write input")
-    return value
+    # Normalized (lowercase hex) at this single choke point: both the row
+    # this module writes to catalog.partitions and the equality check against
+    # candidate.partition_manifest_sha256 must agree regardless of the
+    # caller-supplied document's original casing.
+    return _sha256_hex(value, "candidate_partition manifest hash")
 
 
 __all__ = [

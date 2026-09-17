@@ -69,7 +69,11 @@ def partition_dict(revision: int, token: str, *, partition_key: str = "dt=2024-0
         "row_count": 1,
         "file_size_bytes": 100 + revision,
         "sha256": token * 64,
-        "_manifest_sha256": (token.upper() * 64),
+        # Lowercase, matching `token` exactly: an uppercased variant here
+        # previously diverged from CandidateAttempt's lowercase-normalized
+        # partition_manifest_sha256 for alphabetic hex tokens, causing A16
+        # manifest verification to fail spuriously (review finding).
+        "_manifest_sha256": token * 64,
         "state": "closed",
         "created_at": "2026-09-01T10:00:00Z",
         "closed_at": "2026-09-01T10:00:01Z",
@@ -125,7 +129,7 @@ def candidate_for(intent: RepairIntent, partition: dict, report: dict, *, source
         source_evidence_id=f"a10-source-{source_tag}",
         materialization_id=f"a10-materialization-{source_tag}",
         coverage_evidence_id=compute_coverage_evidence_id(COVERAGE_IDS, ASSERTION_IDS, COVERAGE_SHA),
-        quality_evidence_id=compute_quality_evidence_id(report),
+        quality_evidence_id=compute_quality_evidence_id(report, check_suite=CHECK_SUITE),
         code_ref=partition["code_ref"],
     )
 
@@ -133,7 +137,7 @@ def candidate_for(intent: RepairIntent, partition: dict, report: dict, *, source
 def do_cutover(
     connection, *, intent: RepairIntent, candidate: CandidateAttempt, partition: dict, report: dict,
     coverage_start: Instant = START, coverage_end: Instant = END,
-    current_gaps=None, predecessor_evidence: PredecessorEvidence | None = None,
+    predecessor_evidence: PredecessorEvidence | None = None,
 ) -> object:
     return RepairCutoverCatalog(connection).cutover(
         repair_intent=intent,
@@ -150,7 +154,6 @@ def do_cutover(
         storage_root_id="a10-hot",
         expected_profile=PROFILE,
         expected_check_suite=CHECK_SUITE,
-        current_gaps=current_gaps,
         predecessor_evidence=predecessor_evidence,
     )
 
@@ -431,7 +434,6 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     backfill_outcome = do_cutover(
         connection, intent=backfill_intent, candidate=backfill_candidate, partition=backfill_partition,
         report=backfill_report, coverage_start=backfill_required.start, coverage_end=backfill_required.end,
-        current_gaps=(backfill_gap,),
     )
     assert backfill_outcome.outcome == CONVERGED, backfill_outcome
     assert backfill_outcome.provenance.predecessor is None
@@ -448,7 +450,6 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     already = do_cutover(
         connection, intent=backfill_intent, candidate=backfill_candidate, partition=backfill_partition,
         report=backfill_report, coverage_start=backfill_required.start, coverage_end=backfill_required.end,
-        current_gaps=(),
     )
     assert already.outcome == ALREADY_SATISFIED, already
     assert _row_count(connection, dataset_id, backfill_key) == 1
@@ -464,7 +465,6 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     distinct_outcome = do_cutover(
         connection, intent=backfill_intent, candidate=backfill_distinct_candidate, partition=backfill_distinct_partition,
         report=backfill_distinct_report, coverage_start=backfill_required.start, coverage_end=backfill_required.end,
-        current_gaps=(),
     )
     assert distinct_outcome.outcome == STALE_CONFLICT, distinct_outcome
     assert _row_count(connection, dataset_id, backfill_key) == 1
@@ -482,7 +482,6 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     partial_outcome = do_cutover(
         connection, intent=partial_intent, candidate=partial_candidate, partition=partial_partition,
         report=partial_report, coverage_start=partial_required.start, coverage_end=half,
-        current_gaps=(partial_gap,),
     )
     assert partial_outcome.outcome == FAILED, partial_outcome
     assert _row_count(connection, dataset_id, partial_key) == 0, "a rejected partial-fill candidate must not admit a row"
@@ -504,7 +503,6 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     remaining_outcome = do_cutover(
         connection, intent=remaining_intent, candidate=remaining_candidate, partition=remaining_partition,
         report=remaining_report, coverage_start=remaining_required.start, coverage_end=covers_only_first_day_end,
-        current_gaps=(remaining_gap,),
     )
     assert remaining_outcome.outcome == FAILED, remaining_outcome
     assert _row_count(connection, dataset_id, remaining_key) == 0
