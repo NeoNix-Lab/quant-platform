@@ -180,10 +180,24 @@ def _build_candidate_and_proof(
     *, intent: RepairIntent, day: str, trade_id: str, price: str, created_at: str, code_ref: str,
 ) -> tuple[CandidateAttempt, "CandidateProof", object]:
     content_sha256 = _content_sha256(root, identity, day=day, trade_id=trade_id, price=price)
+    # dataset_sha256 participates in staging_partition_key (isolation must
+    # bind lineage, not only physical bytes), so it must be known BEFORE
+    # the staging key -- and thus before _seal_and_certify -- can be
+    # computed. emit_dataset_manifest is a pure, deterministic function of
+    # these exact arguments, so probing it here and letting
+    # _seal_and_certify emit the identical document again internally
+    # produces the identical hash, without needing to thread a precomputed
+    # document through the credited S13 flow.
+    dataset_probe = emit_dataset_manifest(
+        root / f"_probe-dataset-{trade_id}.json", dataset_identity=identity, created_at=created_at,
+        derived_from=[DatasetIdentity("raw", "trades", "bybit", "BTCUSDT", "trade-v1")],
+        transform="canonicalize-trades-v1",
+    )
+    dataset_sha256 = dataset_probe.manifest_sha256
     provisional = CandidateAttempt(
         intent_identity=intent.intent_identity, dataset_identity=identity,
         natural_partition_key=intent.partition_key, source_semantics_id="bybit-public-trades-sqlite-v1",
-        mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256="a" * 64, partition_sha256="b" * 64,
+        mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256=dataset_sha256, partition_sha256="b" * 64,
         content_sha256=content_sha256, code_ref=code_ref,
     )
     staging_key = provisional.staging_partition_key
@@ -191,7 +205,8 @@ def _build_candidate_and_proof(
         root, writer, profile, identity, partition_key=staging_key,
         day=day, trade_id=trade_id, price=price, created_at=created_at,
     )
-    dataset_document, dataset_sha256 = _load_manifest(dataset_path, "dataset")
+    dataset_document, reloaded_dataset_sha256 = _load_manifest(dataset_path, "dataset")
+    assert reloaded_dataset_sha256 == dataset_sha256, "dataset manifest hash must be reproducible from identical inputs"
     partition_document, partition_sha256 = _load_manifest(partition_path, "partition")
     coverage_document, _ = _load_manifest(coverage_path, "coverage")
     candidate = CandidateAttempt(
@@ -207,13 +222,20 @@ def _build_candidate_and_proof(
     )
     assert eligibility.state == "valid"
 
+    # The REAL canonical_content_hash_v1 S13 certification actually computed
+    # and durably recorded in catalog.quality_reports.metrics -- never an
+    # arbitrary caller-chosen value (finding 1).
+    canonical_content_hash_v1 = run.certification.metrics["canonical_content_hash_v1"]
+    assert canonical_content_hash_v1 is not None
+
     proof = CandidateProof(
         dataset_document=dataset_document, dataset_sha256=dataset_sha256,
         partition_document=partition_document, partition_sha256=partition_sha256,
-        coverage_documents=(coverage_document,), canonical_content_hash_v1="d" * 64,
+        coverage_documents=(coverage_document,), canonical_content_hash_v1=canonical_content_hash_v1,
         assessment_signature=eligibility.certification_signature,
         assessment_status=eligibility.certification_status,
         eligibility_state=eligibility.state, repair_code_ref=code_ref,
+        expected_profile=profile.profile_id, expected_check_suite=profile.check_suite,
     )
     return candidate, proof, run
 

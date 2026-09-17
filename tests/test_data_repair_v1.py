@@ -3,13 +3,21 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from quant_platform.data.manifests import (  # noqa: E402
+    emit_coverage_manifest,
+    emit_dataset_manifest,
+    emit_partition_manifest,
+)
+from quant_platform.data.materializer import ParquetMaterialization  # noqa: E402
 from quant_platform.data.models import CoverageInterval, DatasetIdentity, Instant  # noqa: E402
 from quant_platform.data.repair import (  # noqa: E402
     CandidateAttempt,
@@ -259,63 +267,137 @@ class CandidateAttemptV1Tests(unittest.TestCase):
             )
 
 
+def _real_documents(dataset_root: Path, *, staging_key: str = "dt=2024-01-15/repair=proof-fixture"):
+    """Build genuinely valid, hash-consistent dataset/partition/coverage
+    documents through the REAL credited manifest machinery -- CandidateProof
+    now recomputes and cross-verifies these hashes and schema-validates
+    every document, so a hand-typed stub document can no longer construct
+    one.
+    """
+
+    dataset = emit_dataset_manifest(
+        dataset_root / "dataset-manifest.json", dataset_identity=IDENTITY, created_at="2026-08-31T10:00:00Z",
+        derived_from=[DatasetIdentity("raw", "trades", "bybit", "BTCUSDT", "trade-v1")],
+        transform="canonicalize-trades-v1",
+    )
+    content = b"proof-fixture-payload-1"
+    content_sha256 = hashlib.sha256(content).hexdigest()
+    rel_path = f"{staging_key}/part-001.parquet"
+    artifact_path = dataset_root / rel_path
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_bytes(content)
+    materialization = ParquetMaterialization(
+        path=artifact_path, dataset_identity=IDENTITY, file_size_bytes=len(content), row_count=1,
+        sha256=content_sha256, canonical_content_hash_v1="d" * 64,
+        first_exchange_ts=Instant.parse("2024-01-15T06:00:00Z"), last_exchange_ts=Instant.parse("2024-01-15T06:00:00Z"),
+    )
+    partition = emit_partition_manifest(
+        dataset_root / "partition-manifest.json", materialization, dataset_identity=IDENTITY,
+        dataset_root=dataset_root, partition_key=staging_key, revision=1, rel_path=rel_path,
+        created_at="2026-08-31T10:00:00Z", closed_at="2026-08-31T10:05:00Z",
+        producer="test-repair-producer", code_ref="repair-commit-1",
+    )
+    coverage = emit_coverage_manifest(
+        dataset_root / "coverage-manifest.json", dataset_identity=IDENTITY, coverage_id="proof-fixture-coverage",
+        supersedes=None, created_at="2026-08-31T10:00:00Z",
+        acquisition={
+            "basis": "reconciliation", "intent_start": "2024-01-15T00:00:00Z", "intent_end": "2024-01-16T00:00:00Z",
+            "source_semantics": "bybit-public-trades-sqlite-v1", "mapping": "bybit-sqlite-day-extract-v1",
+        },
+        assertions=[{
+            "assertion_id": "proof-fixture-complete", "start": "2024-01-15T00:00:00Z", "end": "2024-01-16T00:00:00Z",
+            "status": "complete", "partitions": [{"partition_key": staging_key, "revision": 1}],
+            "evidence": [{"kind": "reconciliation", "detail": "proof fixture"}],
+        }],
+        producer="test-repair-source", code_ref="a10-repair-commit-1", source_dataset_identity=IDENTITY,
+        partition_manifests=[partition.document],
+    )
+    return dataset, partition, coverage
+
+
 def proof(
+    dataset_root: Path,
     *,
     dataset_document=None,
+    dataset_sha256=None,
     partition_document=None,
+    partition_sha256=None,
     coverage_documents=None,
     assessment_status: str = "pass",
     eligibility_state: str = "valid",
 ) -> CandidateProof:
+    dataset, partition, coverage = _real_documents(dataset_root)
     return CandidateProof(
-        dataset_document=dataset_document if dataset_document is not None else {"schema_version": "dataset-manifest-v1"},
-        dataset_sha256=HASH_A,
-        partition_document=partition_document if partition_document is not None else {"schema_version": "partition-manifest-v1"},
-        partition_sha256=HASH_B,
-        coverage_documents=coverage_documents if coverage_documents is not None else ({"schema_version": "coverage-manifest-v1"},),
-        canonical_content_hash_v1=HASH_C,
+        dataset_document=dataset_document if dataset_document is not None else dataset.document,
+        dataset_sha256=dataset_sha256 if dataset_sha256 is not None else dataset.manifest_sha256,
+        partition_document=partition_document if partition_document is not None else partition.document,
+        partition_sha256=partition_sha256 if partition_sha256 is not None else partition.manifest_sha256,
+        coverage_documents=coverage_documents if coverage_documents is not None else (coverage.document,),
+        canonical_content_hash_v1="d" * 64,
         assessment_signature="sig-1",
         assessment_status=assessment_status,
         eligibility_state=eligibility_state,
         repair_code_ref="a10-repair-commit-1",
+        expected_profile="test-repair-profile",
+        expected_check_suite="test-repair-suite",
     )
 
 
 class CandidateProofV1Tests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self.dataset_root = Path(self._tempdir.name)
+
+    def tearDown(self) -> None:
+        self._tempdir.cleanup()
+
     def test_well_formed_proof_constructs(self):
-        result = proof()
+        result = proof(self.dataset_root)
         self.assertEqual("pass", result.assessment_status)
         self.assertEqual("valid", result.eligibility_state)
 
     def test_empty_documents_are_refused(self):
         with self.assertRaises(RepairError):
-            proof(dataset_document={})
+            proof(self.dataset_root, dataset_document={})
         with self.assertRaises(RepairError):
-            proof(partition_document={})
+            proof(self.dataset_root, partition_document={})
         with self.assertRaises(RepairError):
-            proof(coverage_documents=())
+            proof(self.dataset_root, coverage_documents=())
 
     # Review finding: candidate proof must require A16 pass/warn, never fail.
     def test_fail_assessment_status_is_ineligible(self):
         with self.assertRaises(RepairIneligible):
-            proof(assessment_status="fail")
+            proof(self.dataset_root, assessment_status="fail")
 
     # Review finding: candidate proof must require S14 valid/degraded, never invalid/closed.
     def test_non_covering_eligibility_state_is_ineligible(self):
         with self.assertRaises(RepairIneligible):
-            proof(eligibility_state="closed")
+            proof(self.dataset_root, eligibility_state="closed")
         with self.assertRaises(RepairIneligible):
-            proof(eligibility_state="invalid")
+            proof(self.dataset_root, eligibility_state="invalid")
 
     def test_malformed_hashes_are_refused(self):
         with self.assertRaises(RepairError):
-            CandidateProof(
-                dataset_document={"a": 1}, dataset_sha256="not-a-hash",
-                partition_document={"a": 1}, partition_sha256=HASH_B,
-                coverage_documents=({"a": 1},), canonical_content_hash_v1=HASH_C,
-                assessment_signature="sig-1", assessment_status="pass",
-                eligibility_state="valid", repair_code_ref="c",
-            )
+            proof(self.dataset_root, dataset_sha256="not-a-hash")
+
+    # Review finding 1: document hashes are recomputed and cross-verified,
+    # never merely format-checked -- a well-formed hex hash for the WRONG
+    # document is refused just as loudly as a malformed one.
+    def test_wrong_but_well_formed_hash_is_refused(self):
+        with self.assertRaises(RepairError):
+            proof(self.dataset_root, dataset_sha256="f" * 64)
+        with self.assertRaises(RepairError):
+            proof(self.dataset_root, partition_sha256="f" * 64)
+
+    # Review finding 1: documents must be schema-valid durable manifests,
+    # not arbitrary dicts -- a plausible-looking but malformed document is
+    # refused even when its own declared hash is self-consistent.
+    def test_malformed_but_hash_consistent_document_is_refused(self):
+        from quant_platform.data.repair import _canonical_fingerprint
+
+        forged = {"not": "a manifest"}
+        with self.assertRaises(RepairError):
+            proof(self.dataset_root, dataset_document=forged, dataset_sha256=_canonical_fingerprint(forged))
 
 
 if __name__ == "__main__":

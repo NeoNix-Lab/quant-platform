@@ -59,9 +59,18 @@ import re
 from typing import Any, Mapping
 
 from .coverage import reconstruct_catalog_coverage
-from .manifests import ManifestEmission, emit_partition_manifest, _persist_manifest
+from .manifests import (
+    ManifestEmission,
+    ManifestValidationError,
+    emit_partition_manifest,
+    _persist_manifest,
+    _validate_coverage_document,
+    _validate_dataset_document,
+    _validate_partition_document,
+)
 from .materializer import ParquetMaterialization
 from .models import CoverageInterval, DatasetIdentity, Instant
+from .quality_lifecycle import QualityLifecycleRefusal, select_current_quality_assessment
 
 
 REPAIR_SEMANTICS_VERSION = "a10-repair-v1"
@@ -322,18 +331,41 @@ class CandidateAttempt:
     def staging_partition_key(self) -> str:
         """The physically/logically isolated natural-key value for this attempt.
 
-        Deliberately derived from a manifest-INDEPENDENT subset of fields
-        (never ``dataset_sha256``/``partition_sha256``): the staged partition
-        manifest's own content must declare this exact key, so a hash that
-        included the manifest's own hash could never be computed before the
-        manifest exists. ``content_sha256`` -- the physical artifact hash,
-        always known before any manifest is written -- is what actually
-        distinguishes attempts here, together with the intent, natural key
-        and code identity; that is already sufficient for retries of
-        identical evidence to share a key and different evidence to differ
-        (vectors 10/11), and matches how physical bytes determine a
-        deterministic staging identity independent of incidental manifest
-        metadata.
+        Includes every field of :meth:`canonical_payload` that can be known
+        BEFORE the staged partition manifest is emitted: ``intent_identity``,
+        ``natural_partition_key``, ``dataset_sha256``, ``source_semantics_id``,
+        ``mapping_id``, ``content_sha256`` and ``code_ref``. Two attempts that
+        agree on all of these are the same evidence under the same lineage
+        and source identity (vectors 10/11/22): they may safely share one
+        staging row. Two attempts that differ in ANY of them -- including
+        distinct dataset lineage or distinct source/mapping identity, not
+        only distinct physical bytes -- get distinct staging keys and can
+        never collide on, or clobber, each other's row.
+
+        ``partition_sha256`` is deliberately the ONE candidate field excluded
+        here, and only because it is impossible to include without literal
+        self-reference: it is the hash of the staged partition MANIFEST
+        DOCUMENT, and that document's own ``partition_key`` field must equal
+        this very key -- so a key derived from a hash that already contains
+        the key could never be computed. This is not a residual isolation
+        gap: every input that actually DETERMINES ``partition_sha256`` for a
+        fixed ``(dataset_identity, natural_partition_key, revision=1)`` --
+        the physical bytes (``content_sha256``), the code identity
+        (``code_ref``), and the lineage/source identity now included above
+        -- already participates in this key. Two attempts that agree on all
+        of those necessarily produce byte-identical manifests (S13 sealing
+        itself additionally refuses to re-seal an existing target with
+        conflicting Phase-1 evidence, per ``_same_phase_one_evidence``), so
+        the only thing that could still differ between them is incidental
+        wall-clock/producer provenance metadata that this contract does not
+        treat as identity-bearing anywhere else (mirroring
+        :class:`PredecessorReference`/:class:`RepairIntent`, which likewise
+        exclude wall-clock from identity). ``cutover`` additionally never
+        trusts a staged row's ``manifest_sha256`` blindly: it always
+        cross-checks it against ``CandidateProof.partition_sha256`` before
+        promotion, so even a hypothetical staging collision could never
+        result in the wrong candidate's proof being accepted as proof of
+        this one.
 
         A different ``partition_key`` value is a different row family under
         ``partitions_one_live``, and because it is deliberately a *sub-path*
@@ -346,6 +378,9 @@ class CandidateAttempt:
             "identity_domain": f"{CANDIDATE_ATTEMPT_IDENTITY_DOMAIN}-staging-key",
             "intent_identity": self.intent_identity,
             "natural_partition_key": self.natural_partition_key,
+            "dataset_sha256": self.dataset_sha256,
+            "source_semantics_id": self.source_semantics_id,
+            "mapping_id": self.mapping_id,
             "content_sha256": self.content_sha256,
             "code_ref": self.code_ref,
         }
@@ -364,11 +399,17 @@ class CandidateAttempt:
 class CandidateProof:
     """Durable evidence binding one staged candidate to its S13/A16/S14 proof.
 
-    Everything here must already be true and durable before ``cutover`` is
-    called: ``cutover`` does not re-derive it, only cross-verifies it against
-    the staged catalog row and :class:`CandidateAttempt`'s own declared
-    hashes, and re-folds ``coverage_documents`` through the credited B04
-    reconstruction to independently prove every targeted gap is closed.
+    Every document here must be a WELL-FORMED, schema-valid durable manifest
+    (verified against the same frozen validators ``quant_platform.data``
+    already uses to load manifests off disk), and every declared hash must
+    be the ACTUAL canonical hash of its own document -- both independently
+    recomputed here, never merely format-checked. ``cutover`` additionally
+    re-derives ``assessment_signature``/``assessment_status``/
+    ``canonical_content_hash_v1`` from the durable ``catalog.quality_reports``
+    row itself (the same credited A16 selection machinery S14 already uses),
+    and re-folds ``coverage_documents`` through the credited B04
+    reconstruction, so nothing here is trusted as caller-asserted fact: it is
+    proof to be verified, not a claim to be recorded.
     """
 
     dataset_document: Mapping[str, Any]
@@ -381,21 +422,42 @@ class CandidateProof:
     assessment_status: str
     eligibility_state: str
     repair_code_ref: str
+    expected_profile: str
+    expected_check_suite: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.dataset_document, Mapping) or not self.dataset_document:
             raise RepairError("dataset_document must be a non-empty mapping")
+        try:
+            _validate_dataset_document(self.dataset_document)
+        except ManifestValidationError as exc:
+            raise RepairError(f"dataset_document is not a valid durable manifest: {exc}") from exc
         object.__setattr__(self, "dataset_sha256", _sha256_hex(self.dataset_sha256, "dataset_sha256"))
+        if _canonical_fingerprint(self.dataset_document) != self.dataset_sha256:
+            raise RepairError("dataset_sha256 is not the actual canonical hash of dataset_document")
+
         if not isinstance(self.partition_document, Mapping) or not self.partition_document:
             raise RepairError("partition_document must be a non-empty mapping")
+        try:
+            _validate_partition_document(self.partition_document)
+        except ManifestValidationError as exc:
+            raise RepairError(f"partition_document is not a valid durable manifest: {exc}") from exc
         object.__setattr__(self, "partition_sha256", _sha256_hex(self.partition_sha256, "partition_sha256"))
+        if _canonical_fingerprint(self.partition_document) != self.partition_sha256:
+            raise RepairError("partition_sha256 is not the actual canonical hash of partition_document")
+
         coverage_documents = tuple(self.coverage_documents)
         if not coverage_documents:
             raise RepairError("coverage_documents must be non-empty")
         for index, document in enumerate(coverage_documents):
             if not isinstance(document, Mapping) or not document:
                 raise RepairError(f"coverage_documents[{index}] must be a non-empty mapping")
+            try:
+                _validate_coverage_document(document)
+            except ManifestValidationError as exc:
+                raise RepairError(f"coverage_documents[{index}] is not a valid durable manifest: {exc}") from exc
         object.__setattr__(self, "coverage_documents", coverage_documents)
+
         object.__setattr__(
             self, "canonical_content_hash_v1", _sha256_hex(self.canonical_content_hash_v1, "canonical_content_hash_v1")
         )
@@ -407,6 +469,32 @@ class CandidateProof:
         if self.eligibility_state not in _COVERING_STATES:
             raise RepairIneligible("candidate proof requires an S14 'valid' or 'degraded' eligibility state")
         object.__setattr__(self, "repair_code_ref", _non_empty_text(self.repair_code_ref, "repair_code_ref"))
+        object.__setattr__(self, "expected_profile", _non_empty_text(self.expected_profile, "expected_profile"))
+        object.__setattr__(
+            self, "expected_check_suite", _non_empty_text(self.expected_check_suite, "expected_check_suite")
+        )
+
+    def coverage_ids_and_assertion_ids(self) -> tuple[list[str], list[str]]:
+        """Coverage/assertion identity DERIVED from the documents themselves
+        (never caller-asserted), matching :meth:`PublicationEligibilityBridge.publish`.
+        """
+
+        ids = [str(document.get("coverage_id")) for document in self.coverage_documents]
+        assertion_ids = [
+            str(assertion.get("assertion_id"))
+            for document in self.coverage_documents
+            for assertion in (document.get("assertions") or ())
+        ]
+        return ids, assertion_ids
+
+    def coverage_sha256(self) -> tuple[str, ...]:
+        """The actual canonical hash of each coverage document, DERIVED here
+        rather than caller-asserted -- matches what S14 durably recorded
+        for these exact documents when it computed the same hash off the
+        persisted manifest bytes.
+        """
+
+        return tuple(_canonical_fingerprint(document) for document in self.coverage_documents)
 
 
 @dataclass(frozen=True, slots=True)
@@ -527,6 +615,18 @@ class RepairCutoverCatalog:
             raise RepairError("proof.partition_document does not target the candidate's own staging_partition_key")
         if proof.partition_document.get("revision") != 1:
             raise RepairError("proof.partition_document must describe the staged candidate's revision 1")
+        if proof.partition_document.get("code_ref") != candidate.code_ref:
+            raise RepairError("proof.partition_document code_ref does not match the candidate's declared code identity")
+        for index, coverage_document in enumerate(proof.coverage_documents):
+            acquisition = coverage_document.get("acquisition") or {}
+            if acquisition.get("source_semantics") != candidate.source_semantics_id:
+                raise RepairError(
+                    f"proof.coverage_documents[{index}] source_semantics does not match the candidate's declared evidence"
+                )
+            if acquisition.get("mapping") != candidate.mapping_id:
+                raise RepairError(
+                    f"proof.coverage_documents[{index}] mapping does not match the candidate's declared evidence"
+                )
 
         identity = intent.dataset_identity
         dataset_root = Path(dataset_root)
@@ -558,6 +658,12 @@ class RepairCutoverCatalog:
                     raise RepairCutoverRefusal("staged content_sha256 does not match the candidate's declared evidence")
                 if _text(staged[8]) != proof.partition_sha256:
                     raise RepairCutoverRefusal("staged manifest_sha256 does not match the proven candidate manifest")
+                if proof.eligibility_state != staged[4]:
+                    raise RepairCutoverRefusal(
+                        "proof.eligibility_state does not match the staged candidate's actual catalog state"
+                    )
+
+                self._verify_durable_assessment(cursor, proof, staged, identity)
 
                 folded_start, folded_end = _verify_candidate_coverage(candidate, proof, intent)
 
@@ -583,6 +689,8 @@ class RepairCutoverCatalog:
                 provenance_payload = _provenance_payload(
                     intent=intent, candidate=candidate, proof=proof,
                     folded_start=folded_start, folded_end=folded_end, next_revision=next_revision,
+                    promoted_partition_id=str(staged[0]), promoted_state=staged[4],
+                    promoted_manifest_sha256=promoted.manifest_sha256,
                 )
                 provenance_emission = _persist_manifest(
                     dataset_root / provenance_local_rel_path, provenance_payload,
@@ -630,11 +738,29 @@ class RepairCutoverCatalog:
                 )
                 provenance_row_id = cursor.fetchone()
                 if provenance_row_id is None:
+                    # ON CONFLICT DO NOTHING fired: a row already exists at
+                    # this path (a prior attempt, e.g. an idempotent retry
+                    # that reached this point before). It is accepted as
+                    # OUR provenance record only if its content genuinely
+                    # matches what we intended to write -- never merely
+                    # because a row exists at the same path.
                     cursor.execute(
-                        "SELECT artifact_id::text FROM catalog.artifacts WHERE storage_root_id=%s AND rel_path=%s",
+                        "SELECT artifact_id::text, content_sha256, manifest_sha256, produced_by, code_ref, dataset_id::text "
+                        "FROM catalog.artifacts WHERE storage_root_id=%s AND rel_path=%s",
                         (staged[9], provenance_rel_path),
                     )
-                    provenance_row_id = cursor.fetchone()
+                    existing = cursor.fetchone()
+                    if existing is not None and (
+                        _text(existing[1]) != provenance_emission.manifest_sha256
+                        or _text(existing[2]) != provenance_emission.manifest_sha256
+                        or existing[3] != candidate.candidate_identity
+                        or existing[4] != proof.repair_code_ref
+                        or str(existing[5]) != str(dataset_id)
+                    ):
+                        raise RepairCutoverRefusal(
+                            "an unrelated convergence provenance record already occupies this path"
+                        )
+                    provenance_row_id = None if existing is None else (existing[0],)
                 if provenance_row_id is None:
                     raise RepairCutoverRefusal("convergence provenance could not be durably recorded")
 
@@ -747,6 +873,65 @@ class RepairCutoverCatalog:
         )
         return cursor.fetchall()
 
+    @staticmethod
+    def _quality_reports(cursor: Any, partition_id: str, check_suite: str):
+        cursor.execute(
+            """
+            SELECT report_id::text, status, metrics, violations, code_ref, ran_at
+              FROM catalog.quality_reports
+             WHERE partition_id=%s AND check_suite=%s
+            """,
+            (partition_id, check_suite),
+        )
+        return cursor.fetchall()
+
+    def _verify_durable_assessment(
+        self, cursor: Any, proof: CandidateProof, staged: Any, identity: DatasetIdentity,
+    ) -> None:
+        """Independently re-derive the staged candidate's A16 assessment from
+        ``catalog.quality_reports`` -- the SAME credited selection machinery
+        (:func:`select_current_quality_assessment`) S14 itself uses to
+        compute ``PublicationEligibilityResult.certification_signature`` /
+        ``.certification_status`` -- and refuse unless ``proof`` matches that
+        durable truth exactly. Nothing about assessment status, signature or
+        ``canonical_content_hash_v1`` is ever accepted merely because the
+        caller asserted it.
+        """
+
+        reports = self._quality_reports(cursor, staged[0], proof.expected_check_suite)
+        coverage_ids, assertion_ids = proof.coverage_ids_and_assertion_ids()
+        # select_current_quality_assessment / current_partition_report only
+        # ever read index 11 (content_sha256) of their `target` row; this
+        # minimal synthetic tuple carries the staged row's REAL, already-
+        # locked content_sha256 at that exact index -- it is not a stand-in
+        # for the rest of that row's shape, only for the one field read.
+        synthetic_target = tuple([None] * 11 + [staged[7]])
+        try:
+            selected = select_current_quality_assessment(
+                reports,
+                expected_profile=proof.expected_profile,
+                expected_check_suite=proof.expected_check_suite,
+                identity=identity,
+                partition=proof.partition_document,
+                dataset_sha256=proof.dataset_sha256,
+                partition_sha256=proof.partition_sha256,
+                coverage_ids=coverage_ids,
+                assertion_ids=assertion_ids,
+                coverage_sha256=proof.coverage_sha256(),
+                target=synthetic_target,
+            )
+        except QualityLifecycleRefusal as exc:
+            raise RepairCutoverRefusal(f"durable A16 assessment could not be re-derived: {exc}") from exc
+        if selected.status != proof.assessment_status:
+            raise RepairCutoverRefusal("proof.assessment_status does not match the durable A16 assessment")
+        if selected.signature != proof.assessment_signature:
+            raise RepairCutoverRefusal("proof.assessment_signature does not match the durable A16 assessment")
+        durable_canonical_hash = _text(selected.metrics.get("canonical_content_hash_v1")) if isinstance(selected.metrics, Mapping) else None
+        if durable_canonical_hash != proof.canonical_content_hash_v1:
+            raise RepairCutoverRefusal(
+                "proof.canonical_content_hash_v1 does not match the durably recorded A16 metrics"
+            )
+
 
 def _verify_candidate_coverage(
     candidate: CandidateAttempt, proof: CandidateProof, intent: RepairIntent,
@@ -814,6 +999,7 @@ def _emit_promoted_manifest(
 def _provenance_payload(
     *, intent: RepairIntent, candidate: CandidateAttempt, proof: CandidateProof,
     folded_start: Instant, folded_end: Instant, next_revision: int,
+    promoted_partition_id: str, promoted_state: str, promoted_manifest_sha256: str,
 ) -> dict[str, Any]:
     return {
         "schema_version": "a10-repair-convergence-v1",
@@ -824,6 +1010,9 @@ def _provenance_payload(
         "candidate_identity": candidate.candidate_identity,
         "repaired_coverage": {"start": folded_start.isoformat(), "end": folded_end.isoformat()},
         "resulting_revision": next_revision,
+        "promoted_partition_id": promoted_partition_id,
+        "promoted_state": promoted_state,
+        "promoted_manifest_sha256": promoted_manifest_sha256,
         "assessment_signature": proof.assessment_signature,
         "assessment_status": proof.assessment_status,
         "eligibility_state": proof.eligibility_state,

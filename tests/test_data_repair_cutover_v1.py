@@ -8,17 +8,18 @@ Real PostgreSQL locking/uniqueness enforcement is CREDITED to
 ``tests/test_quality_lifecycle_v1.py``. This file proves
 ``RepairCutoverCatalog.cutover``'s own control flow -- which outcome it
 picks and what it does/does not mutate -- against a minimal in-memory
-double of ``catalog.partitions``/``catalog.artifacts`` that supports exactly
-the statements ``cutover`` issues, with real transactional rollback
-semantics.
+double of ``catalog.partitions``/``catalog.artifacts``/``catalog.quality_reports``
+that supports exactly the statements ``cutover`` issues, with real
+transactional rollback semantics.
 
 Candidate evidence (staged partition manifest, coverage manifest, physical
-artifact bytes) is produced through the REAL, credited
-``quant_platform.data.manifests``/``materializer``/``coverage`` machinery --
-never hand-typed documents -- so this file also exercises the exact
-identity-binding, coverage-refolding and manifest-re-emission control flow
-the independent review flagged (findings 1-5), not just a mocked stand-in
-for it.
+artifact bytes, and the durable A16 quality report ``cutover`` re-derives
+its assessment from) is produced through the REAL, credited
+``quant_platform.data.manifests``/``materializer``/``coverage``/
+``quality_lifecycle`` machinery -- never hand-typed documents -- so this
+file also exercises the exact identity-binding, coverage-refolding,
+durable-assessment-re-derivation and manifest-re-emission control flow the
+independent review flagged, not just a mocked stand-in for it.
 """
 
 from __future__ import annotations
@@ -36,10 +37,12 @@ sys.path.insert(0, str(ROOT / "src"))
 from quant_platform.data.coverage import reconstruct_catalog_coverage  # noqa: E402
 from quant_platform.data.manifests import (  # noqa: E402
     emit_coverage_manifest,
+    emit_dataset_manifest,
     emit_partition_manifest,
 )
 from quant_platform.data.materializer import ParquetMaterialization  # noqa: E402
 from quant_platform.data.models import CoverageInterval, DatasetIdentity, Instant  # noqa: E402
+from quant_platform.data.quality_lifecycle import semantic_assessment_signature  # noqa: E402
 from quant_platform.data.repair import (  # noqa: E402
     CandidateAttempt,
     CandidateProof,
@@ -52,6 +55,7 @@ from quant_platform.data.repair import (  # noqa: E402
     RepairError,
     RepairIntent,
     RepairOutcome,
+    _canonical_fingerprint,
     provenance_rel_path_for,
 )
 
@@ -68,6 +72,9 @@ CREATED = "2026-08-31T10:00:00Z"
 CLOSED = "2026-08-31T10:05:00Z"
 SOURCE_SEMANTICS_ID = "bybit-public-trades-sqlite-v1"
 MAPPING_ID = "bybit-sqlite-day-extract-v1"
+EXPECTED_PROFILE = "test-repair-profile"
+EXPECTED_CHECK_SUITE = "test-repair-suite"
+QUALITY_CODE_REF = "a10-quality-check-code-1"
 
 
 class FakePartitionsTable:
@@ -115,15 +122,37 @@ class FakeArtifactsTable:
                 return row["produced_by"]
         return None
 
-    def select_id(self, *, storage_root_id, rel_path) -> str | None:
-        row = self.rows.get((storage_root_id, rel_path))
-        return None if row is None else row["artifact_id"]
+    def select_row(self, *, storage_root_id, rel_path) -> dict | None:
+        return self.rows.get((storage_root_id, rel_path))
+
+
+class FakeQualityReportsTable:
+    def __init__(self) -> None:
+        self.rows: dict[tuple[str, str], list[dict]] = {}
+
+    def add(self, *, partition_id, check_suite, status, metrics, violations, code_ref) -> None:
+        self.rows.setdefault((partition_id, check_suite), []).append({
+            "report_id": f"report-{len(self.rows) + 1}",
+            "status": status, "metrics": metrics, "violations": violations,
+            "code_ref": code_ref, "ran_at": None,
+        })
+
+    def select(self, *, partition_id, check_suite) -> list[tuple]:
+        reports = self.rows.get((partition_id, check_suite), [])
+        return [
+            (report["report_id"], report["status"], report["metrics"], report["violations"], report["code_ref"], report["ran_at"])
+            for report in reports
+        ]
 
 
 class FakeCursor:
-    def __init__(self, partitions: FakePartitionsTable, artifacts: FakeArtifactsTable, fault_on: str | None = None) -> None:
+    def __init__(
+        self, partitions: FakePartitionsTable, artifacts: FakeArtifactsTable,
+        quality_reports: FakeQualityReportsTable, fault_on: str | None = None,
+    ) -> None:
         self.partitions = partitions
         self.artifacts = artifacts
+        self.quality_reports = quality_reports
         self.fault_on = fault_on
         self._result: list[tuple] = []
 
@@ -185,10 +214,16 @@ class FakeCursor:
                 manifest_sha256=manifest_sha256,
             )
             self._result = [] if artifact_id is None else [(artifact_id,)]
-        elif statement.startswith("SELECT artifact_id::text FROM catalog.artifacts"):
+        elif statement.startswith("SELECT artifact_id::text, content_sha256, manifest_sha256, produced_by, code_ref, dataset_id::text"):
             storage_root_id, rel_path = params
-            artifact_id = self.artifacts.select_id(storage_root_id=storage_root_id, rel_path=rel_path)
-            self._result = [] if artifact_id is None else [(artifact_id,)]
+            row = self.artifacts.select_row(storage_root_id=storage_root_id, rel_path=rel_path)
+            self._result = [] if row is None else [(
+                row["artifact_id"], row["content_sha256"], row["manifest_sha256"], row["produced_by"],
+                row["code_ref"], row["dataset_id"],
+            )]
+        elif statement.startswith("SELECT report_id::text, status, metrics, violations, code_ref, ran_at"):
+            partition_id, check_suite = params
+            self._result = self.quality_reports.select(partition_id=partition_id, check_suite=check_suite)
         else:  # pragma: no cover - guards against an untested new statement shape
             raise AssertionError(f"unexpected statement: {statement}")
 
@@ -202,30 +237,37 @@ class FakeCursor:
 class FakeConnection:
     """A transactional double: rollback restores the pre-transaction snapshot."""
 
-    def __init__(self, partitions: FakePartitionsTable, artifacts: FakeArtifactsTable, fault_on: str | None = None) -> None:
+    def __init__(
+        self, partitions: FakePartitionsTable, artifacts: FakeArtifactsTable,
+        quality_reports: FakeQualityReportsTable | None = None, fault_on: str | None = None,
+    ) -> None:
         self.partitions = partitions
         self.artifacts = artifacts
+        self.quality_reports = quality_reports if quality_reports is not None else FakeQualityReportsTable()
         self.fault_on = fault_on
         self._p_snapshot = copy.deepcopy(partitions.rows)
         self._a_snapshot = copy.deepcopy(artifacts.rows)
         self._a_next_id = artifacts._next_id
+        self._q_snapshot = copy.deepcopy(self.quality_reports.rows)
         self.committed = False
         self.rolled_back = False
 
     def cursor(self) -> FakeCursor:
-        return FakeCursor(self.partitions, self.artifacts, self.fault_on)
+        return FakeCursor(self.partitions, self.artifacts, self.quality_reports, self.fault_on)
 
     def commit(self) -> None:
         self.committed = True
         self._p_snapshot = copy.deepcopy(self.partitions.rows)
         self._a_snapshot = copy.deepcopy(self.artifacts.rows)
         self._a_next_id = self.artifacts._next_id
+        self._q_snapshot = copy.deepcopy(self.quality_reports.rows)
 
     def rollback(self) -> None:
         self.rolled_back = True
         self.partitions.rows = copy.deepcopy(self._p_snapshot)
         self.artifacts.rows = copy.deepcopy(self._a_snapshot)
         self.artifacts._next_id = self._a_next_id
+        self.quality_reports.rows = copy.deepcopy(self._q_snapshot)
 
 
 def replacement_intent(predecessor_state: str = "invalid") -> tuple[RepairIntent, str]:
@@ -264,10 +306,20 @@ def stage_and_prove(
     code_ref: str = "repair-commit-1",
     coverage_start: str | None = None,
     coverage_end: str | None = None,
-) -> tuple[CandidateAttempt, CandidateProof]:
+) -> tuple[CandidateAttempt, CandidateProof, dict]:
     """Build one candidate + its durable proof through the REAL credited
-    manifest/coverage machinery: no hand-typed manifest documents.
+    manifest/coverage machinery: no hand-typed manifest documents. Also
+    returns the ``catalog.quality_reports`` row ``cutover`` must find
+    durably recorded in order to accept this proof's assessment.
     """
+
+    dataset_emission = emit_dataset_manifest(
+        dataset_root / "_staging" / "dataset-manifest.json", dataset_identity=intent.dataset_identity,
+        created_at=CREATED, derived_from=[DatasetIdentity("raw", "trades", "bybit", "BTCUSDT", "trade-v1")],
+        transform="canonicalize-trades-v1",
+    )
+    dataset_document = dataset_emission.document
+    dataset_sha256 = dataset_emission.manifest_sha256
 
     content_sha256 = hashlib.sha256(content).hexdigest()
     provisional = CandidateAttempt(
@@ -276,7 +328,7 @@ def stage_and_prove(
         natural_partition_key=intent.partition_key,
         source_semantics_id=SOURCE_SEMANTICS_ID,
         mapping_id=MAPPING_ID,
-        dataset_sha256=HASH_A,
+        dataset_sha256=dataset_sha256,
         partition_sha256=HASH_B,
         content_sha256=content_sha256,
         code_ref=code_ref,
@@ -298,7 +350,7 @@ def stage_and_prove(
         last_exchange_ts=Instant.parse(ts),
     )
     partition_emission = emit_partition_manifest(
-        dataset_root / "_staging" / "partition-manifest.json",
+        dataset_root / "_staging" / f"partition-manifest-{content_sha256[:8]}.json",
         materialization,
         dataset_identity=intent.dataset_identity,
         dataset_root=dataset_root,
@@ -316,7 +368,7 @@ def stage_and_prove(
         natural_partition_key=intent.partition_key,
         source_semantics_id=SOURCE_SEMANTICS_ID,
         mapping_id=MAPPING_ID,
-        dataset_sha256=HASH_A,
+        dataset_sha256=dataset_sha256,
         partition_sha256=partition_emission.manifest_sha256,
         content_sha256=content_sha256,
         code_ref=code_ref,
@@ -326,9 +378,9 @@ def stage_and_prove(
     window_start = coverage_start or intent.required_support.start.isoformat()
     window_end = coverage_end or intent.required_support.end.isoformat()
     coverage_emission = emit_coverage_manifest(
-        dataset_root / "_staging" / "coverage-manifest.json",
+        dataset_root / "_staging" / f"coverage-manifest-{content_sha256[:8]}.json",
         dataset_identity=intent.dataset_identity,
-        coverage_id="repair-coverage-1",
+        coverage_id=f"repair-coverage-{content_sha256[:8]}",
         supersedes=None,
         created_at=CREATED,
         acquisition={
@@ -339,7 +391,7 @@ def stage_and_prove(
             "mapping": MAPPING_ID,
         },
         assertions=[{
-            "assertion_id": "repair-complete",
+            "assertion_id": f"repair-complete-{content_sha256[:8]}",
             "start": window_start,
             "end": window_end,
             "status": "complete",
@@ -358,19 +410,63 @@ def stage_and_prove(
     )
     assert not violations, violations
 
+    coverage_ids = [str(coverage_emission.document.get("coverage_id"))]
+    assertion_ids = [
+        str(assertion.get("assertion_id"))
+        for assertion in coverage_emission.document.get("assertions") or ()
+    ]
+    coverage_sha256 = [_canonical_fingerprint(coverage_emission.document)]
+
+    if assessment_status == "pass":
+        evidence_statuses = {name: "pass" for name in ("source", "canonical", "physical", "manifests", "coverage")}
+        quality_violations: list = []
+    elif assessment_status == "warn":
+        evidence_statuses = {"source": "warn", "canonical": "pass", "physical": "pass", "manifests": "pass", "coverage": "pass"}
+        quality_violations = [{"category": "source", "message": "controlled"}]
+    else:
+        raise ValueError(f"unsupported test assessment_status: {assessment_status!r}")
+
+    metrics = {
+        "certification_profile": EXPECTED_PROFILE,
+        "natural_partition_identity": {
+            "dataset_identity": intent.dataset_identity.stable_dict(),
+            "partition_key": staging_key,
+            "revision": 1,
+        },
+        "dataset_manifest_sha256": dataset_sha256,
+        "partition_manifest_sha256": partition_emission.manifest_sha256,
+        "physical_artifact_hash": content_sha256,
+        "canonical_content_hash_v1": "d" * 64,
+        "coverage_manifest_id": coverage_ids[0],
+        "coverage_assertion_id": assertion_ids[0],
+        "coverage_manifest_ids": coverage_ids,
+        "coverage_assertion_ids": assertion_ids,
+        "coverage_manifest_sha256": coverage_sha256,
+        "evidence": {name: {"status": status} for name, status in evidence_statuses.items()},
+    }
+    assessment_signature = semantic_assessment_signature(
+        EXPECTED_CHECK_SUITE, assessment_status, metrics, quality_violations, QUALITY_CODE_REF,
+    )
+
     proof = CandidateProof(
-        dataset_document={"rel_root": "canonical/trades/bybit/BTCUSDT/trade-v1"},
-        dataset_sha256=HASH_A,
+        dataset_document=dataset_document,
+        dataset_sha256=dataset_sha256,
         partition_document=partition_emission.document,
         partition_sha256=partition_emission.manifest_sha256,
         coverage_documents=(coverage_emission.document,),
         canonical_content_hash_v1="d" * 64,
-        assessment_signature="sig-1",
+        assessment_signature=assessment_signature,
         assessment_status=assessment_status,
         eligibility_state=eligibility_state,
         repair_code_ref=code_ref,
+        expected_profile=EXPECTED_PROFILE,
+        expected_check_suite=EXPECTED_CHECK_SUITE,
     )
-    return candidate, proof
+    quality_report = {
+        "check_suite": EXPECTED_CHECK_SUITE, "status": assessment_status,
+        "metrics": metrics, "violations": quality_violations, "code_ref": QUALITY_CODE_REF,
+    }
+    return candidate, proof, quality_report
 
 
 class RepairCutoverTestCase(unittest.TestCase):
@@ -382,12 +478,18 @@ class RepairCutoverTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self._tempdir.cleanup()
 
-    def stage_candidate_row(self, candidate: CandidateAttempt, proof: CandidateProof, *, partitions: FakePartitionsTable, partition_id: str = "cand-1", state: str = "valid") -> None:
+    def stage_candidate_row(
+        self, candidate: CandidateAttempt, proof: CandidateProof, quality_report: dict, *,
+        partitions: FakePartitionsTable, quality_reports: FakeQualityReportsTable,
+        partition_id: str = "cand-1", state: str = "valid",
+    ) -> None:
         partitions.add(
             partition_id=partition_id, partition_key=candidate.staging_partition_key, revision=1, state=state,
             content_sha256=candidate.content_sha256, manifest_sha256=proof.partition_sha256,
             rel_path=f"{candidate.staging_partition_key}/part-001.parquet",
         )
+        if state in {"valid", "degraded"}:
+            quality_reports.add(partition_id=partition_id, **quality_report)
 
     def cutover(self, intent, candidate, proof, connection) -> object:
         return RepairCutoverCatalog(connection).cutover(
@@ -401,11 +503,12 @@ class RepairCutoverConvergenceV1Tests(RepairCutoverTestCase):
     # manifest agree afterward (finding 2).
     def test_proven_candidate_converges_and_supersedes_predecessor(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
 
         result = self.cutover(intent, candidate, proof, connection)
 
@@ -434,20 +537,25 @@ class RepairCutoverConvergenceV1Tests(RepairCutoverTestCase):
         self.assertEqual(f"{candidate.staging_partition_key}/part-001.parquet", promoted_document["rel_path"])
 
         # finding 5: immutable convergence provenance is durably recorded,
-        # both as a catalog.artifacts row and as a durable JSON document.
+        # both as a catalog.artifacts row and as a durable JSON document,
+        # and (finding 4) names the exact promoted partition/state/manifest.
         self.assertIsNotNone(result.provenance_artifact_id)
         provenance_path = self.dataset_root / provenance_rel_path_for(intent)
         self.assertTrue(provenance_path.exists())
         provenance_document = __import__("json").loads(provenance_path.read_bytes())
         self.assertEqual(intent.intent_identity, provenance_document["intent_identity"])
         self.assertEqual(candidate.candidate_identity, provenance_document["candidate_identity"])
+        self.assertEqual("cand-1", provenance_document["promoted_partition_id"])
+        self.assertEqual("valid", provenance_document["promoted_state"])
+        self.assertEqual(result.promoted_manifest_sha256, provenance_document["promoted_manifest_sha256"])
 
     def test_backfill_without_predecessor_converges_as_revision_one(self):
         intent = backfill_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root, eligibility_state="degraded")
         partitions = FakePartitionsTable()
-        self.stage_candidate_row(candidate, proof, partitions=partitions, state="degraded")
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        quality_reports = FakeQualityReportsTable()
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports, state="degraded")
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
 
         result = self.cutover(intent, candidate, proof, connection)
 
@@ -461,11 +569,12 @@ class RepairCutoverConvergenceV1Tests(RepairCutoverTestCase):
     def test_predecessor_state_is_untouched_until_the_single_cutover_call(self):
         intent, pred_id = replacement_intent()
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
         self.assertEqual("invalid", partitions.rows[pred_id]["state"])
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
         self.cutover(intent, candidate, proof, connection)
         self.assertEqual("superseded", partitions.rows[pred_id]["state"])
 
@@ -474,11 +583,12 @@ class RepairCutoverPreservationV1Tests(RepairCutoverTestCase):
     # 6/7. candidate materialized but uncertified / quality fails -> predecessor unchanged
     def test_uncertified_candidate_refuses_and_leaves_predecessor_unchanged(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
-        self.stage_candidate_row(candidate, proof, partitions=partitions, state="closed")
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports, state="closed")
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
         with self.assertRaises(RepairCutoverRefusal):
             self.cutover(intent, candidate, proof, connection)
         self.assertEqual("invalid", partitions.rows[pred_id]["state"])
@@ -486,28 +596,31 @@ class RepairCutoverPreservationV1Tests(RepairCutoverTestCase):
 
     def test_quality_failed_candidate_refuses_and_leaves_predecessor_unchanged(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
-        self.stage_candidate_row(candidate, proof, partitions=partitions, state="invalid")
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports, state="invalid")
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
         with self.assertRaises(RepairCutoverRefusal):
             self.cutover(intent, candidate, proof, connection)
         self.assertEqual("invalid", partitions.rows[pred_id]["state"])
 
     # finding 1: exact declared coverage is independently re-folded and
     # verified -- a candidate that only closes part of the targeted gap
-    # never converges, even though its staging row is 'valid'.
+    # never converges, even though its staging row is 'valid' and its
+    # durable assessment re-derives cleanly.
     def test_candidate_covering_only_part_of_required_support_does_not_converge(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(
+        candidate, proof, quality_report = stage_and_prove(
             intent, self.dataset_root,
             coverage_start=REQUIRED.start.isoformat(), coverage_end="2024-01-15T12:00:00Z",
         )
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
         with self.assertRaises(RepairCutoverRefusal):
             self.cutover(intent, candidate, proof, connection)
         self.assertEqual("invalid", partitions.rows[pred_id]["state"])
@@ -516,7 +629,7 @@ class RepairCutoverPreservationV1Tests(RepairCutoverTestCase):
     # 19. no-predecessor acquisition failure -> support remains missing
     def test_missing_staged_candidate_refuses(self):
         intent = backfill_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
         connection = FakeConnection(partitions, FakeArtifactsTable())
         with self.assertRaises(RepairCutoverRefusal):
@@ -525,12 +638,14 @@ class RepairCutoverPreservationV1Tests(RepairCutoverTestCase):
     # 9. cutover transaction failure -> predecessor unchanged / no half-switch
     def test_fault_between_supersede_and_promote_leaves_no_half_switch(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
         connection = FakeConnection(
-            partitions, FakeArtifactsTable(), fault_on="SET partition_key = %s, revision = %s, manifest_sha256 = %s",
+            partitions, FakeArtifactsTable(), quality_reports,
+            fault_on="SET partition_key = %s, revision = %s, manifest_sha256 = %s",
         )
         with self.assertRaises(RuntimeError):
             self.cutover(intent, candidate, proof, connection)
@@ -546,14 +661,15 @@ class RepairCutoverStaleAndAlreadySatisfiedV1Tests(RepairCutoverTestCase):
     # STALE_CONFLICT, not ALREADY_SATISFIED.
     def test_unrelated_covering_live_revision_is_stale_conflict_not_already_satisfied(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(
             partition_id="other-live", partition_key=NATURAL_KEY, revision=2, state="valid",
             ts_start=REQUIRED.start.to_datetime(), ts_end=REQUIRED.end.to_datetime(),
         )
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
         result = self.cutover(intent, candidate, proof, connection)
         self.assertEqual(RepairOutcome.STALE_CONFLICT, result.status)
         self.assertIsNone(result.candidate_identity)
@@ -565,12 +681,13 @@ class RepairCutoverStaleAndAlreadySatisfiedV1Tests(RepairCutoverTestCase):
     # idempotent retry of the exact candidate that already converged here.
     def test_idempotent_retry_of_the_actual_winner_is_already_satisfied(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
         artifacts = FakeArtifactsTable()
-        connection = FakeConnection(partitions, artifacts)
+        connection = FakeConnection(partitions, artifacts, quality_reports)
         first = self.cutover(intent, candidate, proof, connection)
         self.assertEqual(RepairOutcome.CONVERGED, first.status)
 
@@ -588,11 +705,12 @@ class RepairCutoverStaleAndAlreadySatisfiedV1Tests(RepairCutoverTestCase):
     # 12/17. old trigger/predecessor changes -> stale conflict, no silent retarget
     def test_changed_incompatible_predecessor_is_stale_conflict(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id="other-live", partition_key=NATURAL_KEY, revision=2, state="invalid")
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
         result = self.cutover(intent, candidate, proof, connection)
         self.assertEqual(RepairOutcome.STALE_CONFLICT, result.status)
         self.assertEqual("invalid", partitions.rows["other-live"]["state"])
@@ -601,32 +719,35 @@ class RepairCutoverStaleAndAlreadySatisfiedV1Tests(RepairCutoverTestCase):
     # 18. higher revision/newer timestamp -> no authority by ordering alone
     def test_higher_revision_number_alone_grants_no_authority(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id="other-live", partition_key=NATURAL_KEY, revision=9, state="invalid")
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
         result = self.cutover(intent, candidate, proof, connection)
         self.assertEqual(RepairOutcome.STALE_CONFLICT, result.status)
 
     def test_vanished_predecessor_is_stale_conflict_not_deletion(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        quality_reports = FakeQualityReportsTable()
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
         result = self.cutover(intent, candidate, proof, connection)
         self.assertEqual(RepairOutcome.STALE_CONFLICT, result.status)
 
     # 20. superseded predecessor never reactivated
     def test_cutover_never_reactivates_an_already_superseded_row(self):
         intent, pred_id = replacement_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
         partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="superseded")
         partitions.add(partition_id="other-live", partition_key=NATURAL_KEY, revision=2, state="invalid")
-        self.stage_candidate_row(candidate, proof, partitions=partitions)
-        connection = FakeConnection(partitions, FakeArtifactsTable())
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
         result = self.cutover(intent, candidate, proof, connection)
         self.assertEqual(RepairOutcome.STALE_CONFLICT, result.status)
         self.assertEqual("superseded", partitions.rows[pred_id]["state"])
@@ -636,7 +757,7 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
     def test_candidate_for_a_different_intent_is_refused(self):
         intent, pred_id = replacement_intent()
         other_intent = backfill_intent()
-        candidate, proof = stage_and_prove(other_intent, self.dataset_root)
+        candidate, proof, _quality_report = stage_and_prove(other_intent, self.dataset_root)
         partitions = FakePartitionsTable()
         connection = FakeConnection(partitions, FakeArtifactsTable())
         with self.assertRaises(RepairError):
@@ -646,7 +767,7 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
     # bound to the intent, not merely intent_identity.
     def test_candidate_for_a_different_dataset_identity_is_refused(self):
         intent = backfill_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
         other_identity = DatasetIdentity("canonical", "trades", "kraken", "XBTUSD", "trade-v1")
         forged = CandidateAttempt(
             intent_identity=candidate.intent_identity, dataset_identity=other_identity,
@@ -662,7 +783,7 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
 
     def test_candidate_for_a_different_partition_key_is_refused(self):
         intent = backfill_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
         forged = CandidateAttempt(
             intent_identity=candidate.intent_identity, dataset_identity=candidate.dataset_identity,
             natural_partition_key="dt=2024-01-16",
@@ -675,23 +796,40 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
         with self.assertRaises(RepairError):
             self.cutover(intent, forged, proof, connection)
 
-    # finding 3: proof must be exactly bound to the candidate's own
-    # declared evidence -- an unrelated proof (arbitrary hashes) is refused.
-    def test_proof_with_unrelated_dataset_sha256_is_refused(self):
+    # finding 1/3: proof must be exactly bound to the candidate's own
+    # declared evidence -- a genuinely different (but internally
+    # self-consistent, hash-verified) proof is still refused by cutover's
+    # OWN candidate-binding cross-checks.
+    def test_proof_with_unrelated_dataset_document_is_refused(self):
         intent = backfill_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
         from dataclasses import replace
-        forged_proof = replace(proof, dataset_sha256="f" * 64)
+
+        # A genuinely different, but real and schema-valid, dataset manifest
+        # for an unrelated dataset -- not a candidate's own evidence.
+        other_emission = emit_dataset_manifest(
+            self.dataset_root / "_staging" / "other-dataset-manifest.json",
+            dataset_identity=DatasetIdentity("canonical", "trades", "kraken", "XBTUSD", "trade-v1"),
+            created_at=CREATED, derived_from=[DatasetIdentity("raw", "trades", "kraken", "XBTUSD", "trade-v1")],
+            transform="canonicalize-trades-v1",
+        )
+        forged_proof = replace(
+            proof, dataset_document=other_emission.document, dataset_sha256=other_emission.manifest_sha256,
+        )
         partitions = FakePartitionsTable()
         connection = FakeConnection(partitions, FakeArtifactsTable())
         with self.assertRaises(RepairError):
             self.cutover(intent, candidate, forged_proof, connection)
 
-    def test_proof_with_unrelated_partition_sha256_is_refused(self):
+    def test_proof_with_unrelated_partition_document_is_refused(self):
         intent = backfill_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
         from dataclasses import replace
-        forged_proof = replace(proof, partition_sha256="f" * 64)
+
+        forged_document = dict(proof.partition_document, created_at="2026-08-31T11:00:00Z")
+        forged_proof = replace(
+            proof, partition_document=forged_document, partition_sha256=_canonical_fingerprint(forged_document),
+        )
         partitions = FakePartitionsTable()
         connection = FakeConnection(partitions, FakeArtifactsTable())
         with self.assertRaises(RepairError):
@@ -699,11 +837,15 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
 
     def test_proof_partition_document_pointing_at_a_different_staging_key_is_refused(self):
         intent = backfill_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
         from dataclasses import replace
+
         forged_document = dict(proof.partition_document)
         forged_document["partition_key"] = "dt=2024-01-15/repair=not-this-candidate"
-        forged_proof = replace(proof, partition_document=forged_document)
+        forged_document["rel_path"] = "dt=2024-01-15/repair=not-this-candidate/part-001.parquet"
+        forged_proof = replace(
+            proof, partition_document=forged_document, partition_sha256=_canonical_fingerprint(forged_document),
+        )
         partitions = FakePartitionsTable()
         connection = FakeConnection(partitions, FakeArtifactsTable())
         with self.assertRaises(RepairError):
@@ -711,19 +853,40 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
 
     def test_proof_partition_document_declaring_a_non_revision_one_is_refused(self):
         intent = backfill_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
         from dataclasses import replace
+
         forged_document = dict(proof.partition_document)
         forged_document["revision"] = 2
-        forged_proof = replace(proof, partition_document=forged_document)
+        forged_proof = replace(
+            proof, partition_document=forged_document, partition_sha256=_canonical_fingerprint(forged_document),
+        )
         partitions = FakePartitionsTable()
         connection = FakeConnection(partitions, FakeArtifactsTable())
         with self.assertRaises(RepairError):
             self.cutover(intent, candidate, forged_proof, connection)
 
+    # finding 1: source_semantics/mapping/code identity are cross-checked
+    # against the durable coverage acquisition and partition manifest, not
+    # left as unbound caller assertions on CandidateAttempt.
+    def test_candidate_code_ref_not_matching_the_durable_partition_manifest_is_refused(self):
+        intent = backfill_intent()
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root, code_ref="repair-commit-1")
+        forged = CandidateAttempt(
+            intent_identity=candidate.intent_identity, dataset_identity=candidate.dataset_identity,
+            natural_partition_key=candidate.natural_partition_key,
+            source_semantics_id=candidate.source_semantics_id, mapping_id=candidate.mapping_id,
+            dataset_sha256=candidate.dataset_sha256, partition_sha256=candidate.partition_sha256,
+            content_sha256=candidate.content_sha256, code_ref="a-different-commit",
+        )
+        partitions = FakePartitionsTable()
+        connection = FakeConnection(partitions, FakeArtifactsTable())
+        with self.assertRaises(RepairError):
+            self.cutover(intent, forged, proof, connection)
+
     def test_unknown_dataset_refuses(self):
         intent = backfill_intent()
-        candidate, proof = stage_and_prove(intent, self.dataset_root)
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
         partitions = FakePartitionsTable()
 
         class EmptyDatasetCursor(FakeCursor):
@@ -736,11 +899,81 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
 
         class EmptyDatasetConnection(FakeConnection):
             def cursor(self):
-                return EmptyDatasetCursor(self.partitions, self.artifacts)
+                return EmptyDatasetCursor(self.partitions, self.artifacts, self.quality_reports)
 
         connection = EmptyDatasetConnection(partitions, FakeArtifactsTable())
         with self.assertRaises(RepairCutoverRefusal):
             self.cutover(intent, candidate, proof, connection)
+
+
+class RepairCutoverDurableAssessmentV1Tests(RepairCutoverTestCase):
+    # finding 1: assessment_signature/status and canonical_content_hash_v1
+    # are re-derived from catalog.quality_reports -- the SAME credited A16
+    # selection machinery S14 uses -- never trusted merely because the
+    # caller asserted them.
+    def test_missing_durable_quality_report_refuses(self):
+        intent, pred_id = replacement_intent()
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
+        partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()  # deliberately never populated
+        partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
+        partitions.add(
+            partition_id="cand-1", partition_key=candidate.staging_partition_key, revision=1, state="valid",
+            content_sha256=candidate.content_sha256, manifest_sha256=proof.partition_sha256,
+            rel_path=f"{candidate.staging_partition_key}/part-001.parquet",
+        )
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
+        with self.assertRaises(RepairCutoverRefusal):
+            self.cutover(intent, candidate, proof, connection)
+        self.assertEqual("invalid", partitions.rows[pred_id]["state"])
+
+    def test_proof_assessment_status_disagreeing_with_durable_report_is_refused(self):
+        intent, pred_id = replacement_intent()
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
+        from dataclasses import replace
+
+        # The durable report says 'pass'; the proof claims 'warn'. Even
+        # though 'warn' alone would be an eligible status, it must match
+        # what is ACTUALLY durably recorded for this exact candidate.
+        mismatched_proof = replace(proof, assessment_status="warn")
+        partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
+        partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
+        self.stage_candidate_row(candidate, mismatched_proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
+        with self.assertRaises(RepairCutoverRefusal):
+            self.cutover(intent, candidate, mismatched_proof, connection)
+        self.assertEqual("invalid", partitions.rows[pred_id]["state"])
+
+    def test_proof_canonical_content_hash_disagreeing_with_durable_metrics_is_refused(self):
+        intent, pred_id = replacement_intent()
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
+        from dataclasses import replace
+
+        forged_proof = replace(proof, canonical_content_hash_v1="e" * 64)
+        partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
+        partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
+        self.stage_candidate_row(candidate, forged_proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
+        with self.assertRaises(RepairCutoverRefusal):
+            self.cutover(intent, candidate, forged_proof, connection)
+        self.assertEqual("invalid", partitions.rows[pred_id]["state"])
+
+    def test_proof_eligibility_state_disagreeing_with_the_real_staged_state_is_refused(self):
+        intent, pred_id = replacement_intent()
+        # proof claims 'valid'; the staged catalog row will actually be
+        # 'degraded' -- cutover must trust the real catalog state, not the
+        # caller's copy.
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root, eligibility_state="valid")
+        partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
+        partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports, state="degraded")
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
+        with self.assertRaises(RepairCutoverRefusal):
+            self.cutover(intent, candidate, proof, connection)
+        self.assertEqual("invalid", partitions.rows[pred_id]["state"])
 
 
 if __name__ == "__main__":
