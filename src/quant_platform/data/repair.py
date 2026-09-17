@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
+from .coverage import reconstruct_catalog_coverage
 from .models import CoverageInterval, DatasetIdentity, Instant, NaturalPartitionIdentity
 from .quality_lifecycle import (
     QualityLifecycleCatalog,
@@ -229,17 +230,20 @@ class RepairIntent:
 # ---------------------------------------------------------------------------
 
 
-def compute_quality_evidence_id(report: Mapping[str, Any], *, check_suite: str) -> str:
+def compute_quality_evidence_id(report: Mapping[str, Any], *, check_suite: str, expected_profile: str) -> str:
     """Deterministic identity of the exact quality-report content a candidate binds.
 
-    ``check_suite`` is bound in as well as the report content: ``cutover()``
-    files the report under an independently supplied ``expected_check_suite``,
-    so without binding it here the same report content could be re-filed
-    under a different suite (changing what A16/S14 select against) while
-    ``candidate_id`` stayed unchanged.  A ``CandidateAttempt.quality_evidence_id``
-    MUST equal this value computed over the report and suite that will
-    actually be used at cutover; ``cutover()`` re-derives and checks it, so a
-    differently-evidenced report or suite can never be substituted under the
+    ``check_suite`` and ``expected_profile`` are bound in as well as the
+    report content: ``cutover()`` files the report under an independently
+    supplied ``expected_check_suite`` and selects/verifies it against an
+    independently supplied ``expected_profile`` -- without binding both here,
+    the same report content could be re-filed under a different suite or
+    re-evaluated under a different profile (changing what A16/S14 select and
+    accept) while ``candidate_id`` stayed unchanged.  A
+    ``CandidateAttempt.quality_evidence_id`` MUST equal this value computed
+    over the report, suite and profile that will actually be used at
+    cutover; ``cutover()`` re-derives and checks it, so a differently-
+    evidenced report, suite or profile can never be substituted under the
     same ``candidate_id``.
     """
 
@@ -248,8 +252,11 @@ def compute_quality_evidence_id(report: Mapping[str, Any], *, check_suite: str) 
             raise RepairRefusal(f"quality report evidence is missing required field {name!r}")
     if not isinstance(check_suite, str) or not check_suite.strip():
         raise RepairRefusal("check_suite must be a non-empty string")
+    if not isinstance(expected_profile, str) or not expected_profile.strip():
+        raise RepairRefusal("expected_profile must be a non-empty string")
     return _canonical_hash("a10-quality-report-evidence-v1", {
         "check_suite": check_suite.strip(),
+        "expected_profile": expected_profile.strip(),
         "status": report["status"],
         "metrics": report["metrics"],
         "violations": report["violations"],
@@ -261,17 +268,28 @@ def compute_coverage_evidence_id(
     coverage_ids: Sequence[str],
     assertion_ids: Sequence[str],
     coverage_sha256: Sequence[str],
+    *,
+    coverage_start: Instant,
+    coverage_end: Instant,
 ) -> str:
     """Deterministic identity of the exact coverage evidence a candidate binds.
 
-    A ``CandidateAttempt.coverage_evidence_id`` MUST equal this value; the
-    same binding-and-recheck discipline as :func:`compute_quality_evidence_id`.
+    ``coverage_start``/``coverage_end`` are bound in as well as the coverage
+    manifest identifiers: they determine both gap elimination
+    (:func:`_verify_gaps_eliminated`) and the admitted partition's catalog
+    coverage, so a candidate that fails with one set of bounds must not be
+    able to converge later with expanded bounds under the same
+    ``candidate_id``.  A ``CandidateAttempt.coverage_evidence_id`` MUST equal
+    this value; the same binding-and-recheck discipline as
+    :func:`compute_quality_evidence_id`.
     """
 
     return _canonical_hash("a10-coverage-evidence-v1", {
         "coverage_ids": list(coverage_ids),
         "assertion_ids": list(assertion_ids),
         "coverage_sha256": list(coverage_sha256),
+        "coverage_start": Instant.parse(coverage_start).isoformat(),
+        "coverage_end": Instant.parse(coverage_end).isoformat(),
     })
 
 
@@ -471,7 +489,14 @@ class PredecessorEvidence:
 
 @dataclass(frozen=True, slots=True)
 class ConvergenceProvenance:
-    """Immutable evidence bound to the exact final revision that became authoritative."""
+    """Immutable evidence bound to the exact final revision that became authoritative.
+
+    Carries the exact coverage IDs/assertion IDs/hashes and the candidate's
+    quality-evidence and code identities -- not only the opaque
+    ``coverage_evidence_id`` -- so durable audit/reconstruction never depends
+    on an external document to know what was actually accepted (review
+    finding).
+    """
 
     repair_intent_id: str
     candidate_id: str
@@ -481,9 +506,14 @@ class ConvergenceProvenance:
     final_partition_manifest_sha256: str
     final_content_sha256: str
     coverage_evidence_id: str
+    coverage_ids: tuple[str, ...]
+    assertion_ids: tuple[str, ...]
+    coverage_sha256: tuple[str, ...]
+    quality_evidence_id: str
     quality_assessment_signature: str
     quality_assessment_status: str
     publication_state: str
+    code_ref: str
     repair_semantics_version: str = REPAIR_SEMANTICS_VERSION
 
     def stable_dict(self) -> dict[str, Any]:
@@ -496,9 +526,14 @@ class ConvergenceProvenance:
             "final_partition_manifest_sha256": self.final_partition_manifest_sha256,
             "final_content_sha256": self.final_content_sha256,
             "coverage_evidence_id": self.coverage_evidence_id,
+            "coverage_ids": list(self.coverage_ids),
+            "assertion_ids": list(self.assertion_ids),
+            "coverage_sha256": list(self.coverage_sha256),
+            "quality_evidence_id": self.quality_evidence_id,
             "quality_assessment_signature": self.quality_assessment_signature,
             "quality_assessment_status": self.quality_assessment_status,
             "publication_state": self.publication_state,
+            "code_ref": self.code_ref,
             "repair_semantics_version": self.repair_semantics_version,
         }
 
@@ -600,6 +635,7 @@ class RepairCutoverCatalog:
         expected_profile: str,
         expected_check_suite: str,
         predecessor_evidence: PredecessorEvidence | None = None,
+        coverage_manifests: Sequence[Mapping[str, Any]] | None = None,
     ) -> CutoverResult:
         trigger = repair_intent.trigger
         if candidate.repair_intent_id != repair_intent.intent_id:
@@ -620,17 +656,30 @@ class RepairCutoverCatalog:
 
         # Candidate acceptance inputs must be exactly the evidence this
         # candidate_id is bound to -- never a substitutable, independently
-        # supplied argument (review finding).  expected_check_suite is bound
-        # into quality_evidence_id because the report is filed under it.
-        if candidate.quality_evidence_id != compute_quality_evidence_id(candidate_quality_report, check_suite=expected_check_suite):
+        # supplied argument (review finding).  expected_check_suite and
+        # expected_profile are bound into quality_evidence_id because the
+        # report is filed under the suite and selected/verified under the
+        # profile; coverage_start/coverage_end are bound into
+        # coverage_evidence_id because they determine gap elimination and the
+        # admitted partition's catalog coverage.
+        if candidate.quality_evidence_id != compute_quality_evidence_id(
+            candidate_quality_report, check_suite=expected_check_suite, expected_profile=expected_profile,
+        ):
             raise RepairRefusal("candidate_quality_report does not match the candidate's bound quality_evidence_id")
-        if candidate.coverage_evidence_id != compute_coverage_evidence_id(coverage_ids, assertion_ids, coverage_sha256):
+        if candidate.coverage_evidence_id != compute_coverage_evidence_id(
+            coverage_ids, assertion_ids, coverage_sha256, coverage_start=coverage_start, coverage_end=coverage_end,
+        ):
             raise RepairRefusal("coverage evidence does not match the candidate's bound coverage_evidence_id")
 
         if isinstance(trigger, InvalidRevisionTrigger):
             if predecessor_evidence is None:
                 raise RepairRefusal("predecessor_evidence is required to re-authorize an invalid-revision trigger")
-        elif not isinstance(trigger, CoverageGapTrigger):  # pragma: no cover - exhaustive union
+        elif isinstance(trigger, CoverageGapTrigger):
+            if coverage_manifests is None:
+                raise RepairRefusal("coverage_manifests evidence is required to re-authorize a coverage-gap trigger")
+            if [doc.get("coverage_id") for doc in coverage_manifests] != list(coverage_ids):
+                raise RepairRefusal("coverage_manifests do not match the candidate's bound coverage_ids evidence")
+        else:  # pragma: no cover - exhaustive union
             raise RepairRefusal(f"unsupported repair trigger kind: {trigger!r}")
 
         try:
@@ -657,19 +706,22 @@ class RepairCutoverCatalog:
 
                 # Step 3: re-evaluate the repair trigger/current authority
                 # under lock, against durable convergence provenance -- never
-                # against a coincidental content-hash match.  For a
-                # coverage-gap trigger this IS the exact re-authorization: the
-                # topology lock proves, catalog-natively, whether an eligible
-                # row now exists for this partition_key (gap closed by
-                # someone) versus none at all (gap genuinely still open) --
-                # a caller-supplied "current gaps" argument would add no
-                # verifiable information A10 could integrity-bind without
-                # importing B04/quant_platform.access, so none is accepted.
+                # against a coincidental content-hash match.  A live row
+                # already occupying this partition_key (gap closed, or
+                # something else entirely) is caught here regardless of
+                # trigger kind.
                 predecessor_row = _reevaluate_authority(cursor, repair_intent, candidate, topology)
 
                 # Step 3b: trigger-specific re-authorization.
                 if isinstance(trigger, CoverageGapTrigger):
-                    _verify_gaps_eliminated(trigger.gaps, coverage_start, coverage_end)
+                    _verify_candidate_coverage_via_fold(
+                        identity=identity,
+                        trigger=trigger,
+                        coverage_manifests=coverage_manifests,
+                        candidate_partition=candidate_partition,
+                        coverage_start=coverage_start,
+                        coverage_end=coverage_end,
+                    )
                 else:
                     _verify_invalid_revision_trigger_still_authoritative(
                         cursor,
@@ -770,9 +822,14 @@ class RepairCutoverCatalog:
                     final_partition_manifest_sha256=candidate.partition_manifest_sha256,
                     final_content_sha256=candidate.content_sha256,
                     coverage_evidence_id=candidate.coverage_evidence_id.strip(),
+                    coverage_ids=tuple(coverage_ids),
+                    assertion_ids=tuple(assertion_ids),
+                    coverage_sha256=tuple(coverage_sha256),
+                    quality_evidence_id=candidate.quality_evidence_id.strip(),
                     quality_assessment_signature=quality_result.assessment_signature,
                     quality_assessment_status=quality_result.assessment_status,
                     publication_state=publication_result.state,
+                    code_ref=candidate.code_ref.strip(),
                     repair_semantics_version=repair_intent.repair_semantics_version,
                 )
                 # Step 10: persist integrity-bound convergence provenance
@@ -884,18 +941,22 @@ def _insert_convergence_provenance(
     cursor.execute(
         """
         INSERT INTO catalog.repair_convergence (
-            partition_id, repair_intent_id, candidate_id, predecessor_partition_id,
+            partition_id, repair_intent_id, candidate_id, provenance_id, predecessor_partition_id,
             final_partition_manifest_sha256, final_content_sha256, coverage_evidence_id,
+            coverage_ids, assertion_ids, coverage_sha256, quality_evidence_id,
             quality_assessment_signature, quality_assessment_status, publication_state,
-            repair_semantics_version, provenance_id
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            code_ref, repair_semantics_version
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
-            partition_id, provenance.repair_intent_id, provenance.candidate_id, predecessor_partition_id,
+            partition_id, provenance.repair_intent_id, provenance.candidate_id, provenance.provenance_id,
+            predecessor_partition_id,
             provenance.final_partition_manifest_sha256, provenance.final_content_sha256,
-            provenance.coverage_evidence_id, provenance.quality_assessment_signature,
-            provenance.quality_assessment_status, provenance.publication_state,
-            provenance.repair_semantics_version, provenance.provenance_id,
+            provenance.coverage_evidence_id,
+            list(provenance.coverage_ids), list(provenance.assertion_ids), list(provenance.coverage_sha256),
+            provenance.quality_evidence_id,
+            provenance.quality_assessment_signature, provenance.quality_assessment_status,
+            provenance.publication_state, provenance.code_ref, provenance.repair_semantics_version,
         ),
     )
 
@@ -903,16 +964,41 @@ def _insert_convergence_provenance(
 def _provenance_marks_self(cursor: Any, live_partition_id: str, repair_intent: RepairIntent, candidate: CandidateAttempt) -> bool:
     """True iff durable convergence provenance proves the live row is exactly
     this repair_intent's own prior successful convergence with this exact
-    candidate -- never inferred from a coincidental content-hash match."""
+    candidate.
+
+    Cross-checks multiple independently-stored fields (final content/manifest
+    hashes and coverage/quality evidence ids) against the candidate's own
+    corresponding fields -- not only the two opaque ``repair_intent_id``/
+    ``candidate_id`` strings -- so a write-path defect that stored
+    inconsistent values under a matching ``candidate_id`` is detected rather
+    than silently authorizing ``ALREADY_SATISFIED``.  Never inferred from a
+    coincidental content-hash match alone.
+    """
 
     cursor.execute(
-        "SELECT repair_intent_id, candidate_id FROM catalog.repair_convergence WHERE partition_id = %s",
+        """
+        SELECT repair_intent_id, candidate_id, final_content_sha256,
+               final_partition_manifest_sha256, coverage_evidence_id, quality_evidence_id
+          FROM catalog.repair_convergence
+         WHERE partition_id = %s
+        """,
         (live_partition_id,),
     )
     row = cursor.fetchone()
     if row is None:
         return False
-    return row[0] == repair_intent.intent_id and row[1] == candidate.candidate_id
+    (
+        stored_intent_id, stored_candidate_id, stored_content_sha256,
+        stored_manifest_sha256, stored_coverage_evidence_id, stored_quality_evidence_id,
+    ) = row
+    return (
+        stored_intent_id == repair_intent.intent_id
+        and stored_candidate_id == candidate.candidate_id
+        and _text(stored_content_sha256) == candidate.content_sha256
+        and _text(stored_manifest_sha256) == candidate.partition_manifest_sha256
+        and stored_coverage_evidence_id == candidate.coverage_evidence_id.strip()
+        and stored_quality_evidence_id == candidate.quality_evidence_id.strip()
+    )
 
 
 def _matches_predecessor(row: Any, predecessor_ref: PredecessorRef) -> bool:
@@ -984,6 +1070,59 @@ def _verify_gaps_eliminated(
             raise RepairRefusal(
                 "candidate declared coverage does not eliminate every targeted gap; partial fill cannot converge"
             )
+
+
+def _verify_candidate_coverage_via_fold(
+    *,
+    identity: DatasetIdentity,
+    trigger: CoverageGapTrigger,
+    coverage_manifests: Sequence[Mapping[str, Any]],
+    candidate_partition: Mapping[str, Any],
+    coverage_start: Instant,
+    coverage_end: Instant,
+) -> None:
+    """Re-derive the candidate's declared coverage through the SAME
+    authoritative B04 fold S13/S14 use (``reconstruct_catalog_coverage``),
+    rather than trusting caller-supplied ``coverage_start``/``coverage_end``
+    or the originally captured ``trigger.gaps`` at face value.
+
+    Folds the caller's coverage-manifest evidence against the candidate's own
+    about-to-be-admitted partition (never a synthetic/fabricated partition,
+    and never the current live row, which ``_reevaluate_authority`` has
+    already proven does not exist for a coverage-gap trigger): the fold can
+    only attribute completed coverage to a partition manifest that is
+    actually present, so this is a real, non-tautological, integrity-bound
+    verification -- not a restatement of the topology check.  Every targeted
+    gap must fall inside the folded interval, and the folded interval must
+    exactly equal the caller's ``coverage_start``/``coverage_end``, proving
+    those bounds are not independently fabricated relative to the durable
+    coverage manifests admission will actually use.
+    """
+
+    manifest_for_fold = {
+        **identity.stable_dict(),
+        "partition_key": candidate_partition["partition_key"],
+        "revision": int(candidate_partition["revision"]),
+        "state": "closed",
+        "row_count": candidate_partition.get("row_count", 0),
+        "first_exchange_ts": candidate_partition.get("first_exchange_ts"),
+        "last_exchange_ts": candidate_partition.get("last_exchange_ts"),
+    }
+    folded, violations = reconstruct_catalog_coverage(coverage_manifests, (manifest_for_fold,))
+    if violations:
+        raise RepairRefusal(
+            "candidate coverage evidence does not fold to one publishable interval: "
+            + ", ".join(item.code for item in violations)
+        )
+    key = (manifest_for_fold["partition_key"], manifest_for_fold["revision"])
+    if key not in folded:
+        raise RepairRefusal("candidate coverage evidence does not resolve to the target revision")
+    folded_start, folded_end = folded[key]
+    if folded_start != coverage_start or folded_end != coverage_end:
+        raise RepairRefusal(
+            "supplied coverage_start/coverage_end do not match the authoritative coverage fold"
+        )
+    _verify_gaps_eliminated(trigger.gaps, folded_start, folded_end)
 
 
 def _verify_invalid_revision_trigger_still_authoritative(

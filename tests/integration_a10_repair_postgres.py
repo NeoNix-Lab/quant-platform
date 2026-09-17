@@ -120,7 +120,10 @@ def report_for(partition: dict, *, status: str, certifier_tag: str) -> dict:
     }
 
 
-def candidate_for(intent: RepairIntent, partition: dict, report: dict, *, source_tag: str) -> CandidateAttempt:
+def candidate_for(
+    intent: RepairIntent, partition: dict, report: dict, *, source_tag: str,
+    coverage_start: Instant = START, coverage_end: Instant = END,
+) -> CandidateAttempt:
     return CandidateAttempt(
         repair_intent_id=intent.intent_id,
         natural_identity=NaturalPartitionIdentity(IDENTITY, partition["partition_key"], partition["revision"]),
@@ -128,16 +131,43 @@ def candidate_for(intent: RepairIntent, partition: dict, report: dict, *, source
         partition_manifest_sha256=partition["_manifest_sha256"],
         source_evidence_id=f"a10-source-{source_tag}",
         materialization_id=f"a10-materialization-{source_tag}",
-        coverage_evidence_id=compute_coverage_evidence_id(COVERAGE_IDS, ASSERTION_IDS, COVERAGE_SHA),
-        quality_evidence_id=compute_quality_evidence_id(report, check_suite=CHECK_SUITE),
+        coverage_evidence_id=compute_coverage_evidence_id(
+            COVERAGE_IDS, ASSERTION_IDS, COVERAGE_SHA, coverage_start=coverage_start, coverage_end=coverage_end,
+        ),
+        quality_evidence_id=compute_quality_evidence_id(report, check_suite=CHECK_SUITE, expected_profile=PROFILE),
         code_ref=partition["code_ref"],
     )
+
+
+def coverage_manifest_for(
+    *, coverage_id: str, partition_key: str, revision: int, start: Instant, end: Instant,
+    supersedes: str | None = None,
+) -> dict:
+    """One durable coverage-manifest document, shaped exactly as
+    ``quant_platform.data.coverage.reconstruct_catalog_coverage`` (the SAME
+    authoritative B04 fold S13/S14 use) expects: identity fields plus one
+    'complete' assertion attributing ``[start, end)`` to the target
+    partition_key/revision."""
+
+    return {
+        **IDENTITY.stable_dict(),
+        "coverage_id": coverage_id,
+        "supersedes": supersedes,
+        "assertions": [{
+            "assertion_id": f"{coverage_id}-assertion",
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "status": "complete",
+            "partitions": [{"partition_key": partition_key, "revision": revision}],
+        }],
+    }
 
 
 def do_cutover(
     connection, *, intent: RepairIntent, candidate: CandidateAttempt, partition: dict, report: dict,
     coverage_start: Instant = START, coverage_end: Instant = END,
     predecessor_evidence: PredecessorEvidence | None = None,
+    coverage_manifests: list[dict] | None = None,
 ) -> object:
     return RepairCutoverCatalog(connection).cutover(
         repair_intent=intent,
@@ -155,6 +185,7 @@ def do_cutover(
         expected_profile=PROFILE,
         expected_check_suite=CHECK_SUITE,
         predecessor_evidence=predecessor_evidence,
+        coverage_manifests=coverage_manifests,
     )
 
 
@@ -430,10 +461,18 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     backfill_intent = RepairIntent(IDENTITY, backfill_key, backfill_trigger)
     backfill_partition = partition_dict(1, "7", partition_key=backfill_key)
     backfill_report = report_for(backfill_partition, status="pass", certifier_tag="backfill")
-    backfill_candidate = candidate_for(backfill_intent, backfill_partition, backfill_report, source_tag="backfill")
+    backfill_candidate = candidate_for(
+        backfill_intent, backfill_partition, backfill_report, source_tag="backfill",
+        coverage_start=backfill_required.start, coverage_end=backfill_required.end,
+    )
+    backfill_coverage_manifests = [coverage_manifest_for(
+        coverage_id=COVERAGE_IDS[0], partition_key=backfill_key, revision=1,
+        start=backfill_required.start, end=backfill_required.end,
+    )]
     backfill_outcome = do_cutover(
         connection, intent=backfill_intent, candidate=backfill_candidate, partition=backfill_partition,
         report=backfill_report, coverage_start=backfill_required.start, coverage_end=backfill_required.end,
+        coverage_manifests=backfill_coverage_manifests,
     )
     assert backfill_outcome.outcome == CONVERGED, backfill_outcome
     assert backfill_outcome.provenance.predecessor is None
@@ -450,6 +489,7 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     already = do_cutover(
         connection, intent=backfill_intent, candidate=backfill_candidate, partition=backfill_partition,
         report=backfill_report, coverage_start=backfill_required.start, coverage_end=backfill_required.end,
+        coverage_manifests=backfill_coverage_manifests,
     )
     assert already.outcome == ALREADY_SATISFIED, already
     assert _row_count(connection, dataset_id, backfill_key) == 1
@@ -461,10 +501,14 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     # coincidental content/state match on the live row.
     backfill_distinct_partition = partition_dict(2, "8", partition_key=backfill_key)
     backfill_distinct_report = report_for(backfill_distinct_partition, status="pass", certifier_tag="backfill-distinct")
-    backfill_distinct_candidate = candidate_for(backfill_intent, backfill_distinct_partition, backfill_distinct_report, source_tag="backfill-distinct")
+    backfill_distinct_candidate = candidate_for(
+        backfill_intent, backfill_distinct_partition, backfill_distinct_report, source_tag="backfill-distinct",
+        coverage_start=backfill_required.start, coverage_end=backfill_required.end,
+    )
     distinct_outcome = do_cutover(
         connection, intent=backfill_intent, candidate=backfill_distinct_candidate, partition=backfill_distinct_partition,
         report=backfill_distinct_report, coverage_start=backfill_required.start, coverage_end=backfill_required.end,
+        coverage_manifests=backfill_coverage_manifests,
     )
     assert distinct_outcome.outcome == STALE_CONFLICT, distinct_outcome
     assert _row_count(connection, dataset_id, backfill_key) == 1
@@ -477,11 +521,22 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     partial_intent = RepairIntent(IDENTITY, partial_key, partial_trigger)
     partial_partition = partition_dict(1, "9", partition_key=partial_key)
     partial_report = report_for(partial_partition, status="pass", certifier_tag="partial")
-    partial_candidate = candidate_for(partial_intent, partial_partition, partial_report, source_tag="partial")
     half = Instant.parse("2024-03-01T12:00:00Z")
+    partial_candidate = candidate_for(
+        partial_intent, partial_partition, partial_report, source_tag="partial",
+        coverage_start=partial_required.start, coverage_end=half,
+    )
+    # The candidate can only durably prove HALF the required interval --
+    # its own coverage-manifest evidence declares completion only up to
+    # `half`, exactly matching what it will claim as coverage_end.
+    partial_coverage_manifests = [coverage_manifest_for(
+        coverage_id=COVERAGE_IDS[0], partition_key=partial_key, revision=1,
+        start=partial_required.start, end=half,
+    )]
     partial_outcome = do_cutover(
         connection, intent=partial_intent, candidate=partial_candidate, partition=partial_partition,
         report=partial_report, coverage_start=partial_required.start, coverage_end=half,
+        coverage_manifests=partial_coverage_manifests,
     )
     assert partial_outcome.outcome == FAILED, partial_outcome
     assert _row_count(connection, dataset_id, partial_key) == 0, "a rejected partial-fill candidate must not admit a row"
@@ -497,12 +552,20 @@ def _run_replacement_and_coverage_scenarios(connection, writer, dsn: str) -> Non
     remaining_intent = RepairIntent(IDENTITY, remaining_key, remaining_trigger)
     remaining_partition = partition_dict(1, "0", partition_key=remaining_key)
     remaining_report = report_for(remaining_partition, status="pass", certifier_tag="remaining")
-    remaining_candidate = candidate_for(remaining_intent, remaining_partition, remaining_report, source_tag="remaining")
     # Candidate only declares coverage for 04-01, leaving the 04-02 gap open.
     covers_only_first_day_end = Instant.parse("2024-04-02T00:00:00Z")
+    remaining_candidate = candidate_for(
+        remaining_intent, remaining_partition, remaining_report, source_tag="remaining",
+        coverage_start=remaining_required.start, coverage_end=covers_only_first_day_end,
+    )
+    remaining_coverage_manifests = [coverage_manifest_for(
+        coverage_id=COVERAGE_IDS[0], partition_key=remaining_key, revision=1,
+        start=remaining_required.start, end=covers_only_first_day_end,
+    )]
     remaining_outcome = do_cutover(
         connection, intent=remaining_intent, candidate=remaining_candidate, partition=remaining_partition,
         report=remaining_report, coverage_start=remaining_required.start, coverage_end=covers_only_first_day_end,
+        coverage_manifests=remaining_coverage_manifests,
     )
     assert remaining_outcome.outcome == FAILED, remaining_outcome
     assert _row_count(connection, dataset_id, remaining_key) == 0

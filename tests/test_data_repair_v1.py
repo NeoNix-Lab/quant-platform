@@ -53,21 +53,43 @@ class _FakeProvenanceCursor:
     query ``_reevaluate_authority`` issues -- so the pure re-evaluation logic
     can be exercised without a real database connection.
 
-    ``self_for`` is the set of partition_ids that should look like this exact
-    repair_intent_id/candidate_id's own durable convergence row; every other
-    partition_id reports no provenance row at all.
+    ``self_for`` is the set of partition_ids that should look like a durable
+    convergence row exists.  When one of them is queried, the returned row's
+    fields (repair_intent_id, candidate_id, final_content_sha256,
+    final_partition_manifest_sha256, coverage_evidence_id, quality_evidence_id)
+    are derived from ``candidate``/``repair_intent`` -- pass the SAME objects
+    the test candidate/intent under test to get a genuine self-match, or
+    DIFFERENT objects to prove a mismatch on any single field is caught.
     """
 
-    def __init__(self, self_for: frozenset[str] = frozenset(), *, intent_id: str = "", candidate_id: str = ""):
+    def __init__(
+        self, self_for: frozenset[str] = frozenset(), *,
+        candidate: "CandidateAttempt | None" = None, repair_intent: "RepairIntent | None" = None,
+        field_overrides: dict[str, object] | None = None,
+    ):
         self.self_for = self_for
-        self.intent_id = intent_id
-        self.candidate_id = candidate_id
+        self.candidate = candidate
+        self.repair_intent = repair_intent
+        self.field_overrides = field_overrides or {}
         self._result = None
 
     def execute(self, statement, params=None):
         assert "catalog.repair_convergence" in statement
         partition_id = params[0]
-        self._result = (self.intent_id, self.candidate_id) if partition_id in self.self_for else None
+        if partition_id in self.self_for and self.candidate is not None and self.repair_intent is not None:
+            c = self.candidate
+            row = {
+                "repair_intent_id": self.repair_intent.intent_id,
+                "candidate_id": c.candidate_id,
+                "final_content_sha256": c.content_sha256,
+                "final_partition_manifest_sha256": c.partition_manifest_sha256,
+                "coverage_evidence_id": c.coverage_evidence_id.strip(),
+                "quality_evidence_id": c.quality_evidence_id.strip(),
+            }
+            row.update(self.field_overrides)
+            self._result = tuple(row.values())
+        else:
+            self._result = None
 
     def fetchone(self):
         return self._result
@@ -205,21 +227,23 @@ class EvidenceIdentityBindingTests(unittest.TestCase):
     def test_J5_quality_evidence_id_is_deterministic_over_report_content(self):
         report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
         self.assertEqual(
-            compute_quality_evidence_id(report, check_suite="suite-1"),
-            compute_quality_evidence_id(dict(report), check_suite="suite-1"),
+            compute_quality_evidence_id(report, check_suite="suite-1", expected_profile="profile-1"),
+            compute_quality_evidence_id(dict(report), check_suite="suite-1", expected_profile="profile-1"),
         )
 
     def test_J6_quality_evidence_id_changes_with_status(self):
         base = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
         changed = {**base, "status": "fail"}
         self.assertNotEqual(
-            compute_quality_evidence_id(base, check_suite="suite-1"),
-            compute_quality_evidence_id(changed, check_suite="suite-1"),
+            compute_quality_evidence_id(base, check_suite="suite-1", expected_profile="profile-1"),
+            compute_quality_evidence_id(changed, check_suite="suite-1", expected_profile="profile-1"),
         )
 
     def test_J7_quality_evidence_id_requires_all_fields(self):
         with self.assertRaises(RepairRefusal):
-            compute_quality_evidence_id({"status": "pass", "metrics": {}, "violations": []}, check_suite="suite-1")
+            compute_quality_evidence_id(
+                {"status": "pass", "metrics": {}, "violations": []}, check_suite="suite-1", expected_profile="profile-1",
+            )
 
     def test_J9_quality_evidence_id_changes_with_check_suite(self):
         # cutover() files the report under an independently supplied
@@ -227,21 +251,43 @@ class EvidenceIdentityBindingTests(unittest.TestCase):
         # being re-filed under a different suite under the same candidate_id.
         report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
         self.assertNotEqual(
-            compute_quality_evidence_id(report, check_suite="suite-1"),
-            compute_quality_evidence_id(report, check_suite="suite-2"),
+            compute_quality_evidence_id(report, check_suite="suite-1", expected_profile="profile-1"),
+            compute_quality_evidence_id(report, check_suite="suite-2", expected_profile="profile-1"),
         )
 
     def test_J10_quality_evidence_id_requires_non_empty_check_suite(self):
         report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
         with self.assertRaises(RepairRefusal):
-            compute_quality_evidence_id(report, check_suite="")
+            compute_quality_evidence_id(report, check_suite="", expected_profile="profile-1")
+
+    def test_J11_quality_evidence_id_changes_with_expected_profile(self):
+        # A candidate re-evaluated under a different quality/publication
+        # profile must not be able to converge under the same candidate_id.
+        report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
+        self.assertNotEqual(
+            compute_quality_evidence_id(report, check_suite="suite-1", expected_profile="profile-1"),
+            compute_quality_evidence_id(report, check_suite="suite-1", expected_profile="profile-2"),
+        )
+
+    def test_J12_quality_evidence_id_requires_non_empty_expected_profile(self):
+        report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
+        with self.assertRaises(RepairRefusal):
+            compute_quality_evidence_id(report, check_suite="suite-1", expected_profile="")
 
     def test_J8_coverage_evidence_id_changes_with_any_component(self):
-        base = compute_coverage_evidence_id(["c1"], ["a1"], ["e" * 64])
-        different_ids = compute_coverage_evidence_id(["c2"], ["a1"], ["e" * 64])
-        different_hash = compute_coverage_evidence_id(["c1"], ["a1"], ["f" * 64])
+        start, end = REQUIRED.start, REQUIRED.end
+        base = compute_coverage_evidence_id(["c1"], ["a1"], ["e" * 64], coverage_start=start, coverage_end=end)
+        different_ids = compute_coverage_evidence_id(["c2"], ["a1"], ["e" * 64], coverage_start=start, coverage_end=end)
+        different_hash = compute_coverage_evidence_id(["c1"], ["a1"], ["f" * 64], coverage_start=start, coverage_end=end)
         self.assertNotEqual(base, different_ids)
         self.assertNotEqual(base, different_hash)
+
+    def test_J13_coverage_evidence_id_changes_with_coverage_bounds(self):
+        # A candidate that failed with partial bounds must not be able to
+        # converge later with expanded bounds under the same candidate_id.
+        narrow = compute_coverage_evidence_id(["c1"], ["a1"], ["e" * 64], coverage_start=REQUIRED.start, coverage_end=GAP.end)
+        wide = compute_coverage_evidence_id(["c1"], ["a1"], ["e" * 64], coverage_start=REQUIRED.start, coverage_end=REQUIRED.end)
+        self.assertNotEqual(narrow, wide)
 
 
 class CandidateStagingIsolationTests(unittest.TestCase):
@@ -361,7 +407,7 @@ class ReevaluateAuthorityTests(unittest.TestCase):
     def test_W_missing_support_already_produced_by_this_exact_candidate_is_already_satisfied(self):
         item = candidate(repair_intent_id=self.intent.intent_id, revision=1, content_sha256="a" * 64)
         topology = (topology_row("p-1", 1, "valid", content_sha256="a" * 64),)
-        cursor = _FakeProvenanceCursor({"p-1"}, intent_id=self.intent.intent_id, candidate_id=item.candidate_id)
+        cursor = _FakeProvenanceCursor({"p-1"}, candidate=item, repair_intent=self.intent)
         with self.assertRaises(_AlreadySatisfiedSignal):
             _reevaluate_authority(cursor, self.intent, item, topology)
 
@@ -414,7 +460,7 @@ class ReevaluateAuthorityTests(unittest.TestCase):
             topology_row("p-1", 1, "superseded", content_sha256="1" * 64),
             topology_row("p-2", 2, "valid", content_sha256="c" * 64),
         )
-        cursor = _FakeProvenanceCursor({"p-2"}, intent_id=intent.intent_id, candidate_id=item.candidate_id)
+        cursor = _FakeProvenanceCursor({"p-2"}, candidate=item, repair_intent=intent)
         with self.assertRaises(_AlreadySatisfiedSignal):
             _reevaluate_authority(cursor, intent, item, topology)
 
@@ -430,7 +476,47 @@ class ReevaluateAuthorityTests(unittest.TestCase):
             topology_row("p-1", 1, "superseded", content_sha256="1" * 64),
             topology_row("p-2", 2, "valid", content_sha256="c" * 64),
         )
-        cursor = _FakeProvenanceCursor({"p-2"}, intent_id="some-other-intent", candidate_id="some-other-candidate")
+        other_predecessor = PredecessorRef(revision=1, content_sha256="9" * 64, state="invalid")
+        other_trigger = InvalidRevisionTrigger(predecessor=other_predecessor, assessment_signature="other-sig", assessment_status="fail")
+        other_intent = RepairIntent(IDENTITY, "dt=2024-01-16", other_trigger)
+        other_item = candidate(repair_intent_id=other_intent.intent_id, revision=2, content_sha256="c" * 64)
+        cursor = _FakeProvenanceCursor({"p-2"}, candidate=other_item, repair_intent=other_intent)
+        with self.assertRaises(_StaleConflictSignal):
+            _reevaluate_authority(cursor, intent, item, topology)
+
+    def test_AA3_replacement_slot_matching_ids_but_different_content_hash_is_stale(self):
+        # Durable provenance names the SAME repair_intent_id/candidate_id, but
+        # a DIFFERENT stored final_content_sha256 -- a write-path defect that
+        # inserted inconsistent evidence under a matching candidate_id must
+        # be detected, not treated as this candidate's own convergence.
+        predecessor = PredecessorRef(revision=1, content_sha256="1" * 64, state="invalid")
+        trigger = InvalidRevisionTrigger(predecessor=predecessor, assessment_signature="sig-1", assessment_status="fail")
+        intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
+        item = candidate(repair_intent_id=intent.intent_id, revision=2, content_sha256="c" * 64)
+        topology = (
+            topology_row("p-1", 1, "superseded", content_sha256="1" * 64),
+            topology_row("p-2", 2, "valid", content_sha256="c" * 64),
+        )
+        cursor = _FakeProvenanceCursor(
+            {"p-2"}, candidate=item, repair_intent=intent,
+            field_overrides={"final_content_sha256": "8" * 64},
+        )
+        with self.assertRaises(_StaleConflictSignal):
+            _reevaluate_authority(cursor, intent, item, topology)
+
+    def test_AA4_replacement_slot_matching_ids_but_different_quality_evidence_is_stale(self):
+        predecessor = PredecessorRef(revision=1, content_sha256="1" * 64, state="invalid")
+        trigger = InvalidRevisionTrigger(predecessor=predecessor, assessment_signature="sig-1", assessment_status="fail")
+        intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
+        item = candidate(repair_intent_id=intent.intent_id, revision=2, content_sha256="c" * 64)
+        topology = (
+            topology_row("p-1", 1, "superseded", content_sha256="1" * 64),
+            topology_row("p-2", 2, "valid", content_sha256="c" * 64),
+        )
+        cursor = _FakeProvenanceCursor(
+            {"p-2"}, candidate=item, repair_intent=intent,
+            field_overrides={"quality_evidence_id": "a-different-quality-evidence-id"},
+        )
         with self.assertRaises(_StaleConflictSignal):
             _reevaluate_authority(cursor, intent, item, topology)
 
@@ -477,9 +563,14 @@ class ConvergenceProvenanceTests(unittest.TestCase):
             final_partition_manifest_sha256=self.item.partition_manifest_sha256,
             final_content_sha256=self.item.content_sha256,
             coverage_evidence_id=self.item.coverage_evidence_id,
+            coverage_ids=("cov-1",),
+            assertion_ids=("assert-1",),
+            coverage_sha256=("e" * 64,),
+            quality_evidence_id=self.item.quality_evidence_id,
             quality_assessment_signature="sig-final",
             quality_assessment_status="pass",
             publication_state="valid",
+            code_ref=self.item.code_ref,
         )
 
     def test_AD_provenance_is_deterministic_given_the_same_fields(self):
@@ -507,9 +598,14 @@ class ConvergenceProvenanceTests(unittest.TestCase):
                 final_partition_manifest_sha256=self.item.partition_manifest_sha256,
                 final_content_sha256=self.item.content_sha256,
                 coverage_evidence_id=self.item.coverage_evidence_id,
+                coverage_ids=("cov-1",),
+                assertion_ids=("assert-1",),
+                coverage_sha256=("e" * 64,),
+                quality_evidence_id=self.item.quality_evidence_id,
                 quality_assessment_signature="sig-different",
                 quality_assessment_status="pass",
                 publication_state="valid",
+                code_ref=self.item.code_ref,
             )
             with self.assertRaises(RepairRefusal):
                 write_convergence_provenance(path, other)
@@ -589,6 +685,8 @@ class CutoverPreflightBindingTests(unittest.TestCase):
         self.report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
         self.coverage_ids, self.assertion_ids, self.coverage_sha = ["cov-1"], ["assert-1"], ["e" * 64]
         self.check_suite = "suite-1"
+        self.expected_profile = "profile-1"
+        self.coverage_manifests = [{"coverage_id": "cov-1"}]
         self.item = CandidateAttempt(
             repair_intent_id=self.intent.intent_id,
             natural_identity=_natural(1),
@@ -596,8 +694,13 @@ class CutoverPreflightBindingTests(unittest.TestCase):
             partition_manifest_sha256="b" * 64,
             source_evidence_id="source-1",
             materialization_id="materialization-1",
-            coverage_evidence_id=compute_coverage_evidence_id(self.coverage_ids, self.assertion_ids, self.coverage_sha),
-            quality_evidence_id=compute_quality_evidence_id(self.report, check_suite=self.check_suite),
+            coverage_evidence_id=compute_coverage_evidence_id(
+                self.coverage_ids, self.assertion_ids, self.coverage_sha,
+                coverage_start=REQUIRED.start, coverage_end=REQUIRED.end,
+            ),
+            quality_evidence_id=compute_quality_evidence_id(
+                self.report, check_suite=self.check_suite, expected_profile=self.expected_profile,
+            ),
             code_ref="commit-1",
         )
         self.partition = {
@@ -612,7 +715,8 @@ class CutoverPreflightBindingTests(unittest.TestCase):
             candidate_partition=partition, candidate_quality_report=self.report,
             coverage_start=REQUIRED.start, coverage_end=REQUIRED.end,
             coverage_ids=self.coverage_ids, assertion_ids=self.assertion_ids, coverage_sha256=self.coverage_sha,
-            storage_root_id="hot", expected_profile="profile-1", expected_check_suite=self.check_suite,
+            storage_root_id="hot", expected_profile=self.expected_profile, expected_check_suite=self.check_suite,
+            coverage_manifests=self.coverage_manifests,
         )
 
     def test_well_formed_inputs_reach_the_cursor(self):
@@ -677,6 +781,62 @@ class CutoverPreflightBindingTests(unittest.TestCase):
                 coverage_sha256=self.coverage_sha,
                 storage_root_id="hot", expected_profile="profile-1", expected_check_suite=self.check_suite,
             )
+
+    def test_expected_profile_mismatch_is_refused_before_cursor(self):
+        with self.assertRaises(RepairRefusal):
+            RepairCutoverCatalog(_NoCursorConnection()).cutover(
+                repair_intent=self.intent, candidate=self.item, dataset={}, dataset_sha256="d" * 64,
+                candidate_partition=self.partition, candidate_quality_report=self.report,
+                coverage_start=REQUIRED.start, coverage_end=REQUIRED.end,
+                coverage_ids=self.coverage_ids, assertion_ids=self.assertion_ids, coverage_sha256=self.coverage_sha,
+                storage_root_id="hot", expected_profile="a-different-profile", expected_check_suite=self.check_suite,
+                coverage_manifests=self.coverage_manifests,
+            )
+
+    def test_coverage_start_mismatch_is_refused_before_cursor(self):
+        # coverage_start/coverage_end are bound into coverage_evidence_id: a
+        # candidate that failed with one set of bounds must not be able to
+        # converge later with expanded bounds under the same candidate_id.
+        with self.assertRaises(RepairRefusal):
+            RepairCutoverCatalog(_NoCursorConnection()).cutover(
+                repair_intent=self.intent, candidate=self.item, dataset={}, dataset_sha256="d" * 64,
+                candidate_partition=self.partition, candidate_quality_report=self.report,
+                coverage_start=GAP.start, coverage_end=REQUIRED.end,
+                coverage_ids=self.coverage_ids, assertion_ids=self.assertion_ids, coverage_sha256=self.coverage_sha,
+                storage_root_id="hot", expected_profile=self.expected_profile, expected_check_suite=self.check_suite,
+                coverage_manifests=self.coverage_manifests,
+            )
+
+    def test_missing_coverage_manifests_is_refused_for_a_coverage_gap_trigger(self):
+        with self.assertRaises(RepairRefusal):
+            self._cutover_without_coverage_manifests()
+
+    def _cutover_without_coverage_manifests(self):
+        return RepairCutoverCatalog(_NoCursorConnection()).cutover(
+            repair_intent=self.intent, candidate=self.item, dataset={}, dataset_sha256="d" * 64,
+            candidate_partition=self.partition, candidate_quality_report=self.report,
+            coverage_start=REQUIRED.start, coverage_end=REQUIRED.end,
+            coverage_ids=self.coverage_ids, assertion_ids=self.assertion_ids, coverage_sha256=self.coverage_sha,
+            storage_root_id="hot", expected_profile=self.expected_profile, expected_check_suite=self.check_suite,
+        )
+
+    def test_coverage_manifests_not_matching_bound_coverage_ids_is_refused(self):
+        # coverage_manifests must be the SAME documents identified by
+        # coverage_ids (which is itself bound into candidate_id) -- a caller
+        # cannot swap in unrelated coverage evidence at cutover time.
+        with self.assertRaises(RepairRefusal):
+            RepairCutoverCatalog(_NoCursorConnection()).cutover(
+                repair_intent=self.intent, candidate=self.item, dataset={}, dataset_sha256="d" * 64,
+                candidate_partition=self.partition, candidate_quality_report=self.report,
+                coverage_start=REQUIRED.start, coverage_end=REQUIRED.end,
+                coverage_ids=self.coverage_ids, assertion_ids=self.assertion_ids, coverage_sha256=self.coverage_sha,
+                storage_root_id="hot", expected_profile=self.expected_profile, expected_check_suite=self.check_suite,
+                coverage_manifests=[{"coverage_id": "a-different-coverage-id"}],
+            )
+
+    def test_well_formed_coverage_manifests_reach_the_cursor(self):
+        with self.assertRaises(AssertionError):
+            self._cutover()
 
 
 if __name__ == "__main__":

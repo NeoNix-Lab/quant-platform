@@ -516,20 +516,34 @@ CREATE INDEX ON quality_reports (status, ran_at DESC) WHERE status <> 'pass';
 -- candidate_id e' UNIQUE: lo stesso identico candidate puo' convergere una
 -- sola volta nella sua vita; un retry successivo trova la riga e restituisce
 -- ALREADY_SATISFIED senza inserirne una seconda.
+--
+-- Oltre agli id opachi (coverage_evidence_id, quality_evidence_id,
+-- candidate_id) la riga porta anche gli id/hash ESATTI di copertura e
+-- l'identita' di codice del candidate: un audit/ricostruzione non deve mai
+-- dipendere da un documento JSON esterno per sapere COSA fu esattamente
+-- accettato. _provenance_marks_self() confronta piu' campi indipendenti
+-- (non solo repair_intent_id/candidate_id) contro il candidate corrente,
+-- cosi' un bug di scrittura che inserisse valori incoerenti sotto lo stesso
+-- candidate_id verrebbe rilevato invece di autorizzare ALREADY_SATISFIED.
 -- ---------------------------------------------------------------------------
 CREATE TABLE repair_convergence (
     partition_id                    uuid PRIMARY KEY REFERENCES partitions ON DELETE CASCADE,
     repair_intent_id                text NOT NULL CHECK (length(trim(repair_intent_id)) > 0),
     candidate_id                    text NOT NULL CHECK (length(trim(candidate_id)) > 0),
+    provenance_id                   text NOT NULL CHECK (length(trim(provenance_id)) > 0),
     predecessor_partition_id        uuid REFERENCES partitions ON DELETE RESTRICT,
     final_partition_manifest_sha256 char(64) NOT NULL,
     final_content_sha256            char(64) NOT NULL,
     coverage_evidence_id            text NOT NULL,
+    coverage_ids                    text[] NOT NULL,
+    assertion_ids                   text[] NOT NULL,
+    coverage_sha256                 text[] NOT NULL,
+    quality_evidence_id             text NOT NULL,
     quality_assessment_signature    text NOT NULL,
     quality_assessment_status       text NOT NULL CHECK (quality_assessment_status IN ('pass','warn','fail')),
     publication_state               text NOT NULL CHECK (publication_state IN ('valid','degraded')),
+    code_ref                        text NOT NULL CHECK (length(trim(code_ref)) > 0),
     repair_semantics_version        text NOT NULL,
-    provenance_id                   text NOT NULL,
     recorded_at                     timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT repair_convergence_candidate_unique UNIQUE (candidate_id)
 );
