@@ -42,6 +42,7 @@ OWNERS = {
     "quant_platform.representation.candles": "representation",
     "quant_platform.representation.footprints": "representation",
     "quant_platform.features": "feature",
+    "quant_platform.features.artifacts": "feature",
     "quant_platform.features.definitions": "feature",
     "quant_platform.features.imbalance": "feature",
     "quant_platform.operations": "operations",
