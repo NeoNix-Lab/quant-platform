@@ -56,6 +56,7 @@ from quant_platform.data.repair import (  # noqa: E402
     RepairIntent,
     RepairOutcome,
     _canonical_fingerprint,
+    manifest_metadata_fingerprint,
     provenance_rel_path_for,
 )
 
@@ -115,12 +116,6 @@ class FakeArtifactsTable:
         self._next_id += 1
         self.rows[key] = {"artifact_id": artifact_id, **fields}
         return artifact_id
-
-    def select_produced_by(self, *, storage_root_id, kind, produced_by) -> str | None:
-        for row in self.rows.values():
-            if row["storage_root_id"] == storage_root_id and row["kind"] == kind and row["produced_by"] == produced_by:
-                return row["produced_by"]
-        return None
 
     def select_row(self, *, storage_root_id, rel_path) -> dict | None:
         return self.rows.get((storage_root_id, rel_path))
@@ -185,8 +180,9 @@ class FakeCursor:
                 for row in matches
             ]
         elif "SELECT produced_by FROM catalog.artifacts" in statement:
-            storage_root_id, kind, produced_by = params
-            found = self.artifacts.select_produced_by(storage_root_id=storage_root_id, kind=kind, produced_by=produced_by)
+            storage_root_id, rel_path, kind, dataset_id = params
+            row = self.artifacts.select_row(storage_root_id=storage_root_id, rel_path=rel_path)
+            found = row["produced_by"] if row is not None and row["kind"] == kind and str(row["dataset_id"]) == str(dataset_id) else None
             self._result = [] if found is None else [(found,)]
         elif statement.startswith("UPDATE catalog.partitions") and "SET state = 'superseded'" in statement:
             partition_id, expected_state = params
@@ -322,6 +318,9 @@ def stage_and_prove(
     dataset_sha256 = dataset_emission.manifest_sha256
 
     content_sha256 = hashlib.sha256(content).hexdigest()
+    manifest_metadata_sha256 = manifest_metadata_fingerprint(
+        created_at=CREATED, closed_at=CLOSED, producer="test-repair-producer",
+    )
     provisional = CandidateAttempt(
         intent_identity=intent.intent_identity,
         dataset_identity=intent.dataset_identity,
@@ -331,6 +330,7 @@ def stage_and_prove(
         dataset_sha256=dataset_sha256,
         partition_sha256=HASH_B,
         content_sha256=content_sha256,
+        manifest_metadata_sha256=manifest_metadata_sha256,
         code_ref=code_ref,
     )
     staging_key = provisional.staging_partition_key
@@ -371,6 +371,7 @@ def stage_and_prove(
         dataset_sha256=dataset_sha256,
         partition_sha256=partition_emission.manifest_sha256,
         content_sha256=content_sha256,
+        manifest_metadata_sha256=manifest_metadata_sha256,
         code_ref=code_ref,
     )
     assert candidate.staging_partition_key == staging_key
@@ -540,7 +541,7 @@ class RepairCutoverConvergenceV1Tests(RepairCutoverTestCase):
         # both as a catalog.artifacts row and as a durable JSON document,
         # and (finding 4) names the exact promoted partition/state/manifest.
         self.assertIsNotNone(result.provenance_artifact_id)
-        provenance_path = self.dataset_root / provenance_rel_path_for(intent)
+        provenance_path = self.dataset_root / provenance_rel_path_for(intent, candidate)
         self.assertTrue(provenance_path.exists())
         provenance_document = __import__("json").loads(provenance_path.read_bytes())
         self.assertEqual(intent.intent_identity, provenance_document["intent_identity"])
@@ -653,6 +654,60 @@ class RepairCutoverPreservationV1Tests(RepairCutoverTestCase):
         self.assertEqual("invalid", partitions.rows[pred_id]["state"])
         self.assertEqual(candidate.staging_partition_key, partitions.rows["cand-1"]["partition_key"])
 
+    # finding 3: a failed cutover attempt's provenance document, written
+    # speculatively before DB mutation, must never block -- or be
+    # overwritten by -- a LATER, DIFFERENT candidate's convergence for the
+    # SAME intent: each candidate's provenance lives at its own immutable,
+    # (intent, candidate)-keyed path.
+    def test_a_failed_candidates_provenance_never_blocks_a_later_different_candidate(self):
+        intent, pred_id = replacement_intent()
+        losing_candidate, losing_proof, losing_quality_report = stage_and_prove(
+            intent, self.dataset_root, content=b"repair-candidate-payload-FAILED",
+        )
+        partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
+        partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
+        self.stage_candidate_row(
+            losing_candidate, losing_proof, losing_quality_report, partitions=partitions,
+            quality_reports=quality_reports, partition_id="cand-failed",
+        )
+        faulty_connection = FakeConnection(
+            partitions, FakeArtifactsTable(), quality_reports,
+            fault_on="SET partition_key = %s, revision = %s, manifest_sha256 = %s",
+        )
+        with self.assertRaises(RuntimeError):
+            self.cutover(intent, losing_candidate, losing_proof, faulty_connection)
+        self.assertTrue(faulty_connection.rolled_back)
+        # The failed attempt's provenance document was persisted to disk
+        # speculatively, BEFORE the fault -- filesystem writes are not part
+        # of the DB transaction, so it survives rollback, orphaned.
+        failed_provenance_path = self.dataset_root / provenance_rel_path_for(intent, losing_candidate)
+        self.assertTrue(failed_provenance_path.exists())
+
+        # A genuinely different candidate for the SAME intent now converges.
+        winning_candidate, winning_proof, winning_quality_report = stage_and_prove(
+            intent, self.dataset_root, content=b"repair-candidate-payload-WINNER",
+        )
+        self.assertNotEqual(losing_candidate.candidate_identity, winning_candidate.candidate_identity)
+        self.stage_candidate_row(
+            winning_candidate, winning_proof, winning_quality_report, partitions=partitions,
+            quality_reports=quality_reports, partition_id="cand-winner",
+        )
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
+        result = self.cutover(intent, winning_candidate, winning_proof, connection)
+        self.assertEqual(RepairOutcome.CONVERGED, result.status)
+        self.assertEqual(winning_candidate.candidate_identity, result.candidate_identity)
+
+        # The winner's OWN provenance path is distinct from the failed
+        # candidate's, and durably holds the winner's own content -- no
+        # collision, no overwrite of the orphaned, immutable failed record.
+        winning_provenance_path = self.dataset_root / provenance_rel_path_for(intent, winning_candidate)
+        self.assertNotEqual(failed_provenance_path, winning_provenance_path)
+        winning_document = __import__("json").loads(winning_provenance_path.read_bytes())
+        self.assertEqual(winning_candidate.candidate_identity, winning_document["candidate_identity"])
+        failed_document = __import__("json").loads(failed_provenance_path.read_bytes())
+        self.assertEqual(losing_candidate.candidate_identity, failed_document["candidate_identity"])
+
 
 class RepairCutoverStaleAndAlreadySatisfiedV1Tests(RepairCutoverTestCase):
     # finding 6: mere coverage sufficiency on a mismatch is NEVER
@@ -701,6 +756,40 @@ class RepairCutoverStaleAndAlreadySatisfiedV1Tests(RepairCutoverTestCase):
         # no gratuitous new revision or mutation on the idempotent retry.
         self.assertEqual(2, partitions.rows["cand-1"]["revision"])
         self.assertEqual("superseded", partitions.rows[pred_id]["state"])
+
+    # finding 1: a candidate that DID win at some point, but has since been
+    # legitimately superseded by a FURTHER repair, is STALE_CONFLICT on
+    # retry -- never a stale ALREADY_SATISFIED. _resolve_mismatch must read
+    # back the winner's own durable provenance and see that it no longer
+    # describes the CURRENT live row, not merely that it once converged.
+    def test_retry_of_a_since_superseded_former_winner_is_stale_conflict(self):
+        intent, pred_id = replacement_intent()
+        candidate, proof, quality_report = stage_and_prove(intent, self.dataset_root)
+        partitions = FakePartitionsTable()
+        quality_reports = FakeQualityReportsTable()
+        partitions.add(partition_id=pred_id, partition_key=NATURAL_KEY, revision=1, state="invalid")
+        self.stage_candidate_row(candidate, proof, quality_report, partitions=partitions, quality_reports=quality_reports)
+        connection = FakeConnection(partitions, FakeArtifactsTable(), quality_reports)
+        first = self.cutover(intent, candidate, proof, connection)
+        self.assertEqual(RepairOutcome.CONVERGED, first.status)
+        self.assertEqual("cand-1", first.live_partition_id)
+
+        # A further, legitimate repair (a different intent/candidate, not
+        # modeled in full here) later supersedes cand-1 and promotes a new
+        # live revision -- exactly what would happen if cand-1 itself was
+        # later found defective and repaired again.
+        partitions.rows["cand-1"]["state"] = "superseded"
+        partitions.add(partition_id="cand-2", partition_key=NATURAL_KEY, revision=3, state="valid")
+
+        # Retrying the ORIGINAL (intent, candidate) pair must NOT report
+        # ALREADY_SATISFIED merely because this candidate durably converged
+        # here once: the natural key has since moved past it.
+        retry = self.cutover(intent, candidate, proof, connection)
+        self.assertEqual(RepairOutcome.STALE_CONFLICT, retry.status)
+        self.assertIsNone(retry.candidate_identity)
+        # no mutation: the further repair's own topology is untouched.
+        self.assertEqual("valid", partitions.rows["cand-2"]["state"])
+        self.assertEqual(3, partitions.rows["cand-2"]["revision"])
 
     # 12/17. old trigger/predecessor changes -> stale conflict, no silent retarget
     def test_changed_incompatible_predecessor_is_stale_conflict(self):
@@ -774,7 +863,8 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
             natural_partition_key=candidate.natural_partition_key,
             source_semantics_id=candidate.source_semantics_id, mapping_id=candidate.mapping_id,
             dataset_sha256=candidate.dataset_sha256, partition_sha256=candidate.partition_sha256,
-            content_sha256=candidate.content_sha256, code_ref=candidate.code_ref,
+            content_sha256=candidate.content_sha256,
+            manifest_metadata_sha256=candidate.manifest_metadata_sha256, code_ref=candidate.code_ref,
         )
         partitions = FakePartitionsTable()
         connection = FakeConnection(partitions, FakeArtifactsTable())
@@ -789,7 +879,8 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
             natural_partition_key="dt=2024-01-16",
             source_semantics_id=candidate.source_semantics_id, mapping_id=candidate.mapping_id,
             dataset_sha256=candidate.dataset_sha256, partition_sha256=candidate.partition_sha256,
-            content_sha256=candidate.content_sha256, code_ref=candidate.code_ref,
+            content_sha256=candidate.content_sha256,
+            manifest_metadata_sha256=candidate.manifest_metadata_sha256, code_ref=candidate.code_ref,
         )
         partitions = FakePartitionsTable()
         connection = FakeConnection(partitions, FakeArtifactsTable())
@@ -877,7 +968,42 @@ class RepairCutoverMisuseV1Tests(RepairCutoverTestCase):
             natural_partition_key=candidate.natural_partition_key,
             source_semantics_id=candidate.source_semantics_id, mapping_id=candidate.mapping_id,
             dataset_sha256=candidate.dataset_sha256, partition_sha256=candidate.partition_sha256,
-            content_sha256=candidate.content_sha256, code_ref="a-different-commit",
+            content_sha256=candidate.content_sha256,
+            manifest_metadata_sha256=candidate.manifest_metadata_sha256, code_ref="a-different-commit",
+        )
+        partitions = FakePartitionsTable()
+        connection = FakeConnection(partitions, FakeArtifactsTable())
+        with self.assertRaises(RepairError):
+            self.cutover(intent, forged, proof, connection)
+
+    # finding 4: proof.repair_code_ref must match the candidate's own
+    # declared code identity -- never caller-forgeable independently.
+    def test_proof_repair_code_ref_not_matching_the_candidate_is_refused(self):
+        intent = backfill_intent()
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root, code_ref="repair-commit-1")
+        from dataclasses import replace
+
+        forged_proof = replace(proof, repair_code_ref="a-different-commit")
+        partitions = FakePartitionsTable()
+        connection = FakeConnection(partitions, FakeArtifactsTable())
+        with self.assertRaises(RepairError):
+            self.cutover(intent, candidate, forged_proof, connection)
+
+    # finding 2: candidates identical in content/code/source but with
+    # different manifest metadata (created_at/closed_at/producer) get
+    # distinct staging keys -- a candidate whose declared
+    # manifest_metadata_sha256 does not match the durable manifest's own
+    # created_at/closed_at/producer is refused.
+    def test_candidate_manifest_metadata_not_matching_the_durable_manifest_is_refused(self):
+        intent = backfill_intent()
+        candidate, proof, _quality_report = stage_and_prove(intent, self.dataset_root)
+        forged = CandidateAttempt(
+            intent_identity=candidate.intent_identity, dataset_identity=candidate.dataset_identity,
+            natural_partition_key=candidate.natural_partition_key,
+            source_semantics_id=candidate.source_semantics_id, mapping_id=candidate.mapping_id,
+            dataset_sha256=candidate.dataset_sha256, partition_sha256=candidate.partition_sha256,
+            content_sha256=candidate.content_sha256,
+            manifest_metadata_sha256="f" * 64, code_ref=candidate.code_ref,
         )
         partitions = FakePartitionsTable()
         connection = FakeConnection(partitions, FakeArtifactsTable())

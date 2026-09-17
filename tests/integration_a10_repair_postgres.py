@@ -67,6 +67,7 @@ from quant_platform.data.repair import (  # noqa: E402
     RepairCutoverCatalog,
     RepairIntent,
     RepairOutcome,
+    manifest_metadata_fingerprint,
 )
 from quant_platform.source_adapters.bybit import (  # noqa: E402
     BybitTradeV1CertificationProfile,
@@ -194,11 +195,16 @@ def _build_candidate_and_proof(
         transform="canonicalize-trades-v1",
     )
     dataset_sha256 = dataset_probe.manifest_sha256
+    # Known before sealing too: _seal_and_certify always declares the same
+    # created_at/closed_at/producer for a given call (see below).
+    manifest_metadata_sha256 = manifest_metadata_fingerprint(
+        created_at=created_at, closed_at=created_at, producer="a10-integration-producer",
+    )
     provisional = CandidateAttempt(
         intent_identity=intent.intent_identity, dataset_identity=identity,
         natural_partition_key=intent.partition_key, source_semantics_id="bybit-public-trades-sqlite-v1",
         mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256=dataset_sha256, partition_sha256="b" * 64,
-        content_sha256=content_sha256, code_ref=code_ref,
+        content_sha256=content_sha256, manifest_metadata_sha256=manifest_metadata_sha256, code_ref=code_ref,
     )
     staging_key = provisional.staging_partition_key
     dataset_path, partition_path, coverage_path, run = _seal_and_certify(
@@ -213,7 +219,7 @@ def _build_candidate_and_proof(
         intent_identity=intent.intent_identity, dataset_identity=identity,
         natural_partition_key=intent.partition_key, source_semantics_id="bybit-public-trades-sqlite-v1",
         mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256=dataset_sha256, partition_sha256=partition_sha256,
-        content_sha256=content_sha256, code_ref=code_ref,
+        content_sha256=content_sha256, manifest_metadata_sha256=manifest_metadata_sha256, code_ref=code_ref,
     )
     assert candidate.staging_partition_key == staging_key
 
@@ -346,7 +352,7 @@ def main() -> int:
                 natural_partition_key=natural_key, source_semantics_id="bybit-public-trades-sqlite-v1",
                 mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256=candidate_a.dataset_sha256,
                 partition_sha256=candidate_a.partition_sha256, content_sha256=content_sha256_a_retry,
-                code_ref="repair-attempt-a",
+                manifest_metadata_sha256=candidate_a.manifest_metadata_sha256, code_ref="repair-attempt-a",
             )
             assert candidate_a_retry.candidate_identity == candidate_a.candidate_identity
             retry_run = PublicationCertification(writer, profile).run(

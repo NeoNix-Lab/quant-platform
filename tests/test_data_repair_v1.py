@@ -47,12 +47,16 @@ def predecessor(state: str = "valid", revision: int = 1, partition_id: str = "pr
     return PredecessorReference(partition_id=partition_id, revision=revision, state=state)
 
 
+MANIFEST_METADATA_HASH = "e" * 64
+
+
 def candidate(
     *,
     intent_identity: str = "x",
     content_sha256: str = HASH_C,
     natural_partition_key: str = "dt=2024-01-15",
     code_ref: str = "repair-commit-1",
+    manifest_metadata_sha256: str = MANIFEST_METADATA_HASH,
 ) -> CandidateAttempt:
     return CandidateAttempt(
         intent_identity=intent_identity,
@@ -63,6 +67,7 @@ def candidate(
         dataset_sha256=HASH_A,
         partition_sha256=HASH_B,
         content_sha256=content_sha256,
+        manifest_metadata_sha256=manifest_metadata_sha256,
         code_ref=code_ref,
     )
 
@@ -263,8 +268,18 @@ class CandidateAttemptV1Tests(unittest.TestCase):
             CandidateAttempt(
                 intent_identity="", dataset_identity=IDENTITY, natural_partition_key="dt=2024-01-15",
                 source_semantics_id="s", mapping_id="m", dataset_sha256=HASH_A,
-                partition_sha256=HASH_B, content_sha256=HASH_C, code_ref="c",
+                partition_sha256=HASH_B, content_sha256=HASH_C,
+                manifest_metadata_sha256=MANIFEST_METADATA_HASH, code_ref="c",
             )
+
+    # Review finding 2: candidates identical in content/code/source but
+    # sealed with different manifest metadata (created_at/closed_at/
+    # producer) must NOT collide on the same staging key.
+    def test_different_manifest_metadata_is_a_distinct_candidate(self):
+        first = candidate(manifest_metadata_sha256=MANIFEST_METADATA_HASH)
+        second = candidate(manifest_metadata_sha256="f" * 64)
+        self.assertNotEqual(first.candidate_identity, second.candidate_identity)
+        self.assertNotEqual(first.staging_partition_key, second.staging_partition_key)
 
 
 def _real_documents(dataset_root: Path, *, staging_key: str = "dt=2024-01-15/repair=proof-fixture"):

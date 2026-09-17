@@ -287,6 +287,7 @@ class CandidateAttempt:
     dataset_sha256: str
     partition_sha256: str
     content_sha256: str
+    manifest_metadata_sha256: str
     code_ref: str
 
     def __post_init__(self) -> None:
@@ -303,6 +304,9 @@ class CandidateAttempt:
         object.__setattr__(self, "dataset_sha256", _sha256_hex(self.dataset_sha256, "dataset_sha256"))
         object.__setattr__(self, "partition_sha256", _sha256_hex(self.partition_sha256, "partition_sha256"))
         object.__setattr__(self, "content_sha256", _sha256_hex(self.content_sha256, "content_sha256"))
+        object.__setattr__(
+            self, "manifest_metadata_sha256", _sha256_hex(self.manifest_metadata_sha256, "manifest_metadata_sha256")
+        )
         object.__setattr__(self, "code_ref", _non_empty_text(self.code_ref, "code_ref"))
 
     @property
@@ -320,6 +324,7 @@ class CandidateAttempt:
             "dataset_sha256": self.dataset_sha256,
             "partition_sha256": self.partition_sha256,
             "content_sha256": self.content_sha256,
+            "manifest_metadata_sha256": self.manifest_metadata_sha256,
             "code_ref": self.code_ref,
         }
 
@@ -334,13 +339,14 @@ class CandidateAttempt:
         Includes every field of :meth:`canonical_payload` that can be known
         BEFORE the staged partition manifest is emitted: ``intent_identity``,
         ``natural_partition_key``, ``dataset_sha256``, ``source_semantics_id``,
-        ``mapping_id``, ``content_sha256`` and ``code_ref``. Two attempts that
-        agree on all of these are the same evidence under the same lineage
-        and source identity (vectors 10/11/22): they may safely share one
-        staging row. Two attempts that differ in ANY of them -- including
-        distinct dataset lineage or distinct source/mapping identity, not
-        only distinct physical bytes -- get distinct staging keys and can
-        never collide on, or clobber, each other's row.
+        ``mapping_id``, ``content_sha256``, ``manifest_metadata_sha256`` and
+        ``code_ref``. Two attempts that agree on all of these are the same
+        evidence under the same lineage and source identity (vectors
+        10/11/22): they may safely share one staging row. Two attempts that
+        differ in ANY of them -- including distinct dataset lineage, distinct
+        source/mapping identity, or distinct manifest metadata such as
+        ``created_at``/``closed_at``/``producer`` -- get distinct staging
+        keys and can never collide on, or clobber, each other's row.
 
         ``partition_sha256`` is deliberately the ONE candidate field excluded
         here, and only because it is impossible to include without literal
@@ -349,23 +355,19 @@ class CandidateAttempt:
         this very key -- so a key derived from a hash that already contains
         the key could never be computed. This is not a residual isolation
         gap: every input that actually DETERMINES ``partition_sha256`` for a
-        fixed ``(dataset_identity, natural_partition_key, revision=1)`` --
-        the physical bytes (``content_sha256``), the code identity
-        (``code_ref``), and the lineage/source identity now included above
-        -- already participates in this key. Two attempts that agree on all
-        of those necessarily produce byte-identical manifests (S13 sealing
-        itself additionally refuses to re-seal an existing target with
-        conflicting Phase-1 evidence, per ``_same_phase_one_evidence``), so
-        the only thing that could still differ between them is incidental
-        wall-clock/producer provenance metadata that this contract does not
-        treat as identity-bearing anywhere else (mirroring
-        :class:`PredecessorReference`/:class:`RepairIntent`, which likewise
-        exclude wall-clock from identity). ``cutover`` additionally never
-        trusts a staged row's ``manifest_sha256`` blindly: it always
-        cross-checks it against ``CandidateProof.partition_sha256`` before
-        promotion, so even a hypothetical staging collision could never
-        result in the wrong candidate's proof being accepted as proof of
-        this one.
+        fixed ``(dataset_identity, natural_partition_key, revision=1, state=
+        'closed')`` is now bound here -- the physical bytes
+        (``content_sha256``, which alone determines ``file_size_bytes``,
+        ``row_count``, ``sha256`` and the observed exchange-timestamp bounds
+        for a deterministic materializer), the code identity (``code_ref``),
+        the lineage/source identity, AND the one remaining group of
+        manifest-defining fields the physical bytes do NOT determine --
+        ``created_at``/``closed_at``/``producer`` -- via
+        ``manifest_metadata_sha256`` (see :func:`manifest_metadata_fingerprint`).
+        Two attempts that agree on every field here therefore necessarily
+        produce a byte-identical staged partition manifest, so
+        ``partition_sha256`` is fully determined even though it cannot
+        itself appear in this key.
 
         A different ``partition_key`` value is a different row family under
         ``partitions_one_live``, and because it is deliberately a *sub-path*
@@ -382,6 +384,7 @@ class CandidateAttempt:
             "source_semantics_id": self.source_semantics_id,
             "mapping_id": self.mapping_id,
             "content_sha256": self.content_sha256,
+            "manifest_metadata_sha256": self.manifest_metadata_sha256,
             "code_ref": self.code_ref,
         }
         digest = _canonical_fingerprint(payload)
@@ -557,14 +560,68 @@ class RepairCutoverResult:
         }
 
 
-def provenance_rel_path_for(intent: RepairIntent) -> str:
-    """The deterministic, dataset-root-relative path of one intent's
-    immutable convergence provenance record, deterministic in
-    ``intent_identity`` alone.
+def manifest_metadata_fingerprint(*, created_at: str, closed_at: str, producer: str) -> str:
+    """The deterministic hash of a staged partition manifest's
+    ``created_at``/``closed_at``/``producer`` fields.
+
+    These are the only ``partition-manifest-v1`` fields NOT already
+    determined by physical content (``content_sha256``) or code/lineage
+    identity: a deterministic materializer computes ``file_size_bytes``,
+    ``row_count``, ``sha256`` and the observed exchange-timestamp bounds
+    purely from the physical bytes. Callers compute this BEFORE the staged
+    manifest is emitted (all three values are chosen at seal time, not
+    derived from the manifest itself), and pass it as
+    :attr:`CandidateAttempt.manifest_metadata_sha256` so it can participate
+    in :attr:`CandidateAttempt.staging_partition_key` -- closing the one
+    residual staging-isolation gap: two attempts identical in content, code
+    and lineage but sealed with different metadata must never collide.
     """
 
-    digest = hashlib.sha256(intent.intent_identity.encode("utf-8")).hexdigest()
+    payload = {
+        "identity_domain": "a10-candidate-attempt-manifest-metadata-v1",
+        "created_at": _non_empty_text(created_at, "created_at"),
+        "closed_at": _non_empty_text(closed_at, "closed_at"),
+        "producer": _non_empty_text(producer, "producer"),
+    }
+    return _canonical_fingerprint(payload)
+
+
+def provenance_rel_path_for(intent: RepairIntent, candidate: CandidateAttempt) -> str:
+    """The deterministic, dataset-root-relative path of one (intent,
+    candidate) pair's immutable convergence provenance record.
+
+    Keyed by BOTH ``intent_identity`` AND ``candidate_identity`` -- never by
+    intent alone. ``cutover`` persists this document BEFORE its database
+    mutation commits (so it survives as durable evidence even if the
+    transaction later fails), which means the path must already be unique
+    per candidate: were it keyed by intent alone, a failed attempt by one
+    candidate would occupy the same path a LATER, different candidate for
+    the same intent must also write to, forcing either a spurious conflict
+    or an overwrite of what the module's own contract calls immutable
+    evidence. Keyed per candidate, a failed attempt's document is simply
+    orphaned at its own path -- never touched, never in anyone's way.
+    """
+
+    digest = _canonical_fingerprint({
+        "identity_domain": "a10-repair-provenance-v1",
+        "intent_identity": intent.intent_identity,
+        "candidate_identity": candidate.candidate_identity,
+    })
     return f"_repair/{digest}.json"
+
+
+def _provenance_paths(
+    proof: CandidateProof, intent: RepairIntent, candidate: CandidateAttempt,
+) -> tuple[str, str]:
+    """Return ``(dataset-root-relative path, storage-root-relative catalog
+    rel_path)`` for one (intent, candidate) pair's provenance record.
+    """
+
+    local_rel_path = provenance_rel_path_for(intent, candidate)
+    dataset_rel_root = _non_empty_text(
+        proof.dataset_document.get("rel_root"), "proof.dataset_document.rel_root"
+    )
+    return local_rel_path, f"{dataset_rel_root}/{local_rel_path}"
 
 
 class RepairCutoverCatalog:
@@ -617,6 +674,16 @@ class RepairCutoverCatalog:
             raise RepairError("proof.partition_document must describe the staged candidate's revision 1")
         if proof.partition_document.get("code_ref") != candidate.code_ref:
             raise RepairError("proof.partition_document code_ref does not match the candidate's declared code identity")
+        if proof.repair_code_ref != candidate.code_ref:
+            raise RepairError("proof.repair_code_ref does not match the candidate's declared code identity")
+        if candidate.manifest_metadata_sha256 != manifest_metadata_fingerprint(
+            created_at=proof.partition_document.get("created_at"),
+            closed_at=proof.partition_document.get("closed_at"),
+            producer=proof.partition_document.get("producer"),
+        ):
+            raise RepairError(
+                "candidate.manifest_metadata_sha256 does not match the durable partition manifest's own metadata"
+            )
         for index, coverage_document in enumerate(proof.coverage_documents):
             acquisition = coverage_document.get("acquisition") or {}
             if acquisition.get("source_semantics") != candidate.source_semantics_id:
@@ -636,7 +703,9 @@ class RepairCutoverCatalog:
                 natural = self._lock_topology(cursor, dataset_id, intent.partition_key)
                 current_live = _live_row(natural)
 
-                verdict, detail = self._authority_verdict(cursor, intent, candidate, current_live)
+                verdict, detail = self._authority_verdict(
+                    cursor, intent, candidate, proof, dataset_root, dataset_id, current_live,
+                )
                 if verdict is not None:
                     self.connection.commit()
                     return _result(
@@ -680,12 +749,9 @@ class RepairCutoverCatalog:
                 # Relative to dataset_root for the physical write; relative to
                 # the storage root (dataset_root's own parent tree) for the
                 # catalog.artifacts row, which is keyed across all datasets
-                # sharing one storage root.
-                provenance_local_rel_path = provenance_rel_path_for(intent)
-                dataset_rel_root = _non_empty_text(
-                    proof.dataset_document.get("rel_root"), "proof.dataset_document.rel_root"
-                )
-                provenance_rel_path = f"{dataset_rel_root}/{provenance_local_rel_path}"
+                # sharing one storage root. Keyed by (intent, candidate): see
+                # provenance_rel_path_for for why intent alone is not enough.
+                provenance_local_rel_path, provenance_rel_path = _provenance_paths(proof, intent, candidate)
                 provenance_payload = _provenance_payload(
                     intent=intent, candidate=candidate, proof=proof,
                     folded_start=folded_start, folded_end=folded_end, next_revision=next_revision,
@@ -794,7 +860,8 @@ class RepairCutoverCatalog:
             raise
 
     def _authority_verdict(
-        self, cursor: Any, intent: RepairIntent, candidate: CandidateAttempt, current_live: Any,
+        self, cursor: Any, intent: RepairIntent, candidate: CandidateAttempt, proof: CandidateProof,
+        dataset_root: Path, dataset_id: str, current_live: Any,
     ) -> tuple[RepairOutcome | None, str]:
         """Decide ALREADY_SATISFIED / STALE_CONFLICT / proceed (``None``).
 
@@ -802,14 +869,16 @@ class RepairCutoverCatalog:
         way a mismatch resolves to ``ALREADY_SATISFIED`` rather than
         ``STALE_CONFLICT`` is durable provenance proof that THIS candidate is
         the one that already converged here -- an idempotent retry of the
-        winner, never a loser inferring success from someone else's coverage.
+        winner, never a loser inferring success from someone else's coverage,
+        and never a candidate that DID win at some point in the past but has
+        since been legitimately superseded by a further repair.
         """
 
         predecessor = intent.predecessor
         if predecessor is None:
             if current_live is None:
                 return None, ""
-            return self._resolve_mismatch(cursor, candidate, current_live)
+            return self._resolve_mismatch(cursor, candidate, proof, intent, dataset_root, dataset_id, current_live)
 
         if current_live is None:
             return RepairOutcome.STALE_CONFLICT, "captured predecessor no longer exists"
@@ -819,24 +888,59 @@ class RepairCutoverCatalog:
             and current_live[4] == predecessor.state
         ):
             return None, ""
-        return self._resolve_mismatch(cursor, candidate, current_live)
+        return self._resolve_mismatch(cursor, candidate, proof, intent, dataset_root, dataset_id, current_live)
 
     def _resolve_mismatch(
-        self, cursor: Any, candidate: CandidateAttempt, current_live: Any,
+        self, cursor: Any, candidate: CandidateAttempt, proof: CandidateProof, intent: RepairIntent,
+        dataset_root: Path, dataset_id: str, current_live: Any,
     ) -> tuple[RepairOutcome, str]:
+        """ALREADY_SATISFIED requires more than "this candidate converged
+        SOMEWHERE, SOMETIME": the durable provenance record this candidate
+        itself produced (at its own (intent, candidate)-keyed path -- see
+        :func:`provenance_rel_path_for`) must still describe EXACTLY the
+        current live row: same promoted partition id, revision, state and
+        manifest hash. A candidate that once won but was since legitimately
+        superseded by a further repair no longer satisfies this, and
+        correctly resolves to STALE_CONFLICT, not a stale ALREADY_SATISFIED.
+        """
+
+        local_rel_path, catalog_rel_path = _provenance_paths(proof, intent, candidate)
         cursor.execute(
-            "SELECT produced_by FROM catalog.artifacts WHERE storage_root_id=%s AND kind=%s AND produced_by=%s",
-            (current_live[9], REPAIR_CONVERGENCE_ARTIFACT_KIND, candidate.candidate_identity),
+            "SELECT produced_by FROM catalog.artifacts WHERE storage_root_id=%s AND rel_path=%s AND kind=%s AND dataset_id=%s",
+            (current_live[9], catalog_rel_path, REPAIR_CONVERGENCE_ARTIFACT_KIND, dataset_id),
         )
         row = cursor.fetchone()
-        if row is not None and row[0] == candidate.candidate_identity:
+        if row is None or row[0] != candidate.candidate_identity:
             return (
-                RepairOutcome.ALREADY_SATISFIED,
-                "this exact candidate already converged here (idempotent retry of the winner)",
+                RepairOutcome.STALE_CONFLICT,
+                "current live revision no longer matches the captured predecessor/trigger authority",
+            )
+
+        provenance_path = Path(dataset_root) / local_rel_path
+        if not provenance_path.is_file():
+            raise RepairCutoverRefusal(
+                "convergence provenance is durably recorded in the catalog but its document is missing"
+            )
+        try:
+            provenance_document = json.loads(provenance_path.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RepairCutoverRefusal("convergence provenance document could not be read") from exc
+
+        if (
+            provenance_document.get("intent_identity") != intent.intent_identity
+            or provenance_document.get("candidate_identity") != candidate.candidate_identity
+            or provenance_document.get("promoted_partition_id") != str(current_live[0])
+            or provenance_document.get("resulting_revision") != int(current_live[3])
+            or provenance_document.get("promoted_state") != current_live[4]
+            or _text(provenance_document.get("promoted_manifest_sha256")) != _text(current_live[8])
+        ):
+            return (
+                RepairOutcome.STALE_CONFLICT,
+                "this candidate previously converged here, but the natural key has since moved past it",
             )
         return (
-            RepairOutcome.STALE_CONFLICT,
-            "current live revision no longer matches the captured predecessor/trigger authority",
+            RepairOutcome.ALREADY_SATISFIED,
+            "this exact candidate already converged here (idempotent retry of the winner)",
         )
 
     @staticmethod
@@ -1114,5 +1218,6 @@ __all__ = [
     "RepairIntent",
     "RepairOutcome",
     "RepairTrigger",
+    "manifest_metadata_fingerprint",
     "provenance_rel_path_for",
 ]
