@@ -66,76 +66,117 @@ class PublicationEligibilityCatalog:
         expected_profile: str,
         expected_check_suite: str,
     ) -> PublicationEligibilityResult:
-        identity = _identity(dataset)
-        target_key = (partition["partition_key"], int(partition["revision"]))
         try:
             with self.connection.cursor() as cursor:
-                child = self._resolve_dataset(cursor, identity, dataset, dataset_sha256)
-                parents = self._resolve_parents(cursor, dataset, identity)
-                relevant_ids = sorted({child[0], *(row[0] for row in parents)})
-                self._lock_datasets(cursor, relevant_ids)
-                self._verify_locked_datasets(cursor, child, parents, dataset, dataset_sha256)
-
-                topology = self._lock_partition_topology(cursor, child[0], partition["partition_key"])
-                target = next((row for row in topology if int(row[3]) == target_key[1]), None)
-                current = _live_row(topology)
-                if target is None or current is None or str(target[0]) != str(current[0]):
-                    raise PublicationEligibilityRefusal("target revision is not the current live revision")
-                if target[4] not in {"closed", "valid", "degraded"}:
-                    raise PublicationEligibilityRefusal(f"target state {target[4]!r} is not publishable")
-                self._verify_partition(
-                    target, child, identity, partition, partition_sha256,
-                    coverage_start, coverage_end, storage_root_id,
-                )
-
-                reports = self._quality_reports(cursor, target[0], expected_check_suite)
-                selected = _select_authoritative_report(
-                    reports,
-                    expected_profile=expected_profile,
-                    expected_check_suite=expected_check_suite,
-                    identity=identity,
-                    partition=partition,
+                verified = self._publish_tx(
+                    cursor,
+                    dataset=dataset,
                     dataset_sha256=dataset_sha256,
+                    partition=partition,
                     partition_sha256=partition_sha256,
+                    coverage_start=coverage_start,
+                    coverage_end=coverage_end,
                     coverage_ids=coverage_ids,
                     assertion_ids=assertion_ids,
                     coverage_sha256=coverage_sha256,
-                    target=target,
-                )
-                desired = _eligible_state(selected)
-
-                expected_lineage = self._ensure_lineage(
-                    cursor, child[0], parents, dataset, identity,
-                )
-                if target[4] == "closed":
-                    cursor.execute(
-                        """
-                        UPDATE catalog.partitions
-                           SET state = %s
-                         WHERE partition_id = %s AND state = 'closed'
-                        RETURNING partition_id::text
-                        """,
-                        (desired, target[0]),
-                    )
-                    if cursor.fetchone() is None:
-                        raise PublicationEligibilityRefusal("eligibility state update did not apply")
-                elif target[4] != desired:
-                    raise PublicationEligibilityRefusal(
-                        f"existing eligibility state {target[4]!r} conflicts with {desired!r}"
-                    )
-
-                verified = self._phase5_verify(
-                    cursor, child, target[0], partition["partition_key"], target_key[1],
-                    identity, partition, partition_sha256, coverage_start, coverage_end,
-                    storage_root_id, desired, expected_lineage, expected_check_suite,
-                    expected_profile, dataset_sha256, coverage_ids, assertion_ids,
-                    coverage_sha256, selected.signature,
+                    storage_root_id=storage_root_id,
+                    expected_profile=expected_profile,
+                    expected_check_suite=expected_check_suite,
                 )
             self.connection.commit()
             return verified
         except Exception:
             self.connection.rollback()
             raise
+
+    def _publish_tx(
+        self,
+        cursor: Any,
+        *,
+        dataset: Mapping[str, Any],
+        dataset_sha256: str,
+        partition: Mapping[str, Any],
+        partition_sha256: str,
+        coverage_start: Instant,
+        coverage_end: Instant,
+        coverage_ids: Sequence[str],
+        assertion_ids: Sequence[str],
+        coverage_sha256: Sequence[str],
+        storage_root_id: str,
+        expected_profile: str,
+        expected_check_suite: str,
+    ) -> PublicationEligibilityResult:
+        """Transaction-scoped S14 seam: same verification/mutation, caller's cursor.
+
+        Performs the identical accepted logic as :meth:`publish` against a
+        cursor the caller already owns, and never commits or rolls back the
+        caller's transaction.  A10's atomic cutover reuses this so publication
+        eligibility participates in its own single commit instead of the
+        standalone commit ``publish`` performs for its own direct callers.
+        """
+        identity = _identity(dataset)
+        target_key = (partition["partition_key"], int(partition["revision"]))
+        child = self._resolve_dataset(cursor, identity, dataset, dataset_sha256)
+        parents = self._resolve_parents(cursor, dataset, identity)
+        relevant_ids = sorted({child[0], *(row[0] for row in parents)})
+        self._lock_datasets(cursor, relevant_ids)
+        self._verify_locked_datasets(cursor, child, parents, dataset, dataset_sha256)
+
+        topology = self._lock_partition_topology(cursor, child[0], partition["partition_key"])
+        target = next((row for row in topology if int(row[3]) == target_key[1]), None)
+        current = _live_row(topology)
+        if target is None or current is None or str(target[0]) != str(current[0]):
+            raise PublicationEligibilityRefusal("target revision is not the current live revision")
+        if target[4] not in {"closed", "valid", "degraded"}:
+            raise PublicationEligibilityRefusal(f"target state {target[4]!r} is not publishable")
+        self._verify_partition(
+            target, child, identity, partition, partition_sha256,
+            coverage_start, coverage_end, storage_root_id,
+        )
+
+        reports = self._quality_reports(cursor, target[0], expected_check_suite)
+        selected = _select_authoritative_report(
+            reports,
+            expected_profile=expected_profile,
+            expected_check_suite=expected_check_suite,
+            identity=identity,
+            partition=partition,
+            dataset_sha256=dataset_sha256,
+            partition_sha256=partition_sha256,
+            coverage_ids=coverage_ids,
+            assertion_ids=assertion_ids,
+            coverage_sha256=coverage_sha256,
+            target=target,
+        )
+        desired = _eligible_state(selected)
+
+        expected_lineage = self._ensure_lineage(
+            cursor, child[0], parents, dataset, identity,
+        )
+        if target[4] == "closed":
+            cursor.execute(
+                """
+                UPDATE catalog.partitions
+                   SET state = %s
+                 WHERE partition_id = %s AND state = 'closed'
+                RETURNING partition_id::text
+                """,
+                (desired, target[0]),
+            )
+            if cursor.fetchone() is None:
+                raise PublicationEligibilityRefusal("eligibility state update did not apply")
+        elif target[4] != desired:
+            raise PublicationEligibilityRefusal(
+                f"existing eligibility state {target[4]!r} conflicts with {desired!r}"
+            )
+
+        return self._phase5_verify(
+            cursor, child, target[0], partition["partition_key"], target_key[1],
+            identity, partition, partition_sha256, coverage_start, coverage_end,
+            storage_root_id, desired, expected_lineage, expected_check_suite,
+            expected_profile, dataset_sha256, coverage_ids, assertion_ids,
+            coverage_sha256, selected.signature,
+        )
 
     @staticmethod
     def _resolve_dataset(cursor: Any, identity: DatasetIdentity, document: Mapping[str, Any], digest: str):

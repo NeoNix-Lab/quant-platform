@@ -74,74 +74,118 @@ class QualityLifecycleCatalog:
         expected_check_suite: str,
         lifecycle_code_ref: str = QUALITY_LIFECYCLE_CODE_ID,
     ) -> QualityLifecycleResult:
-        if not isinstance(lifecycle_code_ref, str) or not lifecycle_code_ref.strip():
-            raise QualityLifecycleRefusal("lifecycle code identity is required")
-        identity = _identity(dataset)
-        target_key = (partition["partition_key"], int(partition["revision"]))
         try:
             with self.connection.cursor() as cursor:
-                dataset_row = self._resolve_dataset(cursor, identity, dataset, dataset_sha256)
-                topology = self._lock_partition_topology(cursor, dataset_row[0], partition["partition_key"])
-                target = next((row for row in topology if int(row[3]) == target_key[1]), None)
-                if target is None:
-                    raise QualityLifecycleRefusal("target revision is missing")
-                current = _live_row(topology)
-                if target[4] == "superseded":
-                    raise QualityLifecycleRefusal("superseded partition cannot be reactivated")
-                if str(current[0]) != str(target[0]):
-                    raise QualityLifecycleRefusal("target revision is not the current live revision")
-                if target[4] == "writing":
-                    raise QualityLifecycleRefusal("writing partition is not quality-eligible")
-                if target[4] not in {"closed", "valid", "degraded", "invalid"}:
-                    raise QualityLifecycleRefusal(f"target state {target[4]!r} is not quality-applicable")
-                self._verify_partition(
-                    target, dataset_row, partition, partition_sha256,
-                    coverage_start, coverage_end, storage_root_id,
-                )
-                reports = self._quality_reports(cursor, target[0], expected_check_suite)
-                selected = select_current_quality_assessment(
-                    reports,
-                    expected_profile=expected_profile,
-                    expected_check_suite=expected_check_suite,
-                    identity=identity,
-                    partition=partition,
+                verified = self._apply_partition_lifecycle_tx(
+                    cursor,
+                    dataset=dataset,
                     dataset_sha256=dataset_sha256,
+                    partition=partition,
                     partition_sha256=partition_sha256,
+                    coverage_start=coverage_start,
+                    coverage_end=coverage_end,
                     coverage_ids=coverage_ids,
                     assertion_ids=assertion_ids,
                     coverage_sha256=coverage_sha256,
-                    target=target,
-                )
-                desired = lifecycle_state_for_status(selected.status)
-                prior = str(target[4])
-                mutated = False
-                if prior != desired:
-                    cursor.execute(
-                        """
-                        UPDATE catalog.partitions
-                           SET state = %s
-                         WHERE partition_id = %s
-                           AND state = %s
-                           AND state IN ('closed','valid','degraded','invalid')
-                        RETURNING partition_id::text
-                        """,
-                        (desired, target[0], prior),
-                    )
-                    if cursor.fetchone() is None:
-                        raise QualityLifecycleRefusal("quality lifecycle state update did not apply")
-                    mutated = True
-                verified = self._verify_result(
-                    cursor, dataset_row, target[0], partition, partition_sha256,
-                    coverage_start, coverage_end, storage_root_id, desired,
-                    expected_profile, expected_check_suite, dataset_sha256,
-                    coverage_ids, assertion_ids, coverage_sha256, selected,
-                    prior, mutated, lifecycle_code_ref.strip(),
+                    storage_root_id=storage_root_id,
+                    expected_profile=expected_profile,
+                    expected_check_suite=expected_check_suite,
+                    lifecycle_code_ref=lifecycle_code_ref,
                 )
             self.connection.commit()
             return verified
         except Exception:
             self.connection.rollback()
             raise
+
+    def _apply_partition_lifecycle_tx(
+        self,
+        cursor: Any,
+        *,
+        dataset: Mapping[str, Any],
+        dataset_sha256: str,
+        partition: Mapping[str, Any],
+        partition_sha256: str,
+        coverage_start: Instant,
+        coverage_end: Instant,
+        coverage_ids: Sequence[str],
+        assertion_ids: Sequence[str],
+        coverage_sha256: Sequence[str],
+        storage_root_id: str,
+        expected_profile: str,
+        expected_check_suite: str,
+        lifecycle_code_ref: str = QUALITY_LIFECYCLE_CODE_ID,
+    ) -> QualityLifecycleResult:
+        """Transaction-scoped A16 seam: same verification/mutation, caller's cursor.
+
+        Performs the identical accepted logic as :meth:`apply_partition_lifecycle`
+        against a cursor the caller already owns, and never commits or rolls
+        back the caller's transaction.  A10's atomic cutover reuses this so
+        quality-lifecycle promotion participates in its own single commit
+        instead of the standalone commit ``apply_partition_lifecycle`` performs
+        for its own direct callers.
+        """
+        if not isinstance(lifecycle_code_ref, str) or not lifecycle_code_ref.strip():
+            raise QualityLifecycleRefusal("lifecycle code identity is required")
+        identity = _identity(dataset)
+        target_key = (partition["partition_key"], int(partition["revision"]))
+        dataset_row = self._resolve_dataset(cursor, identity, dataset, dataset_sha256)
+        topology = self._lock_partition_topology(cursor, dataset_row[0], partition["partition_key"])
+        target = next((row for row in topology if int(row[3]) == target_key[1]), None)
+        if target is None:
+            raise QualityLifecycleRefusal("target revision is missing")
+        current = _live_row(topology)
+        if target[4] == "superseded":
+            raise QualityLifecycleRefusal("superseded partition cannot be reactivated")
+        if str(current[0]) != str(target[0]):
+            raise QualityLifecycleRefusal("target revision is not the current live revision")
+        if target[4] == "writing":
+            raise QualityLifecycleRefusal("writing partition is not quality-eligible")
+        if target[4] not in {"closed", "valid", "degraded", "invalid"}:
+            raise QualityLifecycleRefusal(f"target state {target[4]!r} is not quality-applicable")
+        self._verify_partition(
+            target, dataset_row, partition, partition_sha256,
+            coverage_start, coverage_end, storage_root_id,
+        )
+        reports = self._quality_reports(cursor, target[0], expected_check_suite)
+        selected = select_current_quality_assessment(
+            reports,
+            expected_profile=expected_profile,
+            expected_check_suite=expected_check_suite,
+            identity=identity,
+            partition=partition,
+            dataset_sha256=dataset_sha256,
+            partition_sha256=partition_sha256,
+            coverage_ids=coverage_ids,
+            assertion_ids=assertion_ids,
+            coverage_sha256=coverage_sha256,
+            target=target,
+        )
+        desired = lifecycle_state_for_status(selected.status)
+        prior = str(target[4])
+        mutated = False
+        if prior != desired:
+            cursor.execute(
+                """
+                UPDATE catalog.partitions
+                   SET state = %s
+                 WHERE partition_id = %s
+                   AND state = %s
+                   AND state IN ('closed','valid','degraded','invalid')
+                RETURNING partition_id::text
+                """,
+                (desired, target[0], prior),
+            )
+            if cursor.fetchone() is None:
+                raise QualityLifecycleRefusal("quality lifecycle state update did not apply")
+            mutated = True
+        return self._verify_result(
+            cursor, dataset_row, target[0], partition, partition_sha256,
+            coverage_start, coverage_end, storage_root_id, desired,
+            expected_profile, expected_check_suite, dataset_sha256,
+            coverage_ids, assertion_ids, coverage_sha256, selected,
+            prior, mutated, lifecycle_code_ref.strip(),
+        )
 
     @staticmethod
     def _resolve_dataset(cursor: Any, identity: DatasetIdentity, document: Mapping[str, Any], digest: str):
