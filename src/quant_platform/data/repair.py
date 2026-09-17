@@ -360,9 +360,9 @@ class CandidateAttempt:
         (``content_sha256``, which alone determines ``file_size_bytes``,
         ``row_count``, ``sha256`` and the observed exchange-timestamp bounds
         for a deterministic materializer), the code identity (``code_ref``),
-        the lineage/source identity, AND the one remaining group of
+        the lineage/source identity, AND the remaining group of
         manifest-defining fields the physical bytes do NOT determine --
-        ``created_at``/``closed_at``/``producer`` -- via
+        ``created_at``/``closed_at``/``producer``/``rel_path`` -- via
         ``manifest_metadata_sha256`` (see :func:`manifest_metadata_fingerprint`).
         Two attempts that agree on every field here therefore necessarily
         produce a byte-identical staged partition manifest, so
@@ -560,21 +560,30 @@ class RepairCutoverResult:
         }
 
 
-def manifest_metadata_fingerprint(*, created_at: str, closed_at: str, producer: str) -> str:
+def manifest_metadata_fingerprint(
+    *, created_at: str, closed_at: str, producer: str, rel_path_suffix: str
+) -> str:
     """The deterministic hash of a staged partition manifest's
-    ``created_at``/``closed_at``/``producer`` fields.
+    ``created_at``/``closed_at``/``producer``/rel-path-suffix fields.
 
     These are the only ``partition-manifest-v1`` fields NOT already
     determined by physical content (``content_sha256``) or code/lineage
     identity: a deterministic materializer computes ``file_size_bytes``,
     ``row_count``, ``sha256`` and the observed exchange-timestamp bounds
-    purely from the physical bytes. Callers compute this BEFORE the staged
-    manifest is emitted (all three values are chosen at seal time, not
-    derived from the manifest itself), and pass it as
+    purely from the physical bytes. ``created_at``/``closed_at``/``producer``
+    and the manifest's ``rel_path`` are all chosen by the caller at seal
+    time -- but ``rel_path`` itself is required (by the credited
+    ``rel_path_inside_partition`` constraint) to be a sub-path of the
+    candidate's own :attr:`CandidateAttempt.staging_partition_key`, so only
+    the portion of ``rel_path`` AFTER that prefix -- ``rel_path_suffix`` --
+    is an independent choice knowable before the staging key exists; passing
+    the full ``rel_path`` here would be circular. Callers compute this
+    BEFORE the staged manifest is emitted, and pass it as
     :attr:`CandidateAttempt.manifest_metadata_sha256` so it can participate
-    in :attr:`CandidateAttempt.staging_partition_key` -- closing the one
+    in :attr:`CandidateAttempt.staging_partition_key` -- closing the
     residual staging-isolation gap: two attempts identical in content, code
-    and lineage but sealed with different metadata must never collide.
+    and lineage but sealed under a different rel-path suffix (e.g. a
+    different staged filename) must never collide.
     """
 
     payload = {
@@ -582,6 +591,7 @@ def manifest_metadata_fingerprint(*, created_at: str, closed_at: str, producer: 
         "created_at": _non_empty_text(created_at, "created_at"),
         "closed_at": _non_empty_text(closed_at, "closed_at"),
         "producer": _non_empty_text(producer, "producer"),
+        "rel_path_suffix": _non_empty_text(rel_path_suffix, "rel_path_suffix"),
     }
     return _canonical_fingerprint(payload)
 
@@ -676,10 +686,17 @@ class RepairCutoverCatalog:
             raise RepairError("proof.partition_document code_ref does not match the candidate's declared code identity")
         if proof.repair_code_ref != candidate.code_ref:
             raise RepairError("proof.repair_code_ref does not match the candidate's declared code identity")
+        proof_rel_path = proof.partition_document.get("rel_path") or ""
+        staging_prefix = f"{candidate.staging_partition_key}/"
+        if not proof_rel_path.startswith(staging_prefix):
+            raise RepairError(
+                "proof.partition_document rel_path is not a sub-path of the candidate's own staging_partition_key"
+            )
         if candidate.manifest_metadata_sha256 != manifest_metadata_fingerprint(
             created_at=proof.partition_document.get("created_at"),
             closed_at=proof.partition_document.get("closed_at"),
             producer=proof.partition_document.get("producer"),
+            rel_path_suffix=proof_rel_path[len(staging_prefix):],
         ):
             raise RepairError(
                 "candidate.manifest_metadata_sha256 does not match the durable partition manifest's own metadata"

@@ -320,6 +320,7 @@ def stage_and_prove(
     content_sha256 = hashlib.sha256(content).hexdigest()
     manifest_metadata_sha256 = manifest_metadata_fingerprint(
         created_at=CREATED, closed_at=CLOSED, producer="test-repair-producer",
+        rel_path_suffix="part-001.parquet",
     )
     provisional = CandidateAttempt(
         intent_identity=intent.intent_identity,

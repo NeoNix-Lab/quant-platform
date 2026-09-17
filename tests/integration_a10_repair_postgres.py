@@ -115,6 +115,7 @@ class _FaultCursor:
 def _seal_and_certify(
     root: Path, writer: CatalogPublicationWriter, profile, identity: DatasetIdentity,
     *, partition_key: str, day: str, trade_id: str, price: str, created_at: str,
+    code_ref: str = "a10-integration-producer-commit",
 ):
     """Seal + certify one closed partition under an explicit partition_key.
 
@@ -139,7 +140,7 @@ def _seal_and_certify(
         partition_path, materialization, dataset_identity=identity, dataset_root=root,
         partition_key=partition_key, revision=1, rel_path=f"{partition_key}/part-001.parquet",
         created_at=created_at, closed_at=created_at, producer="a10-integration-producer",
-        code_ref="a10-integration-producer-commit",
+        code_ref=code_ref,
     )
     partition = partition_emission.document
     emit_coverage_manifest(
@@ -196,9 +197,10 @@ def _build_candidate_and_proof(
     )
     dataset_sha256 = dataset_probe.manifest_sha256
     # Known before sealing too: _seal_and_certify always declares the same
-    # created_at/closed_at/producer for a given call (see below).
+    # created_at/closed_at/producer/rel_path-suffix for a given call (see below).
     manifest_metadata_sha256 = manifest_metadata_fingerprint(
         created_at=created_at, closed_at=created_at, producer="a10-integration-producer",
+        rel_path_suffix="part-001.parquet",
     )
     provisional = CandidateAttempt(
         intent_identity=intent.intent_identity, dataset_identity=identity,
@@ -209,7 +211,7 @@ def _build_candidate_and_proof(
     staging_key = provisional.staging_partition_key
     dataset_path, partition_path, coverage_path, run = _seal_and_certify(
         root, writer, profile, identity, partition_key=staging_key,
-        day=day, trade_id=trade_id, price=price, created_at=created_at,
+        day=day, trade_id=trade_id, price=price, created_at=created_at, code_ref=code_ref,
     )
     dataset_document, reloaded_dataset_sha256 = _load_manifest(dataset_path, "dataset")
     assert reloaded_dataset_sha256 == dataset_sha256, "dataset manifest hash must be reproducible from identical inputs"
