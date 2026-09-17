@@ -92,9 +92,21 @@ def _canonical_key(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+# ---------------------------------------------------------------------------
+# FeatureSetDefinitionIdentity (frozen contract section 3; incorporated finding).
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True, slots=True)
 class FeatureSetDefinitionIdentity:
-    """Portable runtime identity for one governed FeatureSetDefinition bundle."""
+    """Portable runtime identity for one governed FeatureSetDefinition bundle.
+
+    Uses the existing catalog natural key `(slug, version)` directly --
+    never the `feature_set_definitions.feature_set_def_id` surrogate UUID,
+    and never a second hash derived from raw constituent feature ids.
+    Unknown/invalid/unstable identity fails closed (frozen contract section 3;
+    adversarial vectors 15, 16).
+    """
 
     slug: str
     version: int
@@ -110,6 +122,8 @@ class FeatureSetDefinitionIdentity:
 
     @property
     def portable(self) -> str:
+        """Canonical portable representation, e.g. ``trade_microstructure@v1``."""
+
         return f"{self.slug}@v{self.version}"
 
     def stable_dict(self) -> dict[str, Any]:
@@ -119,8 +133,17 @@ class FeatureSetDefinitionIdentity:
         return self.portable
 
 
+# ---------------------------------------------------------------------------
+# Bound input/source evidence (frozen contract section 4).
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True, slots=True)
 class BoundSourcePartition:
+    """One exact source partition consumed, pinned to its immutable revision
+    and durable content/manifest evidence.  A revision/content change here
+    produces a distinct `BoundInputEvidence` identity (adversarial vector 2)."""
+
     natural_identity: NaturalPartitionIdentity
     content_sha256: str
     manifest_sha256: str
@@ -141,6 +164,11 @@ class BoundSourcePartition:
 
 @dataclass(frozen=True, slots=True)
 class BoundSourceDataset:
+    """One exact source dataset's contribution: its identity plus the exact
+    immutable partitions/revisions consumed from it.  Plural sources let a
+    composite `InputContractV1` bind more than one dataset without inventing
+    a generic opaque source hash (frozen contract section 4)."""
+
     dataset_identity: DatasetIdentity
     partitions: tuple[BoundSourcePartition, ...]
 
@@ -149,7 +177,9 @@ class BoundSourceDataset:
             raise FeatureArtifactError("dataset_identity must be DatasetIdentity")
         partitions = tuple(self.partitions)
         if not partitions:
-            raise FeatureArtifactError("BoundSourceDataset requires at least one exact source partition")
+            raise FeatureArtifactError(
+                "BoundSourceDataset requires at least one exact source partition"
+            )
         for index, item in enumerate(partitions):
             if not isinstance(item, BoundSourcePartition):
                 raise FeatureArtifactError(f"partitions[{index}] must be BoundSourcePartition")
@@ -161,14 +191,30 @@ class BoundSourceDataset:
         keys = {_canonical_key(item.natural_identity.stable_dict()) for item in partitions}
         if len(keys) != len(partitions):
             raise FeatureArtifactError("BoundSourceDataset partitions must be distinct natural identities")
-        object.__setattr__(self, "partitions", tuple(sorted(partitions, key=lambda item: _canonical_key(item.stable_dict()))))
+        object.__setattr__(
+            self, "partitions",
+            tuple(sorted(partitions, key=lambda item: _canonical_key(item.stable_dict()))),
+        )
 
     def stable_dict(self) -> dict[str, Any]:
-        return {"dataset_identity": self.dataset_identity.stable_dict(), "partitions": [item.stable_dict() for item in self.partitions]}
+        return {
+            "dataset_identity": self.dataset_identity.stable_dict(),
+            "partitions": [item.stable_dict() for item in self.partitions],
+        }
 
 
 @dataclass(frozen=True, slots=True)
 class SupportShape:
+    """Exact declared/eligible support shape as one or more non-overlapping
+    intervals.
+
+    Accepted B04 coverage authority permits non-contiguous eligible coverage
+    (gaps between live partitions), so a single contiguous `CoverageInterval`
+    cannot represent every valid exact support shape.  This is the closed
+    alternative: an explicit, order-independent set of `CoverageInterval`
+    values that may be non-adjacent (REQUEST_CHANGES finding 1).
+    """
+
     intervals: tuple[CoverageInterval, ...]
 
     def __post_init__(self) -> None:
@@ -190,6 +236,18 @@ class SupportShape:
 
 @dataclass(frozen=True, slots=True)
 class BoundInputEvidence:
+    """Exact authoritative input evidence a FeatureArtifact was computed from.
+
+    Binds one or more source datasets' exact partition/revision/content
+    evidence, the exact declared/eligible support shape consumed -- which may
+    be non-contiguous -- and the canonical identity of the authoritative
+    upstream coverage-reconstruction result that produced this exact binding.
+    Never a generic opaque `source_hash` when this richer canonical evidence
+    is available (frozen contract section 4).  Empty ``sources`` or a missing
+    ``provenance_identity`` fail closed (adversarial vector 17: missing exact
+    source/support provenance -> registration refused).
+    """
+
     sources: tuple[BoundSourceDataset, ...]
     consumed_support: SupportShape
     provenance_identity: str
@@ -206,8 +264,14 @@ class BoundInputEvidence:
             raise FeatureArtifactError("BoundInputEvidence sources must be distinct dataset identities")
         if not isinstance(self.consumed_support, SupportShape):
             raise FeatureArtifactError("consumed_support must be SupportShape")
-        object.__setattr__(self, "provenance_identity", _non_empty_text(self.provenance_identity, "provenance_identity"))
-        object.__setattr__(self, "sources", tuple(sorted(sources, key=lambda item: _canonical_key(item.stable_dict()))))
+        object.__setattr__(
+            self, "provenance_identity",
+            _non_empty_text(self.provenance_identity, "provenance_identity"),
+        )
+        object.__setattr__(
+            self, "sources",
+            tuple(sorted(sources, key=lambda item: _canonical_key(item.stable_dict()))),
+        )
 
     def stable_dict(self) -> dict[str, Any]:
         return {
@@ -221,8 +285,23 @@ class BoundInputEvidence:
         return f"{BOUND_INPUT_EVIDENCE_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(self.stable_dict())}"
 
 
+# ---------------------------------------------------------------------------
+# FeatureArtifactIdentity (frozen contract section 2).
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True, slots=True)
 class FeatureArtifactIdentity:
+    """Deterministic content-derived FeatureArtifact semantic identity.
+
+    Bound exactly to: feature_set_definition_identity, bound_input_evidence
+    identity, declared_materialized_support, materialization_contract_version
+    and implementation_code_identity (frozen contract section 2).  Excludes
+    database surrogate ids, insertion order, timestamps, host/process/run
+    ids and physical locator -- a relocation or re-registration of identical
+    evidence never changes this value.
+    """
+
     value: str
 
     def __post_init__(self) -> None:
@@ -241,8 +320,23 @@ class FeatureArtifactIdentity:
         return self.value
 
 
+# ---------------------------------------------------------------------------
+# Content identity (frozen contract section 8).
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True, slots=True)
 class BoundOutputPartition:
+    """One exact feature-layer output partition this artifact materializes.
+
+    Binds the durable `layer="features"` `NaturalPartitionIdentity` to its
+    own content/manifest evidence, proving that a `FeatureArtifactContentIdentity`
+    represents real feature-layer dataset/partition durability -- not two
+    unscoped hashes with no relationship to `layer="features"`, the declared
+    feature-set natural key, or the declared output support (REQUEST_CHANGES
+    finding 3; frozen contract sections 8, 13).
+    """
+
     natural_identity: NaturalPartitionIdentity
     content_sha256: str
     manifest_sha256: str
@@ -265,13 +359,27 @@ class BoundOutputPartition:
 
 @dataclass(frozen=True, slots=True)
 class FeatureArtifactContentIdentity:
+    """Cryptographic identity over the canonical durable artifact
+    payload/manifest evidence.  Immutable, locator-independent and distinct
+    from `FeatureArtifactIdentity`.
+
+    Scoped to one or more exact `layer="features"` output partitions and the
+    declared output support they represent -- `FeatureArtifact.__post_init__`
+    additionally proves those partitions belong to the declared
+    `FeatureSetDefinitionIdentity` natural key, and that `declared_support`
+    equals `declared_materialized_support` (REQUEST_CHANGES finding 3;
+    frozen contract sections 8, 13).
+    """
+
     output_partitions: tuple[BoundOutputPartition, ...]
     declared_support: CoverageInterval
 
     def __post_init__(self) -> None:
         partitions = tuple(self.output_partitions)
         if not partitions:
-            raise FeatureArtifactError("FeatureArtifactContentIdentity requires at least one bound output partition")
+            raise FeatureArtifactError(
+                "FeatureArtifactContentIdentity requires at least one bound output partition"
+            )
         for index, item in enumerate(partitions):
             if not isinstance(item, BoundOutputPartition):
                 raise FeatureArtifactError(f"output_partitions[{index}] must be BoundOutputPartition")
@@ -280,18 +388,39 @@ class FeatureArtifactContentIdentity:
             raise FeatureArtifactError("output_partitions must be distinct natural identities")
         if not isinstance(self.declared_support, CoverageInterval):
             raise FeatureArtifactError("declared_support must be CoverageInterval")
-        object.__setattr__(self, "output_partitions", tuple(sorted(partitions, key=lambda item: _canonical_key(item.stable_dict()))))
+        object.__setattr__(
+            self, "output_partitions",
+            tuple(sorted(partitions, key=lambda item: _canonical_key(item.stable_dict()))),
+        )
 
     def stable_dict(self) -> dict[str, Any]:
-        return {"output_partitions": [item.stable_dict() for item in self.output_partitions], "declared_support": self.declared_support.stable_dict()}
+        return {
+            "output_partitions": [item.stable_dict() for item in self.output_partitions],
+            "declared_support": self.declared_support.stable_dict(),
+        }
 
     @property
     def identity(self) -> str:
         return f"{FEATURE_ARTIFACT_CONTENT_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(self.stable_dict())}"
 
 
+# ---------------------------------------------------------------------------
+# Constituent output-contract evidence (incorporated finding; frozen contract
+# section 12): carried for downstream independent-recomputation equivalence,
+# never re-hashed into a competing FeatureArtifactIdentity.
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True, slots=True)
 class ConstituentFeatureOutput:
+    """One constituent FeatureDefinition's identity + governing OutputContract.
+
+    Carried on `FeatureArtifact` purely as downstream evidence for
+    `recomputation_equivalent`; membership/order of the FeatureSetDefinition
+    bundle remains owned by catalog authority and does not participate in
+    `FeatureArtifactIdentity` (frozen contract section 3).
+    """
+
     definition_id: FeatureDefinitionId
     output_contract: OutputContract
 
@@ -304,7 +433,15 @@ class ConstituentFeatureOutput:
             raise FeatureArtifactError("output_contract must be OutputContract")
 
     def stable_dict(self) -> dict[str, Any]:
-        return {"definition_id": str(self.definition_id), "output_contract": self.output_contract.stable_dict()}
+        return {
+            "definition_id": str(self.definition_id),
+            "output_contract": self.output_contract.stable_dict(),
+        }
+
+
+# ---------------------------------------------------------------------------
+# FeatureArtifact lifecycle (frozen contract section 6: FINAL-only v1).
+# ---------------------------------------------------------------------------
 
 
 class FeatureArtifactLifecycle(StrEnum):
@@ -317,30 +454,67 @@ def require_final_observations(
     constituent_output_contracts: Sequence[ConstituentFeatureOutput],
     declared_materialized_support: CoverageInterval,
 ) -> None:
+    """Fail closed unless the supplied evidence actually proves finality of
+    the claimed materialization (frozen contract section 6; adversarial
+    vectors 9, 10; REQUEST_CHANGES finding 2).
+
+    It is not enough for the supplied observations to individually be FINAL:
+    this also requires that every declared constituent `FeatureDefinition`
+    has at least one matching FINAL observation (a caller cannot seal one
+    feature using an unrelated feature's FINAL observation while omitting
+    that feature's own provisional one), that no supplied observation
+    belongs to an undeclared feature, and that every observation's causal
+    evidence falls within the declared `declared_materialized_support`
+    interval.  A caller with zero observations has not evidenced any claimed
+    support and is refused rather than vacuously passed.
+    """
+
     constituents = tuple(constituent_output_contracts)
     if not constituents:
-        raise FeatureArtifactError("require_final_observations requires at least one declared constituent output contract")
+        raise FeatureArtifactError(
+            "require_final_observations requires at least one declared constituent output contract"
+        )
     if not isinstance(declared_materialized_support, CoverageInterval):
         raise FeatureArtifactError("declared_materialized_support must be CoverageInterval")
     declared_ids = {str(item.definition_id) for item in constituents}
+
     items = tuple(observations)
     if not items:
-        raise FeatureArtifactError("materialization requires at least one FINAL observation evidencing claimed support")
+        raise FeatureArtifactError(
+            "materialization requires at least one FINAL observation evidencing claimed support"
+        )
     covered_ids: set[str] = set()
     for item in items:
         if not isinstance(item, FeatureObservation):
             raise FeatureArtifactError("observations must be FeatureObservation values")
         if item.lifecycle != ObservationLifecycle.FINAL:
-            raise FeatureArtifactError(f"non-FINAL observation {item.identity} cannot be sealed into a FeatureArtifact v1")
+            raise FeatureArtifactError(
+                f"non-FINAL observation {item.identity} cannot be sealed into a FeatureArtifact v1"
+            )
         definition_id = str(item.definition_id)
         if definition_id not in declared_ids:
-            raise FeatureArtifactError(f"observation {item.identity} does not belong to any declared constituent FeatureDefinition")
-        if item.causal_available_at < declared_materialized_support.start or item.causal_available_at >= declared_materialized_support.end:
-            raise FeatureArtifactError(f"observation {item.identity} causal evidence falls outside declared_materialized_support")
+            raise FeatureArtifactError(
+                f"observation {item.identity} does not belong to any declared constituent FeatureDefinition"
+            )
+        if (
+            item.causal_available_at < declared_materialized_support.start
+            or item.causal_available_at >= declared_materialized_support.end
+        ):
+            raise FeatureArtifactError(
+                f"observation {item.identity} causal evidence falls outside declared_materialized_support"
+            )
         covered_ids.add(definition_id)
+
     missing = declared_ids - covered_ids
     if missing:
-        raise FeatureArtifactError(f"missing FINAL observation evidence for declared constituent(s): {sorted(missing)}")
+        raise FeatureArtifactError(
+            f"missing FINAL observation evidence for declared constituent(s): {sorted(missing)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# FeatureArtifact (frozen contract sections 2, 12).
+# ---------------------------------------------------------------------------
 
 
 def _feature_artifact_identity_payload(
@@ -351,6 +525,10 @@ def _feature_artifact_identity_payload(
     materialization_contract_version: str,
     implementation_code_identity: str,
 ) -> dict[str, Any]:
+    """The exact 5-field `FeatureArtifactIdentity` payload (frozen contract
+    section 2), factored so `FeatureArtifact.identity_payload()` and
+    `verify_matches_request()` can never drift apart."""
+
     if not isinstance(feature_set_definition_identity, FeatureSetDefinitionIdentity):
         raise FeatureArtifactError("feature_set_definition_identity must be FeatureSetDefinitionIdentity")
     if not isinstance(bound_input_evidence, BoundInputEvidence):
@@ -362,13 +540,26 @@ def _feature_artifact_identity_payload(
         "feature_set_definition_identity": feature_set_definition_identity.stable_dict(),
         "bound_input_evidence_identity": bound_input_evidence.identity,
         "declared_materialized_support": declared_materialized_support.stable_dict(),
-        "materialization_contract_version": _non_empty_text(materialization_contract_version, "materialization_contract_version"),
-        "implementation_code_identity": _non_empty_text(implementation_code_identity, "implementation_code_identity"),
+        "materialization_contract_version": _non_empty_text(
+            materialization_contract_version, "materialization_contract_version",
+        ),
+        "implementation_code_identity": _non_empty_text(
+            implementation_code_identity, "implementation_code_identity",
+        ),
     }
 
 
 @dataclass(frozen=True, slots=True)
 class FeatureArtifact:
+    """Immutable downstream metadata/evidence envelope for one FeatureArtifact v1.
+
+    Sufficient for a consumer (E06/F02/I04) to reject mismatched
+    set/support/source/code/content binding before ever reading payload
+    bytes (frozen contract section 12).  `physical_locators` is the only
+    non-identity-bearing field: relocation only changes it (frozen contract
+    sections 11, 12; adversarial vector 18).
+    """
+
     feature_set_definition_identity: FeatureSetDefinitionIdentity
     bound_input_evidence: BoundInputEvidence
     declared_materialized_support: CoverageInterval
@@ -381,21 +572,37 @@ class FeatureArtifact:
 
     def __post_init__(self) -> None:
         if not isinstance(self.feature_set_definition_identity, FeatureSetDefinitionIdentity):
-            raise FeatureArtifactError("feature_set_definition_identity must be FeatureSetDefinitionIdentity")
+            raise FeatureArtifactError(
+                "feature_set_definition_identity must be FeatureSetDefinitionIdentity"
+            )
         if not isinstance(self.bound_input_evidence, BoundInputEvidence):
             raise FeatureArtifactError("bound_input_evidence must be BoundInputEvidence")
         if not isinstance(self.declared_materialized_support, CoverageInterval):
             raise FeatureArtifactError("declared_materialized_support must be CoverageInterval")
-        object.__setattr__(self, "implementation_code_identity", _non_empty_text(self.implementation_code_identity, "implementation_code_identity"))
-        object.__setattr__(self, "materialization_contract_version", _non_empty_text(self.materialization_contract_version, "materialization_contract_version"))
+        object.__setattr__(
+            self, "implementation_code_identity",
+            _non_empty_text(self.implementation_code_identity, "implementation_code_identity"),
+        )
+        object.__setattr__(
+            self, "materialization_contract_version",
+            _non_empty_text(self.materialization_contract_version, "materialization_contract_version"),
+        )
         if not isinstance(self.content_identity, FeatureArtifactContentIdentity):
             raise FeatureArtifactError("content_identity must be FeatureArtifactContentIdentity")
         for index, item in enumerate(self.content_identity.output_partitions):
             output_identity = item.natural_identity.dataset_identity
-            if output_identity.feature_set_slug != self.feature_set_definition_identity.slug or output_identity.feature_set_version != self.feature_set_definition_identity.version:
-                raise FeatureArtifactError(f"content_identity.output_partitions[{index}] does not belong to the declared FeatureSetDefinitionIdentity natural key")
+            if (
+                output_identity.feature_set_slug != self.feature_set_definition_identity.slug
+                or output_identity.feature_set_version != self.feature_set_definition_identity.version
+            ):
+                raise FeatureArtifactError(
+                    f"content_identity.output_partitions[{index}] does not belong to the "
+                    "declared FeatureSetDefinitionIdentity natural key"
+                )
         if self.content_identity.declared_support != self.declared_materialized_support:
-            raise FeatureArtifactError("content_identity.declared_support must equal declared_materialized_support")
+            raise FeatureArtifactError(
+                "content_identity.declared_support must equal declared_materialized_support"
+            )
         lifecycle = self.lifecycle
         if isinstance(lifecycle, str):
             try:
@@ -407,14 +614,19 @@ class FeatureArtifact:
         object.__setattr__(self, "lifecycle", lifecycle)
         constituents = tuple(self.constituent_output_contracts)
         if not constituents:
-            raise FeatureArtifactError("FeatureArtifact requires at least one constituent output-contract identity")
+            raise FeatureArtifactError(
+                "FeatureArtifact requires at least one constituent output-contract identity"
+            )
         for index, item in enumerate(constituents):
             if not isinstance(item, ConstituentFeatureOutput):
                 raise FeatureArtifactError(f"constituent_output_contracts[{index}] must be ConstituentFeatureOutput")
         definition_ids = {str(item.definition_id) for item in constituents}
         if len(definition_ids) != len(constituents):
             raise FeatureArtifactError("constituent_output_contracts must be distinct FeatureDefinitionId values")
-        object.__setattr__(self, "constituent_output_contracts", tuple(sorted(constituents, key=lambda item: str(item.definition_id))))
+        object.__setattr__(
+            self, "constituent_output_contracts",
+            tuple(sorted(constituents, key=lambda item: str(item.definition_id))),
+        )
         object.__setattr__(self, "physical_locators", tuple(self.physical_locators))
         for index, item in enumerate(self.physical_locators):
             _non_empty_text(item, f"physical_locators[{index}]")
@@ -447,6 +659,10 @@ class FeatureArtifact:
         }
 
     def relocated(self, *, physical_locators: Iterable[str]) -> "FeatureArtifact":
+        """Return a new value with only `physical_locators` changed -- proves
+        relocation is locator-only (frozen contract section 11; adversarial
+        vector 18): identity and content_identity are untouched."""
+
         return FeatureArtifact(
             feature_set_definition_identity=self.feature_set_definition_identity,
             bound_input_evidence=self.bound_input_evidence,
@@ -479,6 +695,17 @@ def seal_feature_artifact(
     materialization_contract_version: str = FEATURE_ARTIFACT_MODEL_VERSION,
     physical_locators: Sequence[str] = (),
 ) -> FeatureArtifact:
+    """Construct one `FeatureArtifact` after enforcing the FINAL-only
+    materialization gate (frozen contract section 6).  This is the only
+    intended construction path for a durable artifact: it proves every
+    declared constituent has matching FINAL observation evidence within the
+    declared support (see `require_final_observations`), not merely that the
+    supplied observations happen to be FINAL.  Constructing `FeatureArtifact`
+    directly bypasses this proof entirely and MUST be reserved for trusted
+    rehydration of an already-sealed record -- i.e. reconstructing metadata
+    from a catalog row that was itself durably written by a prior successful
+    call to this function, never for producing a new durable artifact."""
+
     constituents = tuple(constituent_output_contracts)
     require_final_observations(
         observations,
@@ -508,7 +735,13 @@ def verify_matches_request(
     constituent_output_contracts: Sequence[ConstituentFeatureOutput],
     materialization_contract_version: str = FEATURE_ARTIFACT_MODEL_VERSION,
 ) -> None:
-    """Verify all trusted pre-payload metadata, including durable content and constituents."""
+    """Fail closed if loaded metadata differs from trusted request evidence.
+
+    The cache/load seam verifies every semantic identity-bearing field before
+    payload access and additionally requires trusted durable content identity
+    plus the authoritative constituent FeatureDefinition/OutputContract
+    evidence.  Omitting those values is not a permissive cache lookup mode.
+    """
 
     expected_identity = FeatureArtifactIdentity.from_payload(
         _feature_artifact_identity_payload(
@@ -521,12 +754,15 @@ def verify_matches_request(
     )
     if artifact.identity != expected_identity:
         raise FeatureArtifactError(
-            "loaded artifact identity does not match the exact requested feature-set/support/source/code/contract-version binding"
+            "loaded artifact identity does not match the exact requested "
+            "feature-set/support/source/code/contract-version binding"
         )
     if not isinstance(content_identity, FeatureArtifactContentIdentity):
         raise FeatureArtifactError("trusted content_identity must be FeatureArtifactContentIdentity")
     if artifact.content_identity != content_identity:
-        raise FeatureArtifactError("loaded artifact content_identity does not match the trusted request")
+        raise FeatureArtifactError(
+            "loaded artifact content_identity does not match the trusted request"
+        )
 
     constituents = tuple(constituent_output_contracts)
     if not constituents:
@@ -538,7 +774,9 @@ def verify_matches_request(
             )
     definition_ids = {str(item.definition_id) for item in constituents}
     if len(definition_ids) != len(constituents):
-        raise FeatureArtifactError("trusted constituent_output_contracts must contain distinct FeatureDefinitionId values")
+        raise FeatureArtifactError(
+            "trusted constituent_output_contracts must contain distinct FeatureDefinitionId values"
+        )
     expected_constituents = tuple(sorted(constituents, key=lambda item: str(item.definition_id)))
     if artifact.constituent_output_contracts != expected_constituents:
         raise FeatureArtifactError(
@@ -546,17 +784,40 @@ def verify_matches_request(
         )
 
 
+# ---------------------------------------------------------------------------
+# Duplicate vs conflict classification (frozen contract section 9).
+# ---------------------------------------------------------------------------
+
+
 class ArtifactRegistrationOutcome(StrEnum):
     IDEMPOTENT_DUPLICATE = "IDEMPOTENT_DUPLICATE"
     CONFLICT = "CONFLICT"
 
 
-def classify_registration(*, existing: FeatureArtifact, candidate: FeatureArtifact) -> ArtifactRegistrationOutcome:
+def classify_registration(
+    *, existing: FeatureArtifact, candidate: FeatureArtifact,
+) -> ArtifactRegistrationOutcome:
+    """Same-artifact equality decision procedure (frozen contract section 9;
+    adversarial vectors 1, 5, 6).
+
+    Requires ``existing`` and ``candidate`` to already share
+    `FeatureArtifactIdentity` -- this function decides only the duplicate vs
+    conflict question for that case, never timestamp/location arbitration.
+    """
+
     if existing.identity != candidate.identity:
-        raise FeatureArtifactError("classify_registration requires existing and candidate to share FeatureArtifactIdentity")
+        raise FeatureArtifactError(
+            "classify_registration requires existing and candidate to share FeatureArtifactIdentity"
+        )
     if existing.content_identity == candidate.content_identity:
         return ArtifactRegistrationOutcome.IDEMPOTENT_DUPLICATE
     return ArtifactRegistrationOutcome.CONFLICT
+
+
+# ---------------------------------------------------------------------------
+# Independent recomputation equivalence (frozen contract section 9;
+# incorporated finding).
+# ---------------------------------------------------------------------------
 
 
 def _to_decimal(value: Any, field_name: str) -> Decimal:
@@ -581,52 +842,93 @@ def _to_decimal(value: Any, field_name: str) -> Decimal:
 
 
 def _equivalence_parameters(equivalence: Any) -> dict[str, str]:
+    # NumericalEquivalence.parameters is stored as a tuple of (key, value)
+    # pairs post-construction (see quant_platform.features.definitions).
     return dict(equivalence.parameters)
 
 
+# The only `NumericalEquivalence.version` this module knows how to interpret
+# for each kind.  `version` is itself identity-bearing on the governing
+# FeatureDefinition; silently reusing this module's local EXACT/QUANTIZED/
+# TOLERANT parameter semantics for a future, differently-defined version
+# would be a silent misinterpretation, not equivalence (REQUEST_CHANGES
+# finding 5).  A future version requires an explicit, reviewed extension of
+# this set, never a generic fallback.
 _SUPPORTED_NUMERICAL_EQUIVALENCE_VERSIONS = frozenset({"1"})
 
 
 def _quantize_to_multiple(value: Decimal, quantum: Decimal) -> Decimal:
+    """Round ``value`` to the nearest multiple of ``quantum``.
+
+    `Decimal.quantize` only adopts the *exponent* of its argument (e.g.
+    ``Decimal("1.234").quantize(Decimal("0.05"))`` produces ``"1.23"``, a
+    hundredths rounding, not a rounding to a multiple of 0.05); it does not
+    perform multiple-of rounding, so it cannot be used directly here
+    (REQUEST_CHANGES finding 5).
+    """
+
     return (value / quantum).to_integral_value(rounding=ROUND_HALF_EVEN) * quantum
 
 
 def values_semantically_equivalent(output_contract: OutputContract, left: Any, right: Any) -> bool:
+    """Compare two independently computed values under one governing
+    `OutputContract`'s `NumericalEquivalence` rule (frozen contract section 9
+    / incorporated finding).  Introduces no generic fallback tolerance: only
+    the rule the `OutputContract` itself declares is applied, a
+    numerical-equivalence kind lacking its required parameter fails closed
+    rather than silently defaulting (adversarial vector 23), and only an
+    explicitly supported `NumericalEquivalence.version` is interpreted
+    (REQUEST_CHANGES finding 5).
+
+    Non-numeric output kinds (categorical/record) compare by exact equality:
+    there is no numeric tolerance to interpret for them.
+    """
+
     if output_contract.value_kind != OutputValueKind.NUMERIC:
         return left == right
+
     equivalence = output_contract.numerical_equivalence
-    if equivalence is None:
+    if equivalence is None:  # pragma: no cover - OutputContract construction already enforces this
         raise FeatureArtifactError("numeric output_contract requires numerical_equivalence")
     if equivalence.version not in _SUPPORTED_NUMERICAL_EQUIVALENCE_VERSIONS:
         raise FeatureArtifactError(
             f"unsupported numerical equivalence version {equivalence.version!r} for kind {equivalence.kind}"
         )
+
     left_value = _to_decimal(left, "left")
     right_value = _to_decimal(right, "right")
+
     if equivalence.kind == NumericalEquivalenceKind.EXACT:
         return left_value == right_value
+
     if equivalence.kind == NumericalEquivalenceKind.QUANTIZED:
         parameters = _equivalence_parameters(equivalence)
         quantum_text = parameters.get("quantum")
         if quantum_text is None:
-            raise FeatureArtifactError("QUANTIZED numerical equivalence requires a 'quantum' parameter")
+            raise FeatureArtifactError(
+                "QUANTIZED numerical equivalence requires a 'quantum' parameter"
+            )
         quantum = _to_decimal(quantum_text, "quantum")
         if quantum <= 0:
             raise FeatureArtifactError("QUANTIZED 'quantum' parameter must be positive")
         return _quantize_to_multiple(left_value, quantum) == _quantize_to_multiple(right_value, quantum)
+
     if equivalence.kind == NumericalEquivalenceKind.TOLERANT:
         parameters = _equivalence_parameters(equivalence)
         absolute_text = parameters.get("absolute")
         relative_text = parameters.get("relative")
         if absolute_text is None and relative_text is None:
-            raise FeatureArtifactError("TOLERANT numerical equivalence requires an 'absolute' and/or 'relative' parameter")
+            raise FeatureArtifactError(
+                "TOLERANT numerical equivalence requires an 'absolute' and/or 'relative' parameter"
+            )
         absolute = _to_decimal(absolute_text, "absolute") if absolute_text is not None else Decimal(0)
         relative = _to_decimal(relative_text, "relative") if relative_text is not None else Decimal(0)
         if absolute < 0 or relative < 0:
             raise FeatureArtifactError("TOLERANT parameters must not be negative")
         threshold = absolute + relative * max(abs(left_value), abs(right_value))
         return abs(left_value - right_value) <= threshold
-    raise FeatureArtifactError(f"unsupported numerical equivalence kind: {equivalence.kind}")
+
+    raise FeatureArtifactError(f"unsupported numerical equivalence kind: {equivalence.kind}")  # pragma: no cover
 
 
 def recomputation_equivalent(
@@ -635,6 +937,20 @@ def recomputation_equivalent(
     left: Sequence[FeatureObservation],
     right: Sequence[FeatureObservation],
 ) -> bool:
+    """Independent recomputation equivalence (frozen contract section 9;
+    incorporated finding): True iff ``left`` and ``right`` cover EXACTLY the
+    same observation identities/support and every corresponding value
+    compares equivalent under its governing FeatureDefinition's
+    `OutputContract` -- entirely independent from artifact/content byte
+    identity.
+
+    Fails closed: a definition_id without a supplied governing
+    `OutputContract`, or duplicate observation identities on either side,
+    raise rather than guess.  Mismatched observation-identity sets, or two
+    empty sequences, return False -- a vacuous comparison proves nothing
+    (adversarial vector 22).
+    """
+
     left_by_id = _keyed_by_identity(left, "left")
     right_by_id = _keyed_by_identity(right, "right")
     if not left_by_id or not right_by_id:
@@ -646,13 +962,17 @@ def recomputation_equivalent(
         definition_id = left_observation.definition_id
         contract = output_contracts.get(definition_id)
         if contract is None:
-            raise FeatureArtifactError(f"no governing OutputContract supplied for {definition_id}")
+            raise FeatureArtifactError(
+                f"no governing OutputContract supplied for {definition_id}"
+            )
         if not values_semantically_equivalent(contract, left_observation.value, right_observation.value):
             return False
     return True
 
 
-def _keyed_by_identity(observations: Sequence[FeatureObservation], side: str) -> dict[str, FeatureObservation]:
+def _keyed_by_identity(
+    observations: Sequence[FeatureObservation], side: str,
+) -> dict[str, FeatureObservation]:
     result: dict[str, FeatureObservation] = {}
     for item in observations:
         if not isinstance(item, FeatureObservation):
