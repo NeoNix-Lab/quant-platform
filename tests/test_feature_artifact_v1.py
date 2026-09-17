@@ -15,6 +15,7 @@ from quant_platform.data.models import CoverageInterval, DatasetIdentity, Instan
 from quant_platform.features import (  # noqa: E402
     ArtifactRegistrationOutcome,
     BoundInputEvidence,
+    BoundOutputPartition,
     BoundSourceDataset,
     BoundSourcePartition,
     ConstituentFeatureOutput,
@@ -37,6 +38,7 @@ from quant_platform.features import (  # noqa: E402
     OutputValueKind,
     SupportIdentity,
     SupportReference,
+    SupportShape,
     classify_registration,
     recomputation_equivalent,
     require_final_observations,
@@ -53,25 +55,66 @@ OTHER_SUPPORT = CoverageInterval(Instant.parse("2024-01-16T00:00:00Z"), Instant.
 TRADES_CONTRACT = InputContractV1("trades", "1", ("price", "size"))
 
 
-def natural(revision: int = 1, partition_key: str = "dt=2024-01-15") -> NaturalPartitionIdentity:
-    return NaturalPartitionIdentity(DATASET_IDENTITY, partition_key, revision)
+def output_dataset_identity(slug: str = "trade_microstructure", version: int = 1) -> DatasetIdentity:
+    return DatasetIdentity(
+        "features", slug, "bybit", "BTCUSDT", "feature-v1",
+        feature_set_slug=slug, feature_set_version=version,
+    )
 
 
-def source_partition(*, token: str = "1", revision: int = 1, partition_key: str = "dt=2024-01-15") -> BoundSourcePartition:
+def natural(
+    revision: int = 1, partition_key: str = "dt=2024-01-15", *, dataset_identity: DatasetIdentity = DATASET_IDENTITY,
+) -> NaturalPartitionIdentity:
+    return NaturalPartitionIdentity(dataset_identity, partition_key, revision)
+
+
+def source_partition(
+    *, token: str = "1", revision: int = 1, partition_key: str = "dt=2024-01-15",
+    dataset_identity: DatasetIdentity = DATASET_IDENTITY,
+) -> BoundSourcePartition:
     return BoundSourcePartition(
-        natural_identity=natural(revision, partition_key),
+        natural_identity=natural(revision, partition_key, dataset_identity=dataset_identity),
         content_sha256=token * 64,
         manifest_sha256=token * 64,
     )
 
 
+def output_partition(
+    *, token: str = "a", revision: int = 1, partition_key: str = "dt=2024-01-15",
+    slug: str = "trade_microstructure", version: int = 1,
+) -> BoundOutputPartition:
+    return BoundOutputPartition(
+        natural_identity=NaturalPartitionIdentity(output_dataset_identity(slug, version), partition_key, revision),
+        content_sha256=token * 64,
+        manifest_sha256=(token * 63 + "0"),
+    )
+
+
+def content_identity(
+    token: str = "a", *, support: CoverageInterval = SUPPORT,
+    slug: str = "trade_microstructure", version: int = 1,
+) -> FeatureArtifactContentIdentity:
+    return FeatureArtifactContentIdentity(
+        output_partitions=(output_partition(token=token, slug=slug, version=version),),
+        declared_support=support,
+    )
+
+
+def support_shape(*, support: CoverageInterval = SUPPORT) -> SupportShape:
+    return SupportShape(intervals=(support,))
+
+
 def bound_input_evidence(
     *, token: str = "1", revision: int = 1, partition_key: str = "dt=2024-01-15",
     support: CoverageInterval = SUPPORT, dataset_identity: DatasetIdentity = DATASET_IDENTITY,
+    provenance: str = "b04-coverage-reconstruction:1",
 ) -> BoundInputEvidence:
     return BoundInputEvidence(
-        sources=(BoundSourceDataset(dataset_identity, (source_partition(token=token, revision=revision, partition_key=partition_key),)),),
-        consumed_support=support,
+        sources=(BoundSourceDataset(dataset_identity, (source_partition(
+            token=token, revision=revision, partition_key=partition_key, dataset_identity=dataset_identity,
+        ),)),),
+        consumed_support=support_shape(support=support),
+        provenance_identity=provenance,
     )
 
 
@@ -110,18 +153,15 @@ def support_identity(*, contract: InputContractV1 = TRADES_CONTRACT, obs: str = 
 def feature_observation(
     *, definition: FeatureDefinition, obs: str = "obs-1", value: str = "1.0",
     lifecycle: ObservationLifecycle = ObservationLifecycle.FINAL,
+    causal: Instant | str = "2024-01-15T00:00:00Z",
 ) -> FeatureObservation:
     return FeatureObservation(
         definition_id=definition.definition_id,
         support_identity=support_identity(contract=definition.input_contract, obs=obs),
         value=value,
         lifecycle=lifecycle,
-        causal_available_at="2024-01-15T00:00:00Z",
+        causal_available_at=causal,
     )
-
-
-def content_identity(token: str = "a") -> FeatureArtifactContentIdentity:
-    return FeatureArtifactContentIdentity(content_sha256=token * 64, manifest_sha256=(token * 63 + "0"))
 
 
 def constituent(definition: FeatureDefinition) -> ConstituentFeatureOutput:
@@ -136,16 +176,21 @@ def artifact(
     code: str = "commit-1",
     content: FeatureArtifactContentIdentity | None = None,
     observations: tuple[FeatureObservation, ...] | None = None,
+    constituents: tuple[ConstituentFeatureOutput, ...] | None = None,
 ) -> tuple[FeatureArtifact, FeatureDefinition]:
     definition = definition or feature_definition()
-    observations = observations or (feature_observation(definition=definition),)
+    fsd_identity = fsd_identity or feature_set_identity()
+    constituents = constituents if constituents is not None else (constituent(definition),)
+    observations = observations if observations is not None else (
+        feature_observation(definition=definition, causal=support.start),
+    )
     result = seal_feature_artifact(
-        feature_set_definition_identity=fsd_identity or feature_set_identity(),
-        bound_input_evidence=evidence or bound_input_evidence(),
+        feature_set_definition_identity=fsd_identity,
+        bound_input_evidence=evidence or bound_input_evidence(support=support),
         declared_materialized_support=support,
         implementation_code_identity=code,
-        content_identity=content or content_identity(),
-        constituent_output_contracts=(constituent(definition),),
+        content_identity=content or content_identity(slug=fsd_identity.slug, version=fsd_identity.version, support=support),
+        constituent_output_contracts=constituents,
         observations=observations,
     )
     return result, definition
@@ -195,11 +240,31 @@ class FeatureSetDefinitionIdentityTests(unittest.TestCase):
             identity.slug = "other"  # type: ignore[misc]
 
 
+class SupportShapeTests(unittest.TestCase):
+    """REQUEST_CHANGES finding 1: exact, possibly non-contiguous support shape."""
+
+    def test_requires_at_least_one_interval(self):
+        with self.assertRaises(FeatureArtifactError):
+            SupportShape(intervals=())
+
+    def test_non_contiguous_intervals_are_accepted_and_order_independent(self):
+        gap_day = CoverageInterval(Instant.parse("2024-01-17T00:00:00Z"), Instant.parse("2024-01-18T00:00:00Z"))
+        first = SupportShape(intervals=(SUPPORT, gap_day))
+        second = SupportShape(intervals=(gap_day, SUPPORT))
+        self.assertEqual(first.stable_dict(), second.stable_dict())
+        self.assertEqual(2, len(first.intervals))
+
+    def test_overlapping_intervals_are_rejected(self):
+        overlapping = CoverageInterval(Instant.parse("2024-01-15T12:00:00Z"), Instant.parse("2024-01-16T12:00:00Z"))
+        with self.assertRaises(FeatureArtifactError):
+            SupportShape(intervals=(SUPPORT, overlapping))
+
+
 class BoundInputEvidenceTests(unittest.TestCase):
     def test_missing_sources_fails_closed(self):
         # Adversarial vector 17: missing exact source/support provenance.
         with self.assertRaises(FeatureArtifactError):
-            BoundInputEvidence(sources=(), consumed_support=SUPPORT)
+            BoundInputEvidence(sources=(), consumed_support=support_shape(), provenance_identity="prov-1")
 
     def test_source_dataset_requires_at_least_one_partition(self):
         with self.assertRaises(FeatureArtifactError):
@@ -217,13 +282,41 @@ class BoundInputEvidenceTests(unittest.TestCase):
     def test_duplicate_source_datasets_are_rejected(self):
         dataset = BoundSourceDataset(DATASET_IDENTITY, (source_partition(),))
         with self.assertRaises(FeatureArtifactError):
-            BoundInputEvidence(sources=(dataset, dataset), consumed_support=SUPPORT)
+            BoundInputEvidence(sources=(dataset, dataset), consumed_support=support_shape(), provenance_identity="prov-1")
+
+    def test_partition_embedded_dataset_identity_must_match_enclosing_dataset(self):
+        # REQUEST_CHANGES finding 6: a Bybit partition cannot be placed under
+        # a Kraken source dataset.
+        mismatched = source_partition(dataset_identity=OTHER_DATASET_IDENTITY)
+        with self.assertRaises(FeatureArtifactError):
+            BoundSourceDataset(DATASET_IDENTITY, (mismatched,))
+
+    def test_missing_provenance_identity_fails_closed(self):
+        # REQUEST_CHANGES finding 1: the canonical upstream result identity
+        # is required, not optional.
+        with self.assertRaises(FeatureArtifactError):
+            BoundInputEvidence(
+                sources=(BoundSourceDataset(DATASET_IDENTITY, (source_partition(),)),),
+                consumed_support=support_shape(),
+                provenance_identity="",
+            )
+        with self.assertRaises(TypeError):
+            BoundInputEvidence(  # type: ignore[call-arg]
+                sources=(BoundSourceDataset(DATASET_IDENTITY, (source_partition(),)),),
+                consumed_support=support_shape(),
+            )
 
     def test_identity_is_order_independent_across_sources_and_partitions(self):
         first_partitions = (source_partition(token="1"), source_partition(token="2", partition_key="dt=2024-01-16"))
         second_partitions = tuple(reversed(first_partitions))
-        first = BoundInputEvidence(sources=(BoundSourceDataset(DATASET_IDENTITY, first_partitions),), consumed_support=SUPPORT)
-        second = BoundInputEvidence(sources=(BoundSourceDataset(DATASET_IDENTITY, second_partitions),), consumed_support=SUPPORT)
+        first = BoundInputEvidence(
+            sources=(BoundSourceDataset(DATASET_IDENTITY, first_partitions),),
+            consumed_support=support_shape(), provenance_identity="prov-1",
+        )
+        second = BoundInputEvidence(
+            sources=(BoundSourceDataset(DATASET_IDENTITY, second_partitions),),
+            consumed_support=support_shape(), provenance_identity="prov-1",
+        )
         self.assertEqual(first.identity, second.identity)
 
     def test_different_revision_changes_identity(self):
@@ -235,6 +328,21 @@ class BoundInputEvidenceTests(unittest.TestCase):
     def test_different_content_sha_changes_identity(self):
         first = bound_input_evidence(token="1")
         second = bound_input_evidence(token="2")
+        self.assertNotEqual(first.identity, second.identity)
+
+    def test_non_contiguous_support_shape_changes_identity(self):
+        gap_day = CoverageInterval(Instant.parse("2024-01-17T00:00:00Z"), Instant.parse("2024-01-18T00:00:00Z"))
+        contiguous = bound_input_evidence()
+        non_contiguous = BoundInputEvidence(
+            sources=(BoundSourceDataset(DATASET_IDENTITY, (source_partition(),)),),
+            consumed_support=SupportShape(intervals=(SUPPORT, gap_day)),
+            provenance_identity="b04-coverage-reconstruction:1",
+        )
+        self.assertNotEqual(contiguous.identity, non_contiguous.identity)
+
+    def test_different_provenance_identity_changes_identity(self):
+        first = bound_input_evidence(provenance="b04-coverage-reconstruction:1")
+        second = bound_input_evidence(provenance="b04-coverage-reconstruction:2")
         self.assertNotEqual(first.identity, second.identity)
 
 
@@ -257,7 +365,7 @@ class FeatureArtifactIdentityTests(unittest.TestCase):
 
     def test_different_declared_support_is_distinct_identity(self):
         first, definition = artifact(support=SUPPORT)
-        second, _ = artifact(definition=definition, support=OTHER_SUPPORT)
+        second, _ = artifact(definition=definition, support=OTHER_SUPPORT, evidence=bound_input_evidence(support=OTHER_SUPPORT))
         self.assertNotEqual(first.identity, second.identity)
 
     def test_different_implementation_code_identity_is_distinct_identity(self):
@@ -307,8 +415,48 @@ class FeatureArtifactIdentityTests(unittest.TestCase):
             self.assertNotIn(excluded, payload_text)
 
 
+class OutputPartitionBindingTests(unittest.TestCase):
+    """REQUEST_CHANGES finding 3: content identity bound to real feature-layer
+    dataset/partition durability."""
+
+    def test_output_partition_must_belong_to_the_features_layer(self):
+        non_feature_layer = NaturalPartitionIdentity(DATASET_IDENTITY, "dt=2024-01-15", 1)
+        with self.assertRaises(FeatureArtifactError):
+            BoundOutputPartition(natural_identity=non_feature_layer, content_sha256="a" * 64, manifest_sha256="b" * 64)
+
+    def test_content_identity_requires_at_least_one_output_partition(self):
+        with self.assertRaises(FeatureArtifactError):
+            FeatureArtifactContentIdentity(output_partitions=(), declared_support=SUPPORT)
+
+    def test_artifact_rejects_content_identity_from_a_different_feature_set_natural_key(self):
+        with self.assertRaises(FeatureArtifactError):
+            artifact(
+                fsd_identity=feature_set_identity("trade_microstructure", 1),
+                content=content_identity(slug="trade_microstructure", version=2),
+            )
+
+    def test_artifact_rejects_content_identity_from_a_different_slug(self):
+        with self.assertRaises(FeatureArtifactError):
+            artifact(
+                fsd_identity=feature_set_identity("trade_microstructure", 1),
+                content=content_identity(slug="other_bundle", version=1),
+            )
+
+    def test_artifact_rejects_content_identity_declared_support_mismatch(self):
+        with self.assertRaises(FeatureArtifactError):
+            artifact(support=SUPPORT, content=content_identity(support=OTHER_SUPPORT))
+
+    def test_matching_output_partition_and_declared_support_succeeds(self):
+        sealed, _ = artifact(fsd_identity=feature_set_identity("trade_microstructure", 1), support=SUPPORT)
+        self.assertEqual(SUPPORT, sealed.content_identity.declared_support)
+        output_dataset = sealed.content_identity.output_partitions[0].natural_identity.dataset_identity
+        self.assertEqual("features", output_dataset.layer)
+        self.assertEqual("trade_microstructure", output_dataset.feature_set_slug)
+        self.assertEqual(1, output_dataset.feature_set_version)
+
+
 class FinalityGateTests(unittest.TestCase):
-    """Adversarial vectors 9, 10."""
+    """Adversarial vectors 9, 10; REQUEST_CHANGES finding 2."""
 
     def test_provisional_observation_refuses_materialization(self):
         definition = feature_definition()
@@ -326,14 +474,54 @@ class FinalityGateTests(unittest.TestCase):
             ))
 
     def test_empty_observations_refuses_materialization(self):
+        definition = feature_definition()
         with self.assertRaises(FeatureArtifactError):
-            require_final_observations(())
+            require_final_observations(
+                (), constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
+            )
 
     def test_all_final_observations_satisfy_the_gate(self):
         definition = feature_definition()
-        require_final_observations((feature_observation(definition=definition),))
+        require_final_observations(
+            (feature_observation(definition=definition, causal=SUPPORT.start),),
+            constituent_output_contracts=(constituent(definition),),
+            declared_materialized_support=SUPPORT,
+        )
         sealed, _ = artifact(definition=definition)
         self.assertEqual(FeatureArtifactLifecycle.FINAL, sealed.lifecycle)
+
+    def test_unrelated_final_observation_cannot_stand_in_for_a_declared_constituent(self):
+        # REQUEST_CHANGES finding 2: sealing feature A using only an
+        # unrelated feature B's FINAL observation, while A itself has no
+        # evidence at all, must be refused rather than silently accepted.
+        feature_a = feature_definition(feature_key="order_flow.delta")
+        feature_b = feature_definition(feature_key="order_flow.other")
+        with self.assertRaises(FeatureArtifactError):
+            require_final_observations(
+                (feature_observation(definition=feature_b, causal=SUPPORT.start),),
+                constituent_output_contracts=(constituent(feature_a), constituent(feature_b)),
+                declared_materialized_support=SUPPORT,
+            )
+
+    def test_observation_outside_declared_support_is_refused(self):
+        definition = feature_definition()
+        outside = feature_observation(definition=definition, causal=OTHER_SUPPORT.start)
+        with self.assertRaises(FeatureArtifactError):
+            require_final_observations(
+                (outside,),
+                constituent_output_contracts=(constituent(definition),),
+                declared_materialized_support=SUPPORT,
+            )
+
+    def test_observation_for_an_undeclared_feature_is_refused(self):
+        declared = feature_definition(feature_key="order_flow.delta")
+        undeclared = feature_definition(feature_key="order_flow.other")
+        with self.assertRaises(FeatureArtifactError):
+            require_final_observations(
+                (feature_observation(definition=undeclared, causal=SUPPORT.start),),
+                constituent_output_contracts=(constituent(declared),),
+                declared_materialized_support=SUPPORT,
+            )
 
     def test_direct_construction_bypassing_seal_still_rejects_non_final_lifecycle_value(self):
         definition = feature_definition()
@@ -379,7 +567,7 @@ class DuplicateVsConflictTests(unittest.TestCase):
 
 
 class RelocationAndVerificationTests(unittest.TestCase):
-    """Adversarial vectors 18, 19, 21."""
+    """Adversarial vectors 18, 19, 21; REQUEST_CHANGES finding 4."""
 
     def test_relocation_changes_only_physical_locators(self):
         sealed, _ = artifact()
@@ -387,37 +575,81 @@ class RelocationAndVerificationTests(unittest.TestCase):
         self.assertEqual(("new-path.parquet",), relocated.physical_locators)
         self.assertEqual(sealed.stable_dict()["identity"], relocated.stable_dict()["identity"])
 
-    def test_matching_metadata_verifies_before_payload_use(self):
-        sealed, _ = artifact()
-        verify_matches_request(
-            sealed, feature_set_definition_identity=feature_set_identity(), declared_materialized_support=SUPPORT,
+    def _verify_kwargs(self, **overrides):
+        evidence = bound_input_evidence()
+        base = dict(
+            feature_set_definition_identity=feature_set_identity(),
+            bound_input_evidence=evidence,
+            declared_materialized_support=SUPPORT,
+            implementation_code_identity="commit-1",
         )
+        base.update(overrides)
+        return base
+
+    def test_matching_metadata_verifies_before_payload_use(self):
+        evidence = bound_input_evidence()
+        sealed, _ = artifact(evidence=evidence, code="commit-1")
+        verify_matches_request(sealed, **self._verify_kwargs(bound_input_evidence=evidence))
 
     def test_wrong_feature_set_binding_is_refused_before_payload_use(self):
         sealed, _ = artifact(fsd_identity=feature_set_identity("trade_microstructure", 1))
         with self.assertRaises(FeatureArtifactError):
             verify_matches_request(
                 sealed,
-                feature_set_definition_identity=feature_set_identity("trade_microstructure", 2),
-                declared_materialized_support=SUPPORT,
+                **self._verify_kwargs(feature_set_definition_identity=feature_set_identity("trade_microstructure", 2)),
             )
 
     def test_wrong_support_binding_is_refused_before_payload_use(self):
         sealed, _ = artifact(support=SUPPORT)
         with self.assertRaises(FeatureArtifactError):
-            verify_matches_request(
-                sealed, feature_set_definition_identity=feature_set_identity(), declared_materialized_support=OTHER_SUPPORT,
-            )
+            verify_matches_request(sealed, **self._verify_kwargs(declared_materialized_support=OTHER_SUPPORT))
+
+    def test_wrong_source_evidence_is_refused_before_payload_use(self):
+        # REQUEST_CHANGES finding 4: mismatched source evidence must be
+        # caught even when feature-set identity and support both match.
+        sealed, _ = artifact(evidence=bound_input_evidence(revision=1))
+        with self.assertRaises(FeatureArtifactError):
+            verify_matches_request(sealed, **self._verify_kwargs(bound_input_evidence=bound_input_evidence(revision=2)))
+
+    def test_wrong_implementation_code_identity_is_refused_before_payload_use(self):
+        sealed, _ = artifact(code="commit-1")
+        with self.assertRaises(FeatureArtifactError):
+            verify_matches_request(sealed, **self._verify_kwargs(implementation_code_identity="commit-2"))
+
+    def test_wrong_materialization_contract_version_is_refused_before_payload_use(self):
+        sealed, _ = artifact()
+        with self.assertRaises(FeatureArtifactError):
+            verify_matches_request(sealed, **self._verify_kwargs(materialization_contract_version="2"))
+
+    def test_wrong_trusted_content_identity_is_refused_before_payload_use(self):
+        sealed, _ = artifact(content=content_identity("d"))
+        with self.assertRaises(FeatureArtifactError):
+            verify_matches_request(sealed, **self._verify_kwargs(content_identity=content_identity("e")))
+
+    def test_matching_trusted_content_identity_passes(self):
+        trusted_content = content_identity("d")
+        sealed, _ = artifact(content=trusted_content)
+        verify_matches_request(sealed, **self._verify_kwargs(content_identity=trusted_content))
 
 
 class RecomputationEquivalenceTests(unittest.TestCase):
-    """Adversarial vectors 7, 20, 22, 23."""
+    """Adversarial vectors 7, 20, 22, 23; REQUEST_CHANGES finding 5."""
 
     def test_exact_equivalence_ignores_decimal_string_formatting(self):
         contract = output_contract(NumericalEquivalence.exact())
         self.assertTrue(values_semantically_equivalent(contract, "1.0", "1.00"))
         self.assertTrue(values_semantically_equivalent(contract, 1, "1.0"))
         self.assertFalse(values_semantically_equivalent(contract, "1.0", "1.01"))
+
+    def test_quantized_equivalence_rounds_to_a_multiple_of_the_quantum(self):
+        # REQUEST_CHANGES finding 5: Decimal.quantize(Decimal("0.05")) only
+        # adopts the operand's exponent (hundredths), it does not round to
+        # multiples of 0.05.  1.024 and 0.999 both round to the nearest
+        # multiple of 0.05 (1.00), so real multiple-of quantization must
+        # consider them equivalent even though naive .quantize() would not.
+        contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.QUANTIZED, "1", {"quantum": "0.05"}))
+        self.assertTrue(values_semantically_equivalent(contract, "1.024", "0.999"))
+        self.assertFalse(values_semantically_equivalent(contract, "1.024", "0.90"))
 
     def test_quantized_equivalence_within_quantum_is_equivalent(self):
         contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.QUANTIZED, "1", {"quantum": "0.01"}))
@@ -437,6 +669,14 @@ class RecomputationEquivalenceTests(unittest.TestCase):
     def test_tolerant_equivalence_without_any_parameter_fails_closed(self):
         # Adversarial vector 23: no generic tolerance fallback.
         contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.TOLERANT, "1", {}))
+        with self.assertRaises(FeatureArtifactError):
+            values_semantically_equivalent(contract, "1.0", "1.0")
+
+    def test_unsupported_equivalence_version_fails_closed(self):
+        # REQUEST_CHANGES finding 5: `version` is identity-bearing on the
+        # governing FeatureDefinition; an unrecognized version must not
+        # silently reuse this module's v1 parameter interpretation.
+        contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.EXACT, "2"))
         with self.assertRaises(FeatureArtifactError):
             values_semantically_equivalent(contract, "1.0", "1.0")
 
