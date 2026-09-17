@@ -505,6 +505,38 @@ CREATE INDEX ON quality_reports (dataset_id, ran_at DESC);
 CREATE INDEX ON quality_reports (status, ran_at DESC) WHERE status <> 'pass';
 
 -- ---------------------------------------------------------------------------
+-- repair_convergence — provenienza IMMUTABILE di ogni cutover A10 riuscito.
+--
+-- Una riga lega la revisione finale autoritativa esattamente all'intent di
+-- riparazione e al candidate attempt che l'ha prodotta.  E' la fonte
+-- autoritativa con cui A10 decide ALREADY_SATISFIED: un documento JSON sul
+-- filesystem e' mutabile e non basta a provare che la revisione live sia
+-- stata prodotta esattamente da questo candidate_id.
+--
+-- candidate_id e' UNIQUE: lo stesso identico candidate puo' convergere una
+-- sola volta nella sua vita; un retry successivo trova la riga e restituisce
+-- ALREADY_SATISFIED senza inserirne una seconda.
+-- ---------------------------------------------------------------------------
+CREATE TABLE repair_convergence (
+    partition_id                    uuid PRIMARY KEY REFERENCES partitions ON DELETE CASCADE,
+    repair_intent_id                text NOT NULL CHECK (length(trim(repair_intent_id)) > 0),
+    candidate_id                    text NOT NULL CHECK (length(trim(candidate_id)) > 0),
+    predecessor_partition_id        uuid REFERENCES partitions ON DELETE RESTRICT,
+    final_partition_manifest_sha256 char(64) NOT NULL,
+    final_content_sha256            char(64) NOT NULL,
+    coverage_evidence_id            text NOT NULL,
+    quality_assessment_signature    text NOT NULL,
+    quality_assessment_status       text NOT NULL CHECK (quality_assessment_status IN ('pass','warn','fail')),
+    publication_state               text NOT NULL CHECK (publication_state IN ('valid','degraded')),
+    repair_semantics_version        text NOT NULL,
+    provenance_id                   text NOT NULL,
+    recorded_at                     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT repair_convergence_candidate_unique UNIQUE (candidate_id)
+);
+
+CREATE INDEX ON repair_convergence (repair_intent_id);
+
+-- ---------------------------------------------------------------------------
 -- rebuild_log — traccia di ogni ricostruzione del catalogo dai manifest.
 -- E' cio' che rende verificabile la frase "Postgres non e' la source of truth".
 -- ---------------------------------------------------------------------------

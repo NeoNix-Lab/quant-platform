@@ -38,11 +38,38 @@ from quant_platform.data.repair import (  # noqa: E402
     RepairIntent,
     RepairRefusal,
     STALE_CONFLICT,
+    compute_coverage_evidence_id,
+    compute_quality_evidence_id,
     evaluate_invalid_revision_eligibility,
     evaluate_missing_support_eligibility,
     write_convergence_provenance,
 )
 from quant_platform.data.repair import _reevaluate_authority, _AlreadySatisfiedSignal, _StaleConflictSignal  # noqa: E402
+
+
+class _FakeProvenanceCursor:
+    """Stubs only ``SELECT ... FROM catalog.repair_convergence`` -- the one
+    query ``_reevaluate_authority`` issues -- so the pure re-evaluation logic
+    can be exercised without a real database connection.
+
+    ``self_for`` is the set of partition_ids that should look like this exact
+    repair_intent_id/candidate_id's own durable convergence row; every other
+    partition_id reports no provenance row at all.
+    """
+
+    def __init__(self, self_for: frozenset[str] = frozenset(), *, intent_id: str = "", candidate_id: str = ""):
+        self.self_for = self_for
+        self.intent_id = intent_id
+        self.candidate_id = candidate_id
+        self._result = None
+
+    def execute(self, statement, params=None):
+        assert "catalog.repair_convergence" in statement
+        partition_id = params[0]
+        self._result = (self.intent_id, self.candidate_id) if partition_id in self.self_for else None
+
+    def fetchone(self):
+        return self._result
 
 
 IDENTITY = DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v1")
@@ -152,6 +179,48 @@ class CandidateIdentityTests(unittest.TestCase):
         with self.assertRaises(RepairRefusal):
             candidate(repair_intent_id=intent.intent_id, revision=1, content_sha256="short")
 
+    def test_J2_candidate_content_sha_must_be_hex_not_merely_the_right_length(self):
+        trigger = CoverageGapTrigger(required=REQUIRED, gaps=(GAP,))
+        intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
+        # 64 characters, but 'g' is not a hex digit -- length alone must not pass.
+        with self.assertRaises(RepairRefusal):
+            candidate(repair_intent_id=intent.intent_id, revision=1, content_sha256="g" * 64)
+
+    def test_J3_predecessor_ref_content_sha_must_be_hex(self):
+        with self.assertRaises(RepairRefusal):
+            PredecessorRef(revision=1, content_sha256="z" * 64, state="invalid")
+
+    def test_J4_predecessor_ref_accepts_uppercase_hex_normalized_to_lowercase(self):
+        ref = PredecessorRef(revision=1, content_sha256="A" * 64, state="invalid")
+        self.assertEqual(ref.content_sha256, "a" * 64)
+
+
+class EvidenceIdentityBindingTests(unittest.TestCase):
+    """compute_quality_evidence_id / compute_coverage_evidence_id are what
+    cutover() re-derives from the actual runtime inputs and checks against
+    the candidate's bound identity -- proving the same candidate_id cannot be
+    retried with different acceptance evidence."""
+
+    def test_J5_quality_evidence_id_is_deterministic_over_report_content(self):
+        report = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
+        self.assertEqual(compute_quality_evidence_id(report), compute_quality_evidence_id(dict(report)))
+
+    def test_J6_quality_evidence_id_changes_with_status(self):
+        base = {"status": "pass", "metrics": {"a": 1}, "violations": [], "code_ref": "cert-1"}
+        changed = {**base, "status": "fail"}
+        self.assertNotEqual(compute_quality_evidence_id(base), compute_quality_evidence_id(changed))
+
+    def test_J7_quality_evidence_id_requires_all_fields(self):
+        with self.assertRaises(RepairRefusal):
+            compute_quality_evidence_id({"status": "pass", "metrics": {}, "violations": []})
+
+    def test_J8_coverage_evidence_id_changes_with_any_component(self):
+        base = compute_coverage_evidence_id(["c1"], ["a1"], ["e" * 64])
+        different_ids = compute_coverage_evidence_id(["c2"], ["a1"], ["e" * 64])
+        different_hash = compute_coverage_evidence_id(["c1"], ["a1"], ["f" * 64])
+        self.assertNotEqual(base, different_ids)
+        self.assertNotEqual(base, different_hash)
+
 
 class CandidateStagingIsolationTests(unittest.TestCase):
     def setUp(self):
@@ -191,6 +260,39 @@ class CandidateStagingIsolationTests(unittest.TestCase):
         self.staging.directory_for(item)
         self.assertEqual(self.staging.occupant(item.candidate_id), item.candidate_id)
 
+    def test_N2_parent_traversal_name_is_refused(self):
+        item = candidate(repair_intent_id=self.intent.intent_id, revision=2)
+        with self.assertRaises(RepairRefusal):
+            self.staging.write_evidence(item, "../escape.json", b"payload")
+
+    def test_N3_nested_relative_path_name_is_refused(self):
+        item = candidate(repair_intent_id=self.intent.intent_id, revision=2)
+        with self.assertRaises(RepairRefusal):
+            self.staging.write_evidence(item, "sub/partition.json", b"payload")
+
+    def test_N4_absolute_path_name_is_refused(self):
+        item = candidate(repair_intent_id=self.intent.intent_id, revision=2)
+        absolute = str(Path(self._tmp.name) / "outside.json")
+        with self.assertRaises(RepairRefusal):
+            self.staging.write_evidence(item, absolute, b"payload")
+
+    def test_N5_dot_and_dotdot_names_are_refused(self):
+        item = candidate(repair_intent_id=self.intent.intent_id, revision=2)
+        for name in (".", "..", ""):
+            with self.subTest(name=name):
+                with self.assertRaises(RepairRefusal):
+                    self.staging.write_evidence(item, name, b"payload")
+
+    def test_N6_traversal_attempt_does_not_escape_the_staging_root(self):
+        item = candidate(repair_intent_id=self.intent.intent_id, revision=2)
+        outside_marker = Path(self._tmp.name).parent / "should-not-exist.json"
+        self.addCleanup(lambda: outside_marker.unlink(missing_ok=True))
+        try:
+            self.staging.write_evidence(item, "../should-not-exist.json", b"payload")
+        except RepairRefusal:
+            pass
+        self.assertFalse(outside_marker.exists())
+
 
 class PureEligibilityTests(unittest.TestCase):
     def test_O_exact_internal_gap_requires_repair(self):
@@ -223,83 +325,118 @@ class ReevaluateAuthorityTests(unittest.TestCase):
 
     def test_U_missing_support_no_predecessor_empty_topology_proceeds(self):
         item = candidate(repair_intent_id=self.intent.intent_id, revision=1)
-        result = _reevaluate_authority(self.intent, item, topology=())
+        cursor = _FakeProvenanceCursor()
+        result = _reevaluate_authority(cursor, self.intent, item, topology=())
         self.assertIsNone(result)
 
     def test_V_missing_support_now_eligible_elsewhere_is_stale(self):
         item = candidate(repair_intent_id=self.intent.intent_id, revision=1)
         topology = (topology_row("p-1", 1, "valid", content_sha256="z" * 64),)
+        cursor = _FakeProvenanceCursor()
         with self.assertRaises(_StaleConflictSignal):
-            _reevaluate_authority(self.intent, item, topology)
+            _reevaluate_authority(cursor, self.intent, item, topology)
 
     def test_W_missing_support_already_produced_by_this_exact_candidate_is_already_satisfied(self):
         item = candidate(repair_intent_id=self.intent.intent_id, revision=1, content_sha256="a" * 64)
         topology = (topology_row("p-1", 1, "valid", content_sha256="a" * 64),)
+        cursor = _FakeProvenanceCursor({"p-1"}, intent_id=self.intent.intent_id, candidate_id=item.candidate_id)
         with self.assertRaises(_AlreadySatisfiedSignal):
-            _reevaluate_authority(self.intent, item, topology)
+            _reevaluate_authority(cursor, self.intent, item, topology)
+
+    def test_W2_content_hash_match_alone_without_provenance_is_stale_not_already_satisfied(self):
+        # A coincidental content-hash match between a distinct candidate and
+        # the live row must never be treated as this candidate's own
+        # convergence absent durable provenance naming it.
+        item = candidate(repair_intent_id=self.intent.intent_id, revision=1, content_sha256="a" * 64)
+        topology = (topology_row("p-1", 1, "valid", content_sha256="a" * 64),)
+        cursor = _FakeProvenanceCursor()  # no provenance row recorded at all
+        with self.assertRaises(_StaleConflictSignal):
+            _reevaluate_authority(cursor, self.intent, item, topology)
 
     def test_X_missing_support_slot_now_occupied_differently_is_stale_not_silently_retargeted(self):
         item = candidate(repair_intent_id=self.intent.intent_id, revision=1)
         topology = (topology_row("p-1", 1, "invalid", content_sha256="z" * 64),)
+        cursor = _FakeProvenanceCursor()
         with self.assertRaises(_StaleConflictSignal):
-            _reevaluate_authority(self.intent, item, topology)
+            _reevaluate_authority(cursor, self.intent, item, topology)
 
     def test_Y_replacement_predecessor_matches_proceeds(self):
-        predecessor = PredecessorRef(revision=1, content_sha256="p" * 64, state="invalid")
+        predecessor = PredecessorRef(revision=1, content_sha256="1" * 64, state="invalid")
         trigger = InvalidRevisionTrigger(predecessor=predecessor, assessment_signature="sig-1", assessment_status="fail")
         intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
         item = candidate(repair_intent_id=intent.intent_id, revision=2)
-        topology = (topology_row("p-1", 1, "invalid", content_sha256="p" * 64),)
-        predecessor_row = _reevaluate_authority(intent, item, topology)
+        topology = (topology_row("p-1", 1, "invalid", content_sha256="1" * 64),)
+        cursor = _FakeProvenanceCursor()
+        predecessor_row = _reevaluate_authority(cursor, intent, item, topology)
         self.assertEqual(predecessor_row[0], "p-1")
 
     def test_Z_replacement_predecessor_already_superseded_is_stale(self):
-        predecessor = PredecessorRef(revision=1, content_sha256="p" * 64, state="invalid")
+        predecessor = PredecessorRef(revision=1, content_sha256="1" * 64, state="invalid")
         trigger = InvalidRevisionTrigger(predecessor=predecessor, assessment_signature="sig-1", assessment_status="fail")
         intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
-        item = candidate(repair_intent_id=intent.intent_id, revision=2, content_sha256="different" + "d" * 55)
+        item = candidate(repair_intent_id=intent.intent_id, revision=2, content_sha256="9" * 64)
         topology = (
-            topology_row("p-1", 1, "superseded", content_sha256="p" * 64),
-            topology_row("p-2", 2, "valid", content_sha256="q" * 64),
+            topology_row("p-1", 1, "superseded", content_sha256="1" * 64),
+            topology_row("p-2", 2, "valid", content_sha256="3" * 64),
         )
+        cursor = _FakeProvenanceCursor()
         with self.assertRaises(_StaleConflictSignal):
-            _reevaluate_authority(intent, item, topology)
+            _reevaluate_authority(cursor, intent, item, topology)
 
     def test_AA_replacement_already_converged_by_this_exact_candidate_is_already_satisfied(self):
-        predecessor = PredecessorRef(revision=1, content_sha256="p" * 64, state="invalid")
+        predecessor = PredecessorRef(revision=1, content_sha256="1" * 64, state="invalid")
         trigger = InvalidRevisionTrigger(predecessor=predecessor, assessment_signature="sig-1", assessment_status="fail")
         intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
         item = candidate(repair_intent_id=intent.intent_id, revision=2, content_sha256="c" * 64)
         topology = (
-            topology_row("p-1", 1, "superseded", content_sha256="p" * 64),
+            topology_row("p-1", 1, "superseded", content_sha256="1" * 64),
             topology_row("p-2", 2, "valid", content_sha256="c" * 64),
         )
+        cursor = _FakeProvenanceCursor({"p-2"}, intent_id=intent.intent_id, candidate_id=item.candidate_id)
         with self.assertRaises(_AlreadySatisfiedSignal):
-            _reevaluate_authority(intent, item, topology)
+            _reevaluate_authority(cursor, intent, item, topology)
+
+    def test_AA2_replacement_slot_occupied_by_a_different_candidates_provenance_is_stale(self):
+        # Durable provenance exists for the live row, but it names a
+        # DIFFERENT repair_intent_id/candidate_id -- never treat that as
+        # "this" candidate's own convergence.
+        predecessor = PredecessorRef(revision=1, content_sha256="1" * 64, state="invalid")
+        trigger = InvalidRevisionTrigger(predecessor=predecessor, assessment_signature="sig-1", assessment_status="fail")
+        intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
+        item = candidate(repair_intent_id=intent.intent_id, revision=2, content_sha256="c" * 64)
+        topology = (
+            topology_row("p-1", 1, "superseded", content_sha256="1" * 64),
+            topology_row("p-2", 2, "valid", content_sha256="c" * 64),
+        )
+        cursor = _FakeProvenanceCursor({"p-2"}, intent_id="some-other-intent", candidate_id="some-other-candidate")
+        with self.assertRaises(_StaleConflictSignal):
+            _reevaluate_authority(cursor, intent, item, topology)
 
     def test_AB_replacement_predecessor_content_changed_is_stale(self):
-        predecessor = PredecessorRef(revision=1, content_sha256="p" * 64, state="invalid")
+        predecessor = PredecessorRef(revision=1, content_sha256="1" * 64, state="invalid")
         trigger = InvalidRevisionTrigger(predecessor=predecessor, assessment_signature="sig-1", assessment_status="fail")
         intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
         item = candidate(repair_intent_id=intent.intent_id, revision=2)
-        topology = (topology_row("p-1", 1, "invalid", content_sha256="different-content" + "0" * 47),)
+        topology = (topology_row("p-1", 1, "invalid", content_sha256="2" * 64),)
+        cursor = _FakeProvenanceCursor()
         with self.assertRaises(_StaleConflictSignal):
-            _reevaluate_authority(intent, item, topology)
+            _reevaluate_authority(cursor, intent, item, topology)
 
     def test_AC_higher_revision_or_different_content_never_wins_by_ordering_alone(self):
         # Two revisions live simultaneously is topologically impossible under
         # partitions_one_live, but the pure function must still fail closed
         # rather than pick the higher one if handed a malformed snapshot.
-        predecessor = PredecessorRef(revision=1, content_sha256="p" * 64, state="invalid")
+        predecessor = PredecessorRef(revision=1, content_sha256="1" * 64, state="invalid")
         trigger = InvalidRevisionTrigger(predecessor=predecessor, assessment_signature="sig-1", assessment_status="fail")
         intent = RepairIntent(IDENTITY, "dt=2024-01-15", trigger)
         item = candidate(repair_intent_id=intent.intent_id, revision=2)
         topology = (
-            topology_row("p-1", 1, "invalid", content_sha256="p" * 64),
-            topology_row("p-2", 2, "closed", content_sha256="q" * 64),
+            topology_row("p-1", 1, "invalid", content_sha256="1" * 64),
+            topology_row("p-2", 2, "closed", content_sha256="3" * 64),
         )
+        cursor = _FakeProvenanceCursor()
         with self.assertRaises(RepairRefusal):
-            _reevaluate_authority(intent, item, topology)
+            _reevaluate_authority(cursor, intent, item, topology)
 
 
 class ConvergenceProvenanceTests(unittest.TestCase):
@@ -370,6 +507,52 @@ class CutoverResultInvariantTests(unittest.TestCase):
     def test_AI_unsupported_outcome_is_rejected(self):
         with self.assertRaises(RepairRefusal):
             CutoverResult(outcome="NOT_A_REAL_OUTCOME")
+
+
+class GapEliminationAndFreshnessTests(unittest.TestCase):
+    """The two coverage-gap-trigger re-authorization checks cutover() runs
+    before ever mutating topology: exact elimination by the candidate's own
+    declared coverage, and freshness against just-recomputed B04 evidence."""
+
+    def setUp(self):
+        from quant_platform.data.repair import _verify_gaps_eliminated, _verify_gap_trigger_still_open
+        self._verify_gaps_eliminated = _verify_gaps_eliminated
+        self._verify_gap_trigger_still_open = _verify_gap_trigger_still_open
+        self.trigger = CoverageGapTrigger(required=REQUIRED, gaps=(GAP,))
+
+    def test_AJ_full_coverage_eliminates_the_gap(self):
+        self._verify_gaps_eliminated((GAP,), REQUIRED.start, REQUIRED.end)
+
+    def test_AK_exact_gap_bounds_eliminate_the_gap(self):
+        self._verify_gaps_eliminated((GAP,), GAP.start, GAP.end)
+
+    def test_AL_partial_fill_does_not_eliminate_the_gap(self):
+        half = Instant.parse("2024-01-15T09:00:00Z")
+        with self.assertRaises(RepairRefusal):
+            self._verify_gaps_eliminated((GAP,), GAP.start, half)
+
+    def test_AM_coverage_starting_after_the_gap_does_not_eliminate_it(self):
+        with self.assertRaises(RepairRefusal):
+            self._verify_gaps_eliminated((GAP,), GAP.end, REQUIRED.end)
+
+    def test_AN_fresh_gaps_identical_to_captured_gaps_proceeds(self):
+        self._verify_gap_trigger_still_open(self.trigger, (GAP,))
+
+    def test_AO_fresh_gaps_empty_is_already_satisfied(self):
+        with self.assertRaises(_AlreadySatisfiedSignal):
+            self._verify_gap_trigger_still_open(self.trigger, ())
+
+    def test_AP_fresh_gaps_different_shape_is_stale(self):
+        shifted = CoverageInterval(Instant.parse("2024-01-15T07:00:00Z"), Instant.parse("2024-01-15T13:00:00Z"))
+        with self.assertRaises(_StaleConflictSignal):
+            self._verify_gap_trigger_still_open(self.trigger, (shifted,))
+
+    def test_AQ_partial_overlap_of_multiple_captured_gaps_is_stale(self):
+        second_gap = CoverageInterval(Instant.parse("2024-01-15T14:00:00Z"), Instant.parse("2024-01-15T18:00:00Z"))
+        trigger = CoverageGapTrigger(required=REQUIRED, gaps=(GAP, second_gap))
+        # Only the first gap is still open; the second was independently filled.
+        with self.assertRaises(_StaleConflictSignal):
+            self._verify_gap_trigger_still_open(trigger, (GAP,))
 
 
 if __name__ == "__main__":

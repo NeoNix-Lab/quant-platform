@@ -20,6 +20,19 @@ admits the candidate as ``closed`` inside its own transaction, then calls the
 A16 and S14 transaction-scoped seams against that same connection, and only
 commits if both accept the exact final revision -- so a failed candidate never
 leaves a half cutover and the predecessor stays authoritative.
+
+Lock ordering matches S14's own internal order (all relevant dataset locks,
+child and lineage parents, sorted, before the natural-partition topology
+lock) throughout -- including the pre-mutation re-authorization step -- so a
+concurrent ordinary S13/S14/A16 call sharing a dataset can only ever block on
+this transaction, never deadlock against it.
+
+Successful convergence is recorded durably inside the same commit, in
+``catalog.repair_convergence``: ``ALREADY_SATISFIED`` is decided by looking up
+that row for the live partition and confirming it names this exact
+``repair_intent_id``/``candidate_id`` pair, never by comparing content hashes
+alone (a coincidental hash match between two differently-evidenced candidates
+must never be treated as the same repair).
 """
 
 from __future__ import annotations
@@ -27,11 +40,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
+import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from uuid import uuid4
 
 from .models import CoverageInterval, DatasetIdentity, Instant, NaturalPartitionIdentity
-from .quality_lifecycle import QualityLifecycleCatalog, QualityLifecycleRefusal
+from .quality_lifecycle import (
+    QualityLifecycleCatalog,
+    QualityLifecycleRefusal,
+    select_current_quality_assessment,
+)
 from .publication_eligibility_catalog import (
     PublicationEligibilityCatalog,
     PublicationEligibilityRefusal,
@@ -53,12 +73,19 @@ _OUTCOMES = frozenset({
     ALREADY_SATISFIED, FAILED, STALE_CONFLICT,
 })
 
-_ELIGIBLE_COVERAGE_STATES = frozenset({"closed", "valid", "degraded"})
 _QUALITY_APPLICABLE_STATES = frozenset({"valid", "degraded"})
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SAFE_EVIDENCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 
 
 class RepairRefusal(RuntimeError):
     """Raised when repair evidence or topology cannot authorize an operation."""
+
+
+def _sha256_hex(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not _SHA256.fullmatch(value.strip().lower()):
+        raise RepairRefusal(f"{field} must be a lowercase SHA-256 hex digest")
+    return value.strip().lower()
 
 
 # ---------------------------------------------------------------------------
@@ -77,28 +104,26 @@ class PredecessorRef:
     def __post_init__(self) -> None:
         if self.revision < 1:
             raise RepairRefusal("predecessor revision must be positive")
-        if not isinstance(self.content_sha256, str) or len(self.content_sha256.strip()) != 64:
-            raise RepairRefusal("predecessor content_sha256 must be a SHA-256 hex digest")
+        object.__setattr__(self, "content_sha256", _sha256_hex(self.content_sha256, "predecessor content_sha256"))
         if self.state not in {"closed", "valid", "degraded", "invalid"}:
             raise RepairRefusal(f"predecessor state {self.state!r} is not a repair-eligible state")
 
     def stable_dict(self) -> dict[str, Any]:
-        return {"revision": self.revision, "content_sha256": self.content_sha256.strip(), "state": self.state}
+        return {"revision": self.revision, "content_sha256": self.content_sha256, "state": self.state}
 
 
 @dataclass(frozen=True, slots=True)
 class CoverageGapTrigger:
     """B04 evidence: one or more exact non-empty gaps inside required support.
 
-    ``predecessor`` is set only when the partition_key already carries a
-    non-superseded row assessed ``invalid`` (contributing zero eligible
-    coverage); it is ``None`` when no admitted revision exists at all, i.e.
-    genuine missing-support backfill.
+    A coverage-gap trigger never captures a predecessor: if a row later
+    occupies the target slot, that is a different eligibility ground (frozen
+    contract section 3) and the intent must re-evaluate to ``ALREADY_SATISFIED``
+    or ``STALE_CONFLICT`` rather than silently being reinterpreted.
     """
 
     required: CoverageInterval
     gaps: tuple[CoverageInterval, ...]
-    predecessor: PredecessorRef | None = None
 
     def __post_init__(self) -> None:
         if not self.gaps:
@@ -111,12 +136,15 @@ class CoverageGapTrigger:
     def kind(self) -> str:
         return "missing_support"
 
+    @property
+    def predecessor(self) -> None:
+        return None
+
     def stable_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
             "required": self.required.stable_dict(),
             "gaps": [gap.stable_dict() for gap in self.gaps],
-            "predecessor": None if self.predecessor is None else self.predecessor.stable_dict(),
         }
 
 
@@ -195,6 +223,51 @@ class RepairIntent:
 
 
 # ---------------------------------------------------------------------------
+# Candidate acceptance-input evidence identities (amendment section 3;
+# review finding: candidate acceptance inputs must bind cryptographically to
+# candidate identity, not travel as independent cutover arguments).
+# ---------------------------------------------------------------------------
+
+
+def compute_quality_evidence_id(report: Mapping[str, Any]) -> str:
+    """Deterministic identity of the exact quality-report content a candidate binds.
+
+    A ``CandidateAttempt.quality_evidence_id`` MUST equal this value computed
+    over the report that will actually be recorded at cutover; ``cutover()``
+    re-derives and checks it, so a differently-evidenced report can never be
+    substituted under the same ``candidate_id``.
+    """
+
+    for name in ("status", "metrics", "violations", "code_ref"):
+        if name not in report:
+            raise RepairRefusal(f"quality report evidence is missing required field {name!r}")
+    return _canonical_hash("a10-quality-report-evidence-v1", {
+        "status": report["status"],
+        "metrics": report["metrics"],
+        "violations": report["violations"],
+        "code_ref": report["code_ref"],
+    })
+
+
+def compute_coverage_evidence_id(
+    coverage_ids: Sequence[str],
+    assertion_ids: Sequence[str],
+    coverage_sha256: Sequence[str],
+) -> str:
+    """Deterministic identity of the exact coverage evidence a candidate binds.
+
+    A ``CandidateAttempt.coverage_evidence_id`` MUST equal this value; the
+    same binding-and-recheck discipline as :func:`compute_quality_evidence_id`.
+    """
+
+    return _canonical_hash("a10-coverage-evidence-v1", {
+        "coverage_ids": list(coverage_ids),
+        "assertion_ids": list(assertion_ids),
+        "coverage_sha256": list(coverage_sha256),
+    })
+
+
+# ---------------------------------------------------------------------------
 # Candidate attempts (frozen contract sections 5-6).
 # ---------------------------------------------------------------------------
 
@@ -204,9 +277,14 @@ class CandidateAttempt:
     """One immutable, isolated repair candidate attempt.
 
     Binds every input the acceptance seams (A16/S14) will independently
-    re-verify.  Two attempts with identical evidence share one
-    ``candidate_id`` (idempotent retry); any differing durable/semantic
-    evidence produces a distinct id (frozen contract section 6).
+    re-verify, including the exact quality-report and coverage-evidence
+    content via :func:`compute_quality_evidence_id`/
+    :func:`compute_coverage_evidence_id` -- ``cutover()`` refuses to run if
+    the runtime inputs it is given do not hash to these bound identities, so
+    the same ``candidate_id`` can never be retried with different acceptance
+    evidence.  Two attempts with identical evidence share one ``candidate_id``
+    (idempotent retry); any differing durable/semantic evidence produces a
+    distinct id (frozen contract section 6).
     """
 
     repair_intent_id: str
@@ -220,10 +298,11 @@ class CandidateAttempt:
     code_ref: str
 
     def __post_init__(self) -> None:
-        for name in ("content_sha256", "partition_manifest_sha256"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or len(value.strip()) != 64:
-                raise RepairRefusal(f"candidate {name} must be a SHA-256 hex digest")
+        object.__setattr__(self, "content_sha256", _sha256_hex(self.content_sha256, "candidate content_sha256"))
+        object.__setattr__(
+            self, "partition_manifest_sha256",
+            _sha256_hex(self.partition_manifest_sha256, "candidate partition_manifest_sha256"),
+        )
         for name in ("repair_intent_id", "source_evidence_id", "materialization_id",
                      "coverage_evidence_id", "quality_evidence_id", "code_ref"):
             value = getattr(self, name)
@@ -234,8 +313,8 @@ class CandidateAttempt:
         return {
             "repair_intent_id": self.repair_intent_id,
             "natural_identity": self.natural_identity.stable_dict(),
-            "content_sha256": self.content_sha256.strip(),
-            "partition_manifest_sha256": self.partition_manifest_sha256.strip(),
+            "content_sha256": self.content_sha256,
+            "partition_manifest_sha256": self.partition_manifest_sha256,
             "source_evidence_id": self.source_evidence_id.strip(),
             "materialization_id": self.materialization_id.strip(),
             "coverage_evidence_id": self.coverage_evidence_id.strip(),
@@ -261,6 +340,19 @@ class CandidateAttempt:
 
 class CandidateStagingConflict(RepairRefusal):
     """Raised when two distinct candidate attempts would share physical storage."""
+
+
+def _validate_evidence_name(name: str) -> str:
+    """Reject anything but a single safe relative filename.
+
+    No path separators (either OS's), no ``..``/``.``, no leading dot or
+    dash, no absolute paths.  A staging root must never be escapable through
+    the evidence file name a caller supplies.
+    """
+
+    if not isinstance(name, str) or not _SAFE_EVIDENCE_NAME.fullmatch(name):
+        raise RepairRefusal(f"evidence name {name!r} is not a safe single relative filename")
+    return name
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,22 +381,44 @@ class CandidateStaging:
 
         Writing the same bytes for the same (candidate, name) is idempotent.
         Writing different bytes for an existing (candidate, name) is refused:
-        durable candidate evidence, once written, is immutable.
+        durable candidate evidence, once written, is immutable.  Creation is
+        collision-safe: two concurrent writers for the same (candidate, name)
+        can never both "win" with different content -- the loser's atomic
+        link fails and it falls back to the immutability check.
         """
 
+        safe_name = _validate_evidence_name(name)
         directory = self.directory_for(candidate)
-        target = directory / name
+        target = directory / safe_name
         if target.exists():
             existing = target.read_bytes()
             if existing != payload:
                 raise CandidateStagingConflict(
-                    f"candidate {candidate.candidate_id} evidence {name!r} is immutable "
+                    f"candidate {candidate.candidate_id} evidence {safe_name!r} is immutable "
                     "and cannot be overwritten with different content"
                 )
             return target
-        temporary = directory / f".{name}.tmp"
+        temporary = directory / f".{safe_name}.{uuid4().hex}.tmp"
         temporary.write_bytes(payload)
-        temporary.replace(target)
+        try:
+            os.link(str(temporary), str(target))
+        except FileExistsError:
+            existing = target.read_bytes()
+            if existing != payload:
+                raise CandidateStagingConflict(
+                    f"candidate {candidate.candidate_id} evidence {safe_name!r} is immutable "
+                    "and cannot be overwritten with different content"
+                )
+        except OSError:
+            # os.link can be unsupported on some filesystems; fall back to a
+            # non-atomic replace guarded by the existence check above -- a
+            # true concurrent race on the fallback path is exceedingly
+            # unlikely in practice (same restriction existing sibling
+            # catalog writers accept for their own local filesystem I/O).
+            temporary.replace(target)
+            return target
+        finally:
+            temporary.unlink(missing_ok=True)
         return target
 
     def occupant(self, candidate_id: str) -> str | None:
@@ -317,6 +431,34 @@ class CandidateStaging:
 
         directory = self.root / _filesystem_safe(candidate_id)
         return candidate_id if directory.exists() else None
+
+
+# ---------------------------------------------------------------------------
+# Predecessor re-authorization evidence (review finding: an invalid-revision
+# trigger must re-verify its captured assessment signature is still the
+# authoritative leaf, not just that revision/content/state still match).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class PredecessorEvidence:
+    """Durable evidence needed to re-verify a captured predecessor's assessment.
+
+    Required whenever ``RepairIntent.trigger`` is an :class:`InvalidRevisionTrigger`:
+    binds the predecessor's own sealed partition manifest and the coverage
+    evidence its authoritative quality report was selected against, so
+    ``cutover()`` can re-run the identical A16 selection logic read-only
+    against the predecessor and confirm ``trigger.assessment_signature`` is
+    still the selected leaf before ever touching topology.
+    """
+
+    partition: Mapping[str, Any]
+    partition_sha256: str
+    coverage_start: Instant
+    coverage_end: Instant
+    coverage_ids: Sequence[str]
+    assertion_ids: Sequence[str]
+    coverage_sha256: Sequence[str]
 
 
 # ---------------------------------------------------------------------------
@@ -363,11 +505,13 @@ class ConvergenceProvenance:
 
 
 def write_convergence_provenance(path: Path, provenance: ConvergenceProvenance) -> str:
-    """Durably write convergence provenance as an immutable, hash-addressed JSON document.
+    """Durably write convergence provenance as a supplementary, hash-addressed
+    JSON document alongside the authoritative ``catalog.repair_convergence`` row.
 
     Returns the sha256 of the written bytes.  Refuses to silently overwrite an
-    existing file with different content, matching the immutability the
-    frozen contract requires of convergence evidence.
+    existing file with different content.  This is diagnostic/portable
+    evidence only: ``ALREADY_SATISFIED`` is always decided from the catalog
+    transaction, never from this filesystem document.
     """
 
     payload = json.dumps(provenance.stable_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
@@ -418,12 +562,16 @@ class _StaleConflictSignal(Exception):
 class RepairCutoverCatalog:
     """Owns the one atomic compare-and-cutover transaction for A10 repair.
 
-    Lock ordering matches S14's own internal order (dataset locks before
-    partition-topology locks) to avoid a lock-order-inversion deadlock against
-    concurrent ordinary S14 calls.  A16/S14 verification and mutation are
-    delegated to their own transaction-scoped seams against this same cursor,
-    so a failed candidate rolls back every mutation this transaction made,
-    including the predecessor's uncommitted supersession.
+    Lock ordering matches S14's own internal order exactly: all relevant
+    dataset locks (child and lineage parents, sorted) are acquired first via
+    :class:`PublicationEligibilityCatalog`'s own staticmethods, before the
+    natural-partition topology lock -- including for the pre-mutation
+    re-authorization step, so an empty-topology backfill is serialized by the
+    dataset-row lock even though there is no partition row yet to lock.  A16/S14
+    verification and mutation are delegated to their own transaction-scoped
+    seams against this same cursor, so a failed candidate rolls back every
+    mutation this transaction made, including the predecessor's uncommitted
+    supersession.
     """
 
     def __init__(self, connection: Any):
@@ -448,8 +596,10 @@ class RepairCutoverCatalog:
         storage_root_id: str,
         expected_profile: str,
         expected_check_suite: str,
-        lifecycle_code_ref: str | None = None,
+        current_gaps: Sequence[CoverageInterval] | None = None,
+        predecessor_evidence: PredecessorEvidence | None = None,
     ) -> CutoverResult:
+        trigger = repair_intent.trigger
         if candidate.repair_intent_id != repair_intent.intent_id:
             raise RepairRefusal("candidate does not target this repair intent")
         target_natural = NaturalPartitionIdentity(
@@ -459,20 +609,69 @@ class RepairCutoverCatalog:
             raise RepairRefusal("candidate natural identity does not match candidate_partition")
         if candidate_partition.get("state") != "closed":
             raise RepairRefusal("A10 cutover requires a sealed closed candidate partition manifest")
-        if _text(candidate_partition.get("sha256")) != candidate.content_sha256.strip():
+        if _text(candidate_partition.get("sha256")) != candidate.content_sha256:
             raise RepairRefusal("candidate_partition physical hash differs from candidate identity")
+
+        # Candidate acceptance inputs must be exactly the evidence this
+        # candidate_id is bound to -- never a substitutable, independently
+        # supplied argument (review finding).
+        if candidate.quality_evidence_id != compute_quality_evidence_id(candidate_quality_report):
+            raise RepairRefusal("candidate_quality_report does not match the candidate's bound quality_evidence_id")
+        if candidate.coverage_evidence_id != compute_coverage_evidence_id(coverage_ids, assertion_ids, coverage_sha256):
+            raise RepairRefusal("coverage evidence does not match the candidate's bound coverage_evidence_id")
+
+        if isinstance(trigger, CoverageGapTrigger):
+            if current_gaps is None:
+                raise RepairRefusal("current_gaps evidence is required to re-authorize a coverage-gap trigger")
+        elif isinstance(trigger, InvalidRevisionTrigger):
+            if predecessor_evidence is None:
+                raise RepairRefusal("predecessor_evidence is required to re-authorize an invalid-revision trigger")
+        else:  # pragma: no cover - exhaustive union
+            raise RepairRefusal(f"unsupported repair trigger kind: {trigger!r}")
 
         try:
             with self.connection.cursor() as cursor:
                 identity = repair_intent.dataset_identity
-                # Step 1: lock relevant dataset(s) -- matches S14's own order.
-                dataset_row = QualityLifecycleCatalog._resolve_dataset(cursor, identity, dataset, dataset_sha256)
-                # Step 2: lock/re-read the natural partition topology.
+                # Step 1: lock ALL relevant dataset(s) -- child and lineage
+                # parents, sorted -- exactly as S14's own publish() does, and
+                # strictly before any partition-topology lock.
+                child = PublicationEligibilityCatalog._resolve_dataset(cursor, identity, dataset, dataset_sha256)
+                parents = PublicationEligibilityCatalog._resolve_parents(cursor, dataset, identity)
+                relevant_ids = sorted({child[0], *(row[0] for row in parents)})
+                PublicationEligibilityCatalog._lock_datasets(cursor, relevant_ids)
+                PublicationEligibilityCatalog._verify_locked_datasets(cursor, child, parents, dataset, dataset_sha256)
+                dataset_row = child
+
+                # Step 2: lock/re-read the natural partition topology.  The
+                # dataset-row lock above already serializes two concurrent
+                # attempts even when this returns zero rows (empty-topology
+                # backfill), because both attempts must first acquire the
+                # same dataset lock before either can reach this SELECT.
                 topology = QualityLifecycleCatalog._lock_partition_topology(
                     cursor, dataset_row[0], repair_intent.partition_key,
                 )
-                # Step 3: re-evaluate the repair trigger/current authority under lock.
-                predecessor_row = _reevaluate_authority(repair_intent, candidate, topology)
+
+                # Step 3: re-evaluate the repair trigger/current authority
+                # under lock, against durable convergence provenance -- never
+                # against a coincidental content-hash match.
+                predecessor_row = _reevaluate_authority(cursor, repair_intent, candidate, topology)
+
+                # Step 3b: trigger-specific freshness re-authorization.
+                if isinstance(trigger, CoverageGapTrigger):
+                    _verify_gaps_eliminated(trigger.gaps, coverage_start, coverage_end)
+                    _verify_gap_trigger_still_open(trigger, current_gaps)
+                else:
+                    _verify_invalid_revision_trigger_still_authoritative(
+                        cursor,
+                        dataset_row=dataset_row,
+                        predecessor_row=predecessor_row,
+                        trigger=trigger,
+                        identity=identity,
+                        dataset_sha256=dataset_sha256,
+                        evidence=predecessor_evidence,
+                        expected_profile=expected_profile,
+                        expected_check_suite=expected_check_suite,
+                    )
 
                 # Step 5: if replacement, supersede the predecessor (uncommitted).
                 if predecessor_row is not None:
@@ -501,15 +700,17 @@ class RepairCutoverCatalog:
                 _insert_quality_report(cursor, candidate_partition_id, expected_check_suite, candidate_quality_report)
 
                 sealed_partition = dict(candidate_partition)
-                sealed_partition["_manifest_sha256"] = candidate.partition_manifest_sha256.strip()
+                sealed_partition["_manifest_sha256"] = candidate.partition_manifest_sha256
 
-                # Step 7: apply the existing A16 lifecycle semantics (tx-scoped seam).
+                # Step 7: apply the existing A16 lifecycle semantics (tx-scoped
+                # seam).  lifecycle_code_ref is the candidate's own bound
+                # code_ref -- never an independent, unbound argument.
                 quality_result = self.quality._apply_partition_lifecycle_tx(
                     cursor,
                     dataset=dataset,
                     dataset_sha256=dataset_sha256,
                     partition=sealed_partition,
-                    partition_sha256=candidate.partition_manifest_sha256.strip(),
+                    partition_sha256=candidate.partition_manifest_sha256,
                     coverage_start=coverage_start,
                     coverage_end=coverage_end,
                     coverage_ids=coverage_ids,
@@ -518,7 +719,7 @@ class RepairCutoverCatalog:
                     storage_root_id=storage_root_id,
                     expected_profile=expected_profile,
                     expected_check_suite=expected_check_suite,
-                    lifecycle_code_ref=lifecycle_code_ref or REPAIR_SEMANTICS_VERSION,
+                    lifecycle_code_ref=candidate.code_ref.strip(),
                 )
                 if quality_result.resulting_state not in _QUALITY_APPLICABLE_STATES:
                     raise RepairRefusal(
@@ -532,7 +733,7 @@ class RepairCutoverCatalog:
                     dataset=dataset,
                     dataset_sha256=dataset_sha256,
                     partition=sealed_partition,
-                    partition_sha256=candidate.partition_manifest_sha256.strip(),
+                    partition_sha256=candidate.partition_manifest_sha256,
                     coverage_start=coverage_start,
                     coverage_end=coverage_end,
                     coverage_ids=coverage_ids,
@@ -556,13 +757,23 @@ class RepairCutoverCatalog:
                     predecessor=predecessor_ref,
                     final_partition_id=candidate_partition_id,
                     final_natural_identity=target_natural,
-                    final_partition_manifest_sha256=candidate.partition_manifest_sha256.strip(),
-                    final_content_sha256=candidate.content_sha256.strip(),
+                    final_partition_manifest_sha256=candidate.partition_manifest_sha256,
+                    final_content_sha256=candidate.content_sha256,
                     coverage_evidence_id=candidate.coverage_evidence_id.strip(),
                     quality_assessment_signature=quality_result.assessment_signature,
                     quality_assessment_status=quality_result.assessment_status,
                     publication_state=publication_result.state,
                     repair_semantics_version=repair_intent.repair_semantics_version,
+                )
+                # Step 10: persist integrity-bound convergence provenance
+                # inside the SAME committed transaction -- the authoritative
+                # source ALREADY_SATISFIED is decided from, not an optional
+                # side effect.
+                _insert_convergence_provenance(
+                    cursor,
+                    partition_id=candidate_partition_id,
+                    predecessor_partition_id=None if predecessor_row is None else predecessor_row[0],
+                    provenance=provenance,
                 )
             self.connection.commit()
             return CutoverResult(outcome=CONVERGED, provenance=provenance)
@@ -653,7 +864,57 @@ def _insert_quality_report(
     )
 
 
+def _insert_convergence_provenance(
+    cursor: Any,
+    *,
+    partition_id: str,
+    predecessor_partition_id: str | None,
+    provenance: ConvergenceProvenance,
+) -> None:
+    cursor.execute(
+        """
+        INSERT INTO catalog.repair_convergence (
+            partition_id, repair_intent_id, candidate_id, predecessor_partition_id,
+            final_partition_manifest_sha256, final_content_sha256, coverage_evidence_id,
+            quality_assessment_signature, quality_assessment_status, publication_state,
+            repair_semantics_version, provenance_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            partition_id, provenance.repair_intent_id, provenance.candidate_id, predecessor_partition_id,
+            provenance.final_partition_manifest_sha256, provenance.final_content_sha256,
+            provenance.coverage_evidence_id, provenance.quality_assessment_signature,
+            provenance.quality_assessment_status, provenance.publication_state,
+            provenance.repair_semantics_version, provenance.provenance_id,
+        ),
+    )
+
+
+def _provenance_marks_self(cursor: Any, live_partition_id: str, repair_intent: RepairIntent, candidate: CandidateAttempt) -> bool:
+    """True iff durable convergence provenance proves the live row is exactly
+    this repair_intent's own prior successful convergence with this exact
+    candidate -- never inferred from a coincidental content-hash match."""
+
+    cursor.execute(
+        "SELECT repair_intent_id, candidate_id FROM catalog.repair_convergence WHERE partition_id = %s",
+        (live_partition_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return False
+    return row[0] == repair_intent.intent_id and row[1] == candidate.candidate_id
+
+
+def _matches_predecessor(row: Any, predecessor_ref: PredecessorRef) -> bool:
+    return (
+        int(row[3]) == predecessor_ref.revision
+        and _text(row[11]) == predecessor_ref.content_sha256
+        and row[4] == predecessor_ref.state
+    )
+
+
 def _reevaluate_authority(
+    cursor: Any,
     repair_intent: RepairIntent,
     candidate: CandidateAttempt,
     topology: Sequence[Any],
@@ -663,41 +924,25 @@ def _reevaluate_authority(
     Returns the locked predecessor row to supersede (or ``None`` for a
     genuine no-predecessor backfill), or raises :class:`_AlreadySatisfiedSignal`
     / :class:`_StaleConflictSignal` to short-circuit the transaction without
-    any mutation.
+    any mutation.  "Already this candidate's own convergence" is decided only
+    from durable ``catalog.repair_convergence`` provenance (see
+    :func:`_provenance_marks_self`), never from revision/content/state alone:
+    a distinct candidate that happens to share a content hash with the live
+    row must never be treated as already satisfied.
     """
 
     live = [row for row in topology if row[4] != "superseded"]
     if len(live) > 1:
         raise RepairRefusal("partition topology does not have exactly one live revision")
     live_row = live[0] if live else None
-    target_revision = int(candidate.natural_identity.revision)
-    target_content = candidate.content_sha256.strip()
-
-    def _is_already_the_candidate(row: Any) -> bool:
-        return (
-            int(row[3]) == target_revision
-            and _text(row[11]) == target_content
-            and row[4] in _QUALITY_APPLICABLE_STATES
-        )
-
     predecessor_ref = repair_intent.predecessor
 
     if predecessor_ref is None:
         # Missing-support backfill: no admitted/eligible revision expected yet.
         if live_row is None:
             return None
-        if _is_already_the_candidate(live_row):
+        if _provenance_marks_self(cursor, live_row[0], repair_intent, candidate):
             raise _AlreadySatisfiedSignal()
-        if live_row[4] in _ELIGIBLE_COVERAGE_STATES:
-            raise _StaleConflictSignal(
-                "required support is no longer missing: a live eligible revision already exists"
-            )
-        # A row now exists where the intent expected an empty slot (e.g. it
-        # became invalid after this intent was captured).  That is a
-        # different eligibility ground than the one this intent was built
-        # against (frozen contract section 3): it must re-evaluate to a
-        # freshly derived InvalidRevisionTrigger intent, never silently
-        # retarget this one.
         raise _StaleConflictSignal(
             f"a revision now occupies the target slot in state {live_row[4]!r}; "
             "re-evaluate as a newly derived repair intent"
@@ -706,17 +951,105 @@ def _reevaluate_authority(
     # Replacement repair: a captured predecessor identity/state must still match.
     if live_row is None:
         raise _StaleConflictSignal("predecessor no longer exists in current topology")
-    if (
-        int(live_row[3]) == predecessor_ref.revision
-        and _text(live_row[11]) == predecessor_ref.content_sha256
-        and live_row[4] == predecessor_ref.state
-    ):
+    if _matches_predecessor(live_row, predecessor_ref):
         return live_row
-    if _is_already_the_candidate(live_row):
+    if _provenance_marks_self(cursor, live_row[0], repair_intent, candidate):
         raise _AlreadySatisfiedSignal()
     raise _StaleConflictSignal(
         "current authority no longer matches the captured predecessor; repair intent must re-evaluate"
     )
+
+
+def _verify_gaps_eliminated(
+    gaps: Sequence[CoverageInterval],
+    coverage_start: Instant,
+    coverage_end: Instant,
+) -> None:
+    """Every targeted gap must fall fully inside the candidate's own resulting
+    declared coverage; partial fill is operational progress only (frozen
+    contract section 8) and must never converge."""
+
+    for gap in gaps:
+        if gap.start < coverage_start or gap.end > coverage_end:
+            raise RepairRefusal(
+                "candidate declared coverage does not eliminate every targeted gap; partial fill cannot converge"
+            )
+
+
+def _verify_gap_trigger_still_open(trigger: CoverageGapTrigger, current_gaps: Sequence[CoverageInterval]) -> None:
+    """Re-authorize a coverage-gap trigger against freshly recomputed B04 evidence.
+
+    Every gap the intent captured must still be present, exactly, in the
+    caller's just-recomputed gap evidence; a fabricated or stale trigger
+    whose gaps no longer reflect current B04 evidence can never authorize
+    cutover merely because the catalog topology tuple still matches.
+    """
+
+    current = set(current_gaps)
+    required = list(trigger.gaps)
+    still_open = [gap for gap in required if gap in current]
+    if len(still_open) == len(required):
+        return
+    if not current_gaps:
+        # Truly nothing left uncovered anywhere in the required support --
+        # not merely "the captured gap doesn't appear in a differently
+        # shaped current gap set", which is suspicious rather than resolved.
+        raise _AlreadySatisfiedSignal()
+    raise _StaleConflictSignal(
+        "captured gap evidence no longer exactly matches current B04 evidence; repair intent must re-evaluate"
+    )
+
+
+def _verify_invalid_revision_trigger_still_authoritative(
+    cursor: Any,
+    *,
+    dataset_row: Any,
+    predecessor_row: Any,
+    trigger: InvalidRevisionTrigger,
+    identity: DatasetIdentity,
+    dataset_sha256: str,
+    evidence: PredecessorEvidence,
+    expected_profile: str,
+    expected_check_suite: str,
+) -> None:
+    """Re-authorize an invalid-revision trigger against the predecessor's
+    CURRENT authoritative quality assessment, not merely its topology tuple.
+
+    Re-runs the identical A16 selection logic read-only against the
+    predecessor's own durable manifest evidence and confirms
+    ``trigger.assessment_signature`` is still the selected leaf; a newer
+    quality report that supersedes it with a different signature (even one
+    that leaves the topology state unchanged at ``invalid``) must never
+    silently authorize cutover under the stale signature.
+    """
+
+    QualityLifecycleCatalog._verify_partition(
+        predecessor_row, dataset_row, evidence.partition, evidence.partition_sha256,
+        evidence.coverage_start, evidence.coverage_end, evidence.partition["storage_root_id"],
+    )
+    reports = QualityLifecycleCatalog._quality_reports(cursor, predecessor_row[0], expected_check_suite)
+    try:
+        selected = select_current_quality_assessment(
+            reports,
+            expected_profile=expected_profile,
+            expected_check_suite=expected_check_suite,
+            identity=identity,
+            partition=evidence.partition,
+            dataset_sha256=dataset_sha256,
+            partition_sha256=evidence.partition_sha256,
+            coverage_ids=evidence.coverage_ids,
+            assertion_ids=evidence.assertion_ids,
+            coverage_sha256=evidence.coverage_sha256,
+            target=predecessor_row,
+        )
+    except QualityLifecycleRefusal as exc:
+        raise _StaleConflictSignal(
+            f"predecessor assessment evidence could not be re-authorized: {exc}"
+        ) from exc
+    if selected.signature != trigger.assessment_signature.strip() or selected.status != "fail":
+        raise _StaleConflictSignal(
+            "captured predecessor assessment signature is no longer authoritative; repair intent must re-evaluate"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -801,6 +1134,7 @@ __all__ = [
     "STALE_CONFLICT",
     "RepairRefusal",
     "PredecessorRef",
+    "PredecessorEvidence",
     "CoverageGapTrigger",
     "InvalidRevisionTrigger",
     "RepairTrigger",
@@ -812,6 +1146,8 @@ __all__ = [
     "write_convergence_provenance",
     "CutoverResult",
     "RepairCutoverCatalog",
+    "compute_quality_evidence_id",
+    "compute_coverage_evidence_id",
     "evaluate_missing_support_eligibility",
     "evaluate_invalid_revision_eligibility",
 ]
