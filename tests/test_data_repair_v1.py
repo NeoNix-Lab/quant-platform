@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from quant_platform.data.models import CoverageInterval, DatasetIdentity, Instant  # noqa: E402
 from quant_platform.data.repair import (  # noqa: E402
     CandidateAttempt,
+    CandidateProof,
     CoverageGapTrigger,
     InvalidLiveRevisionTrigger,
     PredecessorReference,
@@ -255,6 +256,65 @@ class CandidateAttemptV1Tests(unittest.TestCase):
                 intent_identity="", dataset_identity=IDENTITY, natural_partition_key="dt=2024-01-15",
                 source_semantics_id="s", mapping_id="m", dataset_sha256=HASH_A,
                 partition_sha256=HASH_B, content_sha256=HASH_C, code_ref="c",
+            )
+
+
+def proof(
+    *,
+    dataset_document=None,
+    partition_document=None,
+    coverage_documents=None,
+    assessment_status: str = "pass",
+    eligibility_state: str = "valid",
+) -> CandidateProof:
+    return CandidateProof(
+        dataset_document=dataset_document if dataset_document is not None else {"schema_version": "dataset-manifest-v1"},
+        dataset_sha256=HASH_A,
+        partition_document=partition_document if partition_document is not None else {"schema_version": "partition-manifest-v1"},
+        partition_sha256=HASH_B,
+        coverage_documents=coverage_documents if coverage_documents is not None else ({"schema_version": "coverage-manifest-v1"},),
+        canonical_content_hash_v1=HASH_C,
+        assessment_signature="sig-1",
+        assessment_status=assessment_status,
+        eligibility_state=eligibility_state,
+        repair_code_ref="a10-repair-commit-1",
+    )
+
+
+class CandidateProofV1Tests(unittest.TestCase):
+    def test_well_formed_proof_constructs(self):
+        result = proof()
+        self.assertEqual("pass", result.assessment_status)
+        self.assertEqual("valid", result.eligibility_state)
+
+    def test_empty_documents_are_refused(self):
+        with self.assertRaises(RepairError):
+            proof(dataset_document={})
+        with self.assertRaises(RepairError):
+            proof(partition_document={})
+        with self.assertRaises(RepairError):
+            proof(coverage_documents=())
+
+    # Review finding: candidate proof must require A16 pass/warn, never fail.
+    def test_fail_assessment_status_is_ineligible(self):
+        with self.assertRaises(RepairIneligible):
+            proof(assessment_status="fail")
+
+    # Review finding: candidate proof must require S14 valid/degraded, never invalid/closed.
+    def test_non_covering_eligibility_state_is_ineligible(self):
+        with self.assertRaises(RepairIneligible):
+            proof(eligibility_state="closed")
+        with self.assertRaises(RepairIneligible):
+            proof(eligibility_state="invalid")
+
+    def test_malformed_hashes_are_refused(self):
+        with self.assertRaises(RepairError):
+            CandidateProof(
+                dataset_document={"a": 1}, dataset_sha256="not-a-hash",
+                partition_document={"a": 1}, partition_sha256=HASH_B,
+                coverage_documents=({"a": 1},), canonical_content_hash_v1=HASH_C,
+                assessment_signature="sig-1", assessment_status="pass",
+                eligibility_state="valid", repair_code_ref="c",
             )
 
 

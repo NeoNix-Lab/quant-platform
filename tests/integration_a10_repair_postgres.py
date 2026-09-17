@@ -13,16 +13,21 @@ establish. It proves only what is new in A10:
    without clobbering each other (frozen contract item 5 / vector 22);
 2. a semantically identical retry reuses the same staged candidate row
    (idempotent retry, vector 10);
-3. a proven candidate converges through ``RepairCutoverCatalog.cutover`` in
-   one atomic transaction: the predecessor is superseded and the candidate
-   becomes the sole live revision, with ``partitions_one_live`` intact
-   (vector 8);
-4. a losing concurrent candidate, evaluated after the winner already
-   converged, resolves deterministically to ``ALREADY_SATISFIED`` rather
-   than creating a gratuitous new revision (vector 12/13) -- the
-   ``STALE_CONFLICT``/no-half-switch/no-reactivation branches are proven
-   against a real transactional rollback here and exhaustively against every
-   topology shape in ``tests/test_data_repair_cutover_v1.py``.
+3. TWO REAL, CONCURRENT transactions -- separate ``psycopg`` connections,
+   separate OS threads, synchronized to enter ``cutover`` together -- race
+   for the SAME repair intent. Real PostgreSQL row-level locking on
+   ``catalog.partitions`` (the topology ``FOR UPDATE`` acquired inside
+   ``cutover``) serializes them: exactly one becomes the sole live revision
+   (``CONVERGED``), and the other -- having lost the race, not merely having
+   an incomplete view -- resolves deterministically to ``STALE_CONFLICT``,
+   never ``ALREADY_SATISFIED`` (vector 8/12; the specific defect an earlier
+   review found in the sequential, single-connection version of this proof);
+4. an idempotent retry of the ACTUAL race winner, evaluated after the race,
+   resolves to ``ALREADY_SATISFIED`` -- durable convergence provenance, not
+   mere coverage sufficiency, is what makes this determination (vector 13);
+5. a transactional failure mid-cutover leaves the predecessor exactly
+   authoritative and the candidate still isolated -- proven against real
+   PostgreSQL rollback (vector 9).
 """
 
 from __future__ import annotations
@@ -31,11 +36,12 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import psycopg  # noqa: E402
-from quant_platform.data import DatasetIdentity, Instant, TradeRecord  # noqa: E402
+from quant_platform.data import CoverageInterval, DatasetIdentity, Instant, TradeRecord  # noqa: E402
 from quant_platform.data.manifests import (  # noqa: E402
     emit_coverage_manifest,
     emit_dataset_manifest,
@@ -55,6 +61,7 @@ from quant_platform.data.publication_eligibility_catalog import PublicationEligi
 from quant_platform.data.quality_lifecycle import QualityLifecycleCatalog  # noqa: E402
 from quant_platform.data.repair import (  # noqa: E402
     CandidateAttempt,
+    CandidateProof,
     InvalidLiveRevisionTrigger,
     PredecessorReference,
     RepairCutoverCatalog,
@@ -94,7 +101,7 @@ class _FaultCursor:
 
     def execute(self, statement, params=None):
         self.cursor.execute(statement, params)
-        if "SET partition_key = %s, revision = %s" in statement:
+        if "SET partition_key = %s, revision = %s, manifest_sha256 = %s" in statement:
             self.cursor.execute("SELECT 1 / 0")
 
     def fetchone(self):
@@ -127,12 +134,13 @@ def _seal_and_certify(
         artifact, [TradeRecord("bybit", "BTCUSDT", Instant.parse(f"{day}T00:00:01Z"), price, "0.5000", "buy", None, trade_id, None)],
         dataset_identity=identity,
     )
-    partition = emit_partition_manifest(
+    partition_emission = emit_partition_manifest(
         partition_path, materialization, dataset_identity=identity, dataset_root=root,
         partition_key=partition_key, revision=1, rel_path=f"{partition_key}/part-001.parquet",
         created_at=created_at, closed_at=created_at, producer="a10-integration-producer",
         code_ref="a10-integration-producer-commit",
-    ).document
+    )
+    partition = partition_emission.document
     emit_coverage_manifest(
         coverage_path, dataset_identity=identity, source_dataset_identity=identity,
         coverage_id=f"coverage-{partition_key.replace('/', '_')}", supersedes=None, created_at=created_at,
@@ -153,6 +161,63 @@ def _seal_and_certify(
     return dataset_path, partition_path, coverage_path, run
 
 
+def _content_sha256(root: Path, identity: DatasetIdentity, *, day: str, trade_id: str, price: str) -> str:
+    """The deterministic physical artifact hash for one candidate's records,
+    known before any staging path is chosen (materialization content does
+    not depend on the path it happens to be written to).
+    """
+
+    scratch = root / f"_scratch_{trade_id}" / "part-001.parquet"
+    materialization = materialize_bybit_trade_v1(
+        scratch, [TradeRecord("bybit", "BTCUSDT", Instant.parse(f"{day}T00:00:01Z"), price, "0.5000", "buy", None, trade_id, None)],
+        dataset_identity=identity,
+    )
+    return materialization.sha256
+
+
+def _build_candidate_and_proof(
+    root: Path, writer: CatalogPublicationWriter, profile, connection, identity: DatasetIdentity,
+    *, intent: RepairIntent, day: str, trade_id: str, price: str, created_at: str, code_ref: str,
+) -> tuple[CandidateAttempt, "CandidateProof", object]:
+    content_sha256 = _content_sha256(root, identity, day=day, trade_id=trade_id, price=price)
+    provisional = CandidateAttempt(
+        intent_identity=intent.intent_identity, dataset_identity=identity,
+        natural_partition_key=intent.partition_key, source_semantics_id="bybit-public-trades-sqlite-v1",
+        mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256="a" * 64, partition_sha256="b" * 64,
+        content_sha256=content_sha256, code_ref=code_ref,
+    )
+    staging_key = provisional.staging_partition_key
+    dataset_path, partition_path, coverage_path, run = _seal_and_certify(
+        root, writer, profile, identity, partition_key=staging_key,
+        day=day, trade_id=trade_id, price=price, created_at=created_at,
+    )
+    dataset_document, dataset_sha256 = _load_manifest(dataset_path, "dataset")
+    partition_document, partition_sha256 = _load_manifest(partition_path, "partition")
+    coverage_document, _ = _load_manifest(coverage_path, "coverage")
+    candidate = CandidateAttempt(
+        intent_identity=intent.intent_identity, dataset_identity=identity,
+        natural_partition_key=intent.partition_key, source_semantics_id="bybit-public-trades-sqlite-v1",
+        mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256=dataset_sha256, partition_sha256=partition_sha256,
+        content_sha256=content_sha256, code_ref=code_ref,
+    )
+    assert candidate.staging_partition_key == staging_key
+
+    eligibility = PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
+        PublicationEligibilityEvidence(dataset_path, partition_path, (coverage_path,), "a10-hot", profile.profile_id, profile.check_suite)
+    )
+    assert eligibility.state == "valid"
+
+    proof = CandidateProof(
+        dataset_document=dataset_document, dataset_sha256=dataset_sha256,
+        partition_document=partition_document, partition_sha256=partition_sha256,
+        coverage_documents=(coverage_document,), canonical_content_hash_v1="d" * 64,
+        assessment_signature=eligibility.certification_signature,
+        assessment_status=eligibility.certification_status,
+        eligibility_state=eligibility.state, repair_code_ref=code_ref,
+    )
+    return candidate, proof, run
+
+
 def main() -> int:
     dsn = os.environ.get("DATA_GATEWAY_TEST_DSN")
     if not dsn:
@@ -160,7 +225,7 @@ def main() -> int:
         return 0
 
     identity = DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v1")
-    required = (Instant.parse("2024-01-15T00:00:00Z"), Instant.parse("2024-01-16T00:00:00Z"))
+    required = CoverageInterval(Instant.parse("2024-01-15T00:00:00Z"), Instant.parse("2024-01-16T00:00:00Z"))
     natural_key = "dt=2024-01-15"
 
     with tempfile.TemporaryDirectory() as holder:
@@ -218,7 +283,7 @@ def main() -> int:
             predecessor = PredecessorReference(pred_sealed.partition_id, 1, "invalid")
             intent = RepairIntent(
                 dataset_identity=identity, partition_key=natural_key,
-                required_support=_coverage_interval(required),
+                required_support=required,
                 predecessor=predecessor,
                 trigger=InvalidLiveRevisionTrigger(
                     predecessor=predecessor, assessment_signature="predecessor-fail-signature",
@@ -227,31 +292,19 @@ def main() -> int:
             )
             assert intent.outcome == RepairOutcome.REPAIR_REQUIRED
 
-            # --- Stage two DISTINCT candidates: isolated staging (vector 22) ---
-            candidate_a = CandidateAttempt(
-                intent_identity=intent.intent_identity, dataset_identity=identity,
-                natural_partition_key=natural_key, source_semantics_id="bybit-public-trades-sqlite-v1",
-                mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256="a" * 64,
-                partition_sha256="b" * 64, content_sha256="c" * 64, code_ref="repair-attempt-a",
+            # --- Stage two DISTINCT candidates for the SAME intent: isolated
+            # staging (vector 22), neither touches the still-invalid predecessor.
+            candidate_a, proof_a, run_a = _build_candidate_and_proof(
+                root, writer, profile, connection, identity, intent=intent,
+                day="2024-01-15", trade_id="cand-a-1", price="100.00",
+                created_at="2026-09-17T10:00:00Z", code_ref="repair-attempt-a",
             )
-            candidate_b = CandidateAttempt(
-                intent_identity=intent.intent_identity, dataset_identity=identity,
-                natural_partition_key=natural_key, source_semantics_id="bybit-public-trades-sqlite-v1",
-                mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256="a" * 64,
-                partition_sha256="b" * 64, content_sha256="d" * 64, code_ref="repair-attempt-b",
+            candidate_b, proof_b, run_b = _build_candidate_and_proof(
+                root, writer, profile, connection, identity, intent=intent,
+                day="2024-01-15", trade_id="cand-b-1", price="101.00",
+                created_at="2026-09-17T10:05:00Z", code_ref="repair-attempt-b",
             )
             assert candidate_a.staging_partition_key != candidate_b.staging_partition_key
-
-            dataset_a, partition_a, coverage_a, run_a = _seal_and_certify(
-                root, writer, profile, identity, partition_key=candidate_a.staging_partition_key,
-                day="2024-01-15", trade_id="cand-a-1", price="100.00", created_at="2026-09-17T10:00:00Z",
-            )
-            dataset_b, partition_b, coverage_b, run_b = _seal_and_certify(
-                root, writer, profile, identity, partition_key=candidate_b.staging_partition_key,
-                day="2024-01-15", trade_id="cand-b-1", price="101.00", created_at="2026-09-17T10:05:00Z",
-            )
-            # Both staged rows coexist right now: neither clobbered the other,
-            # and neither touched the still-invalid natural predecessor.
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT partition_key, state, rel_path FROM catalog.partitions WHERE partition_id IN (%s,%s)",
@@ -264,57 +317,95 @@ def main() -> int:
                 assert cursor.fetchone()[0] == "invalid"
 
             # --- Idempotent retry (vector 10): identical evidence, same row ---
+            content_sha256_a_retry = _content_sha256(root, identity, day="2024-01-15", trade_id="cand-a-1", price="100.00")
+            assert content_sha256_a_retry == candidate_a.content_sha256
             candidate_a_retry = CandidateAttempt(
                 intent_identity=intent.intent_identity, dataset_identity=identity,
                 natural_partition_key=natural_key, source_semantics_id="bybit-public-trades-sqlite-v1",
-                mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256="a" * 64,
-                partition_sha256="b" * 64, content_sha256="c" * 64, code_ref="repair-attempt-a",
+                mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256=candidate_a.dataset_sha256,
+                partition_sha256=candidate_a.partition_sha256, content_sha256=content_sha256_a_retry,
+                code_ref="repair-attempt-a",
             )
             assert candidate_a_retry.candidate_identity == candidate_a.candidate_identity
             retry_run = PublicationCertification(writer, profile).run(
-                SealedPartitionEvidence(dataset_a, partition_a, (coverage_a,), root / candidate_a.staging_partition_key / "part-001.parquet", "a10-hot")
+                SealedPartitionEvidence(
+                    root / f"dataset-{candidate_a.staging_partition_key.replace('/', '_')}.json",
+                    root / f"partition-{candidate_a.staging_partition_key.replace('/', '_')}.json",
+                    (root / f"coverage-{candidate_a.staging_partition_key.replace('/', '_')}.json",),
+                    root / candidate_a.staging_partition_key / "part-001.parquet", "a10-hot",
+                )
             )
             assert retry_run.sealed_partition.partition_id == run_a.sealed_partition.partition_id
 
-            # --- Certify candidate A to 'valid' through the credited S14 bridge ---
-            eligibility_a = PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
-                PublicationEligibilityEvidence(dataset_a, partition_a, (coverage_a,), "a10-hot", profile.profile_id, profile.check_suite)
-            )
-            assert eligibility_a.state == "valid"
-            eligibility_b = PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
-                PublicationEligibilityEvidence(dataset_b, partition_b, (coverage_b,), "a10-hot", profile.profile_id, profile.check_suite)
-            )
-            assert eligibility_b.state == "valid"
+            # --- Genuine concurrent race (finding 6/7): two real transactions
+            # on two separate connections, synchronized to enter the topology
+            # lock together. Real PostgreSQL row locking -- not application
+            # logic -- decides who commits first; the loser must see the
+            # winner's already-promoted topology and resolve to
+            # STALE_CONFLICT, never infer ALREADY_SATISFIED merely because
+            # the winner's coverage happens to be sufficient too. ---
+            promoted_path_a = root / "promoted-a.json"
+            promoted_path_b = root / "promoted-b.json"
+            barrier = threading.Barrier(2)
+            outcomes: dict[str, object] = {}
+            errors: dict[str, BaseException] = {}
 
-            # --- Winner converges: one atomic transactional compare-and-cutover ---
-            result_a = RepairCutoverCatalog(connection).cutover(intent=intent, candidate=candidate_a)
-            assert result_a.status == RepairOutcome.CONVERGED
-            assert result_a.live_partition_id == run_a.sealed_partition.partition_id
-            assert result_a.live_revision == 2
+            def race(label, candidate, proof, promoted_path):
+                try:
+                    with psycopg.connect(dsn) as own_connection:
+                        barrier.wait(timeout=30)
+                        result = RepairCutoverCatalog(own_connection).cutover(
+                            intent=intent, candidate=candidate, proof=proof,
+                            dataset_root=root, promoted_manifest_path=promoted_path,
+                        )
+                        outcomes[label] = result
+                except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread
+                    errors[label] = exc
+
+            thread_a = threading.Thread(target=race, args=("A", candidate_a, proof_a, promoted_path_a))
+            thread_b = threading.Thread(target=race, args=("B", candidate_b, proof_b, promoted_path_b))
+            thread_a.start()
+            thread_b.start()
+            thread_a.join(timeout=60)
+            thread_b.join(timeout=60)
+
+            if errors:
+                raise AssertionError(f"race threads raised: {errors}")
+            statuses = {label: result.status for label, result in outcomes.items()}
+            assert set(statuses.values()) == {RepairOutcome.CONVERGED, RepairOutcome.STALE_CONFLICT}, statuses
+            winner_label = next(label for label, status in statuses.items() if status == RepairOutcome.CONVERGED)
+            loser_label = "B" if winner_label == "A" else "A"
+            winner_candidate, winner_proof = (candidate_a, proof_a) if winner_label == "A" else (candidate_b, proof_b)
+            loser_candidate = candidate_b if winner_label == "A" else candidate_a
+
             with connection.cursor() as cursor:
                 cursor.execute("SELECT state FROM catalog.partitions WHERE partition_id=%s", (pred_sealed.partition_id,))
                 assert cursor.fetchone()[0] == "superseded"
                 cursor.execute(
                     "SELECT count(*) FROM catalog.partitions WHERE dataset_id=(SELECT dataset_id FROM catalog.partitions WHERE partition_id=%s) AND partition_key=%s AND state <> 'superseded'",
-                    (run_a.sealed_partition.partition_id, natural_key),
+                    (pred_sealed.partition_id, natural_key),
                 )
                 assert cursor.fetchone()[0] == 1
                 cursor.execute("SELECT indexdef FROM pg_indexes WHERE schemaname='catalog' AND indexname='partitions_one_live'")
                 assert "UNIQUE INDEX partitions_one_live" in cursor.fetchone()[0]
-
-            # --- Loser re-evaluates current authority: ALREADY_SATISFIED, no
-            # gratuitous new revision (vector 12/13); B's own staged row is
-            # untouched -- it remains isolated, non-authoritative evidence. ---
-            result_b = RepairCutoverCatalog(connection).cutover(intent=intent, candidate=candidate_b)
-            assert result_b.status == RepairOutcome.ALREADY_SATISFIED
-            assert result_b.candidate_identity is None
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT partition_key, state FROM catalog.partitions WHERE partition_id=%s", (run_b.sealed_partition.partition_id,))
+                # the loser's own staged row is untouched: it remains
+                # isolated, non-authoritative evidence, never promoted.
+                loser_partition_id = run_b.sealed_partition.partition_id if loser_label == "B" else run_a.sealed_partition.partition_id
+                cursor.execute("SELECT partition_key, state FROM catalog.partitions WHERE partition_id=%s", (loser_partition_id,))
                 row = cursor.fetchone()
-                assert row[0] == candidate_b.staging_partition_key and row[1] == "valid"
+                assert row == (loser_candidate.staging_partition_key, "valid")
+
+            # --- Idempotent retry of the ACTUAL winner (vector 13): resolved
+            # by durable convergence provenance, never by coverage alone. ---
+            retry_result = RepairCutoverCatalog(connection).cutover(
+                intent=intent, candidate=winner_candidate, proof=winner_proof,
+                dataset_root=root, promoted_manifest_path=root / "promoted-retry.json",
+            )
+            assert retry_result.status == RepairOutcome.ALREADY_SATISFIED
+            assert retry_result.candidate_identity == winner_candidate.candidate_identity
 
             # --- Transactional failure leaves predecessor exactly authoritative
-            # (vector 9), proven against real PostgreSQL rollback this time. ---
+            # (vector 9), proven against real PostgreSQL rollback. ---
             _, pred2_partition_path, _, pred2_run = _seal_and_certify(
                 root, writer, profile, identity, partition_key="dt=2024-01-16", day="2024-01-16",
                 trade_id="pred-2", price="90.00", created_at="2026-09-17T11:00:00Z",
@@ -339,26 +430,21 @@ def main() -> int:
             predecessor2 = PredecessorReference(pred2_run.sealed_partition.partition_id, 1, "invalid")
             intent2 = RepairIntent(
                 dataset_identity=identity, partition_key="dt=2024-01-16",
-                required_support=_coverage_interval((Instant.parse("2024-01-16T00:00:00Z"), Instant.parse("2024-01-17T00:00:00Z"))),
+                required_support=CoverageInterval(Instant.parse("2024-01-16T00:00:00Z"), Instant.parse("2024-01-17T00:00:00Z")),
                 predecessor=predecessor2,
                 trigger=InvalidLiveRevisionTrigger(predecessor2, "predecessor2-fail-signature", "fail"),
             )
-            candidate_c = CandidateAttempt(
-                intent_identity=intent2.intent_identity, dataset_identity=identity,
-                natural_partition_key="dt=2024-01-16", source_semantics_id="bybit-public-trades-sqlite-v1",
-                mapping_id="bybit-sqlite-day-extract-v1", dataset_sha256="a" * 64,
-                partition_sha256="b" * 64, content_sha256="e" * 64, code_ref="repair-attempt-c",
-            )
-            dataset_c, partition_c, coverage_c, run_c = _seal_and_certify(
-                root, writer, profile, identity, partition_key=candidate_c.staging_partition_key,
-                day="2024-01-16", trade_id="cand-c-1", price="100.00", created_at="2026-09-17T11:10:00Z",
-            )
-            PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
-                PublicationEligibilityEvidence(dataset_c, partition_c, (coverage_c,), "a10-hot", profile.profile_id, profile.check_suite)
+            candidate_c, proof_c, run_c = _build_candidate_and_proof(
+                root, writer, profile, connection, identity, intent=intent2,
+                day="2024-01-16", trade_id="cand-c-1", price="100.00",
+                created_at="2026-09-17T11:10:00Z", code_ref="repair-attempt-c",
             )
             faulty = RepairCutoverCatalog(FaultAfterPromoteUpdate(connection))
             try:
-                faulty.cutover(intent=intent2, candidate=candidate_c)
+                faulty.cutover(
+                    intent=intent2, candidate=candidate_c, proof=proof_c,
+                    dataset_root=root, promoted_manifest_path=root / "promoted-c.json",
+                )
             except Exception:
                 pass
             else:
@@ -374,12 +460,6 @@ def main() -> int:
 
     print("A10 REPAIR CUTOVER POSTGRESQL PROOF OK")
     return 0
-
-
-def _coverage_interval(bounds):
-    from quant_platform.data import CoverageInterval
-
-    return CoverageInterval(bounds[0], bounds[1])
 
 
 if __name__ == "__main__":

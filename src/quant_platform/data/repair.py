@@ -11,10 +11,14 @@ module owns only the bounded seam described by the frozen A10 contract:
   staging ``partition_key`` gives distinct attempts physically isolated
   storage/catalog rows before convergence, purely by being a different
   natural-key value -- no new schema, table or column is introduced;
-- one dedicated transactional compare-and-cutover seam that supersedes the
-  predecessor and promotes the candidate atomically, only after the
+- one dedicated transactional compare-and-cutover seam that, after the
   candidate is already proven through the existing S13/A16/S14 machinery
-  under its own isolated staging partition-key family.
+  under its own isolated staging partition-key family, re-verifies that
+  proof is bound to the exact candidate, re-derives declared coverage from
+  canonical evidence, supersedes the predecessor, re-emits a
+  natural-identity manifest so the promoted catalog row and its durable
+  manifest agree, and records immutable convergence provenance -- all in
+  one commit.
 
 Candidate sealing, quality assessment and publication eligibility are
 deliberately NOT reimplemented here: a caller certifies a candidate by
@@ -24,32 +28,46 @@ calling the existing ``CatalogPublicationWriter.seal_partition``,
 ``staging_partition_key`` as the partition manifest's ``partition_key``.
 Because that staging key is never the natural partition_key, none of those
 existing writers ever touches -- let alone supersedes -- the live
-predecessor while the candidate is still being proven.  Only
+predecessor while the candidate is still being proven. Only
 :class:`RepairCutoverCatalog.cutover` ever changes the natural partition's
 topology, and it does so in one transaction, never before candidate proof
-is already durable.
+is already durable and re-verified.
+
+The staging partition_key is deliberately chosen as ``"{natural_key}/repair=
+{digest}"``: a sub-path of the natural key, so the staged artifact's
+``rel_path`` already satisfies the existing, unmodified
+``rel_path_inside_partition`` constraint under the natural key too. This
+means promotion never needs to move or copy the physical artifact -- only a
+new manifest that re-declares natural identity over the same unmoved bytes.
 
 This module must not import ``quant_platform.access``: callers pass already
 computed B04 gap evidence and A16 assessment evidence in as canonical
-``CoverageInterval``/string values.
+``CoverageInterval``/string values.  It does import the sibling
+``quant_platform.data.coverage``/``.manifests``/``.materializer`` modules
+(same "producer" package owner) to reuse their credited folding and
+manifest-emission logic rather than reimplementing it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal
 from enum import StrEnum
 import hashlib
 import json
+from pathlib import Path
 import re
 from typing import Any, Mapping
 
+from .coverage import reconstruct_catalog_coverage
+from .manifests import ManifestEmission, emit_partition_manifest, _persist_manifest
+from .materializer import ParquetMaterialization
 from .models import CoverageInterval, DatasetIdentity, Instant
 
 
 REPAIR_SEMANTICS_VERSION = "a10-repair-v1"
 REPAIR_INTENT_IDENTITY_DOMAIN = "a10-repair-intent-v1"
 CANDIDATE_ATTEMPT_IDENTITY_DOMAIN = "a10-candidate-attempt-v1"
+REPAIR_CONVERGENCE_ARTIFACT_KIND = "a10_repair_convergence"
 
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _ELIGIBLE_LIVE_STATES = frozenset({"closed", "valid", "degraded", "invalid"})
@@ -304,14 +322,34 @@ class CandidateAttempt:
     def staging_partition_key(self) -> str:
         """The physically/logically isolated natural-key value for this attempt.
 
+        Deliberately derived from a manifest-INDEPENDENT subset of fields
+        (never ``dataset_sha256``/``partition_sha256``): the staged partition
+        manifest's own content must declare this exact key, so a hash that
+        included the manifest's own hash could never be computed before the
+        manifest exists. ``content_sha256`` -- the physical artifact hash,
+        always known before any manifest is written -- is what actually
+        distinguishes attempts here, together with the intent, natural key
+        and code identity; that is already sufficient for retries of
+        identical evidence to share a key and different evidence to differ
+        (vectors 10/11), and matches how physical bytes determine a
+        deterministic staging identity independent of incidental manifest
+        metadata.
+
         A different ``partition_key`` value is a different row family under
-        ``partitions_one_live`` and a different ``rel_path`` prefix under
-        ``rel_path_inside_partition`` -- both existing, unmodified DB/manifest
-        constraints -- so distinct attempts can never share mutable physical
-        or catalog state before convergence.
+        ``partitions_one_live``, and because it is deliberately a *sub-path*
+        of the natural key, its ``rel_path`` already satisfies
+        ``rel_path_inside_partition`` under the natural key too -- so
+        promotion never has to move the physical artifact.
         """
 
-        digest = hashlib.sha256(self.candidate_identity.encode("utf-8")).hexdigest()
+        payload = {
+            "identity_domain": f"{CANDIDATE_ATTEMPT_IDENTITY_DOMAIN}-staging-key",
+            "intent_identity": self.intent_identity,
+            "natural_partition_key": self.natural_partition_key,
+            "content_sha256": self.content_sha256,
+            "code_ref": self.code_ref,
+        }
+        digest = _canonical_fingerprint(payload)
         return f"{self.natural_partition_key}/repair={digest}"
 
     def stable_dict(self) -> dict[str, Any]:
@@ -323,24 +361,82 @@ class CandidateAttempt:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateProof:
+    """Durable evidence binding one staged candidate to its S13/A16/S14 proof.
+
+    Everything here must already be true and durable before ``cutover`` is
+    called: ``cutover`` does not re-derive it, only cross-verifies it against
+    the staged catalog row and :class:`CandidateAttempt`'s own declared
+    hashes, and re-folds ``coverage_documents`` through the credited B04
+    reconstruction to independently prove every targeted gap is closed.
+    """
+
+    dataset_document: Mapping[str, Any]
+    dataset_sha256: str
+    partition_document: Mapping[str, Any]
+    partition_sha256: str
+    coverage_documents: tuple[Mapping[str, Any], ...]
+    canonical_content_hash_v1: str
+    assessment_signature: str
+    assessment_status: str
+    eligibility_state: str
+    repair_code_ref: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dataset_document, Mapping) or not self.dataset_document:
+            raise RepairError("dataset_document must be a non-empty mapping")
+        object.__setattr__(self, "dataset_sha256", _sha256_hex(self.dataset_sha256, "dataset_sha256"))
+        if not isinstance(self.partition_document, Mapping) or not self.partition_document:
+            raise RepairError("partition_document must be a non-empty mapping")
+        object.__setattr__(self, "partition_sha256", _sha256_hex(self.partition_sha256, "partition_sha256"))
+        coverage_documents = tuple(self.coverage_documents)
+        if not coverage_documents:
+            raise RepairError("coverage_documents must be non-empty")
+        for index, document in enumerate(coverage_documents):
+            if not isinstance(document, Mapping) or not document:
+                raise RepairError(f"coverage_documents[{index}] must be a non-empty mapping")
+        object.__setattr__(self, "coverage_documents", coverage_documents)
+        object.__setattr__(
+            self, "canonical_content_hash_v1", _sha256_hex(self.canonical_content_hash_v1, "canonical_content_hash_v1")
+        )
+        object.__setattr__(
+            self, "assessment_signature", _non_empty_text(self.assessment_signature, "assessment_signature")
+        )
+        if self.assessment_status not in {"pass", "warn"}:
+            raise RepairIneligible("candidate proof requires an A16 'pass' or 'warn' assessment status")
+        if self.eligibility_state not in _COVERING_STATES:
+            raise RepairIneligible("candidate proof requires an S14 'valid' or 'degraded' eligibility state")
+        object.__setattr__(self, "repair_code_ref", _non_empty_text(self.repair_code_ref, "repair_code_ref"))
+
+
+@dataclass(frozen=True, slots=True)
 class RepairCutoverResult:
     """Immutable convergence provenance for one cutover attempt.
 
     ``status`` is restricted to the three outcomes a cutover transaction can
     itself decide: :attr:`RepairOutcome.CONVERGED`,
     :attr:`RepairOutcome.ALREADY_SATISFIED` or
-    :attr:`RepairOutcome.STALE_CONFLICT`.
+    :attr:`RepairOutcome.STALE_CONFLICT`.  On ``CONVERGED`` every field in
+    frozen contract item 14 is populated; on the other two outcomes only the
+    fields the topology comparison itself could establish are.
     """
 
     status: RepairOutcome
     intent_identity: str
     dataset_id: str
     natural_partition_key: str
+    required_support: CoverageInterval
     predecessor: PredecessorReference | None
     candidate_identity: str | None
     live_partition_id: str | None
     live_revision: int | None
     live_state: str | None
+    assessment_signature: str | None = None
+    assessment_status: str | None = None
+    eligibility_state: str | None = None
+    repair_code_ref: str | None = None
+    promoted_manifest_sha256: str | None = None
+    provenance_artifact_id: str | None = None
     detail: str = ""
 
     def __post_init__(self) -> None:
@@ -357,13 +453,30 @@ class RepairCutoverResult:
             "intent_identity": self.intent_identity,
             "dataset_id": self.dataset_id,
             "natural_partition_key": self.natural_partition_key,
+            "required_support": self.required_support.stable_dict(),
             "predecessor": None if self.predecessor is None else self.predecessor.stable_dict(),
             "candidate_identity": self.candidate_identity,
             "live_partition_id": self.live_partition_id,
             "live_revision": self.live_revision,
             "live_state": self.live_state,
+            "assessment_signature": self.assessment_signature,
+            "assessment_status": self.assessment_status,
+            "eligibility_state": self.eligibility_state,
+            "repair_code_ref": self.repair_code_ref,
+            "promoted_manifest_sha256": self.promoted_manifest_sha256,
+            "provenance_artifact_id": self.provenance_artifact_id,
             "detail": self.detail,
         }
+
+
+def provenance_rel_path_for(intent: RepairIntent) -> str:
+    """The deterministic, dataset-root-relative path of one intent's
+    immutable convergence provenance record, deterministic in
+    ``intent_identity`` alone.
+    """
+
+    digest = hashlib.sha256(intent.intent_identity.encode("utf-8")).hexdigest()
+    return f"_repair/{digest}.json"
 
 
 class RepairCutoverCatalog:
@@ -372,12 +485,12 @@ class RepairCutoverCatalog:
     Deliberately does not seal, certify or assess the candidate: by the time
     ``cutover`` is called, the candidate must already be a ``valid``/
     ``degraded`` row under its own isolated ``staging_partition_key``,
-    proven through the ordinary, unmodified S13/A16/S14 machinery.  This
-    method performs only the one transactional compare-and-swap the ordinary
-    forward-ingest S13 admission path is not permitted to perform for
-    replacement repair: verifying predecessor/trigger authority still
-    matches the repair intent, then -- in one commit -- superseding the
-    predecessor and promoting the candidate to be the sole live revision.
+    proven through the ordinary, unmodified S13/A16/S14 machinery. This
+    method re-verifies that proof is exactly bound to ``candidate`` and
+    ``intent``, independently re-folds declared coverage, then -- in one
+    commit -- supersedes the predecessor, re-emits a natural-identity
+    manifest over the unmoved physical artifact, promotes the candidate row,
+    and records immutable convergence provenance.
     """
 
     def __init__(self, connection: Any):
@@ -388,47 +501,93 @@ class RepairCutoverCatalog:
         *,
         intent: RepairIntent,
         candidate: CandidateAttempt,
+        proof: CandidateProof,
+        dataset_root: Path,
+        promoted_manifest_path: Path,
     ) -> RepairCutoverResult:
         if not isinstance(intent, RepairIntent):
             raise RepairError("intent must be a RepairIntent")
         if not isinstance(candidate, CandidateAttempt):
             raise RepairError("candidate must be a CandidateAttempt")
+        if not isinstance(proof, CandidateProof):
+            raise RepairError("proof must be a CandidateProof")
         if candidate.intent_identity != intent.intent_identity:
             raise RepairError("candidate does not target this repair intent")
+        if candidate.dataset_identity != intent.dataset_identity:
+            raise RepairError("candidate.dataset_identity does not match the repair intent's dataset")
+        if candidate.natural_partition_key != intent.partition_key:
+            raise RepairError("candidate.natural_partition_key does not match the repair intent's partition_key")
+        if proof.dataset_sha256 != candidate.dataset_sha256:
+            raise RepairError("proof.dataset_sha256 does not match the candidate's declared evidence")
+        if proof.partition_sha256 != candidate.partition_sha256:
+            raise RepairError("proof.partition_sha256 does not match the candidate's declared evidence")
+        if proof.partition_document.get("sha256") != candidate.content_sha256:
+            raise RepairError("proof.partition_document physical hash does not match the candidate's declared evidence")
+        if proof.partition_document.get("partition_key") != candidate.staging_partition_key:
+            raise RepairError("proof.partition_document does not target the candidate's own staging_partition_key")
+        if proof.partition_document.get("revision") != 1:
+            raise RepairError("proof.partition_document must describe the staged candidate's revision 1")
 
         identity = intent.dataset_identity
+        dataset_root = Path(dataset_root)
         try:
             with self.connection.cursor() as cursor:
                 dataset_id = self._resolve_dataset(cursor, identity)
                 natural = self._lock_topology(cursor, dataset_id, intent.partition_key)
-                staging = self._lock_topology(cursor, dataset_id, candidate.staging_partition_key)
-
                 current_live = _live_row(natural)
-                verdict, detail = _compare_authority(intent, current_live)
-                if verdict is RepairOutcome.ALREADY_SATISFIED:
+
+                verdict, detail = self._authority_verdict(cursor, intent, candidate, current_live)
+                if verdict is not None:
                     self.connection.commit()
                     return _result(
-                        RepairOutcome.ALREADY_SATISFIED, intent, dataset_id, candidate_identity=None,
-                        live=current_live, detail=detail,
-                    )
-                if verdict is RepairOutcome.STALE_CONFLICT:
-                    self.connection.commit()
-                    return _result(
-                        RepairOutcome.STALE_CONFLICT, intent, dataset_id, candidate_identity=None,
+                        verdict, intent, dataset_id, candidate_identity=(
+                            candidate.candidate_identity if verdict is RepairOutcome.ALREADY_SATISFIED else None
+                        ),
                         live=current_live, detail=detail,
                     )
 
+                staging = self._lock_topology(cursor, dataset_id, candidate.staging_partition_key)
                 staged = _single_row(staging, "candidate staging partition")
+                if str(staged[1]) != str(dataset_id):
+                    raise RepairCutoverRefusal("staged candidate belongs to a different dataset")
                 if staged[4] not in _COVERING_STATES:
                     raise RepairCutoverRefusal(
                         f"candidate is not proven: staging state is {staged[4]!r}, expected valid/degraded"
                     )
-                if not _covers(staged, intent.required_support):
-                    raise RepairCutoverRefusal(
-                        "candidate does not cover the full required support; a target gap remains"
-                    )
+                if _text(staged[7]) != candidate.content_sha256:
+                    raise RepairCutoverRefusal("staged content_sha256 does not match the candidate's declared evidence")
+                if _text(staged[8]) != proof.partition_sha256:
+                    raise RepairCutoverRefusal("staged manifest_sha256 does not match the proven candidate manifest")
+
+                folded_start, folded_end = _verify_candidate_coverage(candidate, proof, intent)
 
                 next_revision = 1 if intent.predecessor is None else intent.predecessor.revision + 1
+
+                # Durable evidence is written before any DB mutation: on
+                # failure it is orphaned, isolated, non-authoritative
+                # diagnostic evidence -- never a half-switch.
+                promoted = _emit_promoted_manifest(
+                    proof=proof, intent=intent, next_revision=next_revision,
+                    dataset_root=dataset_root, manifest_output_path=Path(promoted_manifest_path),
+                    staged_rel_path=staged[10],
+                )
+                # Relative to dataset_root for the physical write; relative to
+                # the storage root (dataset_root's own parent tree) for the
+                # catalog.artifacts row, which is keyed across all datasets
+                # sharing one storage root.
+                provenance_local_rel_path = provenance_rel_path_for(intent)
+                dataset_rel_root = _non_empty_text(
+                    proof.dataset_document.get("rel_root"), "proof.dataset_document.rel_root"
+                )
+                provenance_rel_path = f"{dataset_rel_root}/{provenance_local_rel_path}"
+                provenance_payload = _provenance_payload(
+                    intent=intent, candidate=candidate, proof=proof,
+                    folded_start=folded_start, folded_end=folded_end, next_revision=next_revision,
+                )
+                provenance_emission = _persist_manifest(
+                    dataset_root / provenance_local_rel_path, provenance_payload,
+                )
+
                 if intent.predecessor is not None:
                     cursor.execute(
                         """
@@ -445,22 +604,48 @@ class RepairCutoverCatalog:
                 cursor.execute(
                     """
                     UPDATE catalog.partitions
-                       SET partition_key = %s, revision = %s
+                       SET partition_key = %s, revision = %s, manifest_sha256 = %s
                      WHERE partition_id = %s AND state = %s
                     RETURNING partition_id::text
                     """,
-                    (intent.partition_key, next_revision, staged[0], staged[4]),
+                    (intent.partition_key, next_revision, promoted.manifest_sha256, staged[0], staged[4]),
                 )
                 if cursor.fetchone() is None:
                     raise RepairCutoverRefusal("candidate could not be promoted atomically")
 
+                cursor.execute(
+                    """
+                    INSERT INTO catalog.artifacts
+                        (kind, storage_root_id, rel_path, content_sha256, byte_size, produced_by, code_ref, dataset_id, manifest_sha256)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (storage_root_id, rel_path) DO NOTHING
+                    RETURNING artifact_id::text
+                    """,
+                    (
+                        REPAIR_CONVERGENCE_ARTIFACT_KIND, staged[9], provenance_rel_path,
+                        provenance_emission.manifest_sha256, len(provenance_emission.persisted_bytes),
+                        candidate.candidate_identity, proof.repair_code_ref, dataset_id,
+                        provenance_emission.manifest_sha256,
+                    ),
+                )
+                provenance_row_id = cursor.fetchone()
+                if provenance_row_id is None:
+                    cursor.execute(
+                        "SELECT artifact_id::text FROM catalog.artifacts WHERE storage_root_id=%s AND rel_path=%s",
+                        (staged[9], provenance_rel_path),
+                    )
+                    provenance_row_id = cursor.fetchone()
+                if provenance_row_id is None:
+                    raise RepairCutoverRefusal("convergence provenance could not be durably recorded")
+
                 final = self._lock_topology(cursor, dataset_id, intent.partition_key)
-                promoted = _live_row(final)
+                promoted_row = _live_row(final)
                 if (
-                    promoted is None
-                    or str(promoted[0]) != str(staged[0])
-                    or int(promoted[3]) != next_revision
-                    or promoted[4] != staged[4]
+                    promoted_row is None
+                    or str(promoted_row[0]) != str(staged[0])
+                    or int(promoted_row[3]) != next_revision
+                    or promoted_row[4] != staged[4]
+                    or _text(promoted_row[8]) != promoted.manifest_sha256
                 ):
                     raise RepairCutoverRefusal("post-cutover topology verification failed")
                 if intent.predecessor is not None:
@@ -473,11 +658,60 @@ class RepairCutoverCatalog:
             self.connection.commit()
             return _result(
                 RepairOutcome.CONVERGED, intent, dataset_id, candidate_identity=candidate.candidate_identity,
-                live=promoted, detail="",
+                live=promoted_row, detail="",
+                assessment_signature=proof.assessment_signature, assessment_status=proof.assessment_status,
+                eligibility_state=proof.eligibility_state, repair_code_ref=proof.repair_code_ref,
+                promoted_manifest_sha256=promoted.manifest_sha256, provenance_artifact_id=str(provenance_row_id[0]),
             )
         except Exception:
             self.connection.rollback()
             raise
+
+    def _authority_verdict(
+        self, cursor: Any, intent: RepairIntent, candidate: CandidateAttempt, current_live: Any,
+    ) -> tuple[RepairOutcome | None, str]:
+        """Decide ALREADY_SATISFIED / STALE_CONFLICT / proceed (``None``).
+
+        Coverage completeness never substitutes for exact identity: the only
+        way a mismatch resolves to ``ALREADY_SATISFIED`` rather than
+        ``STALE_CONFLICT`` is durable provenance proof that THIS candidate is
+        the one that already converged here -- an idempotent retry of the
+        winner, never a loser inferring success from someone else's coverage.
+        """
+
+        predecessor = intent.predecessor
+        if predecessor is None:
+            if current_live is None:
+                return None, ""
+            return self._resolve_mismatch(cursor, candidate, current_live)
+
+        if current_live is None:
+            return RepairOutcome.STALE_CONFLICT, "captured predecessor no longer exists"
+        if (
+            str(current_live[0]) == predecessor.partition_id
+            and int(current_live[3]) == predecessor.revision
+            and current_live[4] == predecessor.state
+        ):
+            return None, ""
+        return self._resolve_mismatch(cursor, candidate, current_live)
+
+    def _resolve_mismatch(
+        self, cursor: Any, candidate: CandidateAttempt, current_live: Any,
+    ) -> tuple[RepairOutcome, str]:
+        cursor.execute(
+            "SELECT produced_by FROM catalog.artifacts WHERE storage_root_id=%s AND kind=%s AND produced_by=%s",
+            (current_live[9], REPAIR_CONVERGENCE_ARTIFACT_KIND, candidate.candidate_identity),
+        )
+        row = cursor.fetchone()
+        if row is not None and row[0] == candidate.candidate_identity:
+            return (
+                RepairOutcome.ALREADY_SATISFIED,
+                "this exact candidate already converged here (idempotent retry of the winner)",
+            )
+        return (
+            RepairOutcome.STALE_CONFLICT,
+            "current live revision no longer matches the captured predecessor/trigger authority",
+        )
 
     @staticmethod
     def _resolve_dataset(cursor: Any, identity: DatasetIdentity) -> str:
@@ -502,7 +736,8 @@ class RepairCutoverCatalog:
         cursor.execute(
             """
             SELECT partition_id::text, dataset_id::text, partition_key,
-                   revision, state, ts_start, ts_end
+                   revision, state, ts_start, ts_end,
+                   content_sha256, manifest_sha256, storage_root_id, rel_path
               FROM catalog.partitions
              WHERE dataset_id=%s AND partition_key=%s
              ORDER BY revision
@@ -513,37 +748,87 @@ class RepairCutoverCatalog:
         return cursor.fetchall()
 
 
-def _compare_authority(intent: RepairIntent, current_live: Any) -> tuple[RepairOutcome | None, str]:
-    """Decide ALREADY_SATISFIED / STALE_CONFLICT / proceed (``None``)."""
+def _verify_candidate_coverage(
+    candidate: CandidateAttempt, proof: CandidateProof, intent: RepairIntent,
+) -> tuple[Instant, Instant]:
+    """Independently re-fold declared coverage through the credited B04
+    reconstruction and prove it closes every targeted gap (contract item 8).
+    """
 
-    predecessor = intent.predecessor
-    if predecessor is None:
-        if current_live is None:
-            return None, ""
-        if _covers(current_live, intent.required_support):
-            return RepairOutcome.ALREADY_SATISFIED, "a live revision now covers the required support"
-        return RepairOutcome.STALE_CONFLICT, "a live revision now exists where the intent captured none"
-
-    if current_live is None:
-        return RepairOutcome.STALE_CONFLICT, "captured predecessor no longer exists"
-    if (
-        str(current_live[0]) == predecessor.partition_id
-        and int(current_live[3]) == predecessor.revision
-        and current_live[4] == predecessor.state
-    ):
-        return None, ""
-    if _covers(current_live, intent.required_support):
-        return RepairOutcome.ALREADY_SATISFIED, "current live revision already covers the required support"
-    return RepairOutcome.STALE_CONFLICT, "current live revision no longer matches the captured predecessor"
+    result, violations = reconstruct_catalog_coverage(proof.coverage_documents, (proof.partition_document,))
+    if violations:
+        raise RepairCutoverRefusal(
+            "candidate coverage evidence has violations: " + ", ".join(item.code for item in violations)
+        )
+    key = (candidate.staging_partition_key, 1)
+    if key not in result:
+        raise RepairCutoverRefusal("candidate coverage does not resolve to one complete declared interval")
+    start, end = result[key]
+    if start > intent.required_support.start or end < intent.required_support.end:
+        raise RepairCutoverRefusal("candidate coverage does not close every targeted gap; a target gap remains")
+    return start, end
 
 
-def _covers(row: Any, required_support: CoverageInterval) -> bool:
-    if row[4] not in _COVERING_STATES:
-        return False
-    start, end = row[5], row[6]
-    if start is None or end is None:
-        return False
-    return Instant.parse(start) <= required_support.start and Instant.parse(end) >= required_support.end
+def _emit_promoted_manifest(
+    *,
+    proof: CandidateProof,
+    intent: RepairIntent,
+    next_revision: int,
+    dataset_root: Path,
+    manifest_output_path: Path,
+    staged_rel_path: str,
+) -> ManifestEmission:
+    """Re-declare natural identity over the same, unmoved physical artifact.
+
+    ``staged_rel_path`` is a sub-path of ``intent.partition_key`` by
+    construction (see :attr:`CandidateAttempt.staging_partition_key`), so it
+    already satisfies ``rel_path_inside_partition`` under the natural key:
+    no artifact copy is needed, only a new manifest.
+    """
+
+    partition = proof.partition_document
+    materialization = ParquetMaterialization(
+        path=(dataset_root / staged_rel_path),
+        dataset_identity=intent.dataset_identity,
+        file_size_bytes=partition["file_size_bytes"],
+        row_count=partition["row_count"],
+        sha256=partition["sha256"],
+        canonical_content_hash_v1=proof.canonical_content_hash_v1,
+        first_exchange_ts=None if partition.get("first_exchange_ts") is None else Instant.parse(partition["first_exchange_ts"]),
+        last_exchange_ts=None if partition.get("last_exchange_ts") is None else Instant.parse(partition["last_exchange_ts"]),
+    )
+    return emit_partition_manifest(
+        manifest_output_path, materialization,
+        dataset_identity=intent.dataset_identity,
+        dataset_root=dataset_root,
+        partition_key=intent.partition_key,
+        revision=next_revision,
+        rel_path=staged_rel_path,
+        created_at=partition["created_at"],
+        closed_at=partition["closed_at"],
+        producer=partition["producer"],
+        code_ref=partition["code_ref"],
+    )
+
+
+def _provenance_payload(
+    *, intent: RepairIntent, candidate: CandidateAttempt, proof: CandidateProof,
+    folded_start: Instant, folded_end: Instant, next_revision: int,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "a10-repair-convergence-v1",
+        "repair_semantics_version": REPAIR_SEMANTICS_VERSION,
+        "intent": intent.canonical_payload(),
+        "intent_identity": intent.intent_identity,
+        "candidate": candidate.canonical_payload(),
+        "candidate_identity": candidate.candidate_identity,
+        "repaired_coverage": {"start": folded_start.isoformat(), "end": folded_end.isoformat()},
+        "resulting_revision": next_revision,
+        "assessment_signature": proof.assessment_signature,
+        "assessment_status": proof.assessment_status,
+        "eligibility_state": proof.eligibility_state,
+        "repair_code_ref": proof.repair_code_ref,
+    }
 
 
 def _live_row(rows: Any) -> Any | None:
@@ -567,17 +852,30 @@ def _result(
     candidate_identity: str | None,
     live: Any,
     detail: str,
+    assessment_signature: str | None = None,
+    assessment_status: str | None = None,
+    eligibility_state: str | None = None,
+    repair_code_ref: str | None = None,
+    promoted_manifest_sha256: str | None = None,
+    provenance_artifact_id: str | None = None,
 ) -> RepairCutoverResult:
     return RepairCutoverResult(
         status=status,
         intent_identity=intent.intent_identity,
         dataset_id=dataset_id,
         natural_partition_key=intent.partition_key,
+        required_support=intent.required_support,
         predecessor=intent.predecessor,
         candidate_identity=candidate_identity,
         live_partition_id=None if live is None else str(live[0]),
         live_revision=None if live is None else int(live[3]),
         live_state=None if live is None else live[4],
+        assessment_signature=assessment_signature,
+        assessment_status=assessment_status,
+        eligibility_state=eligibility_state,
+        repair_code_ref=repair_code_ref,
+        promoted_manifest_sha256=promoted_manifest_sha256,
+        provenance_artifact_id=provenance_artifact_id,
         detail=detail,
     )
 
@@ -597,6 +895,10 @@ def _sha256_hex(value: Any, field_name: str) -> str:
     return value
 
 
+def _text(value: Any) -> str | None:
+    return None if value is None else str(value).strip()
+
+
 def _canonical_json(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
@@ -607,9 +909,11 @@ def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
 
 __all__ = [
     "CANDIDATE_ATTEMPT_IDENTITY_DOMAIN",
+    "REPAIR_CONVERGENCE_ARTIFACT_KIND",
     "REPAIR_INTENT_IDENTITY_DOMAIN",
     "REPAIR_SEMANTICS_VERSION",
     "CandidateAttempt",
+    "CandidateProof",
     "CoverageGapTrigger",
     "InvalidLiveRevisionTrigger",
     "PredecessorReference",
@@ -621,4 +925,5 @@ __all__ = [
     "RepairIntent",
     "RepairOutcome",
     "RepairTrigger",
+    "provenance_rel_path_for",
 ]
