@@ -25,8 +25,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from fractions import Fraction
 import hashlib
 import json
 import re
@@ -1052,8 +1053,32 @@ def _equivalence_parameters(equivalence: Any) -> dict[str, str]:
 _SUPPORTED_NUMERICAL_EQUIVALENCE_VERSIONS = frozenset({"1"})
 
 
-def _quantize_to_multiple(value: Decimal, quantum: Decimal) -> Decimal:
-    """Round ``value`` to the nearest multiple of ``quantum``.
+def _round_half_even(value: Fraction) -> int:
+    """Round an exact ``Fraction`` to the nearest integer, ties to even.
+
+    Implemented over exact rational arithmetic rather than `Decimal`
+    division (fresh-review P1 finding): `Decimal` arithmetic operators
+    (unlike construction from a string/int) apply the *ambient*
+    `decimal.getcontext()` precision/rounding, so the same two operands
+    could quantize differently purely because unrelated code elsewhere in
+    the process changed the thread's decimal context first. `Fraction`
+    arithmetic has no context and never loses precision, so the result
+    depends only on the operands.
+    """
+
+    floor_value = value.numerator // value.denominator
+    remainder = value - floor_value
+    half = Fraction(1, 2)
+    if remainder < half:
+        return floor_value
+    if remainder > half:
+        return floor_value + 1
+    return floor_value if floor_value % 2 == 0 else floor_value + 1
+
+
+def _quantize_to_multiple(value: Decimal, quantum: Decimal) -> Fraction:
+    """Round ``value`` to the nearest exact multiple of ``quantum``, ties to
+    even, entirely in exact rational arithmetic (see `_round_half_even`).
 
     `Decimal.quantize` only adopts the *exponent* of its argument (e.g.
     ``Decimal("1.234").quantize(Decimal("0.05"))`` produces ``"1.23"``, a
@@ -1062,7 +1087,8 @@ def _quantize_to_multiple(value: Decimal, quantum: Decimal) -> Decimal:
     (REQUEST_CHANGES finding 5).
     """
 
-    return (value / quantum).to_integral_value(rounding=ROUND_HALF_EVEN) * quantum
+    ratio = Fraction(value) / Fraction(quantum)
+    return _round_half_even(ratio) * Fraction(quantum)
 
 
 def values_semantically_equivalent(output_contract: OutputContract, left: Any, right: Any) -> bool:
@@ -1122,8 +1148,13 @@ def values_semantically_equivalent(output_contract: OutputContract, left: Any, r
         relative = _to_decimal(relative_text, "relative") if relative_text is not None else Decimal(0)
         if absolute < 0 or relative < 0:
             raise FeatureArtifactError("TOLERANT parameters must not be negative")
-        threshold = absolute + relative * max(abs(left_value), abs(right_value))
-        return abs(left_value - right_value) <= threshold
+        # Exact Fraction arithmetic (fresh-review P1 finding): the threshold
+        # and comparison must not depend on the caller's ambient `decimal`
+        # context the way `Decimal` addition/multiplication/subtraction do.
+        left_fraction = Fraction(left_value)
+        right_fraction = Fraction(right_value)
+        threshold = Fraction(absolute) + Fraction(relative) * max(abs(left_fraction), abs(right_fraction))
+        return abs(left_fraction - right_fraction) <= threshold
 
     raise FeatureArtifactError(f"unsupported numerical equivalence kind: {equivalence.kind}")  # pragma: no cover
 

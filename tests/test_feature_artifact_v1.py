@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+import decimal
 from pathlib import Path
 import sys
 import unittest
@@ -829,6 +830,30 @@ class RecomputationEquivalenceTests(unittest.TestCase):
         contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.TOLERANT, "1", {}))
         with self.assertRaises(FeatureArtifactError):
             values_semantically_equivalent(contract, "1.0", "1.0")
+
+    def test_tolerant_equivalence_is_independent_of_ambient_decimal_context(self):
+        # Fresh-review P1 finding: with relative tolerance 0.00000081, the
+        # exact threshold against 1.234567 is 0.00000099999927 -- just
+        # under the 0.000001 difference to 1.234566, so the correct answer
+        # is False. The old Decimal-arithmetic implementation inherited the
+        # caller's ambient decimal.getcontext(); at precision 3 the
+        # threshold rounded up to 0.0000010 and the result flipped to True.
+        # The comparison must depend only on the OutputContract and the
+        # values, never on unrelated ambient state.
+        contract = output_contract(
+            NumericalEquivalence(NumericalEquivalenceKind.TOLERANT, "1", {"relative": "0.00000081"})
+        )
+        self.assertFalse(values_semantically_equivalent(contract, "1.234567", "1.234566"))
+        with decimal.localcontext() as ctx:
+            ctx.prec = 3
+            self.assertFalse(values_semantically_equivalent(contract, "1.234567", "1.234566"))
+
+    def test_quantized_equivalence_is_independent_of_ambient_decimal_context(self):
+        contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.QUANTIZED, "1", {"quantum": "0.05"}))
+        self.assertTrue(values_semantically_equivalent(contract, "1.024", "0.999"))
+        with decimal.localcontext() as ctx:
+            ctx.prec = 1
+            self.assertTrue(values_semantically_equivalent(contract, "1.024", "0.999"))
 
     def test_unsupported_equivalence_version_fails_closed(self):
         contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.EXACT, "2"))
