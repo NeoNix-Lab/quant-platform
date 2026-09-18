@@ -575,6 +575,7 @@ class FinalityGateTests(unittest.TestCase):
         # record's metadata, without re-running the finality proof.
         sealed, _ = artifact()
         rehydrated = rehydrate_feature_artifact(
+            expected_identity=sealed.identity,
             feature_set_definition_identity=sealed.feature_set_definition_identity,
             bound_input_evidence=sealed.bound_input_evidence,
             declared_materialized_support=sealed.declared_materialized_support,
@@ -586,6 +587,27 @@ class FinalityGateTests(unittest.TestCase):
         )
         self.assertEqual(sealed.identity, rehydrated.identity)
         self.assertEqual(sealed.stable_dict(), rehydrated.stable_dict())
+
+    def test_rehydrate_refuses_metadata_that_does_not_reproduce_the_expected_identity(self):
+        # round-3 finding: rehydrate_feature_artifact() must not be a bare
+        # metadata constructor -- a caller supplying plausible-but-wrong
+        # metadata (here, a different implementation_code_identity than the
+        # one the real sealed record actually has) cannot obtain a
+        # FeatureArtifact whose identity was never actually proven by a real
+        # seal_feature_artifact() call.
+        sealed, _ = artifact()
+        with self.assertRaises(FeatureArtifactError):
+            rehydrate_feature_artifact(
+                expected_identity=sealed.identity,
+                feature_set_definition_identity=sealed.feature_set_definition_identity,
+                bound_input_evidence=sealed.bound_input_evidence,
+                declared_materialized_support=sealed.declared_materialized_support,
+                implementation_code_identity="a-different-commit-never-actually-sealed",
+                content_identity=sealed.content_identity,
+                constituent_output_contracts=sealed.constituent_output_contracts,
+                materialization_contract_version=sealed.materialization_contract_version,
+                physical_locators=sealed.physical_locators,
+            )
 
 
 class DuplicateVsConflictTests(unittest.TestCase):

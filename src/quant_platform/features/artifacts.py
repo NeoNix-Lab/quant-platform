@@ -785,6 +785,7 @@ def seal_feature_artifact(
 
 def rehydrate_feature_artifact(
     *,
+    expected_identity: FeatureArtifactIdentity | str,
     feature_set_definition_identity: FeatureSetDefinitionIdentity,
     bound_input_evidence: BoundInputEvidence,
     declared_materialized_support: CoverageInterval,
@@ -798,9 +799,25 @@ def rehydrate_feature_artifact(
     already-authoritative catalog record, without re-running the finality
     proof (finality was already established the one time `seal_feature_artifact()`
     durably wrote this record).  Never call this to produce a NEW artifact --
-    that path always goes through `seal_feature_artifact()`."""
+    that path always goes through `seal_feature_artifact()`.
 
-    return FeatureArtifact(
+    `expected_identity` is the `FeatureArtifactIdentity` the caller already
+    holds from the catalog row being loaded (never invented here).  This is
+    not a bare metadata constructor: the reconstructed value's own
+    recomputed identity must exactly equal it, so a caller cannot rehydrate
+    a NEW artifact into existence by supplying arbitrary-but-plausible
+    metadata that was never actually proven through `seal_feature_artifact()`
+    -- any mismatch (including a truncated/incompatible identity that never
+    represented a real sealed record) fails closed rather than silently
+    fabricating durable finality evidence.
+    """
+
+    expected = (
+        expected_identity
+        if isinstance(expected_identity, FeatureArtifactIdentity)
+        else FeatureArtifactIdentity(_non_empty_text(expected_identity, "expected_identity"))
+    )
+    result = FeatureArtifact(
         feature_set_definition_identity=feature_set_definition_identity,
         bound_input_evidence=bound_input_evidence,
         declared_materialized_support=declared_materialized_support,
@@ -811,6 +828,13 @@ def rehydrate_feature_artifact(
         physical_locators=tuple(physical_locators),
         _seal_token=_SEAL_TOKEN,
     )
+    if result.identity != expected:
+        raise FeatureArtifactError(
+            "rehydrate_feature_artifact() metadata does not reproduce the expected_identity "
+            "of the sealed catalog record being rehydrated -- this is not proof of a real "
+            "prior seal_feature_artifact() call"
+        )
+    return result
 
 
 def verify_matches_request(
