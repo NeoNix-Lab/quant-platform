@@ -384,11 +384,14 @@ class FeatureArtifactContentIdentity:
     additionally proves those partitions belong to the declared
     `FeatureSetDefinitionIdentity` natural key, and that `declared_support`
     equals `declared_materialized_support` (REQUEST_CHANGES finding 3;
-    frozen contract sections 8, 13).
+    frozen contract sections 8, 13).  `declared_support` is a `SupportShape`
+    (fresh-review finding), not a bare `CoverageInterval`: accepted B04
+    authority permits non-contiguous eligible coverage, so a single
+    contiguous interval cannot represent every valid exact output support.
     """
 
     output_partitions: tuple[BoundOutputPartition, ...]
-    declared_support: CoverageInterval
+    declared_support: SupportShape
 
     def __post_init__(self) -> None:
         partitions = tuple(self.output_partitions)
@@ -402,8 +405,8 @@ class FeatureArtifactContentIdentity:
         keys = {_canonical_key(item.natural_identity.stable_dict()) for item in partitions}
         if len(keys) != len(partitions):
             raise FeatureArtifactError("output_partitions must be distinct natural identities")
-        if not isinstance(self.declared_support, CoverageInterval):
-            raise FeatureArtifactError("declared_support must be CoverageInterval")
+        if not isinstance(self.declared_support, SupportShape):
+            raise FeatureArtifactError("declared_support must be SupportShape")
         object.__setattr__(
             self, "output_partitions",
             tuple(sorted(partitions, key=lambda item: _canonical_key(item.stable_dict()))),
@@ -469,7 +472,7 @@ def require_final_observations(
     *,
     expected_observation_identities: Sequence[FeatureObservationIdentity | str],
     constituent_output_contracts: Sequence[ConstituentFeatureOutput],
-    declared_materialized_support: CoverageInterval,
+    declared_materialized_support: SupportShape,
 ) -> None:
     """Fail closed unless the supplied evidence actually proves finality of
     the claimed materialization (frozen contract section 6; adversarial
@@ -519,8 +522,8 @@ def require_final_observations(
         raise FeatureArtifactError(
             "require_final_observations requires at least one declared constituent output contract"
         )
-    if not isinstance(declared_materialized_support, CoverageInterval):
-        raise FeatureArtifactError("declared_materialized_support must be CoverageInterval")
+    if not isinstance(declared_materialized_support, SupportShape):
+        raise FeatureArtifactError("declared_materialized_support must be SupportShape")
     declared_ids = {str(item.definition_id) for item in constituents}
 
     expected_raw = tuple(expected_observation_identities)
@@ -590,7 +593,7 @@ def _feature_artifact_identity_payload(
     *,
     feature_set_definition_identity: FeatureSetDefinitionIdentity,
     bound_input_evidence: BoundInputEvidence,
-    declared_materialized_support: CoverageInterval,
+    declared_materialized_support: SupportShape,
     materialization_contract_version: str,
     implementation_code_identity: str,
 ) -> dict[str, Any]:
@@ -602,8 +605,8 @@ def _feature_artifact_identity_payload(
         raise FeatureArtifactError("feature_set_definition_identity must be FeatureSetDefinitionIdentity")
     if not isinstance(bound_input_evidence, BoundInputEvidence):
         raise FeatureArtifactError("bound_input_evidence must be BoundInputEvidence")
-    if not isinstance(declared_materialized_support, CoverageInterval):
-        raise FeatureArtifactError("declared_materialized_support must be CoverageInterval")
+    if not isinstance(declared_materialized_support, SupportShape):
+        raise FeatureArtifactError("declared_materialized_support must be SupportShape")
     return {
         "identity_domain": FEATURE_ARTIFACT_IDENTITY_DOMAIN,
         "feature_set_definition_identity": feature_set_definition_identity.stable_dict(),
@@ -637,7 +640,7 @@ class FeatureArtifact:
 
     feature_set_definition_identity: FeatureSetDefinitionIdentity
     bound_input_evidence: BoundInputEvidence
-    declared_materialized_support: CoverageInterval
+    declared_materialized_support: SupportShape
     implementation_code_identity: str
     content_identity: FeatureArtifactContentIdentity
     constituent_output_contracts: tuple[ConstituentFeatureOutput, ...]
@@ -659,8 +662,8 @@ class FeatureArtifact:
             )
         if not isinstance(self.bound_input_evidence, BoundInputEvidence):
             raise FeatureArtifactError("bound_input_evidence must be BoundInputEvidence")
-        if not isinstance(self.declared_materialized_support, CoverageInterval):
-            raise FeatureArtifactError("declared_materialized_support must be CoverageInterval")
+        if not isinstance(self.declared_materialized_support, SupportShape):
+            raise FeatureArtifactError("declared_materialized_support must be SupportShape")
         object.__setattr__(
             self, "implementation_code_identity",
             _non_empty_text(self.implementation_code_identity, "implementation_code_identity"),
@@ -773,7 +776,7 @@ def seal_feature_artifact(
     *,
     feature_set_definition_identity: FeatureSetDefinitionIdentity,
     bound_input_evidence: BoundInputEvidence,
-    declared_materialized_support: CoverageInterval,
+    declared_materialized_support: SupportShape,
     implementation_code_identity: str,
     content_identity: FeatureArtifactContentIdentity,
     constituent_output_contracts: Sequence[ConstituentFeatureOutput],
@@ -818,7 +821,7 @@ def rehydrate_feature_artifact(
     expected_identity: FeatureArtifactIdentity | str,
     feature_set_definition_identity: FeatureSetDefinitionIdentity,
     bound_input_evidence: BoundInputEvidence,
-    declared_materialized_support: CoverageInterval,
+    declared_materialized_support: SupportShape,
     implementation_code_identity: str,
     content_identity: FeatureArtifactContentIdentity,
     constituent_output_contracts: Sequence[ConstituentFeatureOutput],
@@ -878,7 +881,7 @@ def verify_matches_request(
     *,
     feature_set_definition_identity: FeatureSetDefinitionIdentity,
     bound_input_evidence: BoundInputEvidence,
-    declared_materialized_support: CoverageInterval,
+    declared_materialized_support: SupportShape,
     implementation_code_identity: str,
     content_identity: FeatureArtifactContentIdentity,
     constituent_output_contracts: Sequence[ConstituentFeatureOutput],

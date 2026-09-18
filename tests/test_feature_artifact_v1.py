@@ -99,7 +99,7 @@ def content_identity(
 ) -> FeatureArtifactContentIdentity:
     return FeatureArtifactContentIdentity(
         output_partitions=(output_partition(token=token, slug=slug, version=version),),
-        declared_support=support,
+        declared_support=support_shape(support=support),
     )
 
 
@@ -199,7 +199,7 @@ def artifact(
     result = seal_feature_artifact(
         feature_set_definition_identity=fsd_identity,
         bound_input_evidence=evidence or bound_input_evidence(support=support),
-        declared_materialized_support=support,
+        declared_materialized_support=support_shape(support=support),
         implementation_code_identity=code,
         content_identity=content or content_identity(slug=fsd_identity.slug, version=fsd_identity.version, support=support),
         constituent_output_contracts=constituents,
@@ -436,7 +436,7 @@ class OutputPartitionBindingTests(unittest.TestCase):
 
     def test_content_identity_requires_at_least_one_output_partition(self):
         with self.assertRaises(FeatureArtifactError):
-            FeatureArtifactContentIdentity(output_partitions=(), declared_support=SUPPORT)
+            FeatureArtifactContentIdentity(output_partitions=(), declared_support=support_shape())
 
     def test_artifact_rejects_content_identity_from_a_different_feature_set_natural_key(self):
         with self.assertRaises(FeatureArtifactError):
@@ -458,7 +458,7 @@ class OutputPartitionBindingTests(unittest.TestCase):
 
     def test_matching_output_partition_and_declared_support_succeeds(self):
         sealed, _ = artifact(fsd_identity=feature_set_identity("trade_microstructure", 1), support=SUPPORT)
-        self.assertEqual(SUPPORT, sealed.content_identity.declared_support)
+        self.assertEqual(support_shape(support=SUPPORT), sealed.content_identity.declared_support)
         output_dataset = sealed.content_identity.output_partitions[0].natural_identity.dataset_identity
         self.assertEqual("features", output_dataset.layer)
         self.assertEqual("trade_microstructure", output_dataset.feature_set_slug)
@@ -486,7 +486,7 @@ class FinalityGateTests(unittest.TestCase):
         with self.assertRaises(FeatureArtifactError):
             require_final_observations(
                 (), expected_observation_identities=("dummy-expected-id",),
-                constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
+                constituent_output_contracts=(constituent(definition),), declared_materialized_support=support_shape(),
             )
 
     def test_all_final_observations_satisfy_the_gate(self):
@@ -496,7 +496,7 @@ class FinalityGateTests(unittest.TestCase):
             (obs,),
             expected_observation_identities=(obs.identity,),
             constituent_output_contracts=(constituent(definition),),
-            declared_materialized_support=SUPPORT,
+            declared_materialized_support=support_shape(),
         )
         sealed, _ = artifact(definition=definition)
         self.assertEqual(FeatureArtifactLifecycle.FINAL, sealed.lifecycle)
@@ -510,7 +510,7 @@ class FinalityGateTests(unittest.TestCase):
                 (obs_b,),
                 expected_observation_identities=(obs_b.identity,),
                 constituent_output_contracts=(constituent(feature_a), constituent(feature_b)),
-                declared_materialized_support=SUPPORT,
+                declared_materialized_support=support_shape(),
             )
 
     def test_causal_availability_outside_the_interval_does_not_by_itself_refuse(self):
@@ -525,7 +525,7 @@ class FinalityGateTests(unittest.TestCase):
         require_final_observations(
             (delayed,),
             expected_observation_identities=(delayed.identity,),
-            constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
+            constituent_output_contracts=(constituent(definition),), declared_materialized_support=support_shape(),
         )
 
     def test_observation_for_an_undeclared_feature_is_refused(self):
@@ -537,7 +537,7 @@ class FinalityGateTests(unittest.TestCase):
                 (undeclared_obs,),
                 expected_observation_identities=(undeclared_obs.identity,),
                 constituent_output_contracts=(constituent(declared),),
-                declared_materialized_support=SUPPORT,
+                declared_materialized_support=support_shape(),
             )
 
     def test_omitted_provisional_observation_is_caught_by_expected_universe(self):
@@ -556,7 +556,7 @@ class FinalityGateTests(unittest.TestCase):
                 (final_obs,),
                 expected_observation_identities=(final_obs.identity, provisional_obs.identity),
                 constituent_output_contracts=(constituent(definition),),
-                declared_materialized_support=SUPPORT,
+                declared_materialized_support=support_shape(),
             )
 
     def test_observation_not_in_expected_universe_is_refused(self):
@@ -570,7 +570,7 @@ class FinalityGateTests(unittest.TestCase):
                 (named, unnamed),
                 expected_observation_identities=(named.identity,),
                 constituent_output_contracts=(constituent(definition),),
-                declared_materialized_support=SUPPORT,
+                declared_materialized_support=support_shape(),
             )
 
     def test_direct_construction_is_always_rejected(self):
@@ -582,7 +582,7 @@ class FinalityGateTests(unittest.TestCase):
             FeatureArtifact(
                 feature_set_definition_identity=feature_set_identity(),
                 bound_input_evidence=bound_input_evidence(),
-                declared_materialized_support=SUPPORT,
+                declared_materialized_support=support_shape(),
                 implementation_code_identity="commit-1",
                 content_identity=content_identity(),
                 constituent_output_contracts=(constituent(definition),),
@@ -600,7 +600,7 @@ class FinalityGateTests(unittest.TestCase):
             seal_feature_artifact(
                 feature_set_definition_identity=feature_set_identity(),
                 bound_input_evidence=bound_input_evidence(),
-                declared_materialized_support=SUPPORT,
+                declared_materialized_support=support_shape(),
                 implementation_code_identity="commit-1",
                 content_identity=content_identity(),
                 constituent_output_contracts=(constituent(definition),),
@@ -684,7 +684,7 @@ class RelocationAndVerificationTests(unittest.TestCase):
         base = dict(
             feature_set_definition_identity=feature_set_identity(),
             bound_input_evidence=evidence,
-            declared_materialized_support=SUPPORT,
+            declared_materialized_support=support_shape(),
             implementation_code_identity="commit-1",
             content_identity=content_identity(),
             constituent_output_contracts=(constituent(definition),),
@@ -715,7 +715,9 @@ class RelocationAndVerificationTests(unittest.TestCase):
     def test_wrong_support_binding_is_refused_before_payload_use(self):
         sealed, _ = artifact(support=SUPPORT)
         with self.assertRaises(FeatureArtifactError):
-            verify_matches_request(sealed, **self._verify_kwargs(declared_materialized_support=OTHER_SUPPORT))
+            verify_matches_request(
+                sealed, **self._verify_kwargs(declared_materialized_support=support_shape(support=OTHER_SUPPORT)),
+            )
 
     def test_wrong_source_evidence_is_refused_before_payload_use(self):
         sealed, _ = artifact(evidence=bound_input_evidence(revision=1))
