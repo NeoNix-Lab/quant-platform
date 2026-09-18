@@ -235,6 +235,20 @@ class FeatureSetDefinitionIdentityTests(unittest.TestCase):
         with self.assertRaises(FeatureArtifactError):
             FeatureSetDefinitionIdentity("Trade-Microstructure!", 1)
 
+    def test_slug_rule_matches_canonical_manifest_authority(self):
+        # Fresh-review P1 finding: E04 must accept exactly the same governed
+        # slugs canonical manifest authority (quant_platform.data.manifests
+        # `_IDENTIFIER`) already accepts, not a stricter local invention --
+        # rejecting these would prevent sealing/rehydrating some
+        # authoritative feature-layer dataset identities.
+        for slug in ("trade-microstructure", "trade.microstructure", "1st_feature"):
+            FeatureSetDefinitionIdentity(slug, 1)
+        # A trailing/doubled separator is invalid under the canonical rule
+        # even though the old, stricter-looking local regex wrongly accepted
+        # it.
+        with self.assertRaises(FeatureArtifactError):
+            FeatureSetDefinitionIdentity("trade__", 1)
+
     def test_non_positive_version_fails_closed(self):
         with self.assertRaises(FeatureArtifactError):
             FeatureSetDefinitionIdentity("trade_microstructure", 0)

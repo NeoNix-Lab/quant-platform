@@ -49,7 +49,14 @@ FEATURE_ARTIFACT_CONTENT_IDENTITY_DOMAIN = "feature-artifact-content-v1"
 BOUND_INPUT_EVIDENCE_IDENTITY_DOMAIN = "feature-artifact-bound-input-v1"
 FEATURE_ARTIFACT_MODEL_VERSION = "1"
 
-_SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# Must accept exactly the same governed slugs as canonical manifest
+# authority's `_IDENTIFIER` (`quant_platform.data.manifests`) -- E04 consumes
+# the existing `(slug, version)` natural key unchanged (frozen contract),
+# so a stricter local rule here would reject authoritative feature-layer
+# dataset identities that manifest validation already accepted
+# (fresh-review P1 finding).  Duplicated rather than imported: `manifests`
+# is owned by "producer", outside the "feature" package-boundary allow-list.
+_SLUG_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # Private construction guard (REQUEST_CHANGES finding 4): only
