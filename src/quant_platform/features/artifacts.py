@@ -1002,10 +1002,29 @@ def _to_decimal(value: Any, field_name: str) -> Decimal:
     return result
 
 
+# The exact parameter names this module knows how to interpret for each
+# kind (fresh-review BLOCKER): these parameters are identity-bearing
+# OutputContract semantics, so silently discarding an unrecognized one could
+# declare equivalence without actually implementing what the governing
+# contract states, rather than failing closed (adversarial vector 23).
+_ALLOWED_NUMERICAL_EQUIVALENCE_PARAMETERS: dict[NumericalEquivalenceKind, frozenset[str]] = {
+    NumericalEquivalenceKind.EXACT: frozenset(),
+    NumericalEquivalenceKind.QUANTIZED: frozenset({"quantum"}),
+    NumericalEquivalenceKind.TOLERANT: frozenset({"absolute", "relative"}),
+}
+
+
 def _equivalence_parameters(equivalence: Any) -> dict[str, str]:
     # NumericalEquivalence.parameters is stored as a tuple of (key, value)
     # pairs post-construction (see quant_platform.features.definitions).
-    return dict(equivalence.parameters)
+    parameters = dict(equivalence.parameters)
+    allowed = _ALLOWED_NUMERICAL_EQUIVALENCE_PARAMETERS[equivalence.kind]
+    unknown = sorted(set(parameters) - allowed)
+    if unknown:
+        raise FeatureArtifactError(
+            f"{equivalence.kind} numerical equivalence does not support parameter(s): {', '.join(unknown)}"
+        )
+    return parameters
 
 
 # The only `NumericalEquivalence.version` this module knows how to interpret
@@ -1058,12 +1077,15 @@ def values_semantically_equivalent(output_contract: OutputContract, left: Any, r
 
     left_value = _to_decimal(left, "left")
     right_value = _to_decimal(right, "right")
+    # Reject any parameter this module does not know how to interpret for
+    # the declared kind before applying kind-specific logic (fresh-review
+    # BLOCKER) -- an unrecognized parameter must never be silently dropped.
+    parameters = _equivalence_parameters(equivalence)
 
     if equivalence.kind == NumericalEquivalenceKind.EXACT:
         return left_value == right_value
 
     if equivalence.kind == NumericalEquivalenceKind.QUANTIZED:
-        parameters = _equivalence_parameters(equivalence)
         quantum_text = parameters.get("quantum")
         if quantum_text is None:
             raise FeatureArtifactError(
@@ -1075,7 +1097,6 @@ def values_semantically_equivalent(output_contract: OutputContract, left: Any, r
         return _quantize_to_multiple(left_value, quantum) == _quantize_to_multiple(right_value, quantum)
 
     if equivalence.kind == NumericalEquivalenceKind.TOLERANT:
-        parameters = _equivalence_parameters(equivalence)
         absolute_text = parameters.get("absolute")
         relative_text = parameters.get("relative")
         if absolute_text is None and relative_text is None:

@@ -807,6 +807,28 @@ class RecomputationEquivalenceTests(unittest.TestCase):
         with self.assertRaises(FeatureArtifactError):
             values_semantically_equivalent(contract, "1.0", "1.0")
 
+    def test_exact_equivalence_rejects_any_parameter(self):
+        # Fresh-review BLOCKER: EXACT declares no parameters at all, so any
+        # supplied parameter is unrecognized identity-bearing contract
+        # semantics that must not be silently dropped.
+        contract = output_contract(NumericalEquivalence(NumericalEquivalenceKind.EXACT, "1", {"quantum": "0.05"}))
+        with self.assertRaises(FeatureArtifactError):
+            values_semantically_equivalent(contract, "1.0", "1.0")
+
+    def test_quantized_equivalence_rejects_an_unrecognized_parameter(self):
+        contract = output_contract(
+            NumericalEquivalence(NumericalEquivalenceKind.QUANTIZED, "1", {"quantum": "0.05", "absolute": "0.01"})
+        )
+        with self.assertRaises(FeatureArtifactError):
+            values_semantically_equivalent(contract, "1.0", "1.0")
+
+    def test_tolerant_equivalence_rejects_an_unrecognized_parameter(self):
+        contract = output_contract(
+            NumericalEquivalence(NumericalEquivalenceKind.TOLERANT, "1", {"absolute": "0.01", "quantum": "0.05"})
+        )
+        with self.assertRaises(FeatureArtifactError):
+            values_semantically_equivalent(contract, "1.0", "1.0")
+
     def test_categorical_output_compares_by_exact_equality_only(self):
         contract = OutputContract(OutputValueKind.CATEGORICAL, "scalar", OutputDimension.DIMENSIONLESS)
         self.assertTrue(values_semantically_equivalent(contract, "buy", "buy"))
