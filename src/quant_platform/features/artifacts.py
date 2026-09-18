@@ -363,11 +363,15 @@ class BoundOutputPartition:
     """One exact feature-layer output partition this artifact materializes.
 
     Binds the durable `layer="features"` `NaturalPartitionIdentity` to its
-    own content/manifest evidence, proving that a `FeatureArtifactContentIdentity`
-    represents real feature-layer dataset/partition durability -- not two
-    unscoped hashes with no relationship to `layer="features"`, the declared
-    feature-set natural key, or the declared output support (REQUEST_CHANGES
-    finding 3; frozen contract sections 8, 13).
+    own caller-supplied content/manifest evidence, structurally validating
+    and exactly scoping a `FeatureArtifactContentIdentity` to `layer="features"`,
+    the declared feature-set natural key, and the declared output support --
+    not two unscoped hashes with no relationship to any of them.  Whether
+    that caller-supplied evidence actually reflects real dataset/partition
+    durability is established upstream, by the data-plane manifest/
+    publication seam that produced it, not proven here (fresh-review
+    finding, attributable-evidence principle; REQUEST_CHANGES finding 3;
+    frozen contract sections 8, 13).
     """
 
     natural_identity: NaturalPartitionIdentity
@@ -812,11 +816,16 @@ def seal_feature_artifact(
 ) -> FeatureArtifact:
     """Construct one `FeatureArtifact` after enforcing the FINAL-only
     materialization gate (frozen contract section 6).  This is the only
-    intended construction path for a NEW durable artifact: it proves the
-    supplied `observations` are exactly the `expected_observation_identities`
-    universe (see `require_final_observations`) -- the caller (E06, which
-    derived that universe from the real evaluation grid) cannot silently
-    omit a provisional point or inflate the claimed support.  Constructing
+    intended construction path for a NEW durable artifact: it verifies the
+    supplied `observations` are exactly the caller-declared
+    `expected_observation_identities` universe (see
+    `require_final_observations`) -- no fewer, no more, all FINAL.  Proving
+    that the declared universe is itself the true complete one E06 derived
+    from the real evaluation grid, rather than one a caller omitted a
+    provisional point from or otherwise misdeclared, is E06's caller
+    responsibility; this construction path cannot independently establish
+    it (fresh-review finding, attributable-evidence principle -- see the
+    governance note on `require_final_observations`).  Constructing
     `FeatureArtifact` directly is blocked entirely; trusted reconstruction of
     an already-sealed catalog record uses `rehydrate_feature_artifact()`
     instead, never this function."""
