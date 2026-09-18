@@ -229,6 +229,15 @@ class SupportShape:
         for index, item in enumerate(intervals):
             if not isinstance(item, CoverageInterval):
                 raise FeatureArtifactError(f"intervals[{index}] must be CoverageInterval")
+        # `CoverageInterval` permits start == end (fresh-review P1 finding):
+        # such an interval carries zero actual coverage under the half-open
+        # [start, end) convention used everywhere else in this module, so
+        # [b,c) and [a,a)+[b,c) must canonicalize to the identical identity
+        # -- discard empty intervals before the overlap check and merge, the
+        # same way an empty set contributes nothing to a union.
+        intervals = tuple(item for item in intervals if item.start != item.end)
+        if not intervals:
+            raise FeatureArtifactError("SupportShape requires at least one non-empty interval")
         ordered = tuple(sorted(intervals, key=lambda item: _canonical_key(item.stable_dict())))
         for previous, current in zip(ordered, ordered[1:]):
             if current.start < previous.end:

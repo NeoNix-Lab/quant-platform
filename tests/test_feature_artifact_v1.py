@@ -281,6 +281,22 @@ class SupportShapeTests(unittest.TestCase):
         self.assertEqual(merged.stable_dict(), split.stable_dict())
         self.assertEqual(1, len(split.intervals))
 
+    def test_empty_interval_is_discarded_and_does_not_change_identity(self):
+        # Fresh-review P1 finding: CoverageInterval permits start == end, so
+        # without discarding it [b,c) and [a,a)+[b,c) would produce distinct
+        # identities despite describing identical real coverage, and a
+        # singleton [a,a) could pass as non-empty materialized support.
+        empty = CoverageInterval(SUPPORT.start, SUPPORT.start)
+        with_empty = SupportShape(intervals=(empty, SUPPORT))
+        without_empty = SupportShape(intervals=(SUPPORT,))
+        self.assertEqual(without_empty.stable_dict(), with_empty.stable_dict())
+        self.assertEqual(1, len(with_empty.intervals))
+
+    def test_all_empty_intervals_are_refused(self):
+        empty = CoverageInterval(SUPPORT.start, SUPPORT.start)
+        with self.assertRaises(FeatureArtifactError):
+            SupportShape(intervals=(empty,))
+
 
 class BoundInputEvidenceTests(unittest.TestCase):
     def test_missing_sources_fails_closed(self):
