@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 import sys
 import unittest
@@ -617,6 +617,20 @@ class FinalityGateTests(unittest.TestCase):
                 content_identity=content_identity(),
                 constituent_output_contracts=(constituent(definition),),
             )
+
+    def test_dataclasses_replace_cannot_bypass_the_seal_token(self):
+        # Fresh-review BLOCKER: if `_seal_token` were an ordinary stored
+        # field, `dataclasses.replace()` would copy it automatically from
+        # an already-sealed artifact, trivially producing a new, unproven
+        # FINAL artifact identity (e.g. with tampered implementation_code_
+        # identity, source evidence, content, or support) without ever
+        # going through seal_feature_artifact() or rehydrate_feature_
+        # artifact(). Making it an InitVar means replace() cannot retrieve
+        # it from the original instance, so it falls back to the default
+        # and the same construction guard fires.
+        sealed, _ = artifact()
+        with self.assertRaises(FeatureArtifactError):
+            replace(sealed, implementation_code_identity="unproven-code")
 
     def test_unsupported_materialization_contract_version_is_refused(self):
         # Fresh-review finding: this runtime implements ONLY

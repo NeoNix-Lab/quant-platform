@@ -24,7 +24,7 @@ never invents a second bundle hash from raw constituent feature ids.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from enum import StrEnum
 import hashlib
@@ -651,7 +651,15 @@ class FeatureArtifact:
     `_seal_token` guard restricts construction to `seal_feature_artifact()`
     (new artifacts, after the FINAL-only proof gate) and
     `rehydrate_feature_artifact()` (trusted reconstruction of an
-    already-sealed catalog record, no proof re-run).
+    already-sealed catalog record, no proof re-run).  `_seal_token` is an
+    `InitVar`, not a stored field (fresh-review BLOCKER): a stored field is
+    copied automatically by `dataclasses.replace()`, so
+    `replace(sealed, implementation_code_identity="unproven")` would have
+    trivially produced a new, unproven FINAL artifact identity by reusing
+    the original's already-passed token. An `InitVar` cannot be retrieved
+    from the original instance, so `replace()` falls back to its default
+    (`None`) and the guard below fails closed exactly as if the caller had
+    tried `FeatureArtifact(...)` directly.
     """
 
     feature_set_definition_identity: FeatureSetDefinitionIdentity
@@ -663,10 +671,10 @@ class FeatureArtifact:
     materialization_contract_version: str = FEATURE_ARTIFACT_MODEL_VERSION
     lifecycle: FeatureArtifactLifecycle = FeatureArtifactLifecycle.FINAL
     physical_locators: tuple[str, ...] = ()
-    _seal_token: object = field(default=None, repr=False, compare=False, kw_only=True)
+    _seal_token: InitVar[object] = field(default=None, kw_only=True)
 
-    def __post_init__(self) -> None:
-        if self._seal_token is not _SEAL_TOKEN:
+    def __post_init__(self, _seal_token: object) -> None:
+        if _seal_token is not _SEAL_TOKEN:
             raise FeatureArtifactError(
                 "FeatureArtifact cannot be constructed directly; use seal_feature_artifact() "
                 "to seal a new artifact with finality proof, or rehydrate_feature_artifact() "
