@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.data.models import CoverageInterval, DatasetIdentity, Instant, NaturalPartitionIdentity  # noqa: E402
 from quant_platform.features import (  # noqa: E402
+    FEATURE_ARTIFACT_MODEL_VERSION,
     ArtifactRegistrationOutcome,
     BoundInputEvidence,
     BoundOutputPartition,
@@ -585,6 +586,27 @@ class FinalityGateTests(unittest.TestCase):
                 implementation_code_identity="commit-1",
                 content_identity=content_identity(),
                 constituent_output_contracts=(constituent(definition),),
+            )
+
+    def test_unsupported_materialization_contract_version_is_refused(self):
+        # Fresh-review finding: this runtime implements ONLY
+        # FEATURE_ARTIFACT_MODEL_VERSION semantics; a caller must not be
+        # able to seal (or rehydrate) an artifact claiming a version this
+        # code never actually established.
+        self.assertEqual("1", FEATURE_ARTIFACT_MODEL_VERSION)
+        definition = feature_definition()
+        obs = feature_observation(definition=definition, causal=SUPPORT.start)
+        with self.assertRaises(FeatureArtifactError):
+            seal_feature_artifact(
+                feature_set_definition_identity=feature_set_identity(),
+                bound_input_evidence=bound_input_evidence(),
+                declared_materialized_support=SUPPORT,
+                implementation_code_identity="commit-1",
+                content_identity=content_identity(),
+                constituent_output_contracts=(constituent(definition),),
+                observations=(obs,),
+                expected_observation_identities=(obs.identity,),
+                materialization_contract_version="2",
             )
 
     def test_rehydrate_reconstructs_an_already_sealed_artifact_without_observations(self):

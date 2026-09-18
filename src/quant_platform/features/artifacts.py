@@ -665,10 +665,13 @@ class FeatureArtifact:
             self, "implementation_code_identity",
             _non_empty_text(self.implementation_code_identity, "implementation_code_identity"),
         )
-        object.__setattr__(
-            self, "materialization_contract_version",
-            _non_empty_text(self.materialization_contract_version, "materialization_contract_version"),
-        )
+        version = _non_empty_text(self.materialization_contract_version, "materialization_contract_version")
+        if version != FEATURE_ARTIFACT_MODEL_VERSION:
+            raise FeatureArtifactError(
+                f"unsupported materialization_contract_version {version!r}; this runtime only "
+                f"implements {FEATURE_ARTIFACT_MODEL_VERSION!r} semantics"
+            )
+        object.__setattr__(self, "materialization_contract_version", version)
         if not isinstance(self.content_identity, FeatureArtifactContentIdentity):
             raise FeatureArtifactError("content_identity must be FeatureArtifactContentIdentity")
         for index, item in enumerate(self.content_identity.output_partitions):
