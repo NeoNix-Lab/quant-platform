@@ -233,7 +233,18 @@ class SupportShape:
         for previous, current in zip(ordered, ordered[1:]):
             if current.start < previous.end:
                 raise FeatureArtifactError("SupportShape intervals must not overlap")
-        object.__setattr__(self, "intervals", ordered)
+        # Canonicalize: [a,b) + [b,c) represents the exact same coverage as
+        # [a,c) and MUST produce the same identity -- merge touching
+        # (adjacent, non-overlapping) intervals rather than leaving the
+        # split-vs-merged representation as an accidental identity input.
+        merged: list[CoverageInterval] = [ordered[0]]
+        for current in ordered[1:]:
+            last = merged[-1]
+            if current.start == last.end:
+                merged[-1] = CoverageInterval(last.start, current.end)
+            else:
+                merged.append(current)
+        object.__setattr__(self, "intervals", tuple(merged))
 
     def stable_dict(self) -> dict[str, Any]:
         return {"intervals": [item.stable_dict() for item in self.intervals]}
@@ -478,6 +489,16 @@ def require_final_observations(
     declare), every one of them FINAL, every one belonging to a declared
     constituent, and every one's causal evidence inside
     `declared_materialized_support`.
+
+    Governance note (attributable-evidence principle, see issue #59/#65):
+    `expected_observation_identities` is itself caller-supplied, so this
+    function cannot independently prove the caller named the TRUE complete
+    universe -- only that whatever universe was named is exactly what was
+    supplied.  A caller that supplies an incomplete universe defeats this
+    gate; that is a caller-discipline requirement on E06 (the only layer
+    with real DataGateway/execution access to derive the true universe),
+    not a provable E04 invariant, and is accepted as a known, tracked
+    limitation rather than an unresolved bug.
     """
 
     constituents = tuple(constituent_output_contracts)
@@ -801,15 +822,21 @@ def rehydrate_feature_artifact(
     durably wrote this record).  Never call this to produce a NEW artifact --
     that path always goes through `seal_feature_artifact()`.
 
-    `expected_identity` is the `FeatureArtifactIdentity` the caller already
-    holds from the catalog row being loaded (never invented here).  This is
-    not a bare metadata constructor: the reconstructed value's own
-    recomputed identity must exactly equal it, so a caller cannot rehydrate
-    a NEW artifact into existence by supplying arbitrary-but-plausible
-    metadata that was never actually proven through `seal_feature_artifact()`
-    -- any mismatch (including a truncated/incompatible identity that never
-    represented a real sealed record) fails closed rather than silently
-    fabricating durable finality evidence.
+    Governance note (attributable-evidence principle, see issue #59/#65):
+    `quant_platform.features` has no catalog/execution access, so nothing in
+    this module can independently PROVE that a given payload actually came
+    from a real prior `seal_feature_artifact()` call -- any such check would
+    be recomputing a value from caller-supplied fields and comparing it to
+    another value computed by the same caller from the same fields, which is
+    not a proof, only a tautology.  `expected_identity` is therefore a
+    consistency safeguard, not a security boundary: it is the
+    `FeatureArtifactIdentity` the caller already holds from the catalog row
+    being loaded, and this function fails closed if the supplied metadata
+    does not reproduce it -- catching an accidental mismatch (e.g. fields
+    read from two different catalog rows by a caller-side bug), not a
+    deliberately fabricated call.  The real safeguard is caller discipline:
+    only the catalog-loading seam may call this function; it must never be
+    used to originate a new artifact.
     """
 
     expected = (
@@ -830,9 +857,9 @@ def rehydrate_feature_artifact(
     )
     if result.identity != expected:
         raise FeatureArtifactError(
-            "rehydrate_feature_artifact() metadata does not reproduce the expected_identity "
-            "of the sealed catalog record being rehydrated -- this is not proof of a real "
-            "prior seal_feature_artifact() call"
+            "rehydrate_feature_artifact() metadata does not reproduce the caller's own "
+            "expected_identity for the catalog row being rehydrated -- this only catches "
+            "accidental inconsistency, not a deliberately fabricated call (see governance note)"
         )
     return result
 

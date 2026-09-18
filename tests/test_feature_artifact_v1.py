@@ -267,6 +267,19 @@ class SupportShapeTests(unittest.TestCase):
         with self.assertRaises(FeatureArtifactError):
             SupportShape(intervals=(SUPPORT, overlapping))
 
+    def test_adjacent_intervals_coalesce_to_the_same_identity_as_one_merged_interval(self):
+        # Fresh-review finding: [a,c) and [a,b)+[b,c) are the exact same
+        # real coverage and must produce the same identity -- the split
+        # representation must not survive as an accidental identity input.
+        midpoint = Instant.parse("2024-01-15T12:00:00Z")
+        split = SupportShape(intervals=(
+            CoverageInterval(SUPPORT.start, midpoint),
+            CoverageInterval(midpoint, SUPPORT.end),
+        ))
+        merged = SupportShape(intervals=(SUPPORT,))
+        self.assertEqual(merged.stable_dict(), split.stable_dict())
+        self.assertEqual(1, len(split.intervals))
+
 
 class BoundInputEvidenceTests(unittest.TestCase):
     def test_missing_sources_fails_closed(self):
