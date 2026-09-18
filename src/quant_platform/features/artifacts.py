@@ -486,9 +486,22 @@ def require_final_observations(
     `observations` must be exactly the set named by
     `expected_observation_identities` (no fewer -- nothing silently missing
     -- and no more -- nothing smuggled in that the caller didn't actually
-    declare), every one of them FINAL, every one belonging to a declared
-    constituent, and every one's causal evidence inside
-    `declared_materialized_support`.
+    declare), every one of them FINAL, and every one belonging to a
+    declared constituent.
+
+    Deliberately does NOT compare `causal_available_at` against
+    `declared_materialized_support` (fresh-review finding): availability is
+    "the earliest legal consumption time" (ADR-0026), a wholly different
+    axis from *which* declared output support an observation's own
+    `SupportIdentity` represents.  A valid observation can become available
+    strictly after the materialized-support interval closes, and an
+    unrelated observation can have an availability timestamp that happens
+    to fall inside it -- causal availability is not a proxy for support
+    membership.  Support membership is established correctly, and only, by
+    the exact `expected_observation_identities` match above.
+    `declared_materialized_support` is still structurally validated here
+    (and is required by `FeatureArtifact` itself) but is no longer used to
+    bound observation causal evidence.
 
     Governance note (attributable-evidence principle, see issue #59/#65):
     `expected_observation_identities` is itself caller-supplied, so this
@@ -545,13 +558,6 @@ def require_final_observations(
         if definition_id not in declared_ids:
             raise FeatureArtifactError(
                 f"observation {item.identity} does not belong to any declared constituent FeatureDefinition"
-            )
-        if (
-            item.causal_available_at < declared_materialized_support.start
-            or item.causal_available_at >= declared_materialized_support.end
-        ):
-            raise FeatureArtifactError(
-                f"observation {item.identity} causal evidence falls outside declared_materialized_support"
             )
         covered_ids.add(definition_id)
 

@@ -512,15 +512,20 @@ class FinalityGateTests(unittest.TestCase):
                 declared_materialized_support=SUPPORT,
             )
 
-    def test_observation_outside_declared_support_is_refused(self):
+    def test_causal_availability_outside_the_interval_does_not_by_itself_refuse(self):
+        # Fresh-review finding: causal_available_at ("earliest legal
+        # consumption time", ADR-0026) is NOT a proxy for support
+        # membership. A named, FINAL, correctly-declared observation must
+        # not be refused merely because it became available strictly after
+        # the materialized-support interval closes -- that is a legitimate
+        # delayed-finality case, not evidence of a support mismatch.
         definition = feature_definition()
-        outside = feature_observation(definition=definition, causal=OTHER_SUPPORT.start)
-        with self.assertRaises(FeatureArtifactError):
-            require_final_observations(
-                (outside,),
-                expected_observation_identities=(outside.identity,),
-                constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
-            )
+        delayed = feature_observation(definition=definition, causal=OTHER_SUPPORT.start)
+        require_final_observations(
+            (delayed,),
+            expected_observation_identities=(delayed.identity,),
+            constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
+        )
 
     def test_observation_for_an_undeclared_feature_is_refused(self):
         declared = feature_definition(feature_key="order_flow.delta")
