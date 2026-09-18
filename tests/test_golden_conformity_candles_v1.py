@@ -10,6 +10,7 @@ backward-compatible extension of the Golden fixture schema.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -29,11 +30,13 @@ from quant_platform.access.models import (  # noqa: E402
     LifecyclePolicy,
 )
 from quant_platform.application.golden_conformity import (  # noqa: E402
+    DEFAULT_GOLDEN_FIXTURE,
     GoldenCandleExpectation,
     GoldenExpectation,
     build_candle_source_evidence,
     candle_field_mismatches,
     format_observation,
+    load_golden_expectation,
     observe_scan_with_candles,
 )
 from quant_platform.data.models import (  # noqa: E402
@@ -334,6 +337,59 @@ class GoldenExpectationCandleSchemaTests(unittest.TestCase):
         payload["unexpected"] = True
         with self.assertRaises(ValueError):
             GoldenCandleExpectation.from_mapping(payload)
+
+
+class DefaultFixtureActivatesTheCandleLegTests(unittest.TestCase):
+    """Prove the candle leg activates on the real authoritative fixture.
+
+    ``fixtures/conformity/golden-bybit-btcusdt-2024-01-15.json`` cannot carry
+    reviewed candle numbers yet: this environment has no reachable PostgreSQL
+    catalog and no real Bybit BTCUSDT historical SQLite source (the real
+    catalog credentials live outside this repository entirely, per
+    ``.gitignore``), so there is no way to compute a trustworthy D03 result
+    for the real 2024-01-15 day here. Freezing invented numbers into a
+    "Golden" fixture would be worse than leaving it trade-only: it would
+    silently pass or fail against fabricated ground truth forever after,
+    which is exactly what the issue's "never infer, only freeze after a
+    reviewed reference run" instruction forbids.
+
+    What *is* verifiable without that data is that the activation gate in
+    ``verify_vertical`` (``target.golden.candle is not None``) has no hidden
+    dependency on which physical file supplies the section: the exact
+    identity fields (venue/instrument/interval/row_count/buy/sell/first and
+    last exchange_ts) of the real checked-in fixture parse unchanged, and
+    adding a syntactically valid ``candle`` section to *that same* payload
+    activates it, exactly as it would if the section were added to the
+    checked-in file itself once a human operator has run the real E2E and
+    supplied reviewed values.
+    """
+
+    def test_checked_in_fixture_currently_has_no_candle_section(self):
+        with DEFAULT_GOLDEN_FIXTURE.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+        self.assertNotIn(
+            "candle",
+            payload,
+            "the authoritative fixture must only gain a candle section from a "
+            "reviewed real reference run; none is available in this environment",
+        )
+        expectation = load_golden_expectation()
+        self.assertIsNone(expectation.candle)
+
+    def test_adding_a_candle_section_to_the_real_fixture_payload_activates_it(self):
+        with DEFAULT_GOLDEN_FIXTURE.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+        payload["candle"] = golden_candle_payload()
+
+        expectation = GoldenExpectation.from_mapping(payload)
+
+        self.assertIsNotNone(expectation.candle)
+        self.assertEqual("1m", expectation.candle.duration)
+        # The propositions verify_vertical branches on, unchanged from the
+        # real fixture's own frozen trade-level identity.
+        self.assertEqual("bybit", expectation.venue)
+        self.assertEqual("BTCUSDT", expectation.instrument)
+        self.assertEqual(1_105_145, expectation.row_count)
 
 
 class FormatObservationCandleRenderingTests(unittest.TestCase):
