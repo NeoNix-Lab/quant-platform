@@ -24,7 +24,7 @@ never invents a second bundle hash from raw constituent feature ids.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from enum import StrEnum
 import hashlib
@@ -36,6 +36,7 @@ from ..data.models import CoverageInterval, DatasetIdentity, NaturalPartitionIde
 from .definitions import (
     FeatureDefinitionId,
     FeatureObservation,
+    FeatureObservationIdentity,
     NumericalEquivalenceKind,
     ObservationLifecycle,
     OutputContract,
@@ -50,6 +51,10 @@ FEATURE_ARTIFACT_MODEL_VERSION = "1"
 
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+# Private construction guard (REQUEST_CHANGES finding 4): only
+# seal_feature_artifact() and rehydrate_feature_artifact() may pass this.
+_SEAL_TOKEN = object()
 
 
 class FeatureArtifactError(ValueError):
@@ -451,22 +456,28 @@ class FeatureArtifactLifecycle(StrEnum):
 def require_final_observations(
     observations: Sequence[FeatureObservation],
     *,
+    expected_observation_identities: Sequence[FeatureObservationIdentity | str],
     constituent_output_contracts: Sequence[ConstituentFeatureOutput],
     declared_materialized_support: CoverageInterval,
 ) -> None:
     """Fail closed unless the supplied evidence actually proves finality of
     the claimed materialization (frozen contract section 6; adversarial
-    vectors 9, 10; REQUEST_CHANGES finding 2).
+    vectors 9, 10; REQUEST_CHANGES finding 2, round-2 finding 1).
 
     It is not enough for the supplied observations to individually be FINAL:
-    this also requires that every declared constituent `FeatureDefinition`
-    has at least one matching FINAL observation (a caller cannot seal one
-    feature using an unrelated feature's FINAL observation while omitting
-    that feature's own provisional one), that no supplied observation
-    belongs to an undeclared feature, and that every observation's causal
-    evidence falls within the declared `declared_materialized_support`
-    interval.  A caller with zero observations has not evidenced any claimed
-    support and is refused rather than vacuously passed.
+    a caller could still cherry-pick one convenient FINAL observation per
+    constituent while silently omitting other PROVISIONAL observations that
+    were actually evaluated for the same declared support, and thereby claim
+    a support interval far larger than what was really evidenced.  Deriving
+    the complete "expected observation universe" from the real evaluation
+    grid is upstream's job (E06), not E04's -- E04 has no DataGateway/
+    execution access.  E04's job is to VERIFY, exactly: the supplied
+    `observations` must be exactly the set named by
+    `expected_observation_identities` (no fewer -- nothing silently missing
+    -- and no more -- nothing smuggled in that the caller didn't actually
+    declare), every one of them FINAL, every one belonging to a declared
+    constituent, and every one's causal evidence inside
+    `declared_materialized_support`.
     """
 
     constituents = tuple(constituent_output_contracts)
@@ -478,15 +489,33 @@ def require_final_observations(
         raise FeatureArtifactError("declared_materialized_support must be CoverageInterval")
     declared_ids = {str(item.definition_id) for item in constituents}
 
+    expected_raw = tuple(expected_observation_identities)
+    if not expected_raw:
+        raise FeatureArtifactError(
+            "materialization requires non-empty expected_observation_identities evidencing claimed support"
+        )
+    expected_ids: set[str] = set()
+    for entry in expected_raw:
+        ident = entry.identity if isinstance(entry, FeatureObservationIdentity) else _non_empty_text(
+            entry, "expected_observation_identities item"
+        )
+        if ident in expected_ids:
+            raise FeatureArtifactError(f"duplicate expected_observation_identities entry: {ident}")
+        expected_ids.add(ident)
+
     items = tuple(observations)
     if not items:
         raise FeatureArtifactError(
             "materialization requires at least one FINAL observation evidencing claimed support"
         )
     covered_ids: set[str] = set()
+    actual_ids: set[str] = set()
     for item in items:
         if not isinstance(item, FeatureObservation):
             raise FeatureArtifactError("observations must be FeatureObservation values")
+        if item.identity in actual_ids:
+            raise FeatureArtifactError(f"duplicate observation identity supplied: {item.identity}")
+        actual_ids.add(item.identity)
         if item.lifecycle != ObservationLifecycle.FINAL:
             raise FeatureArtifactError(
                 f"non-FINAL observation {item.identity} cannot be sealed into a FeatureArtifact v1"
@@ -504,6 +533,19 @@ def require_final_observations(
                 f"observation {item.identity} causal evidence falls outside declared_materialized_support"
             )
         covered_ids.add(definition_id)
+
+    missing_expected = expected_ids - actual_ids
+    if missing_expected:
+        raise FeatureArtifactError(
+            "materialization is missing required FINAL observation(s): "
+            f"{sorted(missing_expected)}"
+        )
+    unexpected = actual_ids - expected_ids
+    if unexpected:
+        raise FeatureArtifactError(
+            "materialization contains observation(s) not in the declared expected universe: "
+            f"{sorted(unexpected)}"
+        )
 
     missing = declared_ids - covered_ids
     if missing:
@@ -558,6 +600,12 @@ class FeatureArtifact:
     bytes (frozen contract section 12).  `physical_locators` is the only
     non-identity-bearing field: relocation only changes it (frozen contract
     sections 11, 12; adversarial vector 18).
+
+    Cannot be constructed directly (REQUEST_CHANGES finding 4): the private
+    `_seal_token` guard restricts construction to `seal_feature_artifact()`
+    (new artifacts, after the FINAL-only proof gate) and
+    `rehydrate_feature_artifact()` (trusted reconstruction of an
+    already-sealed catalog record, no proof re-run).
     """
 
     feature_set_definition_identity: FeatureSetDefinitionIdentity
@@ -569,8 +617,15 @@ class FeatureArtifact:
     materialization_contract_version: str = FEATURE_ARTIFACT_MODEL_VERSION
     lifecycle: FeatureArtifactLifecycle = FeatureArtifactLifecycle.FINAL
     physical_locators: tuple[str, ...] = ()
+    _seal_token: object = field(default=None, repr=False, compare=False, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self._seal_token is not _SEAL_TOKEN:
+            raise FeatureArtifactError(
+                "FeatureArtifact cannot be constructed directly; use seal_feature_artifact() "
+                "to seal a new artifact with finality proof, or rehydrate_feature_artifact() "
+                "for trusted catalog rehydration"
+            )
         if not isinstance(self.feature_set_definition_identity, FeatureSetDefinitionIdentity):
             raise FeatureArtifactError(
                 "feature_set_definition_identity must be FeatureSetDefinitionIdentity"
@@ -673,6 +728,7 @@ class FeatureArtifact:
             materialization_contract_version=self.materialization_contract_version,
             lifecycle=self.lifecycle,
             physical_locators=tuple(physical_locators),
+            _seal_token=_SEAL_TOKEN,
         )
 
     def output_contract_for(self, definition_id: FeatureDefinitionId | str) -> OutputContract:
@@ -692,23 +748,25 @@ def seal_feature_artifact(
     content_identity: FeatureArtifactContentIdentity,
     constituent_output_contracts: Sequence[ConstituentFeatureOutput],
     observations: Sequence[FeatureObservation],
+    expected_observation_identities: Sequence[FeatureObservationIdentity | str],
     materialization_contract_version: str = FEATURE_ARTIFACT_MODEL_VERSION,
     physical_locators: Sequence[str] = (),
 ) -> FeatureArtifact:
     """Construct one `FeatureArtifact` after enforcing the FINAL-only
     materialization gate (frozen contract section 6).  This is the only
-    intended construction path for a durable artifact: it proves every
-    declared constituent has matching FINAL observation evidence within the
-    declared support (see `require_final_observations`), not merely that the
-    supplied observations happen to be FINAL.  Constructing `FeatureArtifact`
-    directly bypasses this proof entirely and MUST be reserved for trusted
-    rehydration of an already-sealed record -- i.e. reconstructing metadata
-    from a catalog row that was itself durably written by a prior successful
-    call to this function, never for producing a new durable artifact."""
+    intended construction path for a NEW durable artifact: it proves the
+    supplied `observations` are exactly the `expected_observation_identities`
+    universe (see `require_final_observations`) -- the caller (E06, which
+    derived that universe from the real evaluation grid) cannot silently
+    omit a provisional point or inflate the claimed support.  Constructing
+    `FeatureArtifact` directly is blocked entirely; trusted reconstruction of
+    an already-sealed catalog record uses `rehydrate_feature_artifact()`
+    instead, never this function."""
 
     constituents = tuple(constituent_output_contracts)
     require_final_observations(
         observations,
+        expected_observation_identities=expected_observation_identities,
         constituent_output_contracts=constituents,
         declared_materialized_support=declared_materialized_support,
     )
@@ -721,6 +779,37 @@ def seal_feature_artifact(
         constituent_output_contracts=constituents,
         materialization_contract_version=materialization_contract_version,
         physical_locators=tuple(physical_locators),
+        _seal_token=_SEAL_TOKEN,
+    )
+
+
+def rehydrate_feature_artifact(
+    *,
+    feature_set_definition_identity: FeatureSetDefinitionIdentity,
+    bound_input_evidence: BoundInputEvidence,
+    declared_materialized_support: CoverageInterval,
+    implementation_code_identity: str,
+    content_identity: FeatureArtifactContentIdentity,
+    constituent_output_contracts: Sequence[ConstituentFeatureOutput],
+    materialization_contract_version: str = FEATURE_ARTIFACT_MODEL_VERSION,
+    physical_locators: Sequence[str] = (),
+) -> FeatureArtifact:
+    """Reconstruct an immutable `FeatureArtifact` from an already-sealed,
+    already-authoritative catalog record, without re-running the finality
+    proof (finality was already established the one time `seal_feature_artifact()`
+    durably wrote this record).  Never call this to produce a NEW artifact --
+    that path always goes through `seal_feature_artifact()`."""
+
+    return FeatureArtifact(
+        feature_set_definition_identity=feature_set_definition_identity,
+        bound_input_evidence=bound_input_evidence,
+        declared_materialized_support=declared_materialized_support,
+        implementation_code_identity=implementation_code_identity,
+        content_identity=content_identity,
+        constituent_output_contracts=tuple(constituent_output_contracts),
+        materialization_contract_version=materialization_contract_version,
+        physical_locators=tuple(physical_locators),
+        _seal_token=_SEAL_TOKEN,
     )
 
 
@@ -1003,6 +1092,7 @@ __all__ = [
     "SupportShape",
     "classify_registration",
     "recomputation_equivalent",
+    "rehydrate_feature_artifact",
     "require_final_observations",
     "seal_feature_artifact",
     "values_semantically_equivalent",

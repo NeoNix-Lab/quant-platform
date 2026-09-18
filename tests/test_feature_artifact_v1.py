@@ -42,6 +42,7 @@ from quant_platform.features import (  # noqa: E402
     SupportShape,
     classify_registration,
     recomputation_equivalent,
+    rehydrate_feature_artifact,
     require_final_observations,
     seal_feature_artifact,
     values_semantically_equivalent,
@@ -178,12 +179,21 @@ def artifact(
     content: FeatureArtifactContentIdentity | None = None,
     observations: tuple[FeatureObservation, ...] | None = None,
     constituents: tuple[ConstituentFeatureOutput, ...] | None = None,
+    expected_observation_identities: tuple[str, ...] | None = None,
 ) -> tuple[FeatureArtifact, FeatureDefinition]:
     definition = definition or feature_definition()
     fsd_identity = fsd_identity or feature_set_identity()
     constituents = constituents if constituents is not None else (constituent(definition),)
     observations = observations if observations is not None else (
         feature_observation(definition=definition, causal=support.start),
+    )
+    # By default the expected universe is exactly what the fixture itself
+    # evaluated (the happy path); adversarial tests override this
+    # independently of `observations` to prove omission/inflation is caught.
+    expected_observation_identities = (
+        expected_observation_identities
+        if expected_observation_identities is not None
+        else tuple(item.identity for item in observations)
     )
     result = seal_feature_artifact(
         feature_set_definition_identity=fsd_identity,
@@ -193,6 +203,7 @@ def artifact(
         content_identity=content or content_identity(slug=fsd_identity.slug, version=fsd_identity.version, support=support),
         constituent_output_contracts=constituents,
         observations=observations,
+        expected_observation_identities=expected_observation_identities,
     )
     return result, definition
 
@@ -460,13 +471,16 @@ class FinalityGateTests(unittest.TestCase):
         definition = feature_definition()
         with self.assertRaises(FeatureArtifactError):
             require_final_observations(
-                (), constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
+                (), expected_observation_identities=("dummy-expected-id",),
+                constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
             )
 
     def test_all_final_observations_satisfy_the_gate(self):
         definition = feature_definition()
+        obs = feature_observation(definition=definition, causal=SUPPORT.start)
         require_final_observations(
-            (feature_observation(definition=definition, causal=SUPPORT.start),),
+            (obs,),
+            expected_observation_identities=(obs.identity,),
             constituent_output_contracts=(constituent(definition),),
             declared_materialized_support=SUPPORT,
         )
@@ -476,9 +490,11 @@ class FinalityGateTests(unittest.TestCase):
     def test_unrelated_final_observation_cannot_stand_in_for_a_declared_constituent(self):
         feature_a = feature_definition(feature_key="order_flow.delta")
         feature_b = feature_definition(feature_key="order_flow.other")
+        obs_b = feature_observation(definition=feature_b, causal=SUPPORT.start)
         with self.assertRaises(FeatureArtifactError):
             require_final_observations(
-                (feature_observation(definition=feature_b, causal=SUPPORT.start),),
+                (obs_b,),
+                expected_observation_identities=(obs_b.identity,),
                 constituent_output_contracts=(constituent(feature_a), constituent(feature_b)),
                 declared_materialized_support=SUPPORT,
             )
@@ -488,20 +504,60 @@ class FinalityGateTests(unittest.TestCase):
         outside = feature_observation(definition=definition, causal=OTHER_SUPPORT.start)
         with self.assertRaises(FeatureArtifactError):
             require_final_observations(
-                (outside,), constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
+                (outside,),
+                expected_observation_identities=(outside.identity,),
+                constituent_output_contracts=(constituent(definition),), declared_materialized_support=SUPPORT,
             )
 
     def test_observation_for_an_undeclared_feature_is_refused(self):
         declared = feature_definition(feature_key="order_flow.delta")
         undeclared = feature_definition(feature_key="order_flow.other")
+        undeclared_obs = feature_observation(definition=undeclared, causal=SUPPORT.start)
         with self.assertRaises(FeatureArtifactError):
             require_final_observations(
-                (feature_observation(definition=undeclared, causal=SUPPORT.start),),
+                (undeclared_obs,),
+                expected_observation_identities=(undeclared_obs.identity,),
                 constituent_output_contracts=(constituent(declared),),
                 declared_materialized_support=SUPPORT,
             )
 
-    def test_direct_construction_bypassing_seal_still_rejects_non_final_lifecycle_value(self):
+    def test_omitted_provisional_observation_is_caught_by_expected_universe(self):
+        # round-2 REQUEST_CHANGES finding 1: a caller with 2 evaluated points
+        # (1 FINAL, 1 still PROVISIONAL) cannot cherry-pick just the FINAL
+        # one and claim the whole declared support -- the expected universe
+        # named by E06 must include the still-provisional point, so its
+        # absence from `observations` fails closed.
+        definition = feature_definition()
+        final_obs = feature_observation(definition=definition, obs="obs-1", causal=SUPPORT.start)
+        provisional_obs = feature_observation(
+            definition=definition, obs="obs-2", lifecycle=ObservationLifecycle.PROVISIONAL, causal=SUPPORT.start,
+        )
+        with self.assertRaises(FeatureArtifactError):
+            require_final_observations(
+                (final_obs,),
+                expected_observation_identities=(final_obs.identity, provisional_obs.identity),
+                constituent_output_contracts=(constituent(definition),),
+                declared_materialized_support=SUPPORT,
+            )
+
+    def test_observation_not_in_expected_universe_is_refused(self):
+        # The reverse direction: a FINAL observation that was never named in
+        # the expected universe cannot be smuggled in either.
+        definition = feature_definition()
+        named = feature_observation(definition=definition, obs="obs-1", causal=SUPPORT.start)
+        unnamed = feature_observation(definition=definition, obs="obs-2", causal=SUPPORT.start)
+        with self.assertRaises(FeatureArtifactError):
+            require_final_observations(
+                (named, unnamed),
+                expected_observation_identities=(named.identity,),
+                constituent_output_contracts=(constituent(definition),),
+                declared_materialized_support=SUPPORT,
+            )
+
+    def test_direct_construction_is_always_rejected(self):
+        # REQUEST_CHANGES finding 4: FeatureArtifact cannot be constructed
+        # directly under any circumstances, bypassing seal_feature_artifact()
+        # entirely -- not even with an otherwise-plausible-looking payload.
         definition = feature_definition()
         with self.assertRaises(FeatureArtifactError):
             FeatureArtifact(
@@ -511,8 +567,25 @@ class FinalityGateTests(unittest.TestCase):
                 implementation_code_identity="commit-1",
                 content_identity=content_identity(),
                 constituent_output_contracts=(constituent(definition),),
-                lifecycle="PROVISIONAL",  # type: ignore[arg-type]
             )
+
+    def test_rehydrate_reconstructs_an_already_sealed_artifact_without_observations(self):
+        # rehydrate_feature_artifact() is the ONLY other legitimate
+        # construction path: reconstructing an already-sealed catalog
+        # record's metadata, without re-running the finality proof.
+        sealed, _ = artifact()
+        rehydrated = rehydrate_feature_artifact(
+            feature_set_definition_identity=sealed.feature_set_definition_identity,
+            bound_input_evidence=sealed.bound_input_evidence,
+            declared_materialized_support=sealed.declared_materialized_support,
+            implementation_code_identity=sealed.implementation_code_identity,
+            content_identity=sealed.content_identity,
+            constituent_output_contracts=sealed.constituent_output_contracts,
+            materialization_contract_version=sealed.materialization_contract_version,
+            physical_locators=sealed.physical_locators,
+        )
+        self.assertEqual(sealed.identity, rehydrated.identity)
+        self.assertEqual(sealed.stable_dict(), rehydrated.stable_dict())
 
 
 class DuplicateVsConflictTests(unittest.TestCase):
