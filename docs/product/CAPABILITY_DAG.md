@@ -177,7 +177,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | J02 | Canonical API transport | API Runtime | C03,real client need | J04-J06 | OPEN_DEFERABLE | MISSING | Preserve Consumer API semantics; transport intentionally deferred |
 | J03 | Job runtime | Runtime | C03,I02 | long operations | OPEN_BLOCKING | MISSING | Durable identity/retry/result semantics; DG-G job branch |
 | J04 | CLI client | Client Layer | J02 or explicitly bounded in-process C03 | operator workflow | RESOLVED | MISSING | Thin client; no quantitative/storage logic |
-| J05 | TUI client | J02 | interactive workflow | RESOLVED | MISSING | Same canonical semantics |
+| J05 | TUI client | Client Layer | J02 | interactive workflow | RESOLVED | MISSING | Same canonical semantics |
 | J06 | App UI | Client Layer | J02 | product workflow | RESOLVED | MISSING | Business logic remains behind service boundary |
 | J07 | Paper/shadow mode | Runtime | A11,H05,I05,J02,K03 | J08 | RESOLVED | MISSING | Same decisions, simulated routing, explicit evidence |
 | J08 | Live product mode | Runtime/Operations | J07,K02,K03,K05,K06,K08,K09,K10 | production | RESOLVED | MISSING | Explicit authorization/audit/recovery gates |
