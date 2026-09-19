@@ -48,7 +48,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Features | FeatureSet catalog/provider | RESOLVED | PARTIAL | Feature Engine | E03 | Existing catalog foundation retained. |
 | Features | FeatureArtifact/materialization | FROZEN | COMPLETE | Feature Engine | E04 | ADR-0034; deterministic identity, SupportShape, FINAL-only sealing, attributable-evidence caller discipline. |
 | Features | H01 pure imbalance kernel | RESOLVED | COMPLETE | Feature Engine | E05 | Narrow Legacy Harvest ADOPT boundary. |
-| Features | H01 canonical integration | OPEN_BLOCKING | MISSING | Feature Engine | E06 | ADR-0035 partial freeze: Application composition, distinct bucket-scoped Diagonal/Stacked observations, FINAL empty covered buckets, D06 decimal -> E05 float, exact D06 binding -> E04; 3 semantic decisions remain. |
+| Features | H01 canonical integration | FROZEN | MISSING | Feature Engine | E06 | ADR-0035; Diagonal + Stacked are independent FINAL-Footprint features in one `h01_imbalance@1` FeatureSet; implementation-ready. |
 | Features | Generic provider extension | OPEN_DEFERABLE | MISSING | Feature Engine | E07 | Wait for a real second provider. |
 | Research | HypothesisSpec | RESOLVED | COMPLETE | Research | F01 | Depends on FeatureDefinition for the canonical vertical. |
 | Research | EventSpec/detection | RESOLVED | MISSING | Research | F02 | Requires FeatureArtifact for the full vertical. |
@@ -115,7 +115,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | K06 RAW/source protection v1 | COMPLETE | ADR-0032 accepted; attributable-evidence `SafetyRelevanceAssertion` pattern implemented. |
 | A10 Backfill/repair v1 | COMPLETE | ADR-0033 accepted; two known limitations tracked (coverage-trigger re-verification, partial candidate identity binding). |
 | E04 FeatureArtifact v1 | COMPLETE | ADR-0034 accepted; `SupportShape`, FINAL-only sealing, `InitVar` construction guard, exact-Fraction equivalence. |
-| E06 H01 canonical integration | PARTIAL FREEZE | ADR-0035 accepted; runtime remains MISSING and 3 semantic decisions remain OPEN_BLOCKING. |
+| E06 H01 canonical integration v1 | FROZEN / MISSING | ADR-0035 accepted; semantic gate closed, bounded implementation now eligible. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; the one remaining loose end is issue #73's Human Golden E2E closeout proof, in progress (infra reachable, blocked on one file-ACL fix, not yet a completed evidence run). |
 
 ## Current frontier
@@ -124,9 +124,9 @@ C05, D03, E05, F01, F05, I01 and K04 (the previous frontier) are now
 `COMPLETE`.
 
 ```text
-C04  F02  F03
+C04  E06  F02  F03
 ```
 
-Frontier membership means planning dependencies are satisfied; it does not authorize implementation.
+Frontier membership means planning dependencies and decision gates are satisfied; it does not authorize implementation.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.
