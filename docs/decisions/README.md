@@ -24,5 +24,6 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0032 | RAW / source protection v1 | Accepted |
 | 0033 | Backfill / repair v1 | Accepted |
 | 0034 | FeatureArtifact v1 | Accepted |
+| 0035 | H01 canonical integration v1 | Accepted |
 
 See the individual ADR files for context and consequences.
