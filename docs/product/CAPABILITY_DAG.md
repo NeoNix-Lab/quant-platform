@@ -121,7 +121,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | E03 | FeatureSet catalog/provider | Feature Engine | E01,E02 | E04 | RESOLVED | PARTIAL | Ordered provider resolution; ADR-0016/CM |
 | E04 | FeatureArtifact/materialization | Feature Engine | E02,E03,A02 | F01,I04,E06 | FROZEN | COMPLETE | Deterministic identity, SupportShape, FINAL-only sealing; ADR-0034 |
 | E05 | H01 pure imbalance kernel | Feature Engine | Legacy Harvest audit | E06 | RESOLVED | COMPLETE | Narrow ADOPT numeric/edge semantics |
-| E06 | H01 canonical integration | Feature Engine | D06,E02,E04,E05 | F02 | OPEN_BLOCKING | MISSING | Canonical footprint + provenance; DG-A canonical-H01 branch; D05 is not a prerequisite |
+| E06 | H01 canonical integration | Feature Engine | D06,E02,E04,E05 | F02 | OPEN_BLOCKING | MISSING | ADR-0035 partial freeze: Application composes; diagonal/stacked are distinct bucket observations; covered-empty -> FINAL empty; deterministic D06 decimal -> E05 float; exact D06 binding -> E04; 3 semantic decisions remain |
 | E07 | Custom/provider extension | Feature Engine | E02,real second-provider need | broader library | OPEN_DEFERABLE | MISSING | Let second provider drive minimum extension seam |
 
 ### F — Research & Evaluation
@@ -177,7 +177,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | J02 | Canonical API transport | API Runtime | C03,real client need | J04-J06 | OPEN_DEFERABLE | MISSING | Preserve Consumer API semantics; transport intentionally deferred |
 | J03 | Job runtime | Runtime | C03,I02 | long operations | OPEN_BLOCKING | MISSING | Durable identity/retry/result semantics; DG-G job branch |
 | J04 | CLI client | Client Layer | J02 or explicitly bounded in-process C03 | operator workflow | RESOLVED | MISSING | Thin client; no quantitative/storage logic |
-| J05 | TUI client | Client Layer | J02 | interactive workflow | RESOLVED | MISSING | Same canonical semantics |
+| J05 | TUI client | J02 | interactive workflow | RESOLVED | MISSING | Same canonical semantics |
 | J06 | App UI | Client Layer | J02 | product workflow | RESOLVED | MISSING | Business logic remains behind service boundary |
 | J07 | Paper/shadow mode | Runtime | A11,H05,I05,J02,K03 | J08 | RESOLVED | MISSING | Same decisions, simulated routing, explicit evidence |
 | J08 | Live product mode | Runtime/Operations | J07,K02,K03,K05,K06,K08,K09,K10 | production | RESOLVED | MISSING | Explicit authorization/audit/recovery gates |
@@ -219,13 +219,16 @@ The 26 open blockers are grouped into **gate families**. A gate-family name is n
 Remaining atom-specific branch:
 
 - `D05` candle-materialization identity: activate only when persisted Candle results are selected.
-- `E06` canonical H01 integration: the only remaining live decision on the
-  `D06` + `E02` + `E04` + `E06` path.
+- `E06` canonical H01 integration: partially frozen under ADR-0035; the only remaining semantic blockers are the stacked dependency shape, exact governed FeatureDefinition keys/OutputContracts, and first durable FeatureSet/materialization bundle shape.
 
 `D06` FootprintDefinition v1 is frozen and complete under ADR-0027. `E02`
 FeatureDefinition v1 is frozen and complete under ADR-0026. `E04`
-FeatureArtifact v1 is frozen and complete under ADR-0034. `D05` is **not** a
-prerequisite of `E06`. DG-A does not block D03 or pure H01 kernel E05.
+FeatureArtifact v1 is frozen and complete under ADR-0034. ADR-0035 additionally
+freezes Application-owned cross-owner composition, distinct bucket-scoped
+Diagonal/Stacked observables, covered-empty FINAL observations, the bounded
+D06 exact-decimal -> E05 float seam, and exact D06 result/binding provenance
+into E04. `D05` is **not** a prerequisite of `E06`. DG-A does not block D03 or
+pure H01 kernel E05.
 
 ### DG-B — Historical / Live data convergence — repair branch RESOLVED
 
@@ -317,7 +320,7 @@ Only operational prerequisites of the selected atom are activated.
 | V1 | Source -> canonical -> catalog -> DataGateway | First published data vertical is deterministically readable through canonical access | COMPLETE |
 | V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | COMPLETE (`C02 + C03`) |
 | V3 | DataGateway -> historical Candle | Bounded trades yield reproducible CLOSED candles | COMPLETE (`D03`) |
-| V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | BLOCKED by E06 (E04 now COMPLETE) |
+| V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | BLOCKED by E06 (partial semantic freeze ADR-0035; 3 decisions remain) |
 | V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies | READY (`F02`/`F03`; E04/F01 now COMPLETE) |
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | BLOCKED by DG-E validation branch |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |
@@ -353,7 +356,7 @@ exactly which atoms that batch actually finished, no more.
 ```text
 Wave 0  Architecture foundation                           COMPLETE
 Wave 1  First canonical computation/application slices    COMPLETE (C05,D03,E05,F05,I01,K04)
-Wave 2  Representation / Feature vertical                 E04 COMPLETE (ADR-0034); E06 canonical H01 remains
+Wave 2  Representation / Feature vertical                 E04 COMPLETE (ADR-0034); E06 partial freeze ADR-0035, 3 decisions remain
 Wave 3  Research / Validation                             F01 COMPLETE, F06 COMPLETE (ADR-0031); F02-F04 then DG-E validation branch remain
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
