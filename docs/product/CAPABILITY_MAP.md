@@ -48,7 +48,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Features | FeatureSet catalog/provider | RESOLVED | PARTIAL | Feature Engine | E03 | Existing catalog foundation retained. |
 | Features | FeatureArtifact/materialization | FROZEN | COMPLETE | Feature Engine | E04 | ADR-0034; deterministic identity, SupportShape, FINAL-only sealing, attributable-evidence caller discipline. |
 | Features | H01 pure imbalance kernel | RESOLVED | COMPLETE | Feature Engine | E05 | Narrow Legacy Harvest ADOPT boundary. |
-| Features | H01 canonical integration | OPEN_BLOCKING | MISSING | Feature Engine | E06 | Requires D06/E02/E04; D05 is not on this path. |
+| Features | H01 canonical integration | OPEN_BLOCKING | MISSING | Feature Engine | E06 | ADR-0035 partial freeze: Application composition, distinct bucket-scoped Diagonal/Stacked observations, FINAL empty covered buckets, D06 decimal -> E05 float, exact D06 binding -> E04; 3 semantic decisions remain. |
 | Features | Generic provider extension | OPEN_DEFERABLE | MISSING | Feature Engine | E07 | Wait for a real second provider. |
 | Research | HypothesisSpec | RESOLVED | COMPLETE | Research | F01 | Depends on FeatureDefinition for the canonical vertical. |
 | Research | EventSpec/detection | RESOLVED | MISSING | Research | F02 | Requires FeatureArtifact for the full vertical. |
@@ -115,6 +115,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | K06 RAW/source protection v1 | COMPLETE | ADR-0032 accepted; attributable-evidence `SafetyRelevanceAssertion` pattern implemented. |
 | A10 Backfill/repair v1 | COMPLETE | ADR-0033 accepted; two known limitations tracked (coverage-trigger re-verification, partial candidate identity binding). |
 | E04 FeatureArtifact v1 | COMPLETE | ADR-0034 accepted; `SupportShape`, FINAL-only sealing, `InitVar` construction guard, exact-Fraction equivalence. |
+| E06 H01 canonical integration | PARTIAL FREEZE | ADR-0035 accepted; runtime remains MISSING and 3 semantic decisions remain OPEN_BLOCKING. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; the one remaining loose end is issue #73's Human Golden E2E closeout proof, in progress (infra reachable, blocked on one file-ACL fix, not yet a completed evidence run). |
 
 ## Current frontier
