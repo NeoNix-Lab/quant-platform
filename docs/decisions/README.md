@@ -21,5 +21,8 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0029 | Non-contiguous coverage reads v1 | Accepted |
 | 0030 | General Quality Lifecycle v1 | Accepted |
 | 0031 | Availability/purge/embargo v1 | Accepted |
+| 0032 | RAW / source protection v1 | Accepted |
+| 0033 | Backfill / repair v1 | Accepted |
+| 0034 | FeatureArtifact v1 | Accepted |
 
 See the individual ADR files for context and consequences.
