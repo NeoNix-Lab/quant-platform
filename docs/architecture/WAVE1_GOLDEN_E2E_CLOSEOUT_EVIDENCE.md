@@ -3,6 +3,41 @@
 **Issue:** #73. **Date:** 2026-09-19. Mechanically derived from the actual
 operator run below; not a manual proof workflow.
 
+## Scope ruling: ingestion/publication is credited, not re-run
+
+An independent review (2026-09-19) requested that `preflight` and the
+mutating `run` (ingestion/publication) legs also be executed and archived
+alongside `verify`, reading propositions 1-2 as requiring literal
+re-execution within this closeout run. Two things make that infeasible and,
+on the issue's own terms, unnecessary:
+
+1. `run_vertical`'s own `_require_absent_run_targets` guard (and
+   `preflight`'s `rerun` check) correctly **refuses** to re-ingest a
+   partition that is already durably published -- confirmed directly:
+   `preflight` on this exact target reports
+   `rerun: FAIL -- canonical target natural identity already exists;
+   refusing ambiguous rerun`. Forcing a re-run would mean bypassing a real
+   anti-duplicate-ingestion safety mechanism, not producing new evidence.
+2. Issue #73's own "Credited evidence" section states: *"CREDIT rather than
+   re-prove: the existing conformity harness already owns operator
+   preflight/run/inspect/verify behavior; the existing golden Bybit fixture
+   already proves source row-count/boundary/catalog expectations for the
+   first vertical."* Proposition 2's wording ("durable manifests/evidence
+   and S13/S14 outcome **are available**") is a state, not an action --
+   consistent with crediting the already-published first vertical (`V1
+   COMPLETE`) rather than re-proving it here.
+
+Durable evidence that ingestion/publication succeeded and remains valid is
+the `inspect` output already on record: dataset `ff12b1c3-...`, partition
+`dt=2024-01-15` state `valid`, row_count `1105145`, with manifest/content
+SHA-256 hashes and `producer=human-e2e-operator-harness-v1`.
+
+**Ruling (human decision owner, 2026-09-19):** the credited-evidence reading
+is accepted; re-executing ingestion/publication against already-validated,
+archived data is unnecessary. This closeout is treated as PASSED on the
+`verify`-leg evidence below plus the already-durable ingestion/publication
+evidence cited above, not on a fresh re-run of either.
+
 ## Prerequisite integration gate
 
 Per issue #73's strict post-merge execution gate, this run is only valid if
