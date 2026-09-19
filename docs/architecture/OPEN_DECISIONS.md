@@ -18,6 +18,7 @@ DG-D Application configuration semantics             RESOLVED
 DG-A FeatureDefinition v1 semantics                  FROZEN / COMPLETE
 DG-A FootprintDefinition v1 semantics                FROZEN / COMPLETE
 DG-A FeatureArtifact v1 (E04)                        FROZEN / COMPLETE
+DG-A H01 canonical integration v1 (E06)              FROZEN / MISSING
 DG-B B04 non-contiguous coverage reads v1            FROZEN / COMPLETE
 DG-B A10 backfill / repair v1                        FROZEN / COMPLETE
 DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
@@ -95,36 +96,35 @@ attributable-evidence caller-discipline obligations on E06/F02/I04 are the
 accepted authority; do not re-litigate them without contradictory current
 authority.
 
-### Footprint + canonical H01 (`D06`,`E06`)
+### Footprint + canonical H01 (`D06`,`E06`) — RESOLVED
 
-For canonical H01, the actual path is now:
+The canonical H01 path is:
 
 ```text
 D06 footprint representation (FROZEN / COMPLETE by ADR-0027)
 E02 FeatureDefinition (FROZEN / COMPLETE by ADR-0026)
 E04 FeatureArtifact (FROZEN / COMPLETE by ADR-0034)
-E05 pure H01 kernel (already RESOLVED)
-E06 canonical H01 integration (PARTIAL SEMANTIC FREEZE by ADR-0035)
+E05 pure H01 kernel (RESOLVED / COMPLETE)
+E06 canonical H01 integration (FROZEN / MISSING by ADR-0035)
 ```
 
-ADR-0035 freezes the following first-vertical E06 propositions:
+[ADR-0035](../decisions/ADR-0035-h01-canonical-integration-v1.md) freezes the first concrete H01 Feature vertical:
 
-- `quant_platform.application` owns the cross-owner D06 -> Feature composition while H01 quantitative/Feature meaning remains Feature-owned; no `feature -> representation` dependency is introduced;
-- Diagonal Imbalance and Stacked Imbalance are distinct E02 FeatureDefinitions and produce distinct FeatureObservations;
-- one eligible FINAL Footprint bucket is one observation support coordinate for each observable, with one structured per-level value per bucket rather than one FeatureObservation per price level;
-- a covered-empty FINAL Footprint bucket produces a FINAL empty observation for each observable; missing/insufficient support remains non-observation;
-- deterministic conversion from D06 exact-decimal level values to E05 float calculation inputs is accepted for H01 v1 without making float the upstream identity/provenance authority;
-- E04 materialization binds the exact immutable D06 result/binding evidence rather than reconstructing a second underlying trade-lineage model.
+- `quant_platform.application` owns D06/Feature cross-owner composition while H01 meaning remains Feature-owned;
+- Diagonal Imbalance and Stacked Imbalance are independent `FeatureDefinition`s, both consuming the canonical FINAL D06 Footprint directly;
+- both use `footprint.price_level@1`, `current()` support and `FINAL_ONLY` maturity;
+- Diagonal owns `imbalance_ratio`; Stacked owns `imbalance_ratio` plus `stacked_min_levels`;
+- one eligible FINAL Footprint bucket yields one structured per-level observation for each constituent feature;
+- covered-empty buckets yield FINAL empty observations; missing support remains non-observation;
+- canonical Diagonal and Stacked RECORD outputs are fixed, including `NaN -> null` normalization for absent-neighbor diagonal ratios;
+- deterministic D06 exact-decimal -> E05 float conversion is accepted for H01 v1 without weakening D06 evidence authority;
+- E06 derives the true expected H01 observation universe required by ADR-0034;
+- E04 binds exact immutable D06 result/binding evidence rather than a duplicated trade-lineage model;
+- one `h01_imbalance@1` FeatureSetDefinition contains the two independent observables.
 
-E06 remains `OPEN_BLOCKING / MISSING`. Only these semantic propositions remain open before E06 can become implementation-ready:
+E06 therefore has no remaining semantic decision blocker. Its implementation remains `MISSING` and may now be activated only through a separately bounded `SCOPE.md`/issue.
 
-1. whether Stacked Imbalance consumes the D06 Footprint directly or consumes the Diagonal FeatureObservation through feature-on-feature composition;
-2. the exact governed `feature_key` values and exact OutputContract payloads for the two FeatureDefinitions;
-3. whether the first durable H01 materialization uses one FeatureSetDefinition containing both observables or separate FeatureSetDefinitions/artifacts.
-
-The existing `E06 -> F02` planning edge is not reinterpreted by ADR-0035; whether generic F02 requires E06 or only H01-backed EventSpecs require it remains a separate governance question.
-
-Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework. FeatureDefinition v1, FootprintDefinition v1 and FeatureArtifact v1 are no longer open; ADR-0026, ADR-0027, ADR-0034 and the accepted partial E06 freeze in ADR-0035 are the relevant authorities.
+Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework. FeatureDefinition v1, FootprintDefinition v1, FeatureArtifact v1 and H01 canonical integration semantics are accepted authority under ADR-0026, ADR-0027, ADR-0034 and ADR-0035.
 
 ## DG-B — Historical / Live data convergence
 
