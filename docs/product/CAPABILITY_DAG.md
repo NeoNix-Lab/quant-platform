@@ -97,7 +97,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | C01 | Application ownership | Application | B01 | C02-C05 | RESOLVED | COMPLETE | `quant_platform.application`; ASS-01/ADR-0024 |
 | C02 | ASS-02 semantic selector resolution | Application | C01,B02,D01,J01 | C03 | FROZEN | COMPLETE | Semantic request resolves without storage identity; Consumer API |
 | C03 | ASS-02 result/error translation | Application | C02 | C04,J02,J04-J06 | FROZEN | COMPLETE | PR #41; stable envelope/error semantics; exact-head integrity #91 PASS |
-| C04 | Tool orchestration convergence | Application | C02,C03,C05 | governed entry points | RESOLVED | MISSING | Exact ASS-03 debt reaches zero; C05 implementation is complete |
+| C04 | Tool orchestration convergence | Application | C02,C03,C05 | governed entry points | RESOLVED | COMPLETE | Exact ASS-03 debt reaches zero; issue #40/PR #44, closed 2026-09-14; `TOOLS_PENDING_ASS03`/`TOOLS_TESTS_PENDING_ASS03` empty and `test_executable_orchestration_respects_the_application_seam` passing since that commit |
 | C05 | Configuration convergence | Engineering/Application | C01 | C04,K02 | RESOLVED | COMPLETE | CLI > env > declared default > fail; typed immutable capability-specific config; Application owns composition |
 | C06 | Multi-capability resolution | Application | second venue/representation evidence | general application service | OPEN_DEFERABLE | MISSING | Unsupported combinations explicit; no speculative registry |
 
@@ -269,7 +269,7 @@ quant_platform.application: concrete composition owner
 
 Resolution precedence is **explicit CLI > environment > declared default > explicit failure**. Application receives resolved values only, owns concrete composition, and does not read process arguments/environment directly. No generic DI container, service locator, provider registry or plugin/config framework is introduced.
 
-C05 implementation is `COMPLETE`. C04/ASS-03 is now unblocked (its own implementation remains `MISSING`).
+C05 implementation is `COMPLETE`. C04/ASS-03 is also `COMPLETE` (issue #40/PR #44, 2026-09-14) -- this was missed in the 2026-09-19 post-Wave-1 reconciliation pass and corrected here after a fresh issue (#84) was drafted against the stale `MISSING` classification and found to be fully redundant against the current baseline.
 
 ### DG-E — Validation semantics
 
@@ -326,11 +326,12 @@ Only operational prerequisites of the selected atom are activated.
 
 ## Execution frontier
 
-C05, D03, E05, F01, F05, I01 and K04 (the previous frontier) are now
-`COMPLETE`. Decision-complete/frozen, missing atoms whose declared dependencies are currently satisfied:
+C05, C04, D03, E05, F01, F05, I01 and K04 (the previous frontier, plus C04
+which was already `COMPLETE` via issue #40/PR #44 and mis-tracked as
+`MISSING` until this correction) are now `COMPLETE`. Decision-complete/frozen,
+missing atoms whose declared dependencies are currently satisfied:
 
 ```text
-C04  tool orchestration convergence through the canonical Application seam (unblocked by C05 COMPLETE)
 E06  H01 canonical integration (ADR-0035 FROZEN; D06/E02/E04/E05 satisfied)
 F02  EventSpec/detection (unblocked by F01 + E04 COMPLETE)
 F03  OutcomeSpec/Outcome (unblocked by F01 COMPLETE)
@@ -361,7 +362,7 @@ Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 whe
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. In particular, C04, E06, F02 and F03 are now the immediate frontier (see Execution frontier above); the previous Wave-1 frontier atoms are complete.
+Parallelism is allowed whenever DAG dependencies are satisfied. In particular, E06, F02 and F03 are now the immediate frontier (see Execution frontier above); C04 and the previous Wave-1 frontier atoms are complete.
 
 ## Macro roadmap relationship
 

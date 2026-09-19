@@ -66,7 +66,7 @@ Rules:
 - `quant_platform.application` owns concrete composition and does not read process arguments/environment directly;
 - no generic DI container, service locator, provider registry or plugin/config framework is introduced.
 
-This resolves the C05 decision state only. C05 implementation remains missing, and C04/ASS-03 remains blocked until that implementation exists.
+This resolves the C05 decision state. Both C05 and C04/ASS-03 implementation are complete (C04 via issue #40/PR #44, 2026-09-14).
 
 ## Decision-gate policy
 

@@ -34,7 +34,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Application | ASS-01 ownership/enforcement | RESOLVED | COMPLETE | Application | C01 | `quant_platform.application` is the canonical in-process composition owner; PR #27 merged. |
 | Application | ASS-02 semantic selector resolution | FROZEN | COMPLETE | Application | C02 | PR #30 integrated the reviewed `trades@1` semantic selector resolution. |
 | Application | ASS-02 result/error translation | FROZEN | COMPLETE | Application | C03 | PR #41 integrated reviewed candidate `f382a2e6...`; exact-head integrity #91 PASS. |
-| Application | ASS-03 tool convergence | RESOLVED | MISSING | Application | C04 | Finite exact-edge orchestration debt; C05 implementation complete, now unblocked. |
+| Application | ASS-03 tool convergence | RESOLVED | COMPLETE | Application | C04 | Issue #40/PR #44, closed 2026-09-14; `TOOLS_PENDING_ASS03`/`TOOLS_TESTS_PENDING_ASS03` empty, boundary test passing. |
 | Application | Configuration convergence | RESOLVED | COMPLETE | Application/Engineering | C05 | Frozen convention: CLI > env > declared default > fail; typed immutable capability-specific config; Application owns composition. |
 | Application | Multi-capability resolver | OPEN_DEFERABLE | MISSING | Application | C06 | Triggered by a real second venue/representation. |
 | Representation | Representation identity | RESOLVED | PARTIAL | Representation | D01 | Distinct from DatasetIdentity. |
@@ -120,11 +120,12 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 
 ## Current frontier
 
-C05, D03, E05, F01, F05, I01 and K04 (the previous frontier) are now
-`COMPLETE`.
+C05, C04, D03, E05, F01, F05, I01 and K04 (the previous frontier, plus C04
+which was already `COMPLETE` via issue #40/PR #44 and mis-tracked as
+`MISSING` until this correction) are now `COMPLETE`.
 
 ```text
-C04  E06  F02  F03
+E06  F02  F03
 ```
 
 Frontier membership means planning dependencies and decision gates are satisfied; it does not authorize implementation.
