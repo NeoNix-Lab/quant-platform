@@ -44,6 +44,7 @@ OWNERS = {
     "quant_platform.features": "feature",
     "quant_platform.features.artifacts": "feature",
     "quant_platform.features.definitions": "feature",
+    "quant_platform.features.h01_imbalance": "feature",
     "quant_platform.features.imbalance": "feature",
     "quant_platform.operations": "operations",
     "quant_platform.operations.capacity": "operations",
@@ -66,6 +67,7 @@ OWNERS = {
     "quant_platform.application.composition": "application",
     "quant_platform.application.conformity": "application",
     "quant_platform.application.golden_conformity": "application",
+    "quant_platform.application.h01_composition": "application",
     "quant_platform.application.market_data": "application",
 }
 ALLOWED = {
