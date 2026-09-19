@@ -1,133 +1,109 @@
-# Scope: B04 Non-contiguous Coverage Reads v1
+# Scope: Weekly frontier preparation, 2026-09-21 to 2026-09-25
 
 ## Objective
 
-Materialize and implement `B04 - Non-contiguous coverage read` so the
-DataGateway contract has accepted authority for explicit partial historical
-reads and the runtime supports an additive `ALLOW_PARTIAL` coverage policy
-inside `quant_platform.access`.
+Record the post-Wave-1 resting state and prepare the execution agenda for the
+week of 2026-09-21. This is a governance/planning scope only: it does not
+activate implementation of C04, F02, F03, issue #73, or any other atom.
 
-This slice owns only historical DataGateway coverage-read semantics:
-request-level `STRICT | ALLOW_PARTIAL`, exact declared support/gap projection,
-zero-support refusal, unchanged canonical ordering/conflict behavior and
-existing result identity/provenance reuse.
+No bounded implementation or decision slice is currently authorized by this
+file. Before any mutation on a frontier atom, rewrite `SCOPE.md` for exactly
+one bounded slice with its objective, baseline, included/excluded work,
+acceptance criteria and verification plan.
 
-## Baseline
+## Status
 
-```text
-base main = 32e750fad6276ecd81f6870c1b41d4738176abc8
-branch    = agent/issue-55-12
-atom      = B04
-owner     = Data Access
-```
+The `implement/wave-1` batch (issues #51-#77: E02, D06, K05, A16, B04, I02,
+K03, F06, F01, K06, A10, E04, plus the earlier C05/D03/E05/F05/I01/K04
+frontier) concluded 2026-09-19. See
+[`docs/product/CAPABILITY_MAP.md`](docs/product/CAPABILITY_MAP.md) and
+[`docs/product/CAPABILITY_DAG.md`](docs/product/CAPABILITY_DAG.md) for the
+reconciled current state.
 
-At work start, local `origin/main` was verified as exactly
-`32e750fad6276ecd81f6870c1b41d4738176abc8`.
-
-## Accepted state after this slice
+The completed Producer-Consumer Conformity cycle remains credited under
+ADR-0023:
 
 ```text
-A04  Declared coverage                       FROZEN / COMPLETE
-A09  S14 publication                         FROZEN / COMPLETE
-A10  Backfill and repair                     OPEN_BLOCKING / MISSING
-A11  Live trades acquisition                 OPEN_BLOCKING / MISSING
-A16  General quality lifecycle               OPEN_BLOCKING / PARTIAL
-B02  Bounded historical scan                 FROZEN / COMPLETE
-B03  Result identity/provenance              FROZEN / COMPLETE
-B04  Non-contiguous coverage read            FROZEN / COMPLETE
-B05  Durable DatasetSnapshot                 OPEN_DEFERABLE / MISSING
-B06  Live access/cursor                      OPEN_BLOCKING / MISSING
+Contract Freeze Gate              PASSED
+Conformity Implementation Gate    PASSED
 ```
 
-`B04` is frozen by ADR-0029 and implemented as an explicit DataGateway
-coverage policy using the existing coverage/provenance model.
+These gates are credited foundation evidence, not reopened work.
 
-## Included
+Issue #73 (Wave 1 Human Golden E2E closeout) is closed. The physical-storage
+host ACL was fixed, a real 1440-candle 1m result was captured through the
+production Application/DataGateway/D03 path and frozen into the golden
+fixture, and the official operator `verify` run returned `GOLDEN E2E: PASS`
+(exit 0). Merged via PR #78; durable evidence and the ingestion/publication
+scope ruling (credit rather than re-prove already-validated, archived data)
+are in `docs/architecture/WAVE1_GOLDEN_E2E_CLOSEOUT_EVIDENCE.md` (PR #80).
 
-- Update `docs/contracts/DATA_GATEWAY.md` with accepted B04 coverage policy
-  semantics.
-- Create accepted ADR-0029 for non-contiguous coverage reads v1.
-- Update directly affected governance so B04 is no longer unresolved.
-- Add canonical `CoveragePolicy` values with `STRICT` as the default.
-- Preserve `STRICT` gap refusal exactly.
-- Permit explicit `ALLOW_PARTIAL` success when non-empty eligible declared
-  support intersects the request.
-- Preserve zero-support `NoCoverage` refusal.
-- Preserve existing result metadata/fingerprint semantics and global ordering.
-- Prove exact leading, trailing and internal gap metadata without synthetic
-  rows.
+## Current frontier
+
+The current execution frontier (decision-complete, missing atoms whose
+declared dependencies are satisfied) is:
+
+```text
+C04  tool orchestration convergence through the canonical Application seam
+F02  EventSpec/detection
+F03  OutcomeSpec/Outcome
+```
+
+Frontier membership is not implementation authorization.
+
+## Week plan
+
+Issue #73 closed and PR #78/#79/#80 merged before the week starts, so it opens
+directly on the frontier rather than on verification of already-completed
+work:
+
+```text
+2026-09-21  verify current origin/main reflects PR #78/#79/#80; open at most
+            one C04 scope for tool orchestration convergence through the
+            Application seam
+2026-09-22  continue/close the C04 scope; do not open a second atom in parallel
+2026-09-23  open at most one F02 scope for EventSpec/detection, only after
+            refreshing F01/E04 evidence
+2026-09-24  continue/close the F02 scope
+2026-09-25  open at most one F03 scope for OutcomeSpec/Outcome, or reserve the
+            day for review/reconciliation if C04/F02 ran long
+```
+
+If an earlier item blocks, do not silently roll its authority into the next
+item. Record the blocker and select the next independent frontier atom with a
+fresh bounded scope.
+
+## Activation rules
+
+Activating any item above requires:
+
+1. verify current `origin/main` and branch ancestry;
+2. locate the atom in `docs/product/CAPABILITY_DAG.md`;
+3. verify its transitive `Requires` path;
+4. activate only unresolved decision branches on that path;
+5. credit existing evidence rather than rerunning expensive proofs without a
+   concrete invalidating concern;
+6. define the exact missing proposition and minimum proof;
+7. keep unrelated frontier atoms inactive;
+8. preserve governance documents unless the new issue is explicitly
+   governance-only / governance-reconciliation work.
 
 ## Excluded
 
-- A10 repair trigger, retry, replacement revision or backfill policy.
-- A16 general quality lifecycle implementation.
-- A11/B06 live cursor, historical/live merge or stream-resume behavior.
-- Source acquisition, duplicate resolution or interpolation/filling.
-- DatasetSnapshot public API.
-- Materialization/storage mutation.
-- Generic query planner, provider plugin or second provenance identity system.
-
-## Credited evidence
-
-The completed Producer–Consumer Conformity cycle remains credited under
-ADR-0023: **Contract Freeze Gate = PASSED** and **Conformity Implementation
-Gate = PASSED**. This slice does not reopen either gate.
-
-- B02 bounded `DataScan` and B03 provenance/result identity semantics are
-  already accepted.
-- ADR-0022 declared coverage remains authoritative and distinct from observed
-  row bounds.
-- DataGateway already computes eligible coverage and gaps from catalog
-  coverage and exposes them in metadata.
-- Existing overlap/conflict and canonical ordering behavior remain fail-closed
-  and are reused.
+- Implementing C04, F02, F03 or issue #73 in this planning scope.
+- Claiming ASS-03, API transport, Job runtime, clients or live product mode.
+- Reopening the Contract Freeze Gate or Conformity Implementation Gate.
+- Mutating contracts, ADRs, schemas, source code, tools, fixtures, DDL or
+  runtime/server state.
 
 ## Acceptance
 
 DONE means:
 
-1. `STRICT` remains the default and preserves existing complete-coverage reads.
-2. Explicit `ALLOW_PARTIAL` produces a distinct request identity.
-3. Zero eligible support remains `NoCoverage`.
-4. Covered zero-event support remains a successful zero-row result.
-5. Leading, trailing and internal gaps are exact in existing metadata.
-6. Returned rows come only from eligible declared support with no interpolation
-   or synthetic continuity.
-7. Canonical global ordering and overlap conflict behavior are unchanged.
-8. Result identity/provenance distinguish support shape without a new identity
-   system.
-9. Aborted scans still have no final result metadata.
-10. Repair, live and client policy remain downstream.
-
-## Verification
-
-Targeted checks for this slice:
-
-```text
-python tests/test_b04_non_contiguous_coverage_reads_v1.py
-python tests/test_data_gateway.py
-python tests/test_bounded_datagateway_read_v1.py
-python tests/test_declared_coverage_semantics.py
-python -m compileall -q src tests
-python tools/check_markdown_links.py
-git diff --check
-```
-
-## Downstream state
-
-Unblocked by B04:
-
-```text
-A10 repair policy may consume explicit requested support, eligible support,
-exact gaps and returned-row facts after its other prerequisites are satisfied.
-```
-
-Still blocked:
-
-```text
-A16  General quality lifecycle beyond the accepted first vertical
-A10  Repair trigger/retry/revision semantics
-A11  Live acquisition overlap/duplicate/restart semantics
-B06  Live access/cursor semantics
-B05  Durable DatasetSnapshot shape
-```
+1. `SCOPE.md` reflects the post-Wave-1 resting state.
+2. The credited conformity gate linkage remains visible.
+3. The current frontier is exactly `C04,F02,F03`.
+4. The week of 2026-09-21 has an explicit candidate agenda.
+5. The agenda does not authorize broad or multi-atom implementation.
+6. Future implementation still requires rewriting this file for exactly one
+   bounded slice.
