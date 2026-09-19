@@ -68,6 +68,7 @@ from quant_platform.application.h01_composition import (  # noqa: E402
 
 
 IDENTITY = DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v1")
+OTHER_IDENTITY = DatasetIdentity("canonical", "trades", "bybit", "ETHUSDT", "trade-v1")
 IMPLEMENTATION = "quant_platform.representation.footprints:d06-v1"
 
 
@@ -275,6 +276,18 @@ class H01FeatureOwnedEvaluationTests(unittest.TestCase):
         observation = evaluate_diagonal_imbalance(definition, bucket)
         self.assertEqual("bucket:xyz", observation.support_identity.observation_identity)
 
+    def test_evaluate_diagonal_imbalance_rejects_stacked_definition(self):
+        stacked = stacked_imbalance_definition()
+        bucket = h01_bucket((H01LevelInput(level_index=1, buy_volume="10", sell_volume="1"),))
+        with self.assertRaises(FeatureDefinitionError):
+            evaluate_diagonal_imbalance(stacked, bucket)
+
+    def test_evaluate_stacked_imbalance_rejects_diagonal_definition(self):
+        diagonal = diagonal_imbalance_definition()
+        bucket = h01_bucket((H01LevelInput(level_index=1, buy_volume="10", sell_volume="1"),))
+        with self.assertRaises(FeatureDefinitionError):
+            evaluate_stacked_imbalance(diagonal, bucket)
+
 
 class H01CompositionTests(unittest.TestCase):
     def _four_level_trades(self) -> list[TradeRecord]:
@@ -323,6 +336,19 @@ class H01CompositionTests(unittest.TestCase):
         self.assertTrue(stacked_by_level[102]["stacked_imbalance"])
         self.assertTrue(stacked_by_level[103]["stacked_imbalance"])
         self.assertEqual(3, stacked_by_level[101]["stacked_run_length"])
+
+    def test_bucket_identity_differs_across_datasets_with_same_interval_and_definition(self):
+        result_btc = footprint_result([], "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z")
+        result_eth = footprint_result(
+            [], "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z", dataset_identity=OTHER_IDENTITY,
+        )
+        self.assertEqual(result_btc.buckets[0].bucket_start, result_eth.buckets[0].bucket_start)
+        self.assertEqual(result_btc.buckets[0].bucket_end, result_eth.buckets[0].bucket_end)
+        self.assertEqual(result_btc.definition_identity, result_eth.definition_identity)
+
+        id_btc = bucket_observation_identity(result_btc, result_btc.buckets[0])
+        id_eth = bucket_observation_identity(result_eth, result_eth.buckets[0])
+        self.assertNotEqual(id_btc, id_eth)
 
     def test_covered_empty_final_bucket_yields_two_final_empty_observations(self):
         result = footprint_result([], "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z")
@@ -463,6 +489,70 @@ class H01MaterializationTests(unittest.TestCase):
             materialize_h01_feature_artifact(
                 evaluation, result,
                 sources=sources(dataset_identity=wrong_identity),
+                implementation_code_identity="impl",
+                content_identity=content_identity(result),
+            )
+
+    def test_materialize_rejects_evaluation_from_a_different_footprint_result(self):
+        result_a = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+        )
+        result_b = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "200", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+        )
+        # Same dataset identity and same declared support -- exactly the
+        # scenario where a mismatched evaluation/footprint_result pair must
+        # still be rejected, since the two results have different content.
+        self.assertEqual(result_a.source_evidence.dataset_identity, result_b.source_evidence.dataset_identity)
+        self.assertEqual(result_a.coverage.covered_intervals, result_b.coverage.covered_intervals)
+        self.assertNotEqual(result_a.result_identity, result_b.result_identity)
+
+        evaluation_a = evaluate_h01_imbalance(result_a)
+        with self.assertRaises(H01CompositionError):
+            materialize_h01_feature_artifact(
+                evaluation_a, result_b,
+                sources=sources(),
+                implementation_code_identity="impl",
+                content_identity=content_identity(result_b),
+            )
+
+    def test_materialize_derives_universe_from_footprint_result_not_tampered_evaluation(self):
+        result = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+        )
+        evaluation = evaluate_h01_imbalance(result)
+        tampered = replace(evaluation, expected_observation_identities=())
+        artifact = materialize_h01_feature_artifact(
+            tampered, result,
+            sources=sources(),
+            implementation_code_identity="impl",
+            content_identity=content_identity(result),
+        )
+        self.assertIsNotNone(artifact.identity)
+
+    def test_materialize_rejects_tampered_extra_observation_despite_caller_universe(self):
+        result = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+        )
+        evaluation = evaluate_h01_imbalance(result)
+        extra_bucket = h01_bucket(
+            (H01LevelInput(level_index=999, buy_volume="1", sell_volume="1"),), obs_id="bucket:extra",
+        )
+        extra_observation = evaluate_diagonal_imbalance(evaluation.diagonal_definition, extra_bucket)
+        tampered = replace(
+            evaluation,
+            observations=evaluation.observations + (extra_observation,),
+            expected_observation_identities=evaluation.expected_observation_identities
+            + (extra_observation.observation_identity,),
+        )
+        with self.assertRaises(FeatureArtifactError):
+            materialize_h01_feature_artifact(
+                tampered, result,
+                sources=sources(),
                 implementation_code_identity="impl",
                 content_identity=content_identity(result),
             )

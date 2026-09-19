@@ -195,6 +195,13 @@ def _price_level_rows(bucket: H01BucketInput) -> tuple[PriceLevelInput, ...]:
     )
 
 
+def _require_feature_key(definition: FeatureDefinition, expected_key: str) -> None:
+    if definition.feature_key != expected_key:
+        raise FeatureDefinitionError(
+            f"expected the canonical {expected_key!r} FeatureDefinition, got {definition.feature_key!r}"
+        )
+
+
 def _support_identity(definition: FeatureDefinition, bucket: H01BucketInput) -> SupportIdentity:
     return SupportIdentity(
         definition.input_contract.identity,
@@ -229,6 +236,7 @@ def evaluate_diagonal_imbalance(definition: FeatureDefinition, bucket: H01Bucket
     """Evaluate the canonical Diagonal Imbalance FeatureDefinition over one
     concrete FINAL Footprint bucket coordinate."""
 
+    _require_feature_key(definition, DIAGONAL_IMBALANCE_FEATURE_KEY)
     config = ImbalanceConfig(imbalance_ratio=float(_parameter_value(definition, "imbalance_ratio")))
     computed = compute_diagonal_imbalance(_price_level_rows(bucket), config)
     return FeatureObservation(
@@ -251,6 +259,7 @@ def evaluate_stacked_imbalance(definition: FeatureDefinition, bucket: H01BucketI
     constituents remain independent per ADR-0035.
     """
 
+    _require_feature_key(definition, STACKED_IMBALANCE_FEATURE_KEY)
     config = ImbalanceConfig(
         imbalance_ratio=float(_parameter_value(definition, "imbalance_ratio")),
         stacked_min_levels=int(_parameter_value(definition, "stacked_min_levels")),

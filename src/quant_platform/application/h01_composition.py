@@ -58,18 +58,23 @@ class H01Evaluation:
     stacked_definition: FeatureDefinition
     observations: tuple[FeatureObservation, ...]
     expected_observation_identities: tuple[FeatureObservationIdentity, ...]
+    footprint_result_identity: str
 
 
 def bucket_observation_identity(footprint_result: HistoricalFootprintResult, bucket: FootprintBucket) -> str:
     """Deterministic per-bucket support coordinate derived from the exact D06
-    FootprintDefinition identity and bucket boundaries.
+    dataset identity, FootprintDefinition identity and bucket boundaries.
 
-    This is a reversible E06 implementation choice for naming one concrete
-    support coordinate; it does not define new Footprint identity/provenance
+    The dataset identity is included so that two distinct datasets (e.g.
+    different venue/instrument) sharing the same FootprintDefinition and
+    bucket boundaries never collide on the same support coordinate.  This is
+    a reversible E06 implementation choice for naming one concrete support
+    coordinate; it does not define new Footprint identity/provenance
     semantics and does not replace D06's own result identity.
     """
 
     payload = {
+        "dataset_identity": footprint_result.source_evidence.dataset_identity.stable_dict(),
         "footprint_definition_identity": footprint_result.definition_identity,
         "bucket_start": bucket.bucket_start.isoformat(),
         "bucket_end": bucket.bucket_end.isoformat(),
@@ -137,6 +142,7 @@ def evaluate_h01_imbalance(
         stacked_definition=stacked_definition,
         observations=tuple(observations),
         expected_observation_identities=expected,
+        footprint_result_identity=footprint_result.result_identity,
     )
 
 
@@ -156,18 +162,44 @@ def materialize_h01_feature_artifact(
     implementation identity), so this is the exact D06 binding rather than an
     independently reconstructed trade-lineage model or an opaque hash.
 
+    ``evaluation`` must have been produced by ``evaluate_h01_imbalance`` over
+    this exact ``footprint_result`` -- verified via ``result_identity``,
+    which is a content commitment over the whole D06 result, not merely
+    dataset/support identity.  This prevents sealing observations that were
+    actually computed from a different (even same-dataset/same-support) D06
+    result under this result's provenance.
+
+    The expected observation universe is derived fresh from
+    ``footprint_result.buckets`` and the evaluation's own canonical
+    FeatureDefinitions rather than trusted from
+    ``evaluation.expected_observation_identities``, so a caller cannot
+    substitute a competing universe for the one E04 actually verifies
+    against.
+
     ``sources``/``implementation_code_identity``/``content_identity`` remain
     caller-supplied: real per-partition content/manifest hash evidence and
     durable output-partition evidence are owned by the existing data-plane
     and E04 seams, not reconstructed here from D06's own summary evidence.
     """
 
+    if evaluation.footprint_result_identity != footprint_result.result_identity:
+        raise H01CompositionError(
+            "evaluation was not produced from the exact supplied footprint_result "
+            "(footprint_result_identity mismatch)"
+        )
     source_dataset_identity = footprint_result.source_evidence.dataset_identity
     bound_sources = tuple(sources)
     if not any(item.dataset_identity == source_dataset_identity for item in bound_sources):
         raise H01CompositionError(
             "sources must include the exact D06 source_evidence.dataset_identity"
         )
+    expected_observation_identities = derive_h01_expected_observation_identities(
+        diagonal_definition=evaluation.diagonal_definition,
+        stacked_definition=evaluation.stacked_definition,
+        bucket_observation_identities=(
+            bucket_observation_identity(footprint_result, bucket) for bucket in footprint_result.buckets
+        ),
+    )
     consumed_support = SupportShape(intervals=footprint_result.coverage.covered_intervals)
     bound_input_evidence = BoundInputEvidence(
         sources=bound_sources,
@@ -195,7 +227,7 @@ def materialize_h01_feature_artifact(
         content_identity=content_identity,
         constituent_output_contracts=constituent_output_contracts,
         observations=evaluation.observations,
-        expected_observation_identities=evaluation.expected_observation_identities,
+        expected_observation_identities=expected_observation_identities,
     )
 
 
