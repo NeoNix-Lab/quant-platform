@@ -104,15 +104,27 @@ D06 footprint representation (FROZEN / COMPLETE by ADR-0027)
 E02 FeatureDefinition (FROZEN / COMPLETE by ADR-0026)
 E04 FeatureArtifact (FROZEN / COMPLETE by ADR-0034)
 E05 pure H01 kernel (already RESOLVED)
-E06 canonical H01 integration
+E06 canonical H01 integration (PARTIAL SEMANTIC FREEZE by ADR-0035)
 ```
 
-D06 has frozen canonical price-level grain, validated tick grid,
-ordering/adjacency, temporal availability and provenance binding. E04 is now
-also frozen. The remaining live decision on this branch is E06 canonical H01
-integration.
+ADR-0035 freezes the following first-vertical E06 propositions:
 
-Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework. FeatureDefinition v1, FootprintDefinition v1 and FeatureArtifact v1 are no longer open; ADR-0026, ADR-0027 and ADR-0034 are the accepted authorities for those foundations.
+- `quant_platform.application` owns the cross-owner D06 -> Feature composition while H01 quantitative/Feature meaning remains Feature-owned; no `feature -> representation` dependency is introduced;
+- Diagonal Imbalance and Stacked Imbalance are distinct E02 FeatureDefinitions and produce distinct FeatureObservations;
+- one eligible FINAL Footprint bucket is one observation support coordinate for each observable, with one structured per-level value per bucket rather than one FeatureObservation per price level;
+- a covered-empty FINAL Footprint bucket produces a FINAL empty observation for each observable; missing/insufficient support remains non-observation;
+- deterministic conversion from D06 exact-decimal level values to E05 float calculation inputs is accepted for H01 v1 without making float the upstream identity/provenance authority;
+- E04 materialization binds the exact immutable D06 result/binding evidence rather than reconstructing a second underlying trade-lineage model.
+
+E06 remains `OPEN_BLOCKING / MISSING`. Only these semantic propositions remain open before E06 can become implementation-ready:
+
+1. whether Stacked Imbalance consumes the D06 Footprint directly or consumes the Diagonal FeatureObservation through feature-on-feature composition;
+2. the exact governed `feature_key` values and exact OutputContract payloads for the two FeatureDefinitions;
+3. whether the first durable H01 materialization uses one FeatureSetDefinition containing both observables or separate FeatureSetDefinitions/artifacts.
+
+The existing `E06 -> F02` planning edge is not reinterpreted by ADR-0035; whether generic F02 requires E06 or only H01-backed EventSpecs require it remains a separate governance question.
+
+Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework. FeatureDefinition v1, FootprintDefinition v1 and FeatureArtifact v1 are no longer open; ADR-0026, ADR-0027, ADR-0034 and the accepted partial E06 freeze in ADR-0035 are the relevant authorities.
 
 ## DG-B — Historical / Live data convergence
 
