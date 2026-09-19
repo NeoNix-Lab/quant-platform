@@ -699,58 +699,91 @@ class ConformityE2ETest(unittest.TestCase):
             self.assertEqual(caught.exception.phase, "MATERIALIZE")
             emit_dataset.assert_not_called()
 
+    def _trade_only_golden_config(self, holder: Path) -> harness.HarnessConfig:
+        # The checked-in fixture now carries a reviewed candle section
+        # (issue #73 closeout), which would route verify_vertical through
+        # observe_scan_with_candles instead of the trade-only observe_scan
+        # this test patches. A local candle-less copy keeps testing exactly
+        # the trade-only leg these tests are about, independent of the real
+        # fixture's own evolution.
+        golden_path = holder / "golden-trade-only.json"
+        golden_path.write_text(
+            json.dumps(
+                {
+                    "venue": "bybit",
+                    "instrument": "BTCUSDT",
+                    "interval": {"start": "2024-01-15T00:00:00Z", "end": "2024-01-16T00:00:00Z"},
+                    "row_count": 1,
+                    "buy": 1,
+                    "sell": 0,
+                    "first_exchange_ts": "2024-01-15T00:00:00.492Z",
+                    "last_exchange_ts": "2024-01-15T00:00:00.492Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return harness.HarnessConfig(
+            sqlite_path=None,
+            dsn="controlled-test-dsn",
+            storage_root=holder,
+            storage_root_id="hot",
+            golden_path=golden_path,
+        )
+
     def test_verify_uses_datagateway_scan_and_rejects_golden_mismatch(self):
-        config = _config(Path.cwd())
-        calls: list[str] = []
+        with tempfile.TemporaryDirectory() as holder:
+            config = self._trade_only_golden_config(Path(holder))
+            calls: list[str] = []
 
-        class Scan:
-            completed_metadata = object()
+            class Scan:
+                completed_metadata = object()
 
-            def close(self):
-                calls.append("scan-close")
+                def close(self):
+                    calls.append("scan-close")
 
-        class FakeGateway:
-            def __init__(self, *args, **kwargs):
-                pass
+            class FakeGateway:
+                def __init__(self, *args, **kwargs):
+                    pass
 
-            def scan(self, request, **kwargs):
-                calls.append("gateway-scan")
-                return Scan()
+                def scan(self, request, **kwargs):
+                    calls.append("gateway-scan")
+                    return Scan()
 
-        observation = object()
-        with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
-             patch.object(app_harness, "DataGateway", FakeGateway), \
-             patch.object(app_harness, "observe_scan", return_value=observation), \
-             patch.object(app_harness, "format_observation", return_value="controlled observation"), \
-             patch.object(app_harness, "golden_field_mismatches", return_value=("row_count",)):
-            with self.assertRaises(harness.VerificationMismatch) as caught:
-                harness.verify_vertical(config)
-        self.assertEqual(calls, ["gateway-scan"])
-        self.assertEqual(caught.exception.mismatches, ("row_count",))
+            observation = object()
+            with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
+                 patch.object(app_harness, "DataGateway", FakeGateway), \
+                 patch.object(app_harness, "observe_scan", return_value=observation), \
+                 patch.object(app_harness, "format_observation", return_value="controlled observation"), \
+                 patch.object(app_harness, "golden_field_mismatches", return_value=("row_count",)):
+                with self.assertRaises(harness.VerificationMismatch) as caught:
+                    harness.verify_vertical(config)
+            self.assertEqual(calls, ["gateway-scan"])
+            self.assertEqual(caught.exception.mismatches, ("row_count",))
 
     def test_verify_success_is_only_reported_after_scan_comparison(self):
-        config = _config(Path.cwd())
-        calls: list[str] = []
+        with tempfile.TemporaryDirectory() as holder:
+            config = self._trade_only_golden_config(Path(holder))
+            calls: list[str] = []
 
-        class Scan:
-            completed_metadata = object()
+            class Scan:
+                completed_metadata = object()
 
-        class FakeGateway:
-            def __init__(self, *args, **kwargs):
-                pass
+            class FakeGateway:
+                def __init__(self, *args, **kwargs):
+                    pass
 
-            def scan(self, request, **kwargs):
-                calls.append("gateway-scan")
-                return Scan()
+                def scan(self, request, **kwargs):
+                    calls.append("gateway-scan")
+                    return Scan()
 
-        with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
-             patch.object(app_harness, "DataGateway", FakeGateway), \
-             patch.object(app_harness, "observe_scan", return_value=object()), \
-             patch.object(app_harness, "format_observation", return_value="controlled observation"), \
-             patch.object(app_harness, "golden_field_mismatches", return_value=()):
-            _target, _observation, rendered = harness.verify_vertical(config)
-        self.assertEqual(rendered, "controlled observation")
-        self.assertEqual(calls, ["gateway-scan"])
+            with patch.object(app_harness, "_connect_catalog", return_value=_CatalogConnection()), \
+                 patch.object(app_harness, "DataGateway", FakeGateway), \
+                 patch.object(app_harness, "observe_scan", return_value=object()), \
+                 patch.object(app_harness, "format_observation", return_value="controlled observation"), \
+                 patch.object(app_harness, "golden_field_mismatches", return_value=()):
+                _target, _observation, rendered = harness.verify_vertical(config)
+            self.assertEqual(rendered, "controlled observation")
+            self.assertEqual(calls, ["gateway-scan"])
 
     def _candle_golden_config(self, holder: Path) -> harness.HarnessConfig:
         golden_path = holder / "golden-with-candle.json"

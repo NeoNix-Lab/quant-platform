@@ -342,54 +342,50 @@ class GoldenExpectationCandleSchemaTests(unittest.TestCase):
 class DefaultFixtureActivatesTheCandleLegTests(unittest.TestCase):
     """Prove the candle leg activates on the real authoritative fixture.
 
-    ``fixtures/conformity/golden-bybit-btcusdt-2024-01-15.json`` cannot carry
-    reviewed candle numbers yet: this environment has no reachable PostgreSQL
-    catalog and no real Bybit BTCUSDT historical SQLite source (the real
-    catalog credentials live outside this repository entirely, per
-    ``.gitignore``), so there is no way to compute a trustworthy D03 result
-    for the real 2024-01-15 day here. Freezing invented numbers into a
-    "Golden" fixture would be worse than leaving it trade-only: it would
-    silently pass or fail against fabricated ground truth forever after,
-    which is exactly what the issue's "never infer, only freeze after a
-    reviewed reference run" instruction forbids.
-
-    What *is* verifiable without that data is that the activation gate in
-    ``verify_vertical`` (``target.golden.candle is not None``) has no hidden
-    dependency on which physical file supplies the section: the exact
-    identity fields (venue/instrument/interval/row_count/buy/sell/first and
-    last exchange_ts) of the real checked-in fixture parse unchanged, and
-    adding a syntactically valid ``candle`` section to *that same* payload
-    activates it, exactly as it would if the section were added to the
-    checked-in file itself once a human operator has run the real E2E and
-    supplied reviewed values.
+    The authoritative fixture now carries reviewed candle numbers: a human
+    operator ran the real E2E against the already-published canonical
+    2024-01-15 partition (issue #73 closeout) -- read-only DataGateway scan
+    plus in-memory D03 aggregation, no catalog/storage writes -- and the
+    observed values were frozen here after independent review, per the
+    issue's "never infer, only freeze after a reviewed reference run"
+    instruction. This is a regression pin on those exact reviewed values,
+    not a recomputation: changing the frozen 2024-01-15 canonical partition
+    would be a distinct, separately-reviewed event.
     """
 
-    def test_checked_in_fixture_currently_has_no_candle_section(self):
+    def test_checked_in_fixture_carries_the_reviewed_candle_section(self):
         with DEFAULT_GOLDEN_FIXTURE.open(encoding="utf-8") as handle:
             payload = json.load(handle)
-        self.assertNotIn(
-            "candle",
-            payload,
-            "the authoritative fixture must only gain a candle section from a "
-            "reviewed real reference run; none is available in this environment",
-        )
+        self.assertIn("candle", payload)
         expectation = load_golden_expectation()
-        self.assertIsNone(expectation.candle)
-
-    def test_adding_a_candle_section_to_the_real_fixture_payload_activates_it(self):
-        with DEFAULT_GOLDEN_FIXTURE.open(encoding="utf-8") as handle:
-            payload = json.load(handle)
-        payload["candle"] = golden_candle_payload()
-
-        expectation = GoldenExpectation.from_mapping(payload)
-
         self.assertIsNotNone(expectation.candle)
         self.assertEqual("1m", expectation.candle.duration)
+        self.assertEqual(1_440, expectation.candle.candle_count)
+        self.assertEqual("2024-01-15T00:00:00Z", expectation.candle.first_candle["bucket_start"])
+        self.assertEqual("2024-01-16T00:00:00Z", expectation.candle.last_candle["bucket_end"])
         # The propositions verify_vertical branches on, unchanged from the
         # real fixture's own frozen trade-level identity.
         self.assertEqual("bybit", expectation.venue)
         self.assertEqual("BTCUSDT", expectation.instrument)
         self.assertEqual(1_105_145, expectation.row_count)
+
+    def test_adding_a_candle_section_to_a_payload_without_one_activates_it(self):
+        payload = {
+            "venue": "bybit",
+            "instrument": "BTCUSDT",
+            "interval": {"start": "2024-01-15T00:00:00Z", "end": "2024-01-16T00:00:00Z"},
+            "row_count": 1_105_145,
+            "buy": 553_875,
+            "sell": 551_270,
+            "first_exchange_ts": "2024-01-15T00:00:00.492Z",
+            "last_exchange_ts": "2024-01-15T23:59:59.931Z",
+            "candle": golden_candle_payload(),
+        }
+
+        expectation = GoldenExpectation.from_mapping(payload)
+
+        self.assertIsNotNone(expectation.candle)
+        self.assertEqual("1m", expectation.candle.duration)
 
 
 class FormatObservationCandleRenderingTests(unittest.TestCase):

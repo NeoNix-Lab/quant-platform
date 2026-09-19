@@ -71,9 +71,14 @@ class GoldenExpectation:
             "first_exchange_ts",
             "last_exchange_ts",
         }
-        if set(payload) != required:
-            missing = sorted(required - set(payload))
-            extra = sorted(set(payload) - required)
+        # "candle" is an optional additive section (issue #73) this trade-only
+        # observer does not parse or need: present, it is simply ignored, the
+        # same way quant_platform.application.golden_conformity.GoldenExpectation
+        # treats it as optional rather than an unknown/extra field.
+        present = set(payload)
+        if not required.issubset(present) or not present.issubset(required | {"candle"}):
+            missing = sorted(required - present)
+            extra = sorted(present - required - {"candle"})
             raise ValueError(f"Golden expectation fields mismatch; missing={missing}, extra={extra}")
         interval = payload["interval"]
         if not isinstance(interval, Mapping) or set(interval) != {"start", "end"}:

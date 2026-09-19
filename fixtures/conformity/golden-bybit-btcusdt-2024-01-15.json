@@ -9,5 +9,31 @@
   "buy": 553875,
   "sell": 551270,
   "first_exchange_ts": "2024-01-15T00:00:00.492Z",
-  "last_exchange_ts": "2024-01-15T23:59:59.931Z"
+  "last_exchange_ts": "2024-01-15T23:59:59.931Z",
+  "candle": {
+    "duration": "1m",
+    "definition_identity": "candle-definition-v1:sha256:94b3a5a99c873f0d2805f4d197b772047f8c13e8753ae8fb4314aafebf1440cc",
+    "candle_count": 1440,
+    "first_candle": {
+      "bucket_start": "2024-01-15T00:00:00Z",
+      "bucket_end": "2024-01-15T00:01:00Z",
+      "open": "41731.1",
+      "high": "41794.1",
+      "low": "41723.2",
+      "close": "41759.8",
+      "volume": "201.935",
+      "trade_count": "1733"
+    },
+    "last_candle": {
+      "bucket_start": "2024-01-15T23:59:00Z",
+      "bucket_end": "2024-01-16T00:00:00Z",
+      "open": "42500",
+      "high": "42529.6",
+      "low": "42494.1",
+      "close": "42508.1",
+      "volume": "133.328",
+      "trade_count": "855"
+    },
+    "result_identity": "historical-candle-result-v1:sha256:998dce0c37898a8d165bcd3090d930bc75bed3a4b8066dd9765535d0ff7425e8"
+  }
 }
