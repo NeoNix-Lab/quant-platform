@@ -15,5 +15,14 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0023 | Producer–Consumer Conformity Gate v1 | Accepted |
 | 0024 | Package Boundary / Modular Monolith Foundation v1 | Accepted |
 | 0025 | Source-Acquired Canonical Dataset Lineage v2 | Accepted |
+| 0026 | FeatureDefinition v1 semantic foundation | Accepted |
+| 0027 | FootprintDefinition v1 representation foundation | Accepted |
+| 0028 | PressurePolicyDefinition v1 | Accepted |
+| 0029 | Non-contiguous coverage reads v1 | Accepted |
+| 0030 | General Quality Lifecycle v1 | Accepted |
+| 0031 | Availability/purge/embargo v1 | Accepted |
+| 0032 | RAW / source protection v1 | Accepted |
+| 0033 | Backfill / repair v1 | Accepted |
+| 0034 | FeatureArtifact v1 | Accepted |
 
 See the individual ADR files for context and consequences.

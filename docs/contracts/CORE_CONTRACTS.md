@@ -246,24 +246,66 @@ Temporal invariant:
 
 ---
 
+## 10.1 FootprintDefinition / Footprint
+
+A footprint is a Representation-owned price-level aggregation of canonical
+trades. It is not a FeatureDefinition and does not contain imbalance
+thresholds, labels, strategy semantics or FeatureArtifact materialization.
+
+`FootprintDefinition v1` is governed by
+[ADR-0027](../decisions/ADR-0027-footprint-definition-v1.md).
+
+Required definition concepts:
+
+- source contract `trades@1` / `trade-v1`;
+- fixed positive duration;
+- UTC Unix-epoch alignment;
+- half-open bucket support `[bucket_start,bucket_end)`;
+- positive exact-decimal `tick_size`;
+- zero-origin exact integer tick grid;
+- sparse level policy;
+- explicit aggression evidence requirement;
+- finalized historical-only lifecycle for v1.
+
+Required finalized Footprint concepts:
+
+- definition identity;
+- bucket support interval;
+- integer `level_index`;
+- canonical price `level_index * tick_size`;
+- exact buy/sell volume sums by aggressor side;
+- concrete source venue/instrument binding;
+- authoritative source coverage/finality/provenance evidence.
+
+Invariants:
+
+- source price is valid only when `price / tick_size` is an exact integer;
+- no rounding, snapping, epsilon tolerance or inferred side is allowed;
+- `aggressor_side == "unknown"` fails closed for the affected bucket;
+- missing grid levels remain absent and are never synthesized as zero rows;
+- complete zero-trade bucket support produces no level rows and is distinct
+  from missing source support;
+- finalized Footprints require complete authoritative source support and are
+  immutable for a fixed definition and source revision/content evidence.
+
+---
+
 ## 11. FeatureDefinition
 
 Canonical definition of a derived observable.
 
 Required concepts:
 
-- `feature_id`
-- `name`
-- `version`
-- `provider`
-- `input_requirements`
-- `parameters`
-- `input_grain`
-- `output_grain`
-- `output_schema`
-- `availability_semantics`
-- `implementation_identity`
-- `materialization_policy`
+- deterministic `feature_definition_id`
+- governed canonical `feature_key`
+- explicit `semantic_version`
+- declared typed semantic-parameter schema
+- canonical normalized semantic parameters
+- exactly one versioned `InputContract`
+- declarative support/reference semantics
+- input maturity and availability/finality semantics
+- initialization/history semantics when output-affecting
+- minimal `OutputContract`
 
 Provider families may include:
 
@@ -278,15 +320,26 @@ Provider families may include:
 
 Invariants:
 
-- feature identity must change when semantics or relevant parameters change;
-- implementation identity must be reproducible;
-- input and output grain must both be explicit and MAY differ;
-- availability semantics must be explicit.
+- feature identity changes when semantic meaning, identity-bearing parameters,
+  input contract, support, availability/finality, initialization/history or
+  output-equivalence semantics change;
+- feature identity does not depend on registry order, implementation
+  build/SHA/backend, cache/materialization strategy, concrete dataset, venue,
+  instrument, time range, physical locator, execution provenance or concrete
+  representation grain unless that grain/duration is intrinsic feature
+  semantics;
+- temporal availability and finality are explicit and distinguish causal floors
+  from nullable observed runtime evidence;
+- undefined/insufficient support is a non-observation outcome, not a
+  canonical null/NaN/zero sentinel value.
 
 `FeatureDefinition` identifies one semantic observable, such as `delta@1` or
 `vwap@1`, and is distinct from a bundle or materialization. Valid examples
 include `trade -> candle`, `price_level -> candle`, `L1_update -> candle`,
 `trade -> trade` and `candle -> candle`.
+
+FeatureDefinition v1 is governed by
+[ADR-0026](../decisions/ADR-0026-feature-definition-v1-semantic-foundation.md).
 
 ---
 
@@ -672,7 +725,36 @@ For any derived value, the platform must be able to explain which source events 
 
 ---
 
-## 34. Contract evolution
+## 34. PressurePolicyDefinition
+
+Operational pressure policy is deterministic policy over explicit evidence, not
+capacity observation. `PressurePolicyDefinition v1` is governed by
+[ADR-0028](../decisions/ADR-0028-pressure-policy-v1.md).
+
+Required concepts:
+
+- immutable/versioned policy definition;
+- deterministic content-derived policy identity;
+- explicit UTC `as_of` evaluation instant;
+- fresh K04 capacity evidence;
+- optional caller-supplied write-rate evidence when time-to-full participates;
+- `NORMAL`, `PRESSURE`, `CRITICAL` and `EXHAUSTED` states;
+- explicit unavailable decisions for missing, stale, future-dated or malformed
+  required evidence;
+- deterministic decision evidence and identity;
+- pressure restrictions as upper bounds only.
+
+Invariants:
+
+- K05 does not observe filesystems, collect telemetry history, mutate storage,
+  schedule work or authorize deletion;
+- the evaluator does not read an implicit host clock;
+- `available_bytes` is consumed as reported by K04 and is not recomputed;
+- zero write rate means unbounded time-to-full, not a finite sentinel;
+- equality enters the more severe threshold state;
+- `delete_authorized` is false for every successful K05 decision.
+
+## 35. Contract evolution
 
 Breaking semantic changes require:
 

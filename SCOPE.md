@@ -1,135 +1,109 @@
-# Scope: Post-C03 Governance Reconciliation / ASS-02 Closeout
+# Scope: Weekly frontier preparation, 2026-09-21 to 2026-09-25
 
 ## Objective
 
-Reconcile canonical governance with the repository state after C03 integration, close the ASS-02 in-process Application vertical, and materialize the already-decided C05 configuration semantics without implementing C05 or ASS-03.
+Record the post-Wave-1 resting state and prepare the execution agenda for the
+week of 2026-09-21. This is a governance/planning scope only: it does not
+activate implementation of C04, F02, F03, issue #73, or any other atom.
 
-C02 and C03 are both integrated. This reconciliation does not reopen their implementation/review evidence and does not authorize C04, API transport, Job runtime, clients or any other missing capability.
+No bounded implementation or decision slice is currently authorized by this
+file. Before any mutation on a frontier atom, rewrite `SCOPE.md` for exactly
+one bounded slice with its objective, baseline, included/excluded work,
+acceptance criteria and verification plan.
 
-The completed Producer–Consumer Conformity cycle remains credited under ADR-0023: **Contract Freeze Gate = PASSED** and **Conformity Implementation Gate = PASSED**. This slice does not reopen either gate.
+## Status
 
-## Baseline
+The `implement/wave-1` batch (issues #51-#77: E02, D06, K05, A16, B04, I02,
+K03, F06, F01, K06, A10, E04, plus the earlier C05/D03/E05/F05/I01/K04
+frontier) concluded 2026-09-19. See
+[`docs/product/CAPABILITY_MAP.md`](docs/product/CAPABILITY_MAP.md) and
+[`docs/product/CAPABILITY_DAG.md`](docs/product/CAPABILITY_DAG.md) for the
+reconciled current state.
 
-```text
-base main                  = 066eaf6984fca9d863bc53c9c7fa07c08a1f464c
-source integration         = PR #41
-reviewed C03 head          = f382a2e6f97ce95f143eed866e602ebf0c5f3acb
-exact-head CI              = Quant Platform integrity #91 PASS
-mutation class             = governance docs only
-source/tests/runtime       = NO
-contracts/ADRs             = NO
-```
-
-PR #41 integrated the reviewed C03 candidate `f382a2e6f97ce95f143eed866e602ebf0c5f3acb` into `main` as merge commit `066eaf6984fca9d863bc53c9c7fa07c08a1f464c`. The pull-request workflow `Quant Platform integrity #91` passed on that exact candidate head.
-
-C02 evidence from PR #30 and C03 review/CI evidence are credited and must not be re-proved absent a concrete invalidating change.
-
-## Accepted state
+The completed Producer-Consumer Conformity cycle remains credited under
+ADR-0023:
 
 ```text
-C01  Application ownership                    COMPLETE
-C02  ASS-02 semantic selector resolution      COMPLETE
-C03  ASS-02 result/error translation          COMPLETE
-V2   DataGateway -> Application               COMPLETE
-C05  Configuration convergence decision       RESOLVED / implementation MISSING
-C04  Tool orchestration convergence           RESOLVED / implementation MISSING; requires C05 implementation
+Contract Freeze Gate              PASSED
+Conformity Implementation Gate    PASSED
 ```
 
-ASS-02 means the current in-process Application service vertical only. It does not imply API transport, Job runtime, clients, C05 implementation or ASS-03 completion.
+These gates are credited foundation evidence, not reopened work.
 
-## Frozen C05 decision recorded by this reconciliation
+Issue #73 (Wave 1 Human Golden E2E closeout) is closed. The physical-storage
+host ACL was fixed, a real 1440-candle 1m result was captured through the
+production Application/DataGateway/D03 path and frozen into the golden
+fixture, and the official operator `verify` run returned `GOLDEN E2E: PASS`
+(exit 0). Merged via PR #78; durable evidence and the ingestion/publication
+scope ruling (credit rather than re-prove already-validated, archived data)
+are in `docs/architecture/WAVE1_GOLDEN_E2E_CLOSEOUT_EVIDENCE.md` (PR #80).
 
-The Application configuration boundary is:
+## Current frontier
+
+The current execution frontier (decision-complete, missing atoms whose
+declared dependencies are satisfied) is:
 
 ```text
-CLI / environment
-      ↓
-executable boundary: acquire + resolve input only
-      ↓
-typed immutable capability-specific Application config
-      ↓
-quant_platform.application: concrete composition owner
-      ↓
-Catalog / DataGateway / source / producer capabilities
+C04  tool orchestration convergence through the canonical Application seam
+F02  EventSpec/detection
+F03  OutcomeSpec/Outcome
 ```
 
-Rules:
+Frontier membership is not implementation authorization.
 
-1. `tools/` owns CLI/environment acquisition and parsing.
-2. Resolution precedence is **explicit CLI > environment > declared default > explicit failure**.
-3. Application receives resolved values only and does not know their acquisition source.
-4. Application-facing config is typed, immutable and capability-specific.
-5. `quant_platform.application` owns concrete composition and does not read `sys.argv`, `argparse` or environment variables directly.
-6. No generic DI container, service locator, provider registry or plugin/config framework is introduced.
-7. C05 implementation remains missing; C04 remains blocked until that implementation exists.
+## Week plan
 
-## Current execution frontier
-
-Decision-complete, missing atoms whose declared planning dependencies are satisfied:
+Issue #73 closed and PR #78/#79/#80 merged before the week starts, so it opens
+directly on the frontier rather than on verification of already-completed
+work:
 
 ```text
-C05  configuration convergence for the Application service
-D03  historical Candle runtime (on-demand only)
-E05  H01 pure imbalance kernel
-F05  deterministic walk-forward schedule
-I01  Study/Trial/Run/Artifact semantic model
-K04  observational capacity monitoring
+2026-09-21  verify current origin/main reflects PR #78/#79/#80; open at most
+            one C04 scope for tool orchestration convergence through the
+            Application seam
+2026-09-22  continue/close the C04 scope; do not open a second atom in parallel
+2026-09-23  open at most one F02 scope for EventSpec/detection, only after
+            refreshing F01/E04 evidence
+2026-09-24  continue/close the F02 scope
+2026-09-25  open at most one F03 scope for OutcomeSpec/Outcome, or reserve the
+            day for review/reconciliation if C04/F02 ran long
 ```
 
-Frontier membership remains planning readiness only; it is not implementation authorization.
+If an earlier item blocks, do not silently roll its authority into the next
+item. Record the blocker and select the next independent frontier atom with a
+fresh bounded scope.
 
-## Scope
+## Activation rules
 
-Included:
+Activating any item above requires:
 
-- record C03 as `FROZEN / COMPLETE` in the canonical DAG and capability map;
-- record `C02 + C03 = ASS-02 in-process Application vertical COMPLETE`;
-- record V2 as COMPLETE;
-- remove C03 from every current-frontier representation;
-- record C05 as `RESOLVED / MISSING` with the frozen configuration convention above;
-- update planning metrics from `49/30/8` to `50/29/8` while preserving 87 classified atoms;
-- expose C05 as the next Application atom and preserve C04 as blocked on C05 implementation;
-- preserve all unrelated dependency edges, gate semantics, deferable triggers and macro phases.
+1. verify current `origin/main` and branch ancestry;
+2. locate the atom in `docs/product/CAPABILITY_DAG.md`;
+3. verify its transitive `Requires` path;
+4. activate only unresolved decision branches on that path;
+5. credit existing evidence rather than rerunning expensive proofs without a
+   concrete invalidating concern;
+6. define the exact missing proposition and minimum proof;
+7. keep unrelated frontier atoms inactive;
+8. preserve governance documents unless the new issue is explicitly
+   governance-only / governance-reconciliation work.
 
-Excluded:
+## Excluded
 
-- any source, test, runtime, schema, DDL or fixture mutation;
-- any ADR/contract semantic change;
-- C05 implementation;
-- C04 implementation or tool-debt migration;
-- API transport, Job runtime or client implementation;
-- unrelated decision resolution;
-- re-review or re-execution of already-credited C02/C03 proof.
-
-## Preserved invariants
-
-```text
-TOTAL_ATOMS                     = 87
-CLASSIFIED_ATOMS                = 87
-UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 50 / 87 = 57.5%
-OPEN_BLOCKING                   = 29
-OPEN_DEFERABLE                  = 8
-ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
-REQUIRES_EDGES                  = 157
-CYCLES                          = 0
-```
-
-The only decision-state movement is `C05: OPEN_BLOCKING -> RESOLVED`. C03 changes implementation state only (`MISSING -> COMPLETE`). No dependency edge, frozen Consumer API semantic, phase numbering or deferable trigger changes.
+- Implementing C04, F02, F03 or issue #73 in this planning scope.
+- Claiming ASS-03, API transport, Job runtime, clients or live product mode.
+- Reopening the Contract Freeze Gate or Conformity Implementation Gate.
+- Mutating contracts, ADRs, schemas, source code, tools, fixtures, DDL or
+  runtime/server state.
 
 ## Acceptance
 
-DONE means all of the following are true:
+DONE means:
 
-1. C03 is `FROZEN / COMPLETE` in canonical governance;
-2. C02 + C03 are recorded as ASS-02 COMPLETE and V2 COMPLETE;
-3. C05 is `RESOLVED / MISSING` with the exact configuration boundary and precedence above;
-4. every current-frontier list is exactly `C05,D03,E05,F05,I01,K04`;
-5. C04 remains `RESOLVED / MISSING` and blocked on C05 implementation;
-6. planning metrics are exactly `50 resolved/frozen`, `29 open-blocking`, `8 open-deferable`, total `87`;
-7. no source/test/runtime/contract/ADR/schema/DDL/fixture mutation is included;
-8. credited C03 review and exact-head CI are referenced rather than re-proved.
-
-## Next action
-
-After this governance reconciliation is integrated, issue #33 can close as completed and #34 (`C05 — Configuration convergence`) becomes the next Application atom eligible for the implementation router. #35–#39 remain independent implementation-ready slices according to their existing issue mandates.
+1. `SCOPE.md` reflects the post-Wave-1 resting state.
+2. The credited conformity gate linkage remains visible.
+3. The current frontier is exactly `C04,F02,F03`.
+4. The week of 2026-09-21 has an explicit candidate agenda.
+5. The agenda does not authorize broad or multi-atom implementation.
+6. Future implementation still requires rewriting this file for exactly one
+   bounded slice.

@@ -21,6 +21,25 @@ The `quant-platform` repository is the authoritative product codebase. Before ar
 - Do not use `git add .` or `git add -A`; stage explicit paths only.
 - If code conflicts with an accepted ADR or contract, stop and report the conflict.
 
+## Governance boundary
+
+Implementation and semantic-materialization agents are **not responsible for repository governance reconciliation**.
+
+They MAY read governance/planning documents as authority and context, but MUST NOT mutate them as part of ordinary implementation work. In particular, do not edit:
+
+- `SCOPE.md`;
+- `docs/product/ROADMAP.md`;
+- `docs/product/CAPABILITY_MAP.md`;
+- `docs/product/CAPABILITY_DAG.md`;
+- `docs/architecture/OPEN_DECISIONS.md`;
+- derived planning metrics, frontier lists, blocker projections, or capability-state counts.
+
+If implementation reveals that governance is stale, inconsistent, or should change, report the exact finding in the issue/PR output and leave the governance files untouched.
+
+Canonical semantic authority owned by the task is different from planning governance: an issue may still add or update its explicitly authorized ADR, normative contract, schema, code and tests when those are part of the task acceptance.
+
+Only an issue explicitly designated as **governance-only / governance-reconciliation work** may authorize mutation of governance/planning files. That authority must be stated in the issue; it is never implied by implementation completion.
+
 ## Legacy adoption
 
 For each candidate, identify the target contract, inspect implementation and tests, record semantic matches and mismatches, choose ADOPT/ADAPT/REVIEW/REJECT, and add canonical semantic and temporal tests.

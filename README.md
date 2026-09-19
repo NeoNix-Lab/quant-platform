@@ -6,7 +6,7 @@ Quant Platform is a historical-first, live-targeted quantitative research and tr
 
 ## Current status
 
-The canonical data-plane foundation is real and implemented: `trade-v1`, dataset and partition manifests, PostgreSQL catalog DDL, lineage, storage roots, Bybit historical import, semantic fixtures and tests. A narrow catalog-backed DataGateway v1 implementation is present; representations, features, research, execution, learning, API and clients remain target layers.
+The canonical data-plane foundation is real and implemented: `trade-v1`, dataset and partition manifests, PostgreSQL catalog DDL, lineage, storage roots, Bybit historical import, semantic fixtures and tests. A narrow catalog-backed DataGateway v1 implementation is present, CandleDefinition v1 is frozen, the FeatureDefinition v1 semantic foundation is implemented, and the FootprintDefinition v1 historical representation foundation is implemented. Broader representation materialization, feature materialization, research, execution, learning, API and clients remain target layers.
 
 ## Architecture
 

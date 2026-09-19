@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-import hashlib
-import json
 from typing import Any, Mapping, Sequence
 
 from .manifests import DATASET_MANIFEST_V1, DATASET_MANIFEST_V2
 from .models import DatasetIdentity, Instant, NaturalPartitionIdentity
+from .quality_lifecycle import (
+    QualityLifecycleRefusal,
+    current_partition_report,
+    select_current_quality_assessment,
+    semantic_assessment_signature,
+)
 
 
 class PublicationEligibilityRefusal(RuntimeError):
@@ -62,76 +66,117 @@ class PublicationEligibilityCatalog:
         expected_profile: str,
         expected_check_suite: str,
     ) -> PublicationEligibilityResult:
-        identity = _identity(dataset)
-        target_key = (partition["partition_key"], int(partition["revision"]))
         try:
             with self.connection.cursor() as cursor:
-                child = self._resolve_dataset(cursor, identity, dataset, dataset_sha256)
-                parents = self._resolve_parents(cursor, dataset, identity)
-                relevant_ids = sorted({child[0], *(row[0] for row in parents)})
-                self._lock_datasets(cursor, relevant_ids)
-                self._verify_locked_datasets(cursor, child, parents, dataset, dataset_sha256)
-
-                topology = self._lock_partition_topology(cursor, child[0], partition["partition_key"])
-                target = next((row for row in topology if int(row[3]) == target_key[1]), None)
-                current = _live_row(topology)
-                if target is None or current is None or str(target[0]) != str(current[0]):
-                    raise PublicationEligibilityRefusal("target revision is not the current live revision")
-                if target[4] not in {"closed", "valid", "degraded"}:
-                    raise PublicationEligibilityRefusal(f"target state {target[4]!r} is not publishable")
-                self._verify_partition(
-                    target, child, identity, partition, partition_sha256,
-                    coverage_start, coverage_end, storage_root_id,
-                )
-
-                reports = self._quality_reports(cursor, target[0], expected_check_suite)
-                selected = _select_authoritative_report(
-                    reports,
-                    expected_profile=expected_profile,
-                    expected_check_suite=expected_check_suite,
-                    identity=identity,
-                    partition=partition,
+                verified = self._publish_tx(
+                    cursor,
+                    dataset=dataset,
                     dataset_sha256=dataset_sha256,
+                    partition=partition,
                     partition_sha256=partition_sha256,
+                    coverage_start=coverage_start,
+                    coverage_end=coverage_end,
                     coverage_ids=coverage_ids,
                     assertion_ids=assertion_ids,
                     coverage_sha256=coverage_sha256,
-                    target=target,
-                )
-                desired = _eligible_state(selected)
-
-                expected_lineage = self._ensure_lineage(
-                    cursor, child[0], parents, dataset, identity,
-                )
-                if target[4] == "closed":
-                    cursor.execute(
-                        """
-                        UPDATE catalog.partitions
-                           SET state = %s
-                         WHERE partition_id = %s AND state = 'closed'
-                        RETURNING partition_id::text
-                        """,
-                        (desired, target[0]),
-                    )
-                    if cursor.fetchone() is None:
-                        raise PublicationEligibilityRefusal("eligibility state update did not apply")
-                elif target[4] != desired:
-                    raise PublicationEligibilityRefusal(
-                        f"existing eligibility state {target[4]!r} conflicts with {desired!r}"
-                    )
-
-                verified = self._phase5_verify(
-                    cursor, child, target[0], partition["partition_key"], target_key[1],
-                    identity, partition, partition_sha256, coverage_start, coverage_end,
-                    storage_root_id, desired, expected_lineage, expected_check_suite,
-                    expected_profile, dataset_sha256, coverage_ids, assertion_ids,
-                    coverage_sha256, selected.signature,
+                    storage_root_id=storage_root_id,
+                    expected_profile=expected_profile,
+                    expected_check_suite=expected_check_suite,
                 )
             self.connection.commit()
             return verified
         except Exception:
             self.connection.rollback()
             raise
+
+    def _publish_tx(
+        self,
+        cursor: Any,
+        *,
+        dataset: Mapping[str, Any],
+        dataset_sha256: str,
+        partition: Mapping[str, Any],
+        partition_sha256: str,
+        coverage_start: Instant,
+        coverage_end: Instant,
+        coverage_ids: Sequence[str],
+        assertion_ids: Sequence[str],
+        coverage_sha256: Sequence[str],
+        storage_root_id: str,
+        expected_profile: str,
+        expected_check_suite: str,
+    ) -> PublicationEligibilityResult:
+        """Transaction-scoped S14 seam: same verification/mutation, caller's cursor.
+
+        Performs the identical accepted logic as :meth:`publish` against a
+        cursor the caller already owns, and never commits or rolls back the
+        caller's transaction.  A10's atomic cutover reuses this so publication
+        eligibility participates in its own single commit instead of the
+        standalone commit ``publish`` performs for its own direct callers.
+        """
+        identity = _identity(dataset)
+        target_key = (partition["partition_key"], int(partition["revision"]))
+        child = self._resolve_dataset(cursor, identity, dataset, dataset_sha256)
+        parents = self._resolve_parents(cursor, dataset, identity)
+        relevant_ids = sorted({child[0], *(row[0] for row in parents)})
+        self._lock_datasets(cursor, relevant_ids)
+        self._verify_locked_datasets(cursor, child, parents, dataset, dataset_sha256)
+
+        topology = self._lock_partition_topology(cursor, child[0], partition["partition_key"])
+        target = next((row for row in topology if int(row[3]) == target_key[1]), None)
+        current = _live_row(topology)
+        if target is None or current is None or str(target[0]) != str(current[0]):
+            raise PublicationEligibilityRefusal("target revision is not the current live revision")
+        if target[4] not in {"closed", "valid", "degraded"}:
+            raise PublicationEligibilityRefusal(f"target state {target[4]!r} is not publishable")
+        self._verify_partition(
+            target, child, identity, partition, partition_sha256,
+            coverage_start, coverage_end, storage_root_id,
+        )
+
+        reports = self._quality_reports(cursor, target[0], expected_check_suite)
+        selected = _select_authoritative_report(
+            reports,
+            expected_profile=expected_profile,
+            expected_check_suite=expected_check_suite,
+            identity=identity,
+            partition=partition,
+            dataset_sha256=dataset_sha256,
+            partition_sha256=partition_sha256,
+            coverage_ids=coverage_ids,
+            assertion_ids=assertion_ids,
+            coverage_sha256=coverage_sha256,
+            target=target,
+        )
+        desired = _eligible_state(selected)
+
+        expected_lineage = self._ensure_lineage(
+            cursor, child[0], parents, dataset, identity,
+        )
+        if target[4] == "closed":
+            cursor.execute(
+                """
+                UPDATE catalog.partitions
+                   SET state = %s
+                 WHERE partition_id = %s AND state = 'closed'
+                RETURNING partition_id::text
+                """,
+                (desired, target[0]),
+            )
+            if cursor.fetchone() is None:
+                raise PublicationEligibilityRefusal("eligibility state update did not apply")
+        elif target[4] != desired:
+            raise PublicationEligibilityRefusal(
+                f"existing eligibility state {target[4]!r} conflicts with {desired!r}"
+            )
+
+        return self._phase5_verify(
+            cursor, child, target[0], partition["partition_key"], target_key[1],
+            identity, partition, partition_sha256, coverage_start, coverage_end,
+            storage_root_id, desired, expected_lineage, expected_check_suite,
+            expected_profile, dataset_sha256, coverage_ids, assertion_ids,
+            coverage_sha256, selected.signature,
+        )
 
     @staticmethod
     def _resolve_dataset(cursor: Any, identity: DatasetIdentity, document: Mapping[str, Any], digest: str):
@@ -350,72 +395,32 @@ def _select_authoritative_report(reports: Sequence[Any], *, expected_profile: st
                                  identity: DatasetIdentity, partition: Mapping[str, Any], dataset_sha256: str,
                                  partition_sha256: str, coverage_ids: Sequence[str], assertion_ids: Sequence[str],
                                  coverage_sha256: Sequence[str], target: Any) -> SelectedCertification:
-    matches: list[SelectedCertification] = []
-    for row in reports:
-        report_id, status, metrics, violations, code_ref, _ran_at = row
-        if not _current_report(metrics, status, violations, code_ref, expected_profile, expected_check_suite,
-                               identity, partition, dataset_sha256, partition_sha256, coverage_ids,
-                               assertion_ids, coverage_sha256, target):
-            continue
-        signature = _semantic_signature(expected_check_suite, status, metrics, violations, code_ref)
-        matches.append(SelectedCertification(signature, status, code_ref.strip()))
-    signatures = {item.signature for item in matches}
-    if not signatures:
-        raise PublicationEligibilityRefusal("no quality report matches current durable evidence")
-    if len(signatures) != 1:
-        raise PublicationEligibilityRefusal("quality report evidence is ambiguous")
-    selected = matches[0]
-    if selected.status not in {"pass", "warn", "fail"}:
-        raise PublicationEligibilityRefusal("quality report status is unsupported")
-    return selected
+    try:
+        selected = select_current_quality_assessment(
+            reports,
+            expected_profile=expected_profile,
+            expected_check_suite=expected_check_suite,
+            identity=identity,
+            partition=partition,
+            dataset_sha256=dataset_sha256,
+            partition_sha256=partition_sha256,
+            coverage_ids=coverage_ids,
+            assertion_ids=assertion_ids,
+            coverage_sha256=coverage_sha256,
+            target=target,
+        )
+    except QualityLifecycleRefusal as exc:
+        raise PublicationEligibilityRefusal(str(exc)) from exc
+    return SelectedCertification(selected.signature, selected.status, selected.code_ref)
 
 
 def _current_report(metrics: Any, status: str, violations: Any, code_ref: Any, profile: str, suite: str,
                     identity: DatasetIdentity, partition: Mapping[str, Any], dataset_sha: str, partition_sha: str,
                     coverage_ids: Sequence[str], assertion_ids: Sequence[str], coverage_sha: Sequence[str], target: Any) -> bool:
-    if not isinstance(metrics, Mapping) or metrics.get("certification_profile") != profile:
-        return False
-    natural = metrics.get("natural_partition_identity")
-    expected_natural = {"dataset_identity": identity.stable_dict(), "partition_key": partition["partition_key"], "revision": int(partition["revision"])}
-    if natural != expected_natural or metrics.get("dataset_manifest_sha256") != dataset_sha:
-        return False
-    if metrics.get("partition_manifest_sha256") != partition_sha:
-        return False
-    if _text(metrics.get("physical_artifact_hash")) != _text(partition["sha256"]) or _text(target[11]) != _text(partition["sha256"]):
-        return False
-    if _text(metrics.get("canonical_content_hash_v1")) is None:
-        return False
-    if metrics.get("coverage_manifest_id") != (coverage_ids[0] if coverage_ids else None):
-        return False
-    if metrics.get("coverage_assertion_id") != (assertion_ids[0] if assertion_ids else None):
-        return False
-    # Fail closed, never conditionally: a report that omits any of the three
-    # plural coverage fields has not proven which durable CoverageManifest set
-    # it was certified against, so a reused coverage_id could otherwise hide
-    # changed coverage content or a narrower coverage set.  Order is
-    # non-semantic, so the comparison stays set-based.
-    for key, expected in (("coverage_manifest_ids", coverage_ids), ("coverage_assertion_ids", assertion_ids), ("coverage_manifest_sha256", coverage_sha)):
-        value = metrics.get(key)
-        if not isinstance(value, (list, tuple)) or _set_values(value) != _set_values(expected):
-            return False
-    evidence = metrics.get("evidence")
-    required = {"source", "canonical", "physical", "manifests", "coverage"}
-    if not isinstance(evidence, Mapping) or set(evidence).difference(required | {"publication"}) or not required.issubset(evidence):
-        return False
-    statuses = {name: evidence[name].get("status") if isinstance(evidence[name], Mapping) else None for name in required}
-    if any(value not in {"pass", "warn", "fail"} for value in statuses.values()):
-        return False
-    if not isinstance(code_ref, str) or not code_ref.strip():
-        return False
-    if status == "pass":
-        return not violations and all(value == "pass" for value in statuses.values())
-    if status == "warn":
-        if statuses["source"] != "warn" or any(statuses[name] != "pass" for name in required - {"source"}):
-            return False
-        if not isinstance(violations, list):
-            return False
-        return all(isinstance(item, Mapping) and item.get("category") == "source" for item in violations)
-    return status == "fail"
+    return current_partition_report(
+        metrics, status, violations, code_ref, profile, suite, identity, partition,
+        dataset_sha, partition_sha, coverage_ids, assertion_ids, coverage_sha, target,
+    )
 
 
 def _eligible_state(selected: SelectedCertification) -> str:
@@ -427,31 +432,7 @@ def _eligible_state(selected: SelectedCertification) -> str:
 
 
 def _semantic_signature(suite: str, status: str, metrics: Any, violations: Any, code_ref: str) -> str:
-    normalized = _normalize(metrics)
-    if isinstance(normalized, dict):
-        for key in ("coverage_manifest_ids", "coverage_assertion_ids", "coverage_manifest_sha256"):
-            if key in normalized and isinstance(normalized[key], list):
-                normalized[key] = sorted(normalized[key])
-    payload = {"check_suite": suite, "status": status, "metrics": normalized, "violations": _normalize(violations), "code_ref": code_ref.strip()}
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
-
-
-def _normalize(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _normalize(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_normalize(item) for item in value]
-    return value
-
-
-def _set_values(value: Any) -> frozenset[Any]:
-    if not isinstance(value, (list, tuple)):
-        return frozenset()
-    return frozenset(_json_key(item) for item in value)
-
-
-def _json_key(value: Any) -> str:
-    return json.dumps(_normalize(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return semantic_assessment_signature(suite, status, metrics, violations, code_ref)
 
 
 def _identity(document: Mapping[str, Any]) -> DatasetIdentity:

@@ -35,6 +35,21 @@ class LifecyclePolicy(str, Enum):
         }[self]
 
 
+class CoveragePolicy(str, Enum):
+    STRICT = "strict"
+    ALLOW_PARTIAL = "allow-partial"
+
+    @classmethod
+    def normalize(cls, value: "CoveragePolicy | str") -> "CoveragePolicy":
+        if isinstance(value, CoveragePolicy):
+            return value
+        if not isinstance(value, str):
+            raise ValueError(value)
+        if value in cls.__members__:
+            return cls[value]
+        return cls(value)
+
+
 @dataclass(frozen=True, slots=True)
 class DataRequest:
     dataset_selector: DatasetIdentity
@@ -42,7 +57,7 @@ class DataRequest:
     end: Instant | datetime | str
     schema_requirement: str | None = None
     lifecycle_policy: LifecyclePolicy = LifecyclePolicy.VALID_ONLY
-    coverage_policy: str = "strict"
+    coverage_policy: CoveragePolicy = CoveragePolicy.STRICT
     # This is an opaque, frozen request-contract token.  Its implementation
     # and compatibility claim are supplied by the source adapter, not here.
     ordering_policy: str | None = None
@@ -60,13 +75,16 @@ class DataRequest:
             schema = self.dataset_selector.record_schema_id
         else:
             schema = _identifier(self.schema_requirement, "schema_requirement")
-        if self.coverage_policy != "strict":
-            raise InvalidRequest("DataGateway v1 supports only strict coverage")
         if not isinstance(self.lifecycle_policy, LifecyclePolicy):
             try:
                 object.__setattr__(self, "lifecycle_policy", LifecyclePolicy(self.lifecycle_policy))
             except ValueError as exc:
                 raise InvalidRequest("unknown lifecycle policy") from exc
+        if not isinstance(self.coverage_policy, CoveragePolicy):
+            try:
+                object.__setattr__(self, "coverage_policy", CoveragePolicy.normalize(self.coverage_policy))
+            except ValueError as exc:
+                raise InvalidRequest("unknown coverage policy") from exc
         object.__setattr__(self, "start", start)
         object.__setattr__(self, "end", end)
         object.__setattr__(self, "schema_requirement", schema)
@@ -81,7 +99,7 @@ class DataRequest:
             "schema_requirement": self.schema_requirement,
             "interval": {"start": self.start.isoformat(), "end": self.end.isoformat()},
             "lifecycle_policy": self.lifecycle_policy.value,
-            "coverage_policy": self.coverage_policy,
+            "coverage_policy": self.coverage_policy.value,
             "ordering_policy": self.ordering_policy,
         }
 
@@ -143,7 +161,7 @@ class DataSliceMetadata:
     row_count: int
     ordering_policy: str
     lifecycle_policy: LifecyclePolicy
-    coverage_policy: str
+    coverage_policy: CoveragePolicy
     catalog_dataset_id: str
     catalog_partition_ids: tuple[str, ...]
     storage_root_ids: tuple[str, ...]

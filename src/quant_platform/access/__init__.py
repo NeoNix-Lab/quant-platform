@@ -10,6 +10,7 @@ from .gateway import (
 from .models import (
     CatalogDataset,
     CatalogPartition,
+    CoveragePolicy,
     DataRequest,
     DataSlice,
     DataSliceMetadata,
@@ -24,6 +25,7 @@ __all__ = [
     "ScanState",
     "CatalogDataset",
     "CatalogPartition",
+    "CoveragePolicy",
     "DataRequest",
     "DataSlice",
     "DataSliceMetadata",

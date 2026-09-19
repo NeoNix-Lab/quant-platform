@@ -15,6 +15,12 @@ Legacy Capability Harvest Audit v1                   COMPLETE
 ASS-01 Application ownership/enforcement             COMPLETE
 ASS-02 in-process Application service                COMPLETE
 DG-D Application configuration semantics             RESOLVED
+DG-A FeatureDefinition v1 semantics                  FROZEN / COMPLETE
+DG-A FootprintDefinition v1 semantics                FROZEN / COMPLETE
+DG-A FeatureArtifact v1 (E04)                        FROZEN / COMPLETE
+DG-B B04 non-contiguous coverage reads v1            FROZEN / COMPLETE
+DG-B A10 backfill / repair v1                        FROZEN / COMPLETE
+DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -30,7 +36,7 @@ Resolved architecture includes:
 - API-first direction: clients/API transport -> application services -> domain/DataGateway;
 - Consumer API semantic selector/result/error boundary;
 - completed ASS-02 in-process path: C02 semantic selector resolution + C03 result/error translation;
-- `trade-v1`, Declared Coverage, CandleDefinition v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
+- `trade-v1`, Declared Coverage, CandleDefinition v1, FeatureDefinition v1, FootprintDefinition v1, B04 non-contiguous coverage reads v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
@@ -79,44 +85,62 @@ Activate only when persisted Candle results are selected. Resolve how a persiste
 
 `D05` is not a prerequisite of canonical H01 integration.
 
-### FeatureDefinition (`E02`)
+### FeatureArtifact (`E04`) — RESOLVED
 
-Activate before FeatureDefinition-dependent work. Freeze the minimum canonical identity/fields/versioning/availability semantics.
-
-### FeatureArtifact (`E04`)
-
-Activate only after the FeatureDefinition path is selected and artifact/materialization behavior is needed. Resolve artifact identity/provenance and equivalence of cached vs recomputed output.
+Artifact identity/provenance and equivalence of cached vs recomputed output
+are frozen and complete under [ADR-0034](../decisions/ADR-0034-feature-artifact-v1.md).
+`FeatureArtifactIdentity`, portable `FeatureSetDefinitionIdentity`,
+`SupportShape` non-contiguous support, FINAL-only sealing and the
+attributable-evidence caller-discipline obligations on E06/F02/I04 are the
+accepted authority; do not re-litigate them without contradictory current
+authority.
 
 ### Footprint + canonical H01 (`D06`,`E06`)
 
-For canonical H01, resolve only its actual path:
+For canonical H01, the actual path is now:
 
 ```text
-D06 footprint representation
-E02 FeatureDefinition
-E04 FeatureArtifact
+D06 footprint representation (FROZEN / COMPLETE by ADR-0027)
+E02 FeatureDefinition (FROZEN / COMPLETE by ADR-0026)
+E04 FeatureArtifact (FROZEN / COMPLETE by ADR-0034)
 E05 pure H01 kernel (already RESOLVED)
 E06 canonical H01 integration
 ```
 
-Freeze canonical price-level grain, validated tick grid, ordering/adjacency, temporal availability and provenance binding.
+D06 has frozen canonical price-level grain, validated tick grid,
+ordering/adjacency, temporal availability and provenance binding. E04 is now
+also frozen. The remaining live decision on this branch is E06 canonical H01
+integration.
 
-Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework.
+Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework. FeatureDefinition v1, FootprintDefinition v1 and FeatureArtifact v1 are no longer open; ADR-0026, ADR-0027 and ADR-0034 are the accepted authorities for those foundations.
 
 ## DG-B — Historical / Live data convergence
 
 This family also has separate repair and live branches.
 
-### Repair branch (`A16`,`B04`,`A10` as required)
+### Repair branch (`A16`,`A10`,`B04` resolved) — RESOLVED for the accepted first vertical
 
-Activate only the propositions needed by the selected repair slice:
+B04 explicit non-contiguous coverage reads are frozen and complete under
+[ADR-0029](../decisions/ADR-0029-non-contiguous-coverage-reads-v1.md). B04
+reports requested support, eligible support, exact gaps and returned rows; it
+does not decide repair triggering, retry, replacement revision or live cursor
+policy.
 
-- general quality-report -> lifecycle mapping beyond the accepted first vertical;
-- explicit non-contiguous coverage semantics where required;
-- repair triggering, precedence and idempotent revision/retry behavior;
-- duplicate resolution where required by repair semantics.
+A10 backfill/repair -- repair triggering (coverage-gap and invalid-revision
+triggers), isolated candidate attempts, and one atomic compare-and-cutover
+transaction reusing the A16/S14 seams -- is frozen and complete under
+[ADR-0033](../decisions/ADR-0033-backfill-repair-v1.md). **Accepted known
+limitations** (see ADR-0033 Consequences): coverage-trigger
+*re-verification* is architecturally unsatisfiable inside A10's own package
+boundary (attributable-evidence principle, same as ADR-0032/ADR-0034); candidate
+identity binding for `coverage_start`/`coverage_end` and full provenance
+persistence remain partial, deferred to a future pass.
 
-Historical repair does not activate live-cursor semantics by default.
+Historical repair does not activate live-cursor semantics by default. Any
+repair proposition beyond the accepted A10/A16/B04 foundation -- general
+quality-report -> lifecycle mapping beyond the accepted first vertical,
+duplicate resolution beyond what A10 already resolves -- remains live and
+should only be activated by the selected repair slice actually needing it.
 
 ### Live branch (`A11`,`B06` + only required shared decisions)
 
@@ -211,9 +235,16 @@ Before paper/live claims or checkpoint/recovery runtime, define the minimum exte
 
 After observational capacity `K04`, resolve thresholds/time-to-full and explicit safe actions. No silent deletion.
 
-### Source protection (`K06`)
+### Source protection (`K06`) — RESOLVED
 
-Resolve protection authority and reconstruction guarantees. `K06` depends on the selected source and pressure policy; it does not depend on backup/restore.
+Protection authority and reconstruction guarantees are frozen and complete
+under [ADR-0032](../decisions/ADR-0032-raw-source-protection-v1.md): a pure
+protection-identity/assessment seam (`ProtectionState`,
+`ProtectionAssessment`, `assess_protection()`, `SafetyRelevanceAssertion`,
+`ProtectionWriteAuthorization`) that never crawls a filesystem or authorizes
+deletion itself. K07 and K08 may depend on its output. **Accepted known
+limitation:** `ProtectionObligationEvidence`'s obligation kind is not yet
+type-restricted to K06-owned concerns, tracked for a future narrowing pass.
 
 ### Tier relocation (`K07`)
 
