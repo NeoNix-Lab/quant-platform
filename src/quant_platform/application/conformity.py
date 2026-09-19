@@ -17,10 +17,12 @@ from typing import Any
 
 from .golden_conformity import (
     GoldenExpectation,
+    candle_field_mismatches,
     format_observation,
     golden_field_mismatches,
     load_golden_expectation,
     observe_scan,
+    observe_scan_with_candles,
 )
 from quant_platform.access.catalog import Catalog
 from quant_platform.data.publication_catalog import CatalogPublicationWriter
@@ -159,10 +161,17 @@ class HarnessRunFailure(HarnessFailure):
 
 
 class VerificationMismatch(HarnessFailure):
-    def __init__(self, target: Target, observation: Any, mismatches: tuple[str, ...]):
+    def __init__(
+        self,
+        target: Target,
+        observation: Any,
+        mismatches: tuple[str, ...],
+        candle: Any = None,
+    ):
         self.target = target
         self.observation = observation
         self.mismatches = mismatches
+        self.candle = candle
         super().__init__("Golden comparison did not match the frozen expectation")
 
 
@@ -634,11 +643,18 @@ def inspect_vertical(config: HarnessConfig) -> tuple[Target, Any, tuple[Any, ...
 
 
 def verify_vertical(config: HarnessConfig) -> tuple[Target, Any, Any]:
-    """Verify the published vertical through DataGateway.scan only."""
+    """Verify the published vertical through DataGateway.scan only.
+
+    When the Golden fixture declares a ``candle`` expectation, the same
+    DataGateway scan is additionally bridged into the accepted D03 historical
+    candle seam (see ``observe_scan_with_candles``); a fixture without one
+    keeps trade-only verification exactly as before this capability existed.
+    """
 
     target = _target_from_golden(config)
     connection = _connect_catalog(config.dsn)
     scan = None
+    candle_result = None
     try:
         request = DataRequest(
             target.identity,
@@ -654,16 +670,21 @@ def verify_vertical(config: HarnessConfig) -> tuple[Target, Any, Any]:
             ordering_providers=(BYBIT_ORDERING_PROVIDER,),
         )
         scan = gateway.scan(request, batch_size=config.batch_size)
-        observation = observe_scan(scan)
+        if target.golden.candle is None:
+            observation = observe_scan(scan)
+        else:
+            observation, candle_result = observe_scan_with_candles(scan, target.golden.candle)
     finally:
         if scan is not None and getattr(scan, "completed_metadata", None) is None:
             scan.close()
         connection.close()
 
     mismatches = golden_field_mismatches(target.golden, observation)
+    if target.golden.candle is not None:
+        mismatches = mismatches + candle_field_mismatches(target.golden.candle, candle_result)
     if mismatches:
-        raise VerificationMismatch(target, observation, mismatches)
-    return target, observation, format_observation(observation, target.golden)
+        raise VerificationMismatch(target, observation, mismatches, candle_result)
+    return target, observation, format_observation(observation, target.golden, candle_result)
 
 
 __all__ = [
@@ -680,9 +701,11 @@ __all__ = [
     "RunReport",
     "Target",
     "VerificationMismatch",
+    "candle_field_mismatches",
     "collect_preflight",
     "format_observation",
     "inspect_vertical",
+    "observe_scan_with_candles",
     "run_vertical",
     "verify_vertical",
 ]

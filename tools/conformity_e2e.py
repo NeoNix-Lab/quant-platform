@@ -203,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         print("GOLDEN E2E: PASS")
         return 0
     except VerificationMismatch as exc:
-        print(format_observation(exc.observation, exc.target.golden), file=sys.stderr)
+        print(format_observation(exc.observation, exc.target.golden, exc.candle), file=sys.stderr)
         print("GOLDEN E2E: FAIL", file=sys.stderr)
         for mismatch in exc.mismatches:
             print(f"  - {mismatch}", file=sys.stderr)
