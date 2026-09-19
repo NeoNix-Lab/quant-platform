@@ -30,10 +30,13 @@ Conformity Implementation Gate    PASSED
 
 These gates are credited foundation evidence, not reopened work.
 
-Issue #73 (Wave 1 Human Golden E2E closeout) remains open: infrastructure is
-reachable and the canonical data already exists, blocked on one file-ACL fix
-on the physical storage host before a real candle observation can be captured
-and frozen into the golden fixture.
+Issue #73 (Wave 1 Human Golden E2E closeout) is closed. The physical-storage
+host ACL was fixed, a real 1440-candle 1m result was captured through the
+production Application/DataGateway/D03 path and frozen into the golden
+fixture, and the official operator `verify` run returned `GOLDEN E2E: PASS`
+(exit 0). Merged via PR #78; durable evidence and the ingestion/publication
+scope ruling (credit rather than re-prove already-validated, archived data)
+are in `docs/architecture/WAVE1_GOLDEN_E2E_CLOSEOUT_EVIDENCE.md` (PR #80).
 
 ## Current frontier
 
@@ -50,15 +53,20 @@ Frontier membership is not implementation authorization.
 
 ## Week plan
 
-The next week should be run as a sequence of bounded scopes, not as one broad
-multi-atom implementation batch:
+Issue #73 closed and PR #78/#79/#80 merged before the week starts, so it opens
+directly on the frontier rather than on verification of already-completed
+work:
 
 ```text
-2026-09-21  verify current origin/main, PR #79 merge state and issue #73 host ACL status
-2026-09-22  if issue #73 is unblocked, capture/review the Human Golden E2E closeout proof
-2026-09-23  open at most one C04 scope for tool orchestration convergence through the Application seam
-2026-09-24  open at most one F02 scope for EventSpec/detection, only after refreshing F01/E04 evidence
-2026-09-25  open at most one F03 scope for OutcomeSpec/Outcome, or reserve the day for review/reconciliation
+2026-09-21  verify current origin/main reflects PR #78/#79/#80; open at most
+            one C04 scope for tool orchestration convergence through the
+            Application seam
+2026-09-22  continue/close the C04 scope; do not open a second atom in parallel
+2026-09-23  open at most one F02 scope for EventSpec/detection, only after
+            refreshing F01/E04 evidence
+2026-09-24  continue/close the F02 scope
+2026-09-25  open at most one F03 scope for OutcomeSpec/Outcome, or reserve the
+            day for review/reconciliation if C04/F02 ran long
 ```
 
 If an earlier item blocks, do not silently roll its authority into the next
