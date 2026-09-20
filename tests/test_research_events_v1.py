@@ -1,0 +1,520 @@
+#!/usr/bin/env python3
+"""F02 EventSpec and causal event detection runtime v1 proof."""
+
+from __future__ import annotations
+
+from dataclasses import FrozenInstanceError
+import os
+from pathlib import Path
+import subprocess
+import sys
+import textwrap
+import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
+
+from quant_platform.features import (  # noqa: E402
+    FeatureDefinitionId,
+    FeatureObservation,
+    InputContractV1,
+    ObservationLifecycle,
+    SupportIdentity,
+    SupportReference,
+)
+from quant_platform.research import (  # noqa: E402
+    ComparisonOperator,
+    DetectedEvent,
+    DirectionRequirement,
+    EventDetectionError,
+    EventSpec,
+    EventSpecError,
+    EventSpecId,
+    HypothesisSpec,
+    ObservableReference,
+    ThresholdPredicate,
+    detect_events,
+)
+
+
+def observable_id(key: str) -> FeatureDefinitionId:
+    return FeatureDefinitionId.from_payload({"feature_key": key})
+
+
+STACKED_IMBALANCE_ID = observable_id("order_flow.stacked_imbalance")
+OTHER_OBSERVABLE_ID = observable_id("order_flow.diagonal_imbalance")
+
+CONTRACT = InputContractV1("footprint.price_level", "1", ("buy_volume", "sell_volume"))
+
+
+def hypothesis(**overrides) -> HypothesisSpec:
+    kwargs = dict(
+        hypothesis_key="stacked_imbalance_precedes_move",
+        semantic_version="1",
+        statement=(
+            "Stacked buy-side imbalance beyond a threshold tends to precede "
+            "a short-horizon directional move."
+        ),
+        observable_references=(ObservableReference(STACKED_IMBALANCE_ID),),
+    )
+    kwargs.update(overrides)
+    return HypothesisSpec(**kwargs)
+
+
+HYPOTHESIS = hypothesis()
+
+
+def event_spec(**overrides) -> EventSpec:
+    kwargs = dict(
+        event_key="order_flow.stacked_imbalance_detected",
+        semantic_version="1",
+        hypothesis_id=HYPOTHESIS.identity,
+        observable_id=str(STACKED_IMBALANCE_ID),
+        predicate=ThresholdPredicate(
+            ComparisonOperator.GREATER_THAN_OR_EQUAL,
+            "2",
+            DirectionRequirement.POSITIVE,
+        ),
+    )
+    kwargs.update(overrides)
+    return EventSpec(**kwargs)
+
+
+def observation(
+    *,
+    definition_id: FeatureDefinitionId = STACKED_IMBALANCE_ID,
+    bucket: str = "bar:2024-01-01T00:00:00Z",
+    value=2.5,
+    lifecycle: ObservationLifecycle = ObservationLifecycle.FINAL,
+    causal_available_at: str = "2024-01-01T00:00:01Z",
+    observed_finalized_at: str | None = None,
+) -> FeatureObservation:
+    support = SupportIdentity(CONTRACT.identity, bucket, SupportReference.current())
+    kwargs = dict(
+        definition_id=definition_id,
+        support_identity=support,
+        value=value,
+        lifecycle=lifecycle,
+        causal_available_at=causal_available_at,
+    )
+    if lifecycle == ObservationLifecycle.FINAL:
+        kwargs["observed_finalized_at"] = observed_finalized_at or causal_available_at
+    return FeatureObservation(**kwargs)
+
+
+class EventSpecIdentityTests(unittest.TestCase):
+    def test_same_semantic_declaration_yields_same_identity(self):
+        a = event_spec()
+        b = event_spec()
+        self.assertEqual(a.identity, b.identity)
+        self.assertIsInstance(a.spec_id, EventSpecId)
+
+    def test_changed_semantic_field_yields_distinct_identity(self):
+        baseline = event_spec()
+        other_hypothesis = hypothesis(hypothesis_key="different_hypothesis")
+        variants = [
+            event_spec(event_key="order_flow.other_event"),
+            event_spec(semantic_version="2"),
+            event_spec(hypothesis_id=other_hypothesis.identity),
+            event_spec(observable_id=str(OTHER_OBSERVABLE_ID)),
+            event_spec(
+                predicate=ThresholdPredicate(
+                    ComparisonOperator.GREATER_THAN_OR_EQUAL, "3", DirectionRequirement.POSITIVE
+                )
+            ),
+            event_spec(
+                predicate=ThresholdPredicate(
+                    ComparisonOperator.LESS_THAN, "2", DirectionRequirement.POSITIVE
+                )
+            ),
+            event_spec(
+                predicate=ThresholdPredicate(
+                    ComparisonOperator.GREATER_THAN_OR_EQUAL, "2", DirectionRequirement.ANY
+                )
+            ),
+        ]
+        for variant in variants:
+            with self.subTest(variant=variant.event_key):
+                self.assertNotEqual(baseline.identity, variant.identity)
+
+    def test_canonical_payload_excludes_runtime_locators(self):
+        spec = event_spec()
+        payload_text = spec.canonical_utf8_serialization
+        for runtime_locator in ("dataset", "venue", "instrument", "path", "backend", "pid"):
+            self.assertNotIn(runtime_locator, payload_text)
+        self.assertTrue(spec.identity.startswith("event-spec-v1:sha256:"))
+
+    def test_event_spec_is_frozen(self):
+        spec = event_spec()
+        with self.assertRaises(FrozenInstanceError):
+            spec.event_key = "mutated"  # type: ignore[misc]
+
+    def test_identity_is_stable_across_independent_processes(self):
+        script = textwrap.dedent(
+            f"""
+            import sys
+            sys.path.insert(0, {str(SRC)!r})
+            from quant_platform.features import FeatureDefinitionId
+            from quant_platform.research import (
+                ComparisonOperator, DirectionRequirement, EventSpec, HypothesisSpec,
+                ObservableReference, ThresholdPredicate,
+            )
+
+            stacked = FeatureDefinitionId.from_payload(
+                {{"feature_key": "order_flow.stacked_imbalance"}}
+            )
+            hyp = HypothesisSpec(
+                hypothesis_key="stacked_imbalance_precedes_move",
+                semantic_version="1",
+                statement=(
+                    "Stacked buy-side imbalance beyond a threshold tends to precede "
+                    "a short-horizon directional move."
+                ),
+                observable_references=(ObservableReference(stacked),),
+            )
+            spec = EventSpec(
+                event_key="order_flow.stacked_imbalance_detected",
+                semantic_version="1",
+                hypothesis_id=hyp.identity,
+                observable_id=str(stacked),
+                predicate=ThresholdPredicate(
+                    ComparisonOperator.GREATER_THAN_OR_EQUAL, "2", DirectionRequirement.POSITIVE
+                ),
+            )
+            print(spec.identity)
+            """
+        )
+        identities = set()
+        for hash_seed in ("0", "1", "random"):
+            env = dict(os.environ, PYTHONHASHSEED=hash_seed)
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", script],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            identities.add(result.stdout.strip())
+        self.assertEqual(1, len(identities))
+        self.assertEqual(event_spec().identity, next(iter(identities)))
+
+
+class EventSpecValidationTests(unittest.TestCase):
+    def test_empty_event_key_is_refused(self):
+        with self.assertRaises(EventSpecError):
+            event_spec(event_key="")
+
+    def test_non_canonical_event_key_is_refused(self):
+        with self.assertRaises(EventSpecError):
+            event_spec(event_key="Not A Valid Key")
+
+    def test_invalid_semantic_version_is_refused(self):
+        with self.assertRaises(EventSpecError):
+            event_spec(semantic_version="0")
+        with self.assertRaises(EventSpecError):
+            event_spec(semantic_version="v1")
+
+    def test_malformed_hypothesis_id_is_refused(self):
+        with self.assertRaises(EventSpecError):
+            event_spec(hypothesis_id="not-a-real-id")
+        with self.assertRaises(EventSpecError):
+            event_spec(hypothesis_id="feature-definition-v1:sha256:" + "a" * 64)
+
+    def test_malformed_observable_id_is_refused(self):
+        with self.assertRaises(EventSpecError):
+            event_spec(observable_id="not-a-real-id")
+        with self.assertRaises(EventSpecError):
+            event_spec(observable_id="hypothesis-spec-v1:sha256:" + "a" * 64)
+
+    def test_non_predicate_value_is_refused(self):
+        with self.assertRaises(EventSpecError):
+            event_spec(predicate={"operator": "greater_than", "threshold": "2"})
+
+
+class ThresholdPredicateTests(unittest.TestCase):
+    def test_boundary_conditions_on_threshold(self):
+        gte = ThresholdPredicate(ComparisonOperator.GREATER_THAN_OR_EQUAL, "2")
+        self.assertTrue(gte.evaluate(2))
+        self.assertTrue(gte.evaluate("2.0"))
+        self.assertTrue(gte.evaluate(2.5))
+        self.assertFalse(gte.evaluate(1.9999))
+
+        gt = ThresholdPredicate(ComparisonOperator.GREATER_THAN, "2")
+        self.assertFalse(gt.evaluate(2))
+        self.assertTrue(gt.evaluate("2.0000001"))
+
+        lte = ThresholdPredicate(ComparisonOperator.LESS_THAN_OR_EQUAL, "2")
+        self.assertTrue(lte.evaluate(2))
+        self.assertFalse(lte.evaluate(2.0001))
+
+        lt = ThresholdPredicate(ComparisonOperator.LESS_THAN, "2")
+        self.assertFalse(lt.evaluate(2))
+        self.assertTrue(lt.evaluate(1.9999))
+
+        eq = ThresholdPredicate(ComparisonOperator.EQUAL, "2")
+        self.assertTrue(eq.evaluate("2.0"))
+        self.assertFalse(eq.evaluate(2.0001))
+
+        ne = ThresholdPredicate(ComparisonOperator.NOT_EQUAL, "2")
+        self.assertFalse(ne.evaluate(2))
+        self.assertTrue(ne.evaluate(2.0001))
+
+    def test_direction_requirement_is_enforced_independently_of_threshold(self):
+        positive_only = ThresholdPredicate(
+            ComparisonOperator.GREATER_THAN_OR_EQUAL, "-100", DirectionRequirement.POSITIVE
+        )
+        self.assertTrue(positive_only.evaluate(5))
+        self.assertFalse(positive_only.evaluate(0))
+        self.assertFalse(positive_only.evaluate(-5))
+
+        non_negative = ThresholdPredicate(
+            ComparisonOperator.GREATER_THAN_OR_EQUAL, "-100", DirectionRequirement.NON_NEGATIVE
+        )
+        self.assertTrue(non_negative.evaluate(0))
+
+        negative_only = ThresholdPredicate(
+            ComparisonOperator.LESS_THAN_OR_EQUAL, "100", DirectionRequirement.NEGATIVE
+        )
+        self.assertTrue(negative_only.evaluate(-1))
+        self.assertFalse(negative_only.evaluate(0))
+
+    def test_non_numeric_value_fails_closed(self):
+        predicate = ThresholdPredicate(ComparisonOperator.GREATER_THAN, "2")
+        with self.assertRaises(EventSpecError):
+            predicate.evaluate("not-a-number")
+        with self.assertRaises(EventSpecError):
+            predicate.evaluate(True)
+
+    def test_invalid_threshold_is_refused_at_construction(self):
+        with self.assertRaises(EventSpecError):
+            ThresholdPredicate(ComparisonOperator.GREATER_THAN, "not-a-number")
+        with self.assertRaises(EventSpecError):
+            ThresholdPredicate("worse_than", "2")  # type: ignore[arg-type]
+
+
+class DetectEventsTests(unittest.TestCase):
+    def test_no_matching_observations_yield_empty_list(self):
+        spec = event_spec()
+        below_threshold = observation(value=1.0, causal_available_at="2024-01-01T00:00:01Z")
+        result = detect_events(spec, [below_threshold])
+        self.assertEqual([], result)
+
+    def test_empty_observations_yield_empty_list_cleanly(self):
+        spec = event_spec()
+        self.assertEqual([], detect_events(spec, []))
+        self.assertEqual([], detect_events(spec, iter(())))
+
+    def test_matching_observation_produces_traceable_detected_event(self):
+        spec = event_spec()
+        match = observation(
+            bucket="bar:2024-01-01T00:05:00Z",
+            value=3.25,
+            causal_available_at="2024-01-01T00:05:01Z",
+        )
+        [detected] = detect_events(spec, [match])
+        self.assertIsInstance(detected, DetectedEvent)
+        self.assertEqual(spec.identity, detected.event_spec_id)
+        self.assertEqual(str(STACKED_IMBALANCE_ID), detected.observable_id)
+        self.assertEqual(match.identity, detected.observation_identity)
+        self.assertEqual("2024-01-01T00:05:01Z", str(detected.event_time))
+        self.assertEqual("2024-01-01T00:05:01Z", str(detected.causal_available_at))
+        self.assertEqual(3.25, dict(detected.match_evidence)["value"])
+        self.assertTrue(detected.event_id.startswith("detected-event-v1:sha256:"))
+
+    def test_causal_available_at_never_precedes_observation_causal_floor(self):
+        spec = event_spec()
+        match = observation(causal_available_at="2024-01-01T00:00:01Z")
+        [detected] = detect_events(spec, [match])
+        self.assertGreaterEqual(detected.causal_available_at, match.causal_available_at)
+        self.assertEqual(detected.causal_available_at, match.causal_available_at)
+
+    def test_provisional_observations_are_refused(self):
+        spec = event_spec()
+        provisional = observation(value=5.0, lifecycle=ObservationLifecycle.PROVISIONAL)
+        with self.assertRaisesRegex(EventDetectionError, "FINAL"):
+            detect_events(spec, [provisional])
+
+    def test_observation_for_a_different_observable_is_refused(self):
+        spec = event_spec()
+        mismatched = observation(definition_id=OTHER_OBSERVABLE_ID, value=5.0)
+        with self.assertRaisesRegex(EventDetectionError, "observable"):
+            detect_events(spec, [mismatched])
+
+    def test_observations_out_of_temporal_order_are_refused(self):
+        spec = event_spec()
+        first = observation(bucket="bar:2024-01-01T00:00:00Z", causal_available_at="2024-01-01T00:00:01Z")
+        second = observation(bucket="bar:2024-01-01T00:01:00Z", causal_available_at="2024-01-01T00:01:01Z")
+        with self.assertRaisesRegex(EventDetectionError, "order"):
+            detect_events(spec, [second, first])
+
+    def test_equal_causal_available_at_is_accepted_as_non_decreasing(self):
+        spec = event_spec()
+        first = observation(bucket="bar:2024-01-01T00:00:00Z", value=5.0, causal_available_at="2024-01-01T00:00:01Z")
+        second = observation(bucket="bar:2024-01-01T00:00:00Z-b", value=5.0, causal_available_at="2024-01-01T00:00:01Z")
+        result = detect_events(spec, [first, second])
+        self.assertEqual(2, len(result))
+
+    def test_duplicate_observation_identity_is_refused(self):
+        spec = event_spec()
+        match = observation(value=5.0)
+        with self.assertRaisesRegex(EventDetectionError, "duplicate"):
+            detect_events(spec, [match, match])
+
+    def test_non_feature_observation_input_is_refused(self):
+        spec = event_spec()
+        with self.assertRaises(EventDetectionError):
+            detect_events(spec, [{"value": 5.0}])  # type: ignore[list-item]
+
+    def test_non_event_spec_first_argument_is_refused(self):
+        with self.assertRaises(EventDetectionError):
+            detect_events("not-a-spec", [])  # type: ignore[arg-type]
+
+    def test_reproducibility_across_independent_calls(self):
+        spec = event_spec()
+        observations = [
+            observation(bucket="bar:2024-01-01T00:00:00Z", value=2.0, causal_available_at="2024-01-01T00:00:01Z"),
+            observation(bucket="bar:2024-01-01T00:01:00Z", value=0.5, causal_available_at="2024-01-01T00:01:01Z"),
+            observation(bucket="bar:2024-01-01T00:02:00Z", value=4.0, causal_available_at="2024-01-01T00:02:01Z"),
+        ]
+        first_run = detect_events(spec, observations)
+        second_run = detect_events(spec, observations)
+        self.assertEqual([event.event_id for event in first_run], [event.event_id for event in second_run])
+        self.assertEqual(2, len(first_run))
+
+    def test_reproducibility_across_independent_processes(self):
+        script = textwrap.dedent(
+            f"""
+            import sys
+            sys.path.insert(0, {str(SRC)!r})
+            from quant_platform.features import (
+                FeatureDefinitionId, FeatureObservation, InputContractV1, ObservationLifecycle,
+                SupportIdentity, SupportReference,
+            )
+            from quant_platform.research import (
+                ComparisonOperator, DirectionRequirement, EventSpec, HypothesisSpec,
+                ObservableReference, ThresholdPredicate, detect_events,
+            )
+
+            stacked = FeatureDefinitionId.from_payload(
+                {{"feature_key": "order_flow.stacked_imbalance"}}
+            )
+            hyp = HypothesisSpec(
+                hypothesis_key="stacked_imbalance_precedes_move",
+                semantic_version="1",
+                statement=(
+                    "Stacked buy-side imbalance beyond a threshold tends to precede "
+                    "a short-horizon directional move."
+                ),
+                observable_references=(ObservableReference(stacked),),
+            )
+            spec = EventSpec(
+                event_key="order_flow.stacked_imbalance_detected",
+                semantic_version="1",
+                hypothesis_id=hyp.identity,
+                observable_id=str(stacked),
+                predicate=ThresholdPredicate(
+                    ComparisonOperator.GREATER_THAN_OR_EQUAL, "2", DirectionRequirement.POSITIVE
+                ),
+            )
+            contract = InputContractV1("footprint.price_level", "1", ("buy_volume", "sell_volume"))
+            support = SupportIdentity(contract.identity, "bar:2024-01-01T00:05:00Z", SupportReference.current())
+            match = FeatureObservation(
+                stacked, support, value=3.25, lifecycle=ObservationLifecycle.FINAL,
+                causal_available_at="2024-01-01T00:05:01Z",
+                observed_finalized_at="2024-01-01T00:05:01Z",
+            )
+            [detected] = detect_events(spec, [match])
+            print(detected.event_id)
+            """
+        )
+        identities = set()
+        for hash_seed in ("0", "1", "random"):
+            env = dict(os.environ, PYTHONHASHSEED=hash_seed)
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", script],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            identities.add(result.stdout.strip())
+        self.assertEqual(1, len(identities))
+
+        in_process = detect_events(
+            event_spec(),
+            [
+                observation(
+                    bucket="bar:2024-01-01T00:05:00Z",
+                    value=3.25,
+                    causal_available_at="2024-01-01T00:05:01Z",
+                )
+            ],
+        )
+        self.assertEqual(in_process[0].event_id, next(iter(identities)))
+
+
+class DetectedEventValueModelTests(unittest.TestCase):
+    def test_detected_event_is_frozen(self):
+        spec = event_spec()
+        [detected] = detect_events(spec, [observation(value=5.0)])
+        with self.assertRaises(FrozenInstanceError):
+            detected.event_time = "2024-01-01T00:00:00Z"  # type: ignore[misc]
+
+    def test_event_id_excludes_match_evidence_key_order(self):
+        base = DetectedEvent(
+            event_spec_id=event_spec().identity,
+            observable_id=str(STACKED_IMBALANCE_ID),
+            observation_identity="feature-observation-v1:sha256:" + "a" * 64,
+            event_time="2024-01-01T00:00:01Z",
+            causal_available_at="2024-01-01T00:00:01Z",
+            match_evidence={"value": 3.25, "operator": "greater_than_or_equal"},
+        )
+        reordered = DetectedEvent(
+            event_spec_id=event_spec().identity,
+            observable_id=str(STACKED_IMBALANCE_ID),
+            observation_identity="feature-observation-v1:sha256:" + "a" * 64,
+            event_time="2024-01-01T00:00:01Z",
+            causal_available_at="2024-01-01T00:00:01Z",
+            match_evidence={"operator": "greater_than_or_equal", "value": 3.25},
+        )
+        self.assertEqual(base.event_id, reordered.event_id)
+
+    def test_event_id_changes_with_observation_identity(self):
+        kwargs = dict(
+            event_spec_id=event_spec().identity,
+            observable_id=str(STACKED_IMBALANCE_ID),
+            event_time="2024-01-01T00:00:01Z",
+            causal_available_at="2024-01-01T00:00:01Z",
+            match_evidence={"value": 3.25},
+        )
+        first = DetectedEvent(observation_identity="feature-observation-v1:sha256:" + "a" * 64, **kwargs)
+        second = DetectedEvent(observation_identity="feature-observation-v1:sha256:" + "b" * 64, **kwargs)
+        self.assertNotEqual(first.event_id, second.event_id)
+
+    def test_event_time_later_than_causal_available_at_is_refused(self):
+        with self.assertRaises(EventSpecError):
+            DetectedEvent(
+                event_spec_id=event_spec().identity,
+                observable_id=str(STACKED_IMBALANCE_ID),
+                observation_identity="feature-observation-v1:sha256:" + "a" * 64,
+                event_time="2024-01-01T00:00:05Z",
+                causal_available_at="2024-01-01T00:00:01Z",
+                match_evidence={"value": 3.25},
+            )
+
+    def test_malformed_event_spec_id_is_refused(self):
+        with self.assertRaises(EventSpecError):
+            DetectedEvent(
+                event_spec_id="not-a-real-id",
+                observable_id=str(STACKED_IMBALANCE_ID),
+                observation_identity="feature-observation-v1:sha256:" + "a" * 64,
+                event_time="2024-01-01T00:00:01Z",
+                causal_available_at="2024-01-01T00:00:01Z",
+                match_evidence={},
+            )
+
+
+if __name__ == "__main__":
+    result = unittest.main(verbosity=2, exit=False)
+    raise SystemExit(0 if result.result.wasSuccessful() else 1)
