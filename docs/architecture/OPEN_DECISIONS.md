@@ -21,6 +21,7 @@ DG-A FeatureArtifact v1 (E04)                        FROZEN / COMPLETE
 DG-A H01 canonical integration v1 (E06)              FROZEN / COMPLETE
 DG-B B04 non-contiguous coverage reads v1            FROZEN / COMPLETE
 DG-B A10 backfill / repair v1                        FROZEN / COMPLETE
+DG-E F07 labels/censoring/lockbox v1                 FROZEN / MISSING
 DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
 ```
 
@@ -182,20 +183,41 @@ Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
 
 ## DG-E — Validation semantics
 
-### Validation / labeling branch (`F06`,`F07`)
+### Validation / labeling branch (`F06`,`F07`) — F07 RESOLVED
 
-Activate for the Validation -> Strategy/ML path. Resolve:
+F06 availability/purge/embargo is frozen and complete under
+[ADR-0031](../decisions/ADR-0031-availability-purge-embargo-v1.md).
 
-- temporal availability rule used by Feature/Research/Validation;
-- purge/embargo/warmup semantics at fold boundaries;
-- Label/Outcome horizon and censoring semantics;
-- lockbox/hidden-evaluation boundary.
+F07 label/censoring/lockbox semantics are frozen under
+[ADR-0036](../decisions/ADR-0036-labels-censoring-lockbox-v1.md) (issue #95).
+Implementation remains `MISSING`.
+
+Accepted F07 v1 decisions include:
+
+- outcome-derived labels only; policy-derived labels wait for explicit
+  Strategy/Execution authority;
+- only `COMPLETE` F03 Outcomes may produce a label value; source-censored and
+  insufficient-coverage Outcomes remain explicit no-value states;
+- exact identity-value and ordered exact-rational threshold transforms only;
+- label causal availability equals source Outcome causal availability;
+- target support includes the consumed F03 boundary at `horizon_end` and is
+  projected into F06 without shrinking that endpoint;
+- training targets are fold-completion dependencies; test/lockbox targets are
+  evaluation outputs, not decision-time inputs;
+- lockbox v1 is one terminal holdout interval with explicit hidden-evaluation
+  isolation and irreversible reveal semantics;
+- F07 freezes semantic isolation, not physical ACL/vault infrastructure;
+- Validation consumes a narrow Validation-owned projection of F03 evidence
+  rather than importing/redefining Research runtime semantics.
+
+The F07 branch therefore has no remaining semantic blocker. A separate bounded
+implementation issue/scope is still required before runtime mutation.
 
 ### DSR/PBO branch (`F08`)
 
 Activate only when robust-comparison/DSR-PBO capability is selected. Resolve exact estimator definitions, input return series, trial population, comparable-fold semantics and pinned numeric vectors.
 
-`F08` does **not** block Strategy or supervised-input paths whose dependency chain runs through `F07` rather than `F08`.
+`F08` remains `OPEN_BLOCKING` and does **not** block Strategy or supervised-input paths whose dependency chain runs through implemented F07 rather than F08.
 
 ## DG-F — Strategy / Execution semantics
 

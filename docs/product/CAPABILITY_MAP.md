@@ -56,7 +56,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Research | Event studies/sweeps | RESOLVED | COMPLETE | Research | F04 | Reproducible study population/aggregates; implemented, issue #92/PR #94. |
 | Validation | Walk-forward schedule | RESOLVED | COMPLETE | Validation | F05 | Deterministic pure temporal atom. |
 | Validation | Availability/purge/embargo | FROZEN | COMPLETE | Validation | F06 | ADR-0031. |
-| Validation | Labels/censoring/lockbox | OPEN_BLOCKING | MISSING | Validation | F07 | DG-E validation branch. |
+| Validation | Labels/censoring/lockbox | FROZEN | MISSING | Validation | F07 | ADR-0036; outcome-derived labels/censoring/terminal-lockbox semantics frozen; implementation pending. |
 | Validation | DSR/PBO | OPEN_BLOCKING | MISSING | Research/Validation | F08 | Separate DG-E DSR/PBO branch; does not block Strategy/ML paths that depend on F07. |
 | Strategy | StrategySpec/DecisionIntent | RESOLVED | MISSING | Strategy | G01 | Strategy remains upstream of execution. |
 | Strategy | Policy composition | RESOLVED | MISSING | Strategy | G02 | Deterministic composition required. |
@@ -119,22 +119,22 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | F02 EventSpec/detection v1 | COMPLETE | Traceable event rule + availability evidence implemented, issue #85/PR #89. |
 | F03 OutcomeSpec/Outcome v1 | COMPLETE | Horizon/censoring/availability explicit, implemented, issue #86/PR #90. |
 | F04 Event studies/sweeps v1 | COMPLETE | Reproducible study population/aggregates and parameter sweep runtime implemented, issue #92/PR #94. |
+| F07 labels/censoring/lockbox v1 | FROZEN | ADR-0036 accepted under issue #95; implementation remains MISSING. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 
 ## Current frontier
 
-`F04` (Event studies/sweeps v1) is **COMPLETE** (issue #92/PR #94).
-All decision-complete research atoms (`F01`, `F02`, `F03`, `F04`) are now `COMPLETE`.
+F07 label/censoring/lockbox semantics are **FROZEN** under ADR-0036; implementation is `MISSING` and its declared dependencies F03/F06 are `COMPLETE`.
 
 ```text
-DG-E (F07, F08)
+F07 implementation
+DG-E / F08 decision branch (independent)
 ```
 
-The next work on the Research / Validation path is the **DG-E** decision gate
-(`F07` labels/censoring/lockbox, `OPEN_BLOCKING`, dependencies `F03`+`F06` satisfied;
-and `F08` DSR/PBO, `OPEN_BLOCKING`, dependencies `F04`+`F05` satisfied).
-Neither atom may proceed to implementation until a decision gate resolves its semantics.
+The next implementation-ready atom on the Validation -> Strategy/ML path is F07. It requires a separately bounded implementation issue/scope before runtime mutation.
+
+F08 DSR/PBO remains `OPEN_BLOCKING` in the independent robust-comparison branch. Resolving F07 does not activate or resolve F08.
 
 Frontier membership means planning dependencies and decision gates are satisfied; it does not authorize implementation.
 
