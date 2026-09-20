@@ -28,51 +28,71 @@ later dedicated governance pass materializes whichever of these become the
 accepted ADR text):
 
 - ``OutcomeSpec`` semantic identity is exactly the tuple (outcome_key,
-  semantic_version, horizon_duration, metric_kind, price_reference).  No
-  other field participates.
+  semantic_version, horizon_duration, sampling_period, metric_kind,
+  price_reference).  No other field participates.
 - ``horizon_duration`` accepts either a governed unit-suffixed duration
   spelling (``5m``, ``15m``, ``1h``, ...; identical unit vocabulary to
   ``CandleDefinitionV1.duration_ns``) or a plain positive Python ``int``
-  bar count.  The two shapes are semantically distinct (wall-clock horizon
-  vs. a fixed count of forward observations) and are canonicalized to
-  ``"<amount>ns"`` or ``"<amount>bars"`` respectively, so equivalent
-  spellings (e.g. ``"1m"`` and ``"60s"``) collapse to one identity while a
-  bar-count horizon never collides with a duration horizon.
+  bar count.  ``sampling_period`` is always a duration spelling: the fixed
+  expected spacing between consecutive forward observations (e.g. the
+  candle/bar duration the caller is sourcing ``market_series`` from).  A
+  duration horizon must be an exact multiple of ``sampling_period``
+  (validated at construction) so that both horizon shapes resolve, without
+  any dependence on the supplied market data, to the same thing: a fixed
+  number of ``sampling_period``-spaced grid steps forward from the event.
+  This is what lets ``evaluate_outcome`` compute ``horizon_end`` for a
+  bar-count horizon exactly the same way as for a duration horizon
+  (``count * sampling_period``), and walk both on one fixed grid.
 - An ``Outcome``'s ``horizon_start`` is always the triggering event's own
   ``event_time`` -- the outcome measures the path forward from the moment
   the event occurred, never from when it became knowable.
-- For a duration horizon, ``horizon_end`` is computed purely from
-  ``spec`` and ``event`` (``event_time + horizon_duration``); it never
-  depends on the supplied market data.  For a bar-count horizon,
-  ``horizon_end`` is the instant of the Nth forward observation once N
-  forward observations have been consumed; when fewer are available before
-  the stream ends, the last actually-consumed instant (or the anchor's own
-  instant, if none were consumed) stands in as the honest boundary of
-  available evidence -- never a fabricated projection.
+- ``horizon_end`` is always ``event_time + spec.horizon_duration_ns``,
+  computed purely from ``spec`` and ``event``; it never depends on the
+  supplied market data, for either horizon shape.
 - ``evaluate_outcome`` requires the first supplied ``MarketObservation`` to
   be the anchor: its ``instant`` must equal ``event.event_time`` exactly.
-  When the supplied series does not even start at the event's own instant
-  (including an empty series), the outcome is marked
-  ``INSUFFICIENT_COVERAGE`` -- a distinct failure mode from running out of
-  forward data mid-horizon (``CENSORED_END_OF_DATA``), because the
-  evaluation cannot even establish a starting reference price.
-- ``causal_available_at`` is always the later of ``horizon_end`` and the
-  boundary/last-seen observation's own ``causal_available_at`` (which
-  itself defaults to the observation's ``instant`` when the caller supplies
-  no independent finalization evidence -- mirroring F02's
-  ``nullable_observed_time_never_fabricated`` floor).  This guarantees the
-  ADR-0006 invariant ``causal_available_at >= horizon_end`` unconditionally,
-  enforced structurally in ``Outcome.__post_init__`` rather than merely by
-  convention in the evaluator.
+  From there the forward path is walked on the fixed ``sampling_period``
+  grid: each expected grid instant must be matched exactly by the next
+  supplied observation.  A grid instant with no matching observation --
+  whether the series stops there or simply skips past it -- means the
+  evaluator cannot see through to a trustworthy boundary or path, so the
+  result is ``INSUFFICIENT_COVERAGE`` rather than either fabricating a
+  metric over an incomplete path or overshooting past the requested
+  horizon to the next available price.  Only the series ending outright
+  before the grid reaches ``horizon_end`` is ``CENSORED_END_OF_DATA``.
+  Both failure modes are honest: neither ever reports a ``horizon_end``
+  that the evaluator did not actually establish from ``spec`` and
+  ``event`` alone.
+- ``causal_available_at`` is the later of ``horizon_end``,
+  ``event.causal_available_at``, and every consumed observation's own
+  ``causal_available_at`` (anchor included, which itself defaults to the
+  observation's ``instant`` when the caller supplies no independent
+  finalization evidence -- mirroring F02's
+  ``nullable_observed_time_never_fabricated`` floor).  Considering every
+  consumed observation -- not just the boundary -- guarantees an outcome
+  can never become available before any evidence actually used to compute
+  it, including path metrics fed by intermediate observations.  This
+  guarantees the ADR-0006 invariant ``causal_available_at >= horizon_end``
+  unconditionally, enforced structurally in ``Outcome.__post_init__``
+  rather than merely by convention in the evaluator.
 - A non-``COMPLETE`` outcome never carries a ``realized_value``: censored or
   insufficient-coverage outcomes fail closed rather than fabricate a price
   that was never observed.
 - ``realized_value`` and ``path_metrics`` are exact canonical fraction
   strings (``"<numerator>"`` or ``"<numerator>/<denominator>"``, lowest
-  terms, ``fractions.Fraction`` arithmetic over ``Decimal`` prices) so that
-  outcome measurement never introduces float or rounding error -- the same
-  exact-arithmetic discipline ``quant_platform.features.artifacts`` already
-  applies to numerical equivalence checks.
+  terms, no reducible or zero-denominator-style forms such as ``"2/2"`` or
+  ``"0/3"``, and no signed-zero ``"-0"``; ``fractions.Fraction`` arithmetic
+  over ``Decimal`` prices) so that outcome measurement never introduces
+  float or rounding error and every number has exactly one byte
+  representation -- the same exact-arithmetic discipline
+  ``quant_platform.features.artifacts`` already applies to numerical
+  equivalence checks.
+- ``PathMetrics`` always includes the anchor's own zero return alongside
+  every consumed observation's return: a path that only ever moves against
+  the anchor (e.g. a straight decline) still reports a
+  ``maximum_favorable_excursion`` of ``"0"`` rather than the least-bad
+  observed loss, since the event-time price itself was always an
+  available (if trivial) exit point.
 """
 
 from __future__ import annotations
@@ -193,7 +213,18 @@ def _fraction_text(value: Fraction) -> str:
 def _validated_fraction_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not _FRACTION_TEXT_RE.fullmatch(value):
         raise OutcomeError(f"{field_name} must be an exact canonical fraction string, got {value!r}")
+    numerator_text, separator, denominator_text = value.partition("/")
+    fraction = Fraction(int(numerator_text), int(denominator_text) if separator else 1)
+    if _fraction_text(fraction) != value:
+        raise OutcomeError(
+            f"{field_name} must be a canonical lowest-terms fraction string (no reducible "
+            f"form, zero denominator collapse or signed zero), got {value!r}"
+        )
     return value
+
+
+def _max_instant(left: Instant, right: Instant) -> Instant:
+    return left if left >= right else right
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +284,30 @@ def _parse_canonical_horizon(text: str) -> tuple[HorizonKind, int]:
     return kind, int(match.group(1))
 
 
+def _parse_duration_only(value: Any, field_name: str) -> int:
+    """Parse a caller-supplied duration-only field (e.g. ``sampling_period``)
+    into nanoseconds.  Unlike ``horizon_duration``, a bar count is never a
+    valid shape here: a sampling period is inherently a wall-clock spacing."""
+
+    if isinstance(value, str) and value.strip():
+        match = _DURATION_RE.fullmatch(value.strip())
+        if match:
+            amount = int(match.group(1))
+            if amount < 1:
+                raise OutcomeError(f"{field_name} must be positive")
+            return amount * _DURATION_UNITS[match.group(2)]
+    raise OutcomeError(
+        f"{field_name} must be a governed duration string (e.g. '5m', '15m', '1h'), got {value!r}"
+    )
+
+
+def _parse_canonical_duration_only(text: str) -> int:
+    match = _CANONICAL_HORIZON_RE.fullmatch(text)
+    if not match or match.group(2) != "ns":  # pragma: no cover - text always produced by __post_init__
+        raise OutcomeError(f"malformed canonical sampling_period: {text!r}")
+    return int(match.group(1))
+
+
 # ---------------------------------------------------------------------------
 # OutcomeSpec identity and value model.
 # ---------------------------------------------------------------------------
@@ -292,6 +347,7 @@ class OutcomeSpec:
     outcome_key: str
     semantic_version: str | int
     horizon_duration: str | int
+    sampling_period: str
     metric_kind: str | MetricKind
     price_reference: str
 
@@ -301,7 +357,14 @@ class OutcomeSpec:
     def __post_init__(self) -> None:
         object.__setattr__(self, "outcome_key", _governed_key(self.outcome_key, "outcome_key"))
         object.__setattr__(self, "semantic_version", _semantic_version(self.semantic_version))
+        sampling_period_ns = _parse_duration_only(self.sampling_period, "sampling_period")
+        object.__setattr__(self, "sampling_period", f"{sampling_period_ns}ns")
         kind, amount = _parse_horizon_input(self.horizon_duration)
+        if kind is HorizonKind.DURATION and amount % sampling_period_ns != 0:
+            raise OutcomeError(
+                "horizon_duration must be an exact multiple of sampling_period so the "
+                "forward path can be walked on a fixed grid without overshoot or gaps"
+            )
         canonical_horizon = f"{amount}ns" if kind is HorizonKind.DURATION else f"{amount}bars"
         object.__setattr__(self, "horizon_duration", canonical_horizon)
         object.__setattr__(self, "metric_kind", _enum(MetricKind, self.metric_kind, "metric_kind"))
@@ -315,6 +378,22 @@ class OutcomeSpec:
     def horizon_amount(self) -> int:
         return _parse_canonical_horizon(self.horizon_duration)[1]
 
+    @property
+    def sampling_period_ns(self) -> int:
+        return _parse_canonical_duration_only(self.sampling_period)
+
+    @property
+    def horizon_duration_ns(self) -> int:
+        """The horizon's total length in nanoseconds, computed purely from
+        this spec (never from market data): a duration horizon's own
+        nanosecond amount, or a bar-count horizon's count multiplied by
+        ``sampling_period_ns``."""
+
+        kind, amount = _parse_canonical_horizon(self.horizon_duration)
+        if kind is HorizonKind.DURATION:
+            return amount
+        return amount * self.sampling_period_ns
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "identity_type": self.identity_type,
@@ -322,6 +401,7 @@ class OutcomeSpec:
             "outcome_key": self.outcome_key,
             "semantic_version": self.semantic_version,
             "horizon_duration": self.horizon_duration,
+            "sampling_period": self.sampling_period,
             "metric_kind": self.metric_kind.value,
             "price_reference": self.price_reference,
         }
@@ -547,7 +627,13 @@ def _path_metrics(spec: OutcomeSpec, anchor: MarketObservation, path: list[Marke
     start = anchor.price_for(spec.price_reference)
     if start == 0:
         raise OutcomeEvaluationError("cannot compute path metrics against a zero anchor price")
-    returns = [_return_fraction(start, observation.price_for(spec.price_reference)) for observation in path]
+    # The anchor itself (a zero return against its own price) is always an
+    # available reference point along the path, not merely the forward
+    # observations: a path that only ever declines still has a "best"
+    # outcome of exiting flat at the event, not the least-bad observed loss.
+    returns = [Fraction(0)] + [
+        _return_fraction(start, observation.price_for(spec.price_reference)) for observation in path
+    ]
     return PathMetrics(
         maximum_favorable_excursion=_fraction_text(max(returns)),
         maximum_adverse_excursion=_fraction_text(min(returns)),
@@ -569,20 +655,32 @@ def evaluate_outcome(
 
     The first element of ``market_series`` must be the anchor: its
     ``instant`` must equal ``event.event_time`` exactly.  When it is not
-    (including an empty series), the result is `OutcomeState.INSUFFICIENT_COVERAGE`:
-    there is no starting reference price to measure a forward return
-    against.
+    (including an empty series), the result is
+    `OutcomeState.INSUFFICIENT_COVERAGE`: there is no starting reference
+    price to measure a forward return against.
 
-    For a duration horizon, forward observations are consumed until one is
-    found at or after ``horizon_end`` (computed purely from ``spec`` and
-    ``event``, independent of the data); that observation is the boundary.
-    For a bar-count horizon, the boundary is the Nth forward observation.
-    If the series ends before a boundary is reached, the result is
-    `OutcomeState.CENSORED_END_OF_DATA` with `realized_value = None` --
-    never a fabricated price.
+    ``horizon_end`` is always ``event.event_time + spec.horizon_duration_ns``
+    -- computed purely from ``spec`` and ``event``, independent of the
+    supplied data, for both a duration and a bar-count horizon.  The forward
+    path is then walked on the fixed ``spec.sampling_period_ns`` grid
+    anchored at ``event.event_time``: each expected grid instant must be
+    matched exactly by the next observation in ``market_series``.
 
-    `Outcome.causal_available_at` is never earlier than `Outcome.horizon_end`
-    (enforced structurally by `Outcome.__post_init__`), forbidding lookahead.
+    - A grid instant with no matching observation (the series skips ahead
+      of it, or ends there without a match) that is *not* the final grid
+      instant means the interior path has a hole no metric can be trusted
+      through: `OutcomeState.INSUFFICIENT_COVERAGE`.
+    - The series ending exactly at (or before) the final grid instant
+      without reaching a match there is `OutcomeState.CENSORED_END_OF_DATA`
+      -- the data genuinely ran out rather than merely skipping a step.
+    - Matching every grid instant up to and including ``horizon_end`` is
+      `OutcomeState.COMPLETE`.
+
+    `Outcome.causal_available_at` is the later of ``horizon_end``,
+    ``event.causal_available_at``, and every consumed observation's own
+    ``causal_available_at`` (anchor included) -- never merely the boundary
+    observation's -- so a late-finalizing observation anywhere along the
+    path still pushes availability forward, forbidding lookahead.
     """
 
     if not isinstance(spec, OutcomeSpec):
@@ -602,13 +700,10 @@ def evaluate_outcome(
         previous_instant = observation.instant
         observations.append(observation)
 
+    horizon_end = Instant(event.event_time.epoch_ns + spec.horizon_duration_ns)
+
     if not observations or observations[0].instant != event.event_time:
-        horizon_end = (
-            Instant(event.event_time.epoch_ns + spec.horizon_amount)
-            if spec.horizon_kind is HorizonKind.DURATION
-            else event.event_time
-        )
-        causal_available_at = horizon_end if horizon_end > event.causal_available_at else event.causal_available_at
+        causal_available_at = _max_instant(horizon_end, event.causal_available_at)
         return Outcome(
             outcome_spec_id=spec.identity,
             event_id=event.event_id,
@@ -622,49 +717,47 @@ def evaluate_outcome(
 
     anchor = observations[0]
     forward = observations[1:]
+    sampling_period_ns = spec.sampling_period_ns
 
-    if spec.horizon_kind is HorizonKind.DURATION:
-        horizon_end = Instant(event.event_time.epoch_ns + spec.horizon_amount)
-        consumed: list[MarketObservation] = []
-        boundary: MarketObservation | None = None
-        for observation in forward:
-            if observation.instant < horizon_end:
-                consumed.append(observation)
-                continue
-            boundary = observation
+    consumed: list[MarketObservation] = []
+    boundary: MarketObservation | None = None
+    causal_watermark = _max_instant(event.causal_available_at, anchor.causal_available_at)
+    state = OutcomeState.CENSORED_END_OF_DATA
+    expected_ns = anchor.instant.epoch_ns + sampling_period_ns
+    index = 0
+    while expected_ns <= horizon_end.epoch_ns:
+        if index >= len(forward):
+            state = OutcomeState.CENSORED_END_OF_DATA
             break
-    else:
-        count = spec.horizon_amount
-        if len(forward) >= count:
-            consumed = forward[: count - 1]
-            boundary = forward[count - 1]
-            horizon_end = boundary.instant
-        else:
-            consumed = forward
-            boundary = None
-            horizon_end = consumed[-1].instant if consumed else anchor.instant
+        candidate = forward[index]
+        if candidate.instant.epoch_ns != expected_ns:
+            state = OutcomeState.INSUFFICIENT_COVERAGE
+            break
+        causal_watermark = _max_instant(causal_watermark, candidate.causal_available_at)
+        if expected_ns == horizon_end.epoch_ns:
+            boundary = candidate
+            state = OutcomeState.COMPLETE
+            break
+        consumed.append(candidate)
+        index += 1
+        expected_ns += sampling_period_ns
+
+    causal_available_at = _max_instant(horizon_end, causal_watermark)
 
     if boundary is None:
-        last_seen = consumed[-1] if consumed else anchor
-        causal_available_at = (
-            horizon_end if horizon_end > last_seen.causal_available_at else last_seen.causal_available_at
-        )
         return Outcome(
             outcome_spec_id=spec.identity,
             event_id=event.event_id,
             horizon_start=event.event_time,
             horizon_end=horizon_end,
             causal_available_at=causal_available_at,
-            state=OutcomeState.CENSORED_END_OF_DATA,
+            state=state,
             realized_value=None,
             path_metrics=_path_metrics(spec, anchor, consumed),
         )
 
     realized_path = consumed + [boundary]
     realized_value = _compute_metric(spec, anchor, boundary, realized_path)
-    causal_available_at = (
-        horizon_end if horizon_end > boundary.causal_available_at else boundary.causal_available_at
-    )
     return Outcome(
         outcome_spec_id=spec.identity,
         event_id=event.event_id,
