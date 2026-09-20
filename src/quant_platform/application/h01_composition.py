@@ -200,10 +200,33 @@ def materialize_h01_feature_artifact(
         )
     source_dataset_identity = footprint_result.source_evidence.dataset_identity
     bound_sources = tuple(sources)
-    if not any(item.dataset_identity == source_dataset_identity for item in bound_sources):
+    if len(bound_sources) != 1 or bound_sources[0].dataset_identity != source_dataset_identity:
         raise H01CompositionError(
-            "sources must include the exact D06 source_evidence.dataset_identity"
+            f"sources must contain exactly one BoundSourceDataset matching D06 source_evidence.dataset_identity ({source_dataset_identity})"
         )
+    source_ev = footprint_result.source_evidence
+    if source_ev.natural_partitions:
+        if (
+            len(source_ev.content_hashes) != len(source_ev.natural_partitions)
+            or len(source_ev.manifest_hashes) != len(source_ev.natural_partitions)
+        ):
+            raise H01CompositionError("D06 source_evidence partitions and hashes length mismatch")
+        expected_partition_tuples = {
+            (nat, content_hash, manifest_hash)
+            for nat, content_hash, manifest_hash in zip(
+                source_ev.natural_partitions,
+                source_ev.content_hashes,
+                source_ev.manifest_hashes,
+            )
+        }
+        supplied_partition_tuples = {
+            (p.natural_identity, p.content_sha256, p.manifest_sha256)
+            for p in bound_sources[0].partitions
+        }
+        if supplied_partition_tuples != expected_partition_tuples:
+            raise H01CompositionError(
+                "supplied sources partitions/hashes do not match D06 source_evidence immutable partition evidence"
+            )
     expected_observation_identities = derive_h01_expected_observation_identities(
         diagonal_definition=evaluation.diagonal_definition,
         stacked_definition=evaluation.stacked_definition,
@@ -211,7 +234,7 @@ def materialize_h01_feature_artifact(
             bucket_observation_identity(footprint_result, bucket) for bucket in footprint_result.buckets
         ),
     )
-    consumed_support = SupportShape(intervals=footprint_result.coverage.covered_intervals)
+    consumed_support = SupportShape(intervals=footprint_result.required_bucket_support)
     bound_input_evidence = BoundInputEvidence(
         sources=bound_sources,
         consumed_support=consumed_support,

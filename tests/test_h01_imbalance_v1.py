@@ -89,8 +89,9 @@ def trade(ts: str, price: str, size: str, side: str = "buy") -> TradeRecord:
 
 
 def source_evidence(support: tuple[CoverageInterval, ...], **overrides) -> HistoricalFootprintSourceEvidence:
+    dataset_id = overrides.get("dataset_identity", IDENTITY)
     fields = {
-        "dataset_identity": IDENTITY,
+        "dataset_identity": dataset_id,
         "record_schema_id": "trade-v1",
         "schema_version": 1,
         "schema_hash": "schema-sha",
@@ -98,6 +99,9 @@ def source_evidence(support: tuple[CoverageInterval, ...], **overrides) -> Histo
         "eligible_source_coverage": support,
         "finalized_source_intervals": support,
         "finalization_evidence": ("attested",),
+        "natural_partitions": (NaturalPartitionIdentity(dataset_id, "dt=2024-01-01", 1),),
+        "manifest_hashes": ("1" * 64,),
+        "content_hashes": ("1" * 64,),
         "source_result_identity": "source-result:sha256:" + "a" * 64,
         "observed_available_at": support[-1].end if support else None,
     }
@@ -107,10 +111,10 @@ def source_evidence(support: tuple[CoverageInterval, ...], **overrides) -> Histo
 
 def footprint_result(
     trades: list[TradeRecord], start: str, end: str, *,
-    duration: str = "60s", tick: str = "1", **evidence_overrides,
+    duration: str = "60s", tick: str = "1", source_support: tuple[CoverageInterval, ...] | None = None, **evidence_overrides,
 ):
     definition = FootprintDefinitionV1.from_duration_and_tick(duration, tick)
-    support = (interval(start, end),)
+    support = source_support or (interval(start, end),)
     evidence = source_evidence(support, **evidence_overrides)
     return build_historical_footprint_result(
         trades, definition, instant(start), instant(end),
@@ -154,7 +158,7 @@ def content_identity(result, *, token: str = "a") -> FeatureArtifactContentIdent
                 manifest_sha256=(token * 63 + "0"),
             ),
         ),
-        declared_support=SupportShape(intervals=result.coverage.covered_intervals),
+        declared_support=SupportShape(intervals=result.required_bucket_support),
     )
 
 
@@ -618,6 +622,77 @@ class H01MaterializationTests(unittest.TestCase):
                 implementation_code_identity="impl",
                 content_identity=content_identity(result),
             )
+
+    def test_materialize_rejects_additional_unconsumed_datasets(self):
+        result = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+        )
+        evaluation = evaluate_h01_imbalance(result)
+        other_identity = DatasetIdentity("canonical", "trades", "binance", "BTCUSDT", "trade-v1")
+        extra_source = BoundSourceDataset(
+            other_identity,
+            (
+                BoundSourcePartition(
+                    natural_identity=NaturalPartitionIdentity(other_identity, "dt=2024-01-01", 1),
+                    content_sha256="2" * 64,
+                    manifest_sha256="2" * 64,
+                ),
+            ),
+        )
+        invalid_sources = sources() + (extra_source,)
+        with self.assertRaises(H01CompositionError):
+            materialize_h01_feature_artifact(
+                evaluation, result,
+                sources=invalid_sources,
+                implementation_code_identity="impl",
+                content_identity=content_identity(result),
+            )
+
+    def test_materialize_rejects_sources_with_mismatched_partition_hashes(self):
+        result = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+        )
+        evaluation = evaluate_h01_imbalance(result)
+        mismatched_sources = sources(token="2")
+        with self.assertRaises(H01CompositionError):
+            materialize_h01_feature_artifact(
+                evaluation, result,
+                sources=mismatched_sources,
+                implementation_code_identity="impl",
+                content_identity=content_identity(result),
+            )
+
+    def test_materialize_non_bucket_aligned_request_binds_required_bucket_support(self):
+        result = footprint_result(
+            [trade("2024-01-01T00:00:20Z", "100", "10", "buy")],
+            "2024-01-01T00:00:15Z", "2024-01-01T00:00:45Z",
+            source_support=(interval("2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z"),),
+        )
+        evaluation = evaluate_h01_imbalance(result)
+        artifact = materialize_h01_feature_artifact(
+            evaluation, result,
+            sources=sources(),
+            implementation_code_identity="impl",
+            content_identity=content_identity(result),
+        )
+        self.assertEqual(
+            result.coverage.covered_intervals,
+            (interval("2024-01-01T00:00:15Z", "2024-01-01T00:00:45Z"),),
+        )
+        self.assertEqual(
+            result.required_bucket_support,
+            (interval("2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z"),),
+        )
+        self.assertEqual(
+            artifact.bound_input_evidence.consumed_support.intervals,
+            result.required_bucket_support,
+        )
+        self.assertNotEqual(
+            artifact.bound_input_evidence.consumed_support.intervals,
+            result.coverage.covered_intervals,
+        )
 
 
 if __name__ == "__main__":
