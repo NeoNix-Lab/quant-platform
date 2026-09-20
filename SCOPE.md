@@ -1,34 +1,36 @@
-# Scope: Wave 2 frontier preparation, 2026-09-21 to 2026-09-25
+# Scope: Post-Wave-2 governance closeout and Wave 3 frontier preparation, 2026-09-28 to 2026-10-02
 
 ## Objective
 
-Record the corrected post-Wave-1 resting state and prepare the Wave 2 execution
-agenda for the week of 2026-09-21.
+Record the resting state at the close of the Wave 2 week (2026-09-21 to
+2026-09-25) and prepare the execution agenda for the following week
+(2026-09-28 to 2026-10-02).
 
-This file is a governance/planning scope. It does not broaden or combine the
-separately bounded implementation authority carried by issues #83 (E06), #85
-(F02), and #86 (F03). Any implementation work must remain inside the exact
-runtime/code-and-tests boundaries of the selected issue.
+This file is a governance/planning scope. It does not itself authorize any
+implementation or decision-gate mutation; a separately bounded `SCOPE.md`/
+issue is required before any runtime/code-and-tests work is activated.
 
-## Status
+## Status: Wave 2 resting state (close of 2026-09-25)
 
-The `implement/wave-1` batch concluded 2026-09-19 and was merged into `main`
-through PR #81. PR #82 then froze `E06 — H01 canonical integration v1` under
-ADR-0035.
-
-The routed Wave 2 integration branch is:
+The Wave 2 frontier (issues #83 E06, #85 F02, #86 F03) is **COMPLETE** and
+merged into `implement/wave-2`, then into `main`:
 
 ```text
-implement/wave-2
+E06  H01 canonical integration   COMPLETE   issue #83 / PR #88
+F02  EventSpec/detection         COMPLETE   issue #85 / PR #89
+F03  OutcomeSpec/Outcome         COMPLETE   issue #86 / PR #90
 ```
 
-It was created from `main` after PR #82. The governance correction commit
-`a1e3cc9c70f1b906711d3de020f347e60d989d73` records that C04/ASS-03 was
-already complete via issue #40 / PR #44 on 2026-09-14 and had been
-misclassified as `MISSING` during the post-Wave-1 reconciliation.
+This governance issue (#87) performs the reconciliation: `CAPABILITY_MAP.md`,
+`CAPABILITY_DAG.md`, `ROADMAP.md` and `OPEN_DECISIONS.md` now record E06, F02
+and F03 as `COMPLETE`, and Wave 2 as concluded.
 
-Issue #84 was therefore redundant and is closed. Its work must not be
-re-implemented or re-proved absent a concrete invalidating change.
+C04/ASS-03 remains credited pre-existing evidence (issue #40/PR #44,
+2026-09-14) and was never part of the Wave 2 implementation gate. Issue #73's
+Wave 1 Human Golden E2E closeout (1440-candle 1m D03, official
+`GOLDEN E2E: PASS`) remains closed and credited; the previously stale
+"in progress" notes in `CAPABILITY_MAP.md`/`ROADMAP.md` are corrected by this
+reconciliation.
 
 The completed Producer-Consumer Conformity cycle remains credited under
 ADR-0023:
@@ -38,97 +40,56 @@ Contract Freeze Gate              PASSED
 Conformity Implementation Gate    PASSED
 ```
 
-Issue #73 (Wave 1 Human Golden E2E closeout) is also closed and credited. The
-real 1440-candle 1m D03 result, official `GOLDEN E2E: PASS` verification and
-durable evidence remain accepted foundation evidence and are not reopened by
-Wave 2.
+## Next week execution agenda (2026-09-28 to 2026-10-02)
 
-## Current frontier
-
-The current execution frontier is:
+The next decision-complete, dependency-satisfied atom is:
 
 ```text
-E06  H01 canonical integration runtime — ADR-0035 FROZEN, issue #83
-F02  EventSpec / causal event detection — issue #85
-F03  OutcomeSpec / Outcome — issue #86
+F04  Event study/sweeps — Requires F02,F03,B03, all COMPLETE; decision RESOLVED
 ```
 
-C04 is not part of the frontier; it is `COMPLETE` via issue #40 / PR #44.
+Beyond `F04`, the Validation/Strategy path remains blocked by the DG-E
+decision gate (`F07` labels/censoring/lockbox, `OPEN_BLOCKING`). F07's
+dependencies (`F03`,`F06`) are now both `COMPLETE`, but the gate itself is
+not resolved, so it does not join the frontier until a decision-gate scope
+resolves it.
 
-Frontier membership is not blanket implementation authorization. The selected
-issue remains the bounded authority for its own runtime mutation surface.
-
-## Wave 2 execution relationship
-
-E06 and F02 are independently executable from the current routed baseline when
-their own activation gates hold. Generic F02 does not depend on E06 runtime;
-E06 semantics are frozen under ADR-0035 but its runtime remains missing until
-issue #83 is completed.
-
-F03 depends on F02 being present on the routed baseline. Do not implement or
-cherry-pick missing prerequisites inside #86.
-
-The Wave 2 governance closeout is issue #87. It remains inactive until the E06,
-F02 and F03 implementation PRs are merged into `implement/wave-2`. C04 is
-credited pre-existing evidence and is not a Wave 2 implementation gate.
-
-## Week plan
-
-The week is organized around the three real frontier atoms rather than the
-stale C04 entry:
+Candidate agenda for the week, in order of readiness:
 
 ```text
-2026-09-21  verify current origin/implement/wave-2 and branch ancestry;
-            begin at most one bounded frontier issue (#83 E06 or #85 F02)
-2026-09-22  continue/review the active bounded issue; avoid duplicate proof
-2026-09-23  begin/continue the remaining independent E06 or F02 slice after
-            refreshing only its named prerequisites and directly affected evidence
-2026-09-24  F03 may start only after F02 is available on the routed baseline;
-            otherwise use the day for review/closeout of E06 or F02
-2026-09-25  continue F03 or reserve for review/integration; activate #87 only
-            after E06, F02 and F03 are all merged into implement/wave-2
+2026-09-28  verify current origin/main ancestry after Wave 2 merge;
+            open a bounded SCOPE.md for F04 (Event study/sweeps) if selected
+2026-09-29  continue F04, or open a bounded decision-gate scope for DG-E
+            (F07 labels/censoring/lockbox) if F04 is not selected this week
+2026-09-30  continue the selected bounded scope; avoid duplicate proof
+2026-10-01  continue/review the selected scope
+2026-10-02  close the selected scope; reserve remainder for review/integration
 ```
 
-If an item blocks, do not silently roll its authority into another issue.
-Record the exact blocker and continue only with an independent frontier atom
-whose own prerequisites remain satisfied.
-
-## Activation rules
-
-For any Wave 2 implementation issue:
-
-1. verify current `origin/implement/wave-2` and its ancestry from `origin/main`;
-2. read the issue's named authority and directly affected code/evidence first;
-3. verify only the transitive prerequisites material to that issue;
-4. credit existing evidence rather than rerunning expensive proofs without a
-   concrete invalidating concern;
-5. identify the exact missing proposition and minimum sufficient proof;
-6. keep unrelated frontier atoms inactive;
-7. do not mutate governance from code-and-tests issues;
-8. stop only on a real authority contradiction, missing semantic decision or
-   authorization boundary.
+Only one bounded implementation or decision-gate scope may be active at a
+time, per the Planning rule in `ROADMAP.md`/`CAPABILITY_DAG.md`.
 
 ## Excluded
 
-- Reopening or re-implementing C04 / issue #84.
-- Treating E06 runtime as a prerequisite of generic F02.
-- Combining E06, F02 and F03 into one implementation scope.
-- Activating issue #87 before E06, F02 and F03 are merged into
-  `implement/wave-2`.
-- Claiming API transport, Job runtime, clients, live product mode or unrelated
-  future capabilities.
-- Reopening the Contract Freeze Gate, Conformity Implementation Gate or Human
-  Golden E2E without concrete invalidating evidence.
+- Activating `F04` implementation or the DG-E decision gate directly from
+  this governance issue (issue #87 is governance-only; a separate bounded
+  scope/issue is required).
+- Reopening or re-implementing C04 / issue #84, or the Wave 1/Wave 2
+  implementation issues.
+- Reopening the Contract Freeze Gate, Conformity Implementation Gate or
+  Human Golden E2E without concrete invalidating evidence.
+- Claiming API transport, Job runtime, clients, live product mode or other
+  unrelated future capabilities.
 
 ## Acceptance
 
 DONE means:
 
-1. `SCOPE.md` reflects the corrected Wave 2 routed baseline and C04 evidence.
-2. C04 is credited as `COMPLETE`; issue #84 is treated as redundant/closed.
-3. The current frontier is exactly `E06,F02,F03`.
-4. E06 and F02 independence, and the F02 -> F03 prerequisite, are explicit.
-5. Issue #87 waits only for E06, F02 and F03 Wave 2 merges.
-6. Existing conformity and Golden E2E evidence remains credited rather than
-   re-proved.
-7. `main` is not mutated by this scope reconciliation.
+1. `SCOPE.md` reflects the Wave 2 resting state and the corrected Wave 3
+   frontier candidate (`F04`) plus the next blocking decision gate (DG-E).
+2. E06, F02 and F03 are credited as `COMPLETE` across governance documents.
+3. Wave 2 is recorded as `COMPLETE` in `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md`
+   and `ROADMAP.md`.
+4. Issue #73's stale "in progress" note is corrected to closed/credited.
+5. `main` is not mutated by this scope reconciliation beyond the authorized
+   governance files.
