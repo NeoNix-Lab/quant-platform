@@ -1,0 +1,68 @@
+name: Close issue on PR merge
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches:
+      - 'implement/**'
+      - 'main'
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  close-linked-issue:
+    name: Close linked issue
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close linked issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          python - << 'EOF'
+          import os
+          import re
+          import subprocess
+
+          pr_number = os.environ.get("PR_NUMBER", "")
+          pr_body = os.environ.get("PR_BODY") or ""
+          pr_head_ref = os.environ.get("PR_HEAD_REF") or ""
+          base_ref = os.environ.get("BASE_REF") or ""
+
+          issue_numbers = set()
+
+          # 1. Match linking keywords in body: "Closes #123", "Fixes #123", "Resolves #123"
+          keyword_pattern = r'(?i)\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\s+#(\d+)\b'
+          for match in re.finditer(keyword_pattern, pr_body):
+              issue_numbers.add(match.group(1))
+
+          # 2. Match branch pattern like "agent/issue-123-45"
+          branch_pattern = r'issue-(\d+)'
+          branch_match = re.search(branch_pattern, pr_head_ref)
+          if branch_match:
+              issue_numbers.add(branch_match.group(1))
+
+          if not issue_numbers:
+              print(f"No linked issues found for PR #{pr_number}.")
+              exit(0)
+
+          for issue_num in sorted(issue_numbers, key=int):
+              print(f"Closing issue #{issue_num} via PR #{pr_number}...")
+              comment = f"Automatically closed by PR #{pr_number} merged into `{base_ref}`."
+              res = subprocess.run(
+                  ["gh", "issue", "close", issue_num, "--comment", comment],
+                  capture_output=True,
+                  text=True,
+              )
+              if res.returncode == 0:
+                  print(f"Successfully closed issue #{issue_num}.")
+              else:
+                  print(f"Failed to close issue #{issue_num}: {res.stderr.strip()}")
+          EOF
