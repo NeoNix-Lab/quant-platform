@@ -57,7 +57,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Validation | Walk-forward schedule | RESOLVED | COMPLETE | Validation | F05 | Deterministic pure temporal atom. |
 | Validation | Availability/purge/embargo | FROZEN | COMPLETE | Validation | F06 | ADR-0031. |
 | Validation | Labels/censoring/lockbox | FROZEN | MISSING | Validation | F07 | ADR-0036; outcome-derived labels/censoring/terminal-lockbox semantics frozen; implementation pending. |
-| Validation | DSR/PBO | FROZEN | MISSING | Validation | F08 | ADR-0037; DSR-L and full-CSCV PBO semantics, numerical policy and reference vectors frozen; implementation pending. |
+| Validation | DSR/PBO | FROZEN | MISSING | Research/Validation | F08 | ADR-0037; capability remains cross-domain, while the bounded estimator runtime is Validation-owned; DSR-L/full-CSCV semantics and reference vectors frozen. |
 | Strategy | StrategySpec/DecisionIntent | RESOLVED | MISSING | Strategy | G01 | Strategy remains upstream of execution. |
 | Strategy | Policy composition | RESOLVED | MISSING | Strategy | G02 | Deterministic composition required. |
 | Strategy | Risk/sizing | RESOLVED | MISSING | Strategy | G03 | No client-owned logic. |
