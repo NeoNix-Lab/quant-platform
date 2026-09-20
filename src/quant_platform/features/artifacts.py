@@ -656,6 +656,17 @@ def compute_observation_evidence_digest(
     return f"{OBSERVATION_EVIDENCE_DIGEST_DOMAIN}:sha256:{_canonical_fingerprint(list(raw))}"
 
 
+def compute_observation_evidence_fingerprint(
+    observations: Sequence[FeatureObservation],
+) -> str:
+    """Compute deterministic SHA-256 fingerprint over observation identities and values."""
+    payload = [
+        {"identity": obs.identity, "value": obs.value}
+        for obs in sorted(observations, key=lambda o: o.identity)
+    ]
+    return _canonical_fingerprint(payload)
+
+
 @dataclass(frozen=True, slots=True)
 class FeatureArtifact:
     """Immutable downstream metadata/evidence envelope for one FeatureArtifact v1.
@@ -933,6 +944,18 @@ def rehydrate_feature_artifact(
         if digest != expected_digest:
             raise FeatureArtifactError(
                 f"rehydrate_feature_artifact() sealed_observation_digest mismatch: expected {expected_digest}, got {digest}"
+            )
+    if sealed_observations:
+        evidence_hash = compute_observation_evidence_fingerprint(sealed_observations)
+        manifest_hashes = {
+            partition.manifest_sha256 for partition in content_identity.output_partitions
+        } | {
+            partition.content_sha256 for partition in content_identity.output_partitions
+        }
+        if evidence_hash not in manifest_hashes:
+            raise FeatureArtifactError(
+                "rehydrated sealed_observations do not match identity-bound content partition commitment "
+                "(evidence substitution or forgery rejected)"
             )
     result = FeatureArtifact(
         feature_set_definition_identity=feature_set_definition_identity,
@@ -1288,6 +1311,7 @@ __all__ = [
     "SupportShape",
     "classify_registration",
     "compute_observation_evidence_digest",
+    "compute_observation_evidence_fingerprint",
     "recomputation_equivalent",
     "rehydrate_feature_artifact",
     "require_final_observations",

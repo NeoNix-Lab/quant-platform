@@ -93,6 +93,7 @@ from ..features import (
     Instant,
     ObservationLifecycle,
     compute_observation_evidence_digest,
+    compute_observation_evidence_fingerprint,
 )
 from .hypothesis import HypothesisSpecError, HypothesisSpecId
 
@@ -597,6 +598,17 @@ def detect_events(
         if artifact.sealed_observation_digest != expected_digest:
             raise EventDetectionError(
                 f"artifact {artifact.identity} sealed observation digest mismatch"
+            )
+        manifest_hashes = {
+            p.manifest_sha256 for p in artifact.content_identity.output_partitions
+        } | {
+            p.content_sha256 for p in artifact.content_identity.output_partitions
+        }
+        evidence_hash = compute_observation_evidence_fingerprint(artifact.sealed_observations)
+        if evidence_hash not in manifest_hashes:
+            raise EventDetectionError(
+                f"artifact {artifact.identity} sealed observation evidence does not match "
+                "identity-bound content partition commitment (forged or substituted evidence)"
             )
 
     sealed_by_id: dict[str, FeatureObservation] = {}

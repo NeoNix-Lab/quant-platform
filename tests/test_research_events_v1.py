@@ -24,6 +24,7 @@ from quant_platform.features import (  # noqa: E402
     ConstituentFeatureOutput,
     FeatureArtifact,
     FeatureArtifactContentIdentity,
+    FeatureArtifactError,
     FeatureDefinitionId,
     FeatureObservation,
     FeatureSetDefinitionIdentity,
@@ -37,6 +38,7 @@ from quant_platform.features import (  # noqa: E402
     SupportIdentity,
     SupportReference,
     SupportShape,
+    compute_observation_evidence_fingerprint,
     rehydrate_feature_artifact,
     seal_feature_artifact,
 )
@@ -165,7 +167,7 @@ def sealed_artifact_for(
     output_partition = BoundOutputPartition(
         natural_identity=NaturalPartitionIdentity(artifact_output_dataset_identity(), "dt=2024-01-01", 1),
         content_sha256="a" * 64,
-        manifest_sha256="a" * 63 + "0",
+        manifest_sha256=compute_observation_evidence_fingerprint(sealed_observations),
     )
     source_partition = BoundSourcePartition(
         natural_identity=NaturalPartitionIdentity(ARTIFACT_SOURCE_DATASET_IDENTITY, "dt=2024-01-01", 1),
@@ -592,6 +594,86 @@ class DetectEventsTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(EventDetectionError, "lacks sealed observation evidence"):
             detect_events(spec, [obs], artifact=rehydrated)
+
+    def test_detect_events_refuses_substituted_forged_evidence_in_rehydrated_artifact(self):
+        # Codex finding: rehydration must not allow non-empty forged/substituted
+        # observations while preserving the artifact identity.
+        spec = event_spec()
+        real_obs = observation(
+            bucket="bar:2024-01-01T12:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        sealed = sealed_artifact_for(STACKED_IMBALANCE_ID, [real_obs])
+        forged_obs = observation(
+            bucket="bar:2024-01-01T12:00:00Z",
+            value=999.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        # Rehydrating with non-empty forged evidence differing from content commitment fails closed
+        with self.assertRaisesRegex(FeatureArtifactError, "evidence substitution or forgery rejected"):
+            rehydrate_feature_artifact(
+                expected_identity=sealed.identity,
+                feature_set_definition_identity=sealed.feature_set_definition_identity,
+                bound_input_evidence=sealed.bound_input_evidence,
+                declared_materialized_support=sealed.declared_materialized_support,
+                implementation_code_identity=sealed.implementation_code_identity,
+                content_identity=sealed.content_identity,
+                constituent_output_contracts=sealed.constituent_output_contracts,
+                materialization_contract_version=sealed.materialization_contract_version,
+                physical_locators=sealed.physical_locators,
+                sealed_observation_identities=(forged_obs.identity,),
+                sealed_observations=(forged_obs,),
+            )
+
+    def test_detect_events_refuses_artifact_with_forged_evidence_differing_from_content_commitment(self):
+        # detect_events fails closed if an artifact's sealed observations do not match
+        # its identity-bound partition commitment manifest hash.
+        spec = event_spec()
+        obs = observation(
+            bucket="bar:2024-01-01T12:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        tampered_content = FeatureArtifactContentIdentity(
+            output_partitions=(
+                BoundOutputPartition(
+                    natural_identity=NaturalPartitionIdentity(artifact_output_dataset_identity(), "dt=2024-01-01", 1),
+                    content_sha256="0" * 64,
+                    manifest_sha256="0" * 64,
+                ),
+            ),
+            declared_support=SupportShape(intervals=(ARTIFACT_SUPPORT_INTERVAL,)),
+        )
+        mismatched_artifact = seal_feature_artifact(
+            feature_set_definition_identity=FeatureSetDefinitionIdentity("order_flow", 1),
+            bound_input_evidence=BoundInputEvidence(
+                sources=(BoundSourceDataset(ARTIFACT_SOURCE_DATASET_IDENTITY, (
+                    BoundSourcePartition(
+                        natural_identity=NaturalPartitionIdentity(ARTIFACT_SOURCE_DATASET_IDENTITY, "dt=2024-01-01", 1),
+                        content_sha256="1" * 64,
+                        manifest_sha256="1" * 64,
+                    ),
+                )),),
+                consumed_support=SupportShape(intervals=(ARTIFACT_SUPPORT_INTERVAL,)),
+                provenance_identity="b04-coverage-reconstruction:1",
+            ),
+            declared_materialized_support=SupportShape(intervals=(ARTIFACT_SUPPORT_INTERVAL,)),
+            implementation_code_identity="commit-1",
+            content_identity=tampered_content,
+            constituent_output_contracts=(
+                ConstituentFeatureOutput(
+                    STACKED_IMBALANCE_ID,
+                    OutputContract(
+                        OutputValueKind.NUMERIC, "scalar", OutputDimension.DIMENSIONLESS, NumericalEquivalence.exact(),
+                    ),
+                ),
+            ),
+            observations=[obs],
+            expected_observation_identities=[obs.identity],
+        )
+        with self.assertRaisesRegex(EventDetectionError, "forged or substituted evidence"):
+            detect_events(spec, [obs], artifact=mismatched_artifact)
 
     def test_detect_events_refuses_an_unsealed_artifact(self):
         spec = event_spec()
