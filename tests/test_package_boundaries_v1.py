@@ -44,6 +44,7 @@ OWNERS = {
     "quant_platform.features": "feature",
     "quant_platform.features.artifacts": "feature",
     "quant_platform.features.definitions": "feature",
+    "quant_platform.features.h01_imbalance": "feature",
     "quant_platform.features.imbalance": "feature",
     "quant_platform.operations": "operations",
     "quant_platform.operations.capacity": "operations",
@@ -57,7 +58,9 @@ OWNERS = {
     "quant_platform.experiments.identities": "experiment",
     "quant_platform.experiments.persistence": "experiment",
     "quant_platform.research": "research",
+    "quant_platform.research.events": "research",
     "quant_platform.research.hypothesis": "research",
+    "quant_platform.research.outcomes": "research",
     "quant_platform.source_adapters": "source",
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
@@ -66,6 +69,7 @@ OWNERS = {
     "quant_platform.application.composition": "application",
     "quant_platform.application.conformity": "application",
     "quant_platform.application.golden_conformity": "application",
+    "quant_platform.application.h01_composition": "application",
     "quant_platform.application.market_data": "application",
 }
 ALLOWED = {

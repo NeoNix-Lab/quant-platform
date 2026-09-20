@@ -48,6 +48,14 @@ from .conformity import (
     run_vertical,
     verify_vertical,
 )
+from .h01_composition import (
+    BUCKET_OBSERVATION_IDENTITY_DOMAIN,
+    H01CompositionError,
+    H01Evaluation,
+    bucket_observation_identity,
+    evaluate_h01_imbalance,
+    materialize_h01_feature_artifact,
+)
 from .golden_conformity import (
     GoldenExpectation,
     ScanObservation,
@@ -74,6 +82,7 @@ from .market_data import (
 )
 
 __all__ = [
+    "BUCKET_OBSERVATION_IDENTITY_DOMAIN",
     "CANONICAL_FIELD_ORDER",
     "DEFAULT_MARKET_DATA_BATCH_SIZE",
     "ApplicationRequestError",
@@ -85,6 +94,8 @@ __all__ = [
     "ConsumerMarketDataResult",
     "ConsumerProvenance",
     "GoldenExpectation",
+    "H01CompositionError",
+    "H01Evaluation",
     "HarnessConfig",
     "HarnessFailure",
     "HarnessRunFailure",
@@ -108,15 +119,18 @@ __all__ = [
     "UnsupportedVenue",
     "VerificationMismatch",
     "WriteResult",
+    "bucket_observation_identity",
     "collect_preflight",
     "compose_market_data_application",
     "encode_record",
+    "evaluate_h01_imbalance",
     "execute_market_data_query",
     "format_exchange_ts",
     "format_observation",
     "golden_field_mismatches",
     "inspect_vertical",
     "load_golden_expectation",
+    "materialize_h01_feature_artifact",
     "observe_scan",
     "resolve_market_data_request",
     "run_import",

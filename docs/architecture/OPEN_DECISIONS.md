@@ -18,7 +18,7 @@ DG-D Application configuration semantics             RESOLVED
 DG-A FeatureDefinition v1 semantics                  FROZEN / COMPLETE
 DG-A FootprintDefinition v1 semantics                FROZEN / COMPLETE
 DG-A FeatureArtifact v1 (E04)                        FROZEN / COMPLETE
-DG-A H01 canonical integration v1 (E06)              FROZEN / MISSING
+DG-A H01 canonical integration v1 (E06)              FROZEN / COMPLETE
 DG-B B04 non-contiguous coverage reads v1            FROZEN / COMPLETE
 DG-B A10 backfill / repair v1                        FROZEN / COMPLETE
 DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
@@ -66,7 +66,7 @@ Rules:
 - `quant_platform.application` owns concrete composition and does not read process arguments/environment directly;
 - no generic DI container, service locator, provider registry or plugin/config framework is introduced.
 
-This resolves the C05 decision state only. C05 implementation remains missing, and C04/ASS-03 remains blocked until that implementation exists.
+This resolves the C05 decision state. Both C05 and C04/ASS-03 implementation are complete (C04 via issue #40/PR #44, 2026-09-14).
 
 ## Decision-gate policy
 
@@ -105,7 +105,7 @@ D06 footprint representation (FROZEN / COMPLETE by ADR-0027)
 E02 FeatureDefinition (FROZEN / COMPLETE by ADR-0026)
 E04 FeatureArtifact (FROZEN / COMPLETE by ADR-0034)
 E05 pure H01 kernel (RESOLVED / COMPLETE)
-E06 canonical H01 integration (FROZEN / MISSING by ADR-0035)
+E06 canonical H01 integration (FROZEN / COMPLETE by ADR-0035; issue #83/PR #88)
 ```
 
 [ADR-0035](../decisions/ADR-0035-h01-canonical-integration-v1.md) freezes the first concrete H01 Feature vertical:
@@ -122,7 +122,7 @@ E06 canonical H01 integration (FROZEN / MISSING by ADR-0035)
 - E04 binds exact immutable D06 result/binding evidence rather than a duplicated trade-lineage model;
 - one `h01_imbalance@1` FeatureSetDefinition contains the two independent observables.
 
-E06 therefore has no remaining semantic decision blocker. Its implementation remains `MISSING` and may now be activated only through a separately bounded `SCOPE.md`/issue.
+E06 therefore has no remaining semantic decision blocker. Its implementation is `COMPLETE` (issue #83/PR #88).
 
 Do not activate Candle materialization merely because it is in DG-A. Do not create a generic provider/plugin framework. FeatureDefinition v1, FootprintDefinition v1, FeatureArtifact v1 and H01 canonical integration semantics are accepted authority under ADR-0026, ADR-0027, ADR-0034 and ADR-0035.
 
