@@ -22,6 +22,7 @@ DG-A H01 canonical integration v1 (E06)              FROZEN / COMPLETE
 DG-B B04 non-contiguous coverage reads v1            FROZEN / COMPLETE
 DG-B A10 backfill / repair v1                        FROZEN / COMPLETE
 DG-E F07 labels/censoring/lockbox v1                 FROZEN / MISSING
+DG-E F08 DSR/PBO robust comparison v1                FROZEN / MISSING
 DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
 ```
 
@@ -181,9 +182,11 @@ Activate only when L2 is selected, after the declared L1 dependency. Resolve sna
 
 Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
 
-## DG-E — Validation semantics
+## DG-E — Validation semantics — RESOLVED
 
-### Validation / labeling branch (`F06`,`F07`) — F07 RESOLVED
+DG-E has no remaining open semantic branch. Runtime implementation states remain separate from this decision status.
+
+### Validation / labeling branch (`F06`,`F07`) — RESOLVED
 
 F06 availability/purge/embargo is frozen and complete under
 [ADR-0031](../decisions/ADR-0031-availability-purge-embargo-v1.md).
@@ -194,30 +197,38 @@ Implementation remains `MISSING`.
 
 Accepted F07 v1 decisions include:
 
-- outcome-derived labels only; policy-derived labels wait for explicit
-  Strategy/Execution authority;
-- only `COMPLETE` F03 Outcomes may produce a label value; source-censored and
-  insufficient-coverage Outcomes remain explicit no-value states;
+- outcome-derived labels only; policy-derived labels wait for explicit Strategy/Execution authority;
+- only `COMPLETE` F03 Outcomes may produce a label value; source-censored and insufficient-coverage Outcomes remain explicit no-value states;
 - exact identity-value and ordered exact-rational threshold transforms only;
 - label causal availability equals source Outcome causal availability;
-- target support includes the consumed F03 boundary at `horizon_end` and is
-  projected into F06 without shrinking that endpoint;
-- training targets are fold-completion dependencies; test/lockbox targets are
-  evaluation outputs, not decision-time inputs;
-- lockbox v1 is one terminal holdout interval with explicit hidden-evaluation
-  isolation and irreversible reveal semantics;
+- target support includes the consumed F03 boundary at `horizon_end` and is projected into F06 without shrinking that endpoint;
+- training targets are fold-completion dependencies; test/lockbox targets are evaluation outputs, not decision-time inputs;
+- lockbox v1 is one terminal holdout interval with explicit hidden-evaluation isolation and irreversible reveal semantics;
 - F07 freezes semantic isolation, not physical ACL/vault infrastructure;
-- Validation consumes a narrow Validation-owned projection of F03 evidence
-  rather than importing/redefining Research runtime semantics.
+- Validation consumes a narrow Validation-owned projection of F03 evidence rather than importing/redefining Research runtime semantics.
 
-The F07 branch therefore has no remaining semantic blocker. A separate bounded
-implementation issue/scope is still required before runtime mutation.
+### DSR/PBO branch (`F08`) — RESOLVED
 
-### DSR/PBO branch (`F08`)
+F08 robust-comparison semantics are frozen under
+[ADR-0037](../decisions/ADR-0037-dsr-pbo-robust-comparison-v1.md) (issue #97).
+Implementation remains `MISSING`.
 
-Activate only when robust-comparison/DSR-PBO capability is selected. Resolve exact estimator definitions, input return series, trial population, comparable-fold semantics and pinned numeric vectors.
+Accepted F08 v1 decisions include:
 
-`F08` remains `OPEN_BLOCKING` and does **not** block Strategy or supervised-input paths whose dependency chain runs through implemented F07 rather than F08.
+- one complete same-frequency excess-return panel over a declared comparable trial population;
+- non-annualized canonical Sharpe using sample standard deviation (`ddof=1`);
+- deterministic raw standardized moment formulas for DSR;
+- DSR v1 is the location-only `DSR-L` variant; DSR-LS/full-search variants are future extensions;
+- effective trial count `K_eff` is explicit caller evidence, not estimated by F08;
+- search adjustment uses the Bailey/López de Prado expected-maximum location approximation and PSR formula;
+- sampling assumption is explicitly `IID_V1`; no serial-correlation correction is implied;
+- PBO v1 is full CSCV with all symmetric half-block combinations, deterministic IS selection, OOS ranking, average exact-tie rank and strict `lambda < 0` overfit event;
+- non-evaluable required Sharpe values fail the complete metric rather than silently dropping a trial/split;
+- F05 walk-forward folds are not reinterpreted as CSCV partitions;
+- binary64 numerical policy and pinned DSR/PBO reference vectors are part of the contract;
+- Validation remains the runtime owner and consumes opaque cross-owner evidence without loosening the package DAG.
+
+F08 therefore has no remaining semantic blocker. Its future runtime requires a separate bounded implementation issue/scope.
 
 ## DG-F — Strategy / Execution semantics
 
