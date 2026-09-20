@@ -1,5 +1,6 @@
 """Feature Engine semantic definitions and pure quantitative kernels."""
 
+from ..data.models import Instant
 from .artifacts import (
     BOUND_INPUT_EVIDENCE_IDENTITY_DOMAIN,
     FEATURE_ARTIFACT_CONTENT_IDENTITY_DOMAIN,
@@ -130,6 +131,7 @@ __all__ = [
     "InputContractShape",
     "InputContractV1",
     "InputMaturity",
+    "Instant",
     "NonObservation",
     "NonObservationReason",
     "NumericalEquivalence",

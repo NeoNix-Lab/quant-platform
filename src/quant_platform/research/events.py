@@ -40,29 +40,37 @@ accepted ADR text):
   to, requires strictly non-decreasing ``causal_available_at`` order, and
   refuses any non-FINAL observation or duplicate observation identity --
   all fail closed rather than silently skip (adversarial-vector style,
-  matching this codebase's E02/E04 modules).
-- A detected event's ``causal_available_at`` is set to exactly the
-  triggering observation's own ``causal_available_at`` (the tightest legal
-  value that still satisfies "never precede the latest causal_available_at
-  of its required feature observations", since v1 introduces no additional
-  detection-side latency).
+  matching this codebase's E02/E04 modules).  It optionally accepts a
+  sealed E04 ``FeatureArtifact`` as durable provenance for the supplied
+  observations; when given one, it refuses anything that is not a genuine
+  sealed ``FeatureArtifact`` instance (E04's private-construction guard
+  makes an "unsealed" instance of that type impossible to hold in the
+  first place) and refuses an artifact that does not actually seal
+  evidence for ``spec.observable_id``.
 - A detected event's ``event_time`` is set to exactly the triggering
-  observation's own ``causal_available_at``.  E02's frozen contract
-  exposes no separate, narrower "market bucket closed" instant: per
+  observation's own ``causal_available_at``.  E02's
   ``FeatureAvailabilitySemantics.causal_floor_rule ==
-  "after_required_support_available"``, ``causal_available_at`` already
-  *is* the moment the required support closed, for any `FeatureDefinition`
-  that adds no additional publication latency of its own.  The only other
-  candidate field, ``observed_available_at``, is guaranteed by E02's own
-  validation to be greater than or equal to ``causal_available_at`` (it
-  can never precede the causal floor), so using it as ``event_time`` would
-  silently invert which of the two fields is earlier.  Reusing
-  ``causal_available_at`` for both fields in v1 is therefore the honest,
-  non-fabricated answer rather than an arbitrary collapse -- and remains
-  forward-compatible: a future revision modeling per-event additional
-  detection latency can widen ``causal_available_at`` beyond
-  ``event_time`` without changing this module's identity/evaluation
-  contracts.
+  "after_required_support_available"`` pins that field to the moment the
+  observation's *required support* became available -- i.e. the market
+  bucket/bar's own closing instant -- independent of how long
+  finalization confirmation later took.  This is "canonical observation
+  support semantics": the only E02-typed instant that is actually defined
+  in terms of support availability rather than downstream knowledge of it.
+- A detected event's ``causal_available_at`` is the later of the
+  triggering observation's own ``causal_available_at`` and (when present)
+  its ``observed_finalized_at``.  E02 guarantees
+  ``observed_finalized_at >= causal_available_at`` whenever the former is
+  supplied, but never guarantees equality: a bar that closed at 10:00 can
+  still be finalized at 10:05 (a correction/reconciliation window), and an
+  event detected from it must not be treated as legally available before
+  10:05 just because its bucket closed at 10:00.  Using
+  ``observation.causal_available_at`` alone here -- as an earlier revision
+  of this module did -- would leak: it could make a `DetectedEvent`
+  causally available before the evidence that produced it was actually
+  proven FINAL.  When ``observed_finalized_at`` is absent (nullable,
+  ``nullable_observed_time_never_fabricated``), the structural floor is
+  the only real evidence available and is used unchanged -- never
+  fabricated forward.
 """
 
 from __future__ import annotations
@@ -74,10 +82,18 @@ from enum import StrEnum
 import hashlib
 import json
 import re
+from types import MappingProxyType
 from typing import Any, ClassVar
 
-from ..data.models import Instant
-from ..features import FeatureDefinitionId, FeatureObservation, ObservationLifecycle
+from ..features import (
+    FeatureArtifact,
+    FeatureArtifactError,
+    FeatureArtifactLifecycle,
+    FeatureDefinitionId,
+    FeatureObservation,
+    Instant,
+    ObservationLifecycle,
+)
 from .hypothesis import HypothesisSpecError, HypothesisSpecId
 
 
@@ -354,24 +370,20 @@ class EventSpec:
 # ---------------------------------------------------------------------------
 
 
-def _stable_match_evidence(value: Any) -> tuple[tuple[str, Any], ...]:
-    """Canonicalize caller-supplied evidence into a hashable, order-independent
-    tuple of pairs -- the same idiom this codebase already uses for
-    ``NumericalEquivalence.parameters`` (`quant_platform.features.definitions`)
-    to keep a frozen dataclass's auto-generated `__hash__`/`__eq__` well
-    defined without a second, unbounded-shape immutable-mapping type."""
+def _stable_match_evidence(value: Any) -> MappingProxyType[str, Any]:
+    """Canonicalize caller-supplied evidence into a genuinely immutable
+    ``Mapping`` (`types.MappingProxyType`), so ``event.match_evidence["value"]``
+    works directly as the public value shape -- not a tuple of pairs.  Keys
+    are normalized and stored in sorted order so two mappings built from the
+    same evidence in a different key order compare/serialize identically.
+    """
 
     if not isinstance(value, Mapping):
         raise EventSpecError("match_evidence must be a mapping")
     items: dict[str, Any] = {}
     for key, item in value.items():
-        text_key = _non_empty_text(key, "match_evidence key")
-        try:
-            hash(item)
-        except TypeError as exc:
-            raise EventSpecError(f"match_evidence[{text_key!r}] must be a hashable value") from exc
-        items[text_key] = item
-    return tuple(sorted(items.items()))
+        items[_non_empty_text(key, "match_evidence key")] = item
+    return MappingProxyType(dict(sorted(items.items())))
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,7 +404,7 @@ class DetectedEvent:
     observation_identity: str
     event_time: Instant | str
     causal_available_at: Instant | str
-    match_evidence: Mapping[str, Any] | tuple[tuple[str, Any], ...]
+    match_evidence: Mapping[str, Any]
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -442,7 +454,38 @@ class DetectedEvent:
 # ---------------------------------------------------------------------------
 
 
-def detect_events(spec: EventSpec, observations: Iterable[FeatureObservation]) -> list[DetectedEvent]:
+def _require_sealed_artifact_covers_observable(artifact: Any, observable_id: str) -> None:
+    """Fail closed unless ``artifact`` is a genuine sealed E04 `FeatureArtifact`
+    that actually seals evidence for ``observable_id``.
+
+    E04's private-construction guard (`_SEAL_TOKEN`) makes it impossible to
+    hold an "unsealed" `FeatureArtifact` instance at all -- only
+    `seal_feature_artifact()` (after its FINAL-only proof gate) or
+    `rehydrate_feature_artifact()` (trusted catalog reconstruction of an
+    already-sealed record) can produce one.  So refusing anything that is
+    not literally an instance of that type *is* the refusal of unsealed
+    artifacts this function performs; a caller cannot construct a
+    counterfeit one to bypass it.
+    """
+
+    if not isinstance(artifact, FeatureArtifact):
+        raise EventDetectionError("artifact must be a sealed FeatureArtifact")
+    if artifact.lifecycle != FeatureArtifactLifecycle.FINAL:
+        raise EventDetectionError("artifact must be FINAL-sealed")  # pragma: no cover - E04 already guarantees this
+    try:
+        artifact.output_contract_for(observable_id)
+    except FeatureArtifactError as exc:
+        raise EventDetectionError(
+            f"artifact does not seal any evidence for observable {observable_id}"
+        ) from exc
+
+
+def detect_events(
+    spec: EventSpec,
+    observations: Iterable[FeatureObservation],
+    *,
+    artifact: FeatureArtifact | None = None,
+) -> list[DetectedEvent]:
     """Deterministically evaluate ``spec.predicate`` over a strictly
     time-ordered stream of FINAL ``FeatureObservation`` values bound to
     ``spec.observable_id``.
@@ -453,13 +496,23 @@ def detect_events(spec: EventSpec, observations: Iterable[FeatureObservation]) -
     or a duplicate observation identity in the same call -- rather than
     silently skipping evidence a caller may not have intended to omit.
 
+    ``artifact``, when supplied, is durable E04 provenance for
+    ``observations``: it must be a genuine sealed `FeatureArtifact` that
+    seals evidence for ``spec.observable_id`` (see
+    `_require_sealed_artifact_covers_observable`), or detection is refused
+    before any observation is evaluated.  Omitting it evaluates
+    ``observations`` directly, unchanged from evaluating them with an
+    artifact.
+
     Byte-identical results for byte-identical inputs: no field of a
     resulting `DetectedEvent` (including `event_id`) depends on anything
-    but the supplied `spec` and `observations`.
+    but the supplied `spec`, `observations` and `artifact`.
     """
 
     if not isinstance(spec, EventSpec):
         raise EventDetectionError("spec must be EventSpec")
+    if artifact is not None:
+        _require_sealed_artifact_covers_observable(artifact, spec.observable_id)
 
     events: list[DetectedEvent] = []
     seen_identities: set[str] = set()
@@ -493,8 +546,13 @@ def detect_events(spec: EventSpec, observations: Iterable[FeatureObservation]) -
         if not spec.predicate.evaluate(observation.value):
             continue
 
-        causal_available_at = observation.causal_available_at
-        event_time = causal_available_at
+        event_time = observation.causal_available_at
+        causal_available_at = (
+            observation.observed_finalized_at
+            if observation.observed_finalized_at is not None
+            and observation.observed_finalized_at > event_time
+            else event_time
+        )
         match_evidence = {
             "value": observation.value,
             "operator": spec.predicate.operator.value,

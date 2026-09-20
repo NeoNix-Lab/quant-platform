@@ -15,13 +15,29 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
+from quant_platform.data.models import CoverageInterval, DatasetIdentity, NaturalPartitionIdentity  # noqa: E402
 from quant_platform.features import (  # noqa: E402
+    BoundInputEvidence,
+    BoundOutputPartition,
+    BoundSourceDataset,
+    BoundSourcePartition,
+    ConstituentFeatureOutput,
+    FeatureArtifact,
+    FeatureArtifactContentIdentity,
     FeatureDefinitionId,
     FeatureObservation,
+    FeatureSetDefinitionIdentity,
     InputContractV1,
+    Instant,
+    NumericalEquivalence,
     ObservationLifecycle,
+    OutputContract,
+    OutputDimension,
+    OutputValueKind,
     SupportIdentity,
     SupportReference,
+    SupportShape,
+    seal_feature_artifact,
 )
 from quant_platform.research import (  # noqa: E402
     ComparisonOperator,
@@ -101,6 +117,64 @@ def observation(
     if lifecycle == ObservationLifecycle.FINAL:
         kwargs["observed_finalized_at"] = observed_finalized_at or causal_available_at
     return FeatureObservation(**kwargs)
+
+
+ARTIFACT_SOURCE_DATASET_IDENTITY = DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v1")
+ARTIFACT_SUPPORT_INTERVAL = CoverageInterval(
+    Instant.parse("2024-01-01T00:00:00Z"), Instant.parse("2024-01-02T00:00:00Z")
+)
+
+
+def artifact_output_dataset_identity(slug: str = "order_flow", version: int = 1) -> DatasetIdentity:
+    return DatasetIdentity(
+        "features", slug, "bybit", "BTCUSDT", "feature-v1",
+        feature_set_slug=slug, feature_set_version=version,
+    )
+
+
+def sealed_artifact_for(definition_id: FeatureDefinitionId) -> FeatureArtifact:
+    """A minimal, genuinely sealed E04 FeatureArtifact covering exactly
+    ``definition_id``, built the same way tests/test_feature_artifact_v1.py
+    builds one: via `seal_feature_artifact()`, never direct construction."""
+
+    output_contract = OutputContract(
+        OutputValueKind.NUMERIC, "scalar", OutputDimension.DIMENSIONLESS, NumericalEquivalence.exact(),
+    )
+    sealed_observation = FeatureObservation(
+        definition_id=definition_id,
+        support_identity=SupportIdentity(CONTRACT.identity, "obs-1", SupportReference.current()),
+        value="1.0",
+        lifecycle=ObservationLifecycle.FINAL,
+        causal_available_at=ARTIFACT_SUPPORT_INTERVAL.start,
+    )
+    output_partition = BoundOutputPartition(
+        natural_identity=NaturalPartitionIdentity(artifact_output_dataset_identity(), "dt=2024-01-01", 1),
+        content_sha256="a" * 64,
+        manifest_sha256="a" * 63 + "0",
+    )
+    source_partition = BoundSourcePartition(
+        natural_identity=NaturalPartitionIdentity(ARTIFACT_SOURCE_DATASET_IDENTITY, "dt=2024-01-01", 1),
+        content_sha256="1" * 64,
+        manifest_sha256="1" * 64,
+    )
+    declared_support = SupportShape(intervals=(ARTIFACT_SUPPORT_INTERVAL,))
+    return seal_feature_artifact(
+        feature_set_definition_identity=FeatureSetDefinitionIdentity("order_flow", 1),
+        bound_input_evidence=BoundInputEvidence(
+            sources=(BoundSourceDataset(ARTIFACT_SOURCE_DATASET_IDENTITY, (source_partition,)),),
+            consumed_support=declared_support,
+            provenance_identity="test-provenance:1",
+        ),
+        declared_materialized_support=declared_support,
+        implementation_code_identity="commit-1",
+        content_identity=FeatureArtifactContentIdentity(
+            output_partitions=(output_partition,),
+            declared_support=declared_support,
+        ),
+        constituent_output_contracts=(ConstituentFeatureOutput(definition_id, output_contract),),
+        observations=(sealed_observation,),
+        expected_observation_identities=(sealed_observation.identity,),
+    )
 
 
 class EventSpecIdentityTests(unittest.TestCase):
@@ -319,7 +393,7 @@ class DetectEventsTests(unittest.TestCase):
         self.assertEqual(match.identity, detected.observation_identity)
         self.assertEqual("2024-01-01T00:05:01Z", str(detected.event_time))
         self.assertEqual("2024-01-01T00:05:01Z", str(detected.causal_available_at))
-        self.assertEqual(3.25, dict(detected.match_evidence)["value"])
+        self.assertEqual(3.25, detected.match_evidence["value"])
         self.assertTrue(detected.event_id.startswith("detected-event-v1:sha256:"))
 
     def test_causal_available_at_never_precedes_observation_causal_floor(self):
@@ -328,6 +402,60 @@ class DetectEventsTests(unittest.TestCase):
         [detected] = detect_events(spec, [match])
         self.assertGreaterEqual(detected.causal_available_at, match.causal_available_at)
         self.assertEqual(detected.causal_available_at, match.causal_available_at)
+
+    def test_event_time_is_the_bucket_close_not_the_finalization_timestamp(self):
+        # A bar closing (causal_available_at) at 10:00 that is only
+        # confirmed FINAL (observed_finalized_at) at 10:05 must still report
+        # event_time == 10:00 -- the market bucket's own instant -- never
+        # drifting forward to the later finalization/knowledge timestamp.
+        spec = event_spec()
+        late_finalized = observation(
+            value=5.0,
+            causal_available_at="2024-01-01T10:00:00Z",
+            observed_finalized_at="2024-01-01T10:05:00Z",
+        )
+        [detected] = detect_events(spec, [late_finalized])
+        self.assertEqual("2024-01-01T10:00:00Z", str(detected.event_time))
+
+    def test_causal_available_at_reflects_delayed_finalization_latency(self):
+        # Non-anticipation: if the evidence was not actually proven FINAL
+        # until 10:05, the detected event must not be treated as legally
+        # available before that -- even though the bucket itself closed
+        # (causal_available_at) at 10:00.
+        spec = event_spec()
+        late_finalized = observation(
+            value=5.0,
+            causal_available_at="2024-01-01T10:00:00Z",
+            observed_finalized_at="2024-01-01T10:05:00Z",
+        )
+        [detected] = detect_events(spec, [late_finalized])
+        self.assertEqual("2024-01-01T10:05:00Z", str(detected.causal_available_at))
+        self.assertGreater(detected.causal_available_at, detected.event_time)
+        self.assertGreaterEqual(detected.causal_available_at, late_finalized.observed_finalized_at)
+
+    def test_detect_events_accepts_a_sealed_artifact_covering_the_observable(self):
+        spec = event_spec()
+        match = observation(value=5.0)
+        artifact = sealed_artifact_for(STACKED_IMBALANCE_ID)
+        result = detect_events(spec, [match], artifact=artifact)
+        self.assertEqual(1, len(result))
+
+    def test_detect_events_refuses_an_unsealed_artifact(self):
+        spec = event_spec()
+        match = observation(value=5.0)
+
+        class NotSealed:
+            lifecycle = "FINAL"
+
+        with self.assertRaisesRegex(EventDetectionError, "sealed"):
+            detect_events(spec, [match], artifact=NotSealed())  # type: ignore[arg-type]
+
+    def test_detect_events_refuses_an_artifact_that_does_not_cover_the_observable(self):
+        spec = event_spec()
+        match = observation(value=5.0)
+        mismatched_artifact = sealed_artifact_for(OTHER_OBSERVABLE_ID)
+        with self.assertRaisesRegex(EventDetectionError, "does not seal"):
+            detect_events(spec, [match], artifact=mismatched_artifact)
 
     def test_provisional_observations_are_refused(self):
         spec = event_spec()
