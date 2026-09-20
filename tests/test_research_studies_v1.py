@@ -36,6 +36,7 @@ from quant_platform.research import (  # noqa: E402
     ParameterSweepSpec,
     ParameterSweepSpecId,
     PopulationRecord,
+    SweepSummaryRow,
     ThresholdPredicate,
     run_event_study,
     run_parameter_sweep,
@@ -386,6 +387,27 @@ class RunEventStudyRuntimeGuardTests(unittest.TestCase):
         with self.assertRaises(EventStudyRuntimeError):
             run_event_study(spec, [other_event], series)
 
+    def test_rejects_event_carrying_the_expected_spec_id_but_a_mismatched_observable(self):
+        # A DetectedEvent's event_spec_id and observable_id are independent
+        # fields (DetectedEvent does not itself know EventSpec.observable_id),
+        # so an event could carry the expected spec identity while its own
+        # observable_id points somewhere else entirely. That must still be
+        # rejected: it is exactly the mismatched observable/event binding
+        # the fail-closed contract requires closing.
+        spec = study_spec()
+        other_observable = observable_id("order_flow.unrelated_observable")
+        mismatched_event = DetectedEvent(
+            event_spec_id=EVENT_SPEC.identity,
+            observable_id=str(other_observable),
+            observation_identity="feature-observation-v1:sha256:" + "d" * 64,
+            event_time=EVENT_TIME,
+            causal_available_at=EVENT_TIME,
+            match_evidence={"value": "2.5"},
+        )
+        series = market_series_for(EVENT_TIME, {0: "100", 5: "105", 10: "110"})
+        with self.assertRaises(EventStudyRuntimeError):
+            run_event_study(spec, [mismatched_event], series)
+
     def test_rejects_duplicate_event(self):
         spec = study_spec()
         event = detected_event(event_time=EVENT_TIME)
@@ -734,6 +756,64 @@ class AggregateMetricsValidationTests(unittest.TestCase):
                 positive_rate=Decimal("1.5"),
                 negative_rate=Decimal(0),
             )
+
+
+class SweepSummaryRowValidationTests(unittest.TestCase):
+    def _row_kwargs(self, **overrides):
+        kwargs = dict(
+            study_spec_id=study_spec().identity,
+            outcome_spec_id=OUTCOME_SPEC.identity,
+            sample_count=1,
+            completed_count=1,
+            censored_count=0,
+            insufficient_coverage_count=0,
+            mean_realized_value=Decimal(0),
+            positive_rate=Decimal(0),
+            negative_rate=Decimal(0),
+        )
+        kwargs.update(overrides)
+        return kwargs
+
+    def test_accepts_a_valid_row(self):
+        row = SweepSummaryRow(**self._row_kwargs())
+        self.assertEqual(Decimal(0), row.mean_realized_value)
+
+    def test_counts_must_sum_to_sample_count(self):
+        with self.assertRaises(EventStudyError):
+            SweepSummaryRow(**self._row_kwargs(sample_count=3, completed_count=1, censored_count=1))
+
+    def test_rejects_non_finite_mean_realized_value(self):
+        with self.assertRaises(EventStudyError):
+            SweepSummaryRow(**self._row_kwargs(mean_realized_value=float("inf")))
+
+    def test_rejects_float_metric_value(self):
+        with self.assertRaises(EventStudyError):
+            SweepSummaryRow(**self._row_kwargs(mean_realized_value=0.1))
+
+    def test_rejects_rate_out_of_bounds(self):
+        with self.assertRaises(EventStudyError):
+            SweepSummaryRow(**self._row_kwargs(positive_rate=Decimal("1.5")))
+
+    def test_rejects_negative_rate(self):
+        with self.assertRaises(EventStudyError):
+            SweepSummaryRow(**self._row_kwargs(negative_rate=Decimal("-0.1")))
+
+    def test_metric_fields_must_be_none_when_completed_count_is_zero(self):
+        with self.assertRaises(EventStudyError):
+            SweepSummaryRow(
+                **self._row_kwargs(
+                    sample_count=1,
+                    completed_count=0,
+                    censored_count=1,
+                    mean_realized_value=Decimal(0),
+                    positive_rate=None,
+                    negative_rate=None,
+                )
+            )
+
+    def test_metric_fields_must_not_be_none_when_completed_count_is_positive(self):
+        with self.assertRaises(EventStudyError):
+            SweepSummaryRow(**self._row_kwargs(mean_realized_value=None))
 
 
 if __name__ == "__main__":

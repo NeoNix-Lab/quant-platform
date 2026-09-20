@@ -48,9 +48,11 @@ accepted ADR text):
   ``market_series`` to each event's own forward window (every observation
   at or after ``event.event_time``) before delegating -- it never
   reimplements forward-path walking itself.  It fails closed on an event
-  bound to a different ``EventSpec`` than ``spec.event_spec``, a duplicate
-  event, or a ``market_series`` supplied out of strictly increasing
-  ``instant`` order.
+  bound to a different ``EventSpec`` or a different observable than
+  ``spec.event_spec`` -- the latter closes a gap where an event could carry
+  the expected spec identity yet a mismatched ``observable_id`` -- a
+  duplicate event, or a ``market_series`` supplied out of strictly
+  increasing ``instant`` order.
 - A ``PopulationRecord.realized_value`` is stored as ``Decimal`` (never a
   raw fraction string) so aggregation arithmetic is exact-precision
   ``Decimal`` throughout, not float; every division here runs inside a
@@ -653,6 +655,26 @@ class SweepSummaryRow:
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise EventStudyError(f"{count_field} must be a non-negative integer")
 
+        if self.completed_count + self.censored_count + self.insufficient_coverage_count != self.sample_count:
+            raise EventStudyError(
+                "completed_count + censored_count + insufficient_coverage_count must equal sample_count"
+            )
+
+        metric_fields = ("mean_realized_value", "positive_rate", "negative_rate")
+        if self.completed_count == 0:
+            for metric_field in metric_fields:
+                if getattr(self, metric_field) is not None:
+                    raise EventStudyError(f"{metric_field} must be None when completed_count is 0")
+        else:
+            for metric_field in metric_fields:
+                value = getattr(self, metric_field)
+                if not isinstance(value, Decimal) or not value.is_finite():
+                    raise EventStudyError(f"{metric_field} must be a finite Decimal when completed_count > 0")
+            for rate_field in ("positive_rate", "negative_rate"):
+                value = getattr(self, rate_field)
+                if value < 0 or value > 1:
+                    raise EventStudyError(f"{rate_field} must be within [0, 1]")
+
     def stable_dict(self) -> dict[str, Any]:
         return {
             "study_spec_id": self.study_spec_id,
@@ -801,9 +823,10 @@ def run_event_study(
 
     Fails closed (`EventStudyRuntimeError`) on: a non-`EventStudySpec`
     ``spec``, an empty ``events``, a non-`DetectedEvent` element, an event
-    bound to a different `EventSpec` than ``spec.event_spec``, a duplicate
-    event, a non-`MarketObservation` element in ``market_series``, or a
-    ``market_series`` supplied out of strictly increasing ``instant`` order.
+    bound to a different `EventSpec` or a different observable than
+    ``spec.event_spec``, a duplicate event, a non-`MarketObservation`
+    element in ``market_series``, or a ``market_series`` supplied out of
+    strictly increasing ``instant`` order.
 
     Each event's forward outcome evaluation is anchored to exactly the
     ``market_series`` observations at or after ``event.event_time`` -- the
@@ -828,6 +851,11 @@ def run_event_study(
             raise EventStudyRuntimeError(
                 f"events[{index}] is bound to event_spec {event.event_spec_id}, not the "
                 f"EventStudySpec's event_spec {spec.event_spec.identity}"
+            )
+        if event.observable_id != spec.event_spec.observable_id:
+            raise EventStudyRuntimeError(
+                f"events[{index}] is bound to observable {event.observable_id}, not the "
+                f"EventStudySpec's event_spec observable {spec.event_spec.observable_id}"
             )
         if event.event_id in seen_event_ids:
             raise EventStudyRuntimeError(f"duplicate event supplied: {event.event_id}")
