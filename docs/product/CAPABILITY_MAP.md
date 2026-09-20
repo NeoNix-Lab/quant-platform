@@ -48,11 +48,11 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Features | FeatureSet catalog/provider | RESOLVED | PARTIAL | Feature Engine | E03 | Existing catalog foundation retained. |
 | Features | FeatureArtifact/materialization | FROZEN | COMPLETE | Feature Engine | E04 | ADR-0034; deterministic identity, SupportShape, FINAL-only sealing, attributable-evidence caller discipline. |
 | Features | H01 pure imbalance kernel | RESOLVED | COMPLETE | Feature Engine | E05 | Narrow Legacy Harvest ADOPT boundary. |
-| Features | H01 canonical integration | FROZEN | MISSING | Feature Engine | E06 | ADR-0035; Diagonal + Stacked are independent FINAL-Footprint features in one `h01_imbalance@1` FeatureSet; implementation-ready. |
+| Features | H01 canonical integration | FROZEN | COMPLETE | Feature Engine | E06 | ADR-0035; Diagonal + Stacked are independent FINAL-Footprint features in one `h01_imbalance@1` FeatureSet; implemented, issue #83/PR #88. |
 | Features | Generic provider extension | OPEN_DEFERABLE | MISSING | Feature Engine | E07 | Wait for a real second provider. |
 | Research | HypothesisSpec | RESOLVED | COMPLETE | Research | F01 | Depends on FeatureDefinition for the canonical vertical. |
-| Research | EventSpec/detection | RESOLVED | MISSING | Research | F02 | Requires FeatureArtifact for the full vertical. |
-| Research | OutcomeSpec/Outcome | RESOLVED | MISSING | Research | F03 | Future-window identity and availability separated from labels. |
+| Research | EventSpec/detection | RESOLVED | COMPLETE | Research | F02 | Requires FeatureArtifact for the full vertical; implemented, issue #85/PR #89. |
+| Research | OutcomeSpec/Outcome | RESOLVED | COMPLETE | Research | F03 | Future-window identity and availability separated from labels; implemented, issue #86/PR #90. |
 | Research | Event studies/sweeps | RESOLVED | MISSING | Research | F04 | Reproducible study population/aggregates. |
 | Validation | Walk-forward schedule | RESOLVED | COMPLETE | Validation | F05 | Deterministic pure temporal atom. |
 | Validation | Availability/purge/embargo | FROZEN | COMPLETE | Validation | F06 | ADR-0031. |
@@ -115,18 +115,25 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | K06 RAW/source protection v1 | COMPLETE | ADR-0032 accepted; attributable-evidence `SafetyRelevanceAssertion` pattern implemented. |
 | A10 Backfill/repair v1 | COMPLETE | ADR-0033 accepted; two known limitations tracked (coverage-trigger re-verification, partial candidate identity binding). |
 | E04 FeatureArtifact v1 | COMPLETE | ADR-0034 accepted; `SupportShape`, FINAL-only sealing, `InitVar` construction guard, exact-Fraction equivalence. |
-| E06 H01 canonical integration v1 | FROZEN / MISSING | ADR-0035 accepted; semantic gate closed, bounded implementation now eligible. |
-| Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; the one remaining loose end is issue #73's Human Golden E2E closeout proof, in progress (infra reachable, blocked on one file-ACL fix, not yet a completed evidence run). |
+| E06 H01 canonical integration v1 | COMPLETE | ADR-0035 accepted; bounded implementation completed, issue #83/PR #88. |
+| F02 EventSpec/detection v1 | COMPLETE | Traceable event rule + availability evidence implemented, issue #85/PR #89. |
+| F03 OutcomeSpec/Outcome v1 | COMPLETE | Horizon/censoring/availability explicit, implemented, issue #86/PR #90. |
+| Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
+| Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 
 ## Current frontier
 
-C05, C04, D03, E05, F01, F05, I01 and K04 (the previous frontier, plus C04
-which was already `COMPLETE` via issue #40/PR #44 and mis-tracked as
-`MISSING` until this correction) are now `COMPLETE`.
+Wave 2 is **COMPLETE**: `E06`, `F02` and `F03` (the Wave 2 frontier) are now
+`COMPLETE` (issues #83/PR #88, #85/PR #89, #86/PR #90).
 
 ```text
-E06  F02  F03
+F04
 ```
+
+`F04` (Event study/sweeps) is the next decision-complete, dependency-satisfied
+atom: its `Requires` (`F02`, `F03`, `B03`) are all `COMPLETE` and its decision
+state is `RESOLVED`. The Validation path beyond it remains blocked by the
+DG-E decision gate (`F07` labels/censoring/lockbox, `OPEN_BLOCKING`).
 
 Frontier membership means planning dependencies and decision gates are satisfied; it does not authorize implementation.
 
