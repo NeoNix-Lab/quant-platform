@@ -10,7 +10,11 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after F08 semantic freeze (ADR-0037 / issue #97; F07 frozen by ADR-0036 / issue #95; F04 merged via issue #92, PR #94 on `implement/wave-3`; post-Wave-2 atoms E06/F02/F03 merged via issues #83/#85/#86, PRs #88/#89/#90; K06/A10/E04/C05/D03/E05/F05/I01/K04/F01/K05/I02/K03/F06 implementation previously confirmed against merged PRs):
+Current audited inventory after F08 semantic freeze (ADR-0037 / issue #97; F07 frozen by ADR-0036 / issue #95;
+F04 merged via issue #92, PR #94 on `implement/wave-3`; post-Wave-2 atoms
+E06/F02/F03 merged via issues #83/#85/#86, PRs #88/#89/#90;
+K06/A10/E04/C05/D03/E05/F05/I01/K04/F01/K05/I02/K03/F06 implementation
+previously confirmed against merged PRs; E06 semantics frozen by ADR-0035):
 
 ```text
 TOTAL_ATOMS                     = 87
@@ -227,9 +231,17 @@ ADR-0035 fixes Application-owned cross-owner composition, two independent direct
 
 ### DG-B — Historical / Live data convergence — repair branch RESOLVED
 
-Repair branch (`A16` quality lifecycle + `A10` repair/reconciliation + `B04` disjoint coverage) is frozen and complete for the accepted first vertical under ADR-0028/ADR-0029/ADR-0033, with two accepted known limitations tracked in ADR-0033 (coverage-trigger re-verification; partial candidate identity binding). General quality-report -> lifecycle mapping beyond the first vertical remains open, activated only by the repair slice actually needing it.
+Repair branch (`A16` quality lifecycle + `A10` repair/reconciliation + `B04`
+disjoint coverage) is frozen and complete for the accepted first vertical
+under ADR-0028/ADR-0029/ADR-0033, with two accepted known limitations
+tracked in ADR-0033 (coverage-trigger re-verification; partial candidate
+identity binding). General quality-report -> lifecycle mapping beyond the
+first vertical remains open, activated only by the repair slice actually
+needing it.
 
-Live branch: `A11` live acquisition + `B06` live cursor, plus only the repair/shared semantics and DG-H prerequisites actually present on that path, remain the only open DG-B decisions.
+Live branch: `A11` live acquisition + `B06` live cursor, plus only the
+repair/shared semantics and DG-H prerequisites actually present on that
+path, remain the only open DG-B decisions.
 
 Historical repair does not activate live-cursor semantics merely because both belong to DG-B.
 
@@ -279,13 +291,15 @@ Trigger only when their dependent strategy/replay path is selected. Freeze sessi
 
 ### DG-G — Experiment / RL / Jobs
 
-`I02` experiment persistence is resolved and complete (one restart-safe canonical persistence model). Remaining atoms: `I06,I07,J03`.
+`I02` experiment persistence is resolved and complete (one restart-safe
+canonical persistence model). Remaining atoms: `I06,I07,J03`.
 
 Independent branches: Strategic RL and Execution RL only before their own runtimes; Job semantics before durable long-running operations.
 
 ### DG-H — Operational safety
 
-`K03` observability and `K05`/`K06` pressure/source-protection are resolved and complete (ADR-0028, ADR-0032). Remaining atoms: `K02,K07,K08,K09,K10`.
+`K03` observability and `K05`/`K06` pressure/source-protection are resolved
+and complete (ADR-0028, ADR-0032). Remaining atoms: `K02,K07,K08,K09,K10`.
 
 Progressive independent branches. Important order relationships are:
 
@@ -315,11 +329,12 @@ Only operational prerequisites of the selected atom are activated.
 
 ## Execution frontier
 
-F07 and F08 semantics are now both `FROZEN`; their declared prerequisites are complete and both implementations are `MISSING`.
+`F04` (Event studies/sweeps v1) is **COMPLETE** (issue #92/PR #94).
+F07 and F08 semantics are **FROZEN** under ADR-0036/ADR-0037; both implementations are `MISSING` and their declared prerequisites are complete.
 
 ```text
-F07 implementation   READY BY DEPENDENCY/DECISION STATE; issue #96 prepared; NOT AUTHORIZED by frontier alone
-F08 implementation   READY BY DEPENDENCY/DECISION STATE; separate bounded issue required; NOT AUTHORIZED by frontier alone
+F07 implementation                  READY BY DEPENDENCY/DECISION STATE; issue #96 prepared; NOT AUTHORIZED by frontier alone
+F08 implementation                  READY BY DEPENDENCY/DECISION STATE; separate bounded issue required; NOT AUTHORIZED by frontier alone
 ```
 
 F07 remains the required path to G01/I04. F08 is an independent robustness capability and does not block those downstream atoms.
@@ -328,7 +343,14 @@ This is a **frontier, not authorization**. `SCOPE.md` must activate exactly one 
 
 ## Execution waves
 
-The waves below are dependency/value groupings, not a new linear phase numbering, and are a different concept from the `implement/wave-1` git branch/orchestrator batch (issues #51-#77): that branch's work cut across several of these DAG waves at once rather than completing exactly one. The `implement/wave-1` git batch is concluded as of 2026-09-19.
+The waves below are dependency/value groupings, not a new linear phase
+numbering, and are a different concept from the `implement/wave-1` git
+branch/orchestrator batch (issues #51-#77): that branch's work cut across
+several of these waves at once (Wave 1 frontier atoms, part of Wave 2's
+E04, part of Wave 3's F01/F06, part of Wave 5's I02, and part of Wave 6's
+A10/A16/K05/K06) rather than completing exactly one. The `implement/wave-1`
+git batch is concluded as of 2026-09-19; the DAG-wave statuses below reflect
+exactly which atoms that batch actually finished, no more.
 
 ```text
 Wave 0  Architecture foundation                           COMPLETE
