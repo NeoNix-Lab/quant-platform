@@ -29,6 +29,7 @@ from ..features.h01_imbalance import (
     H01_IMBALANCE_FEATURE_SET_IDENTITY,
     H01BucketInput,
     H01LevelInput,
+    _parameter_value,
     derive_h01_expected_observation_identities,
     diagonal_imbalance_definition,
     evaluate_diagonal_imbalance,
@@ -186,6 +187,16 @@ def materialize_h01_feature_artifact(
         raise H01CompositionError(
             "evaluation was not produced from the exact supplied footprint_result "
             "(footprint_result_identity mismatch)"
+        )
+    expected_evaluation = evaluate_h01_imbalance(
+        footprint_result,
+        diagonal_imbalance_ratio=_parameter_value(evaluation.diagonal_definition, "imbalance_ratio"),
+        stacked_imbalance_ratio=_parameter_value(evaluation.stacked_definition, "imbalance_ratio"),
+        stacked_min_levels=int(_parameter_value(evaluation.stacked_definition, "stacked_min_levels")),
+    )
+    if evaluation.observations != expected_evaluation.observations:
+        raise H01CompositionError(
+            "evaluation observations do not match observations derived from the supplied footprint_result"
         )
     source_dataset_identity = footprint_result.source_evidence.dataset_identity
     bound_sources = tuple(sources)

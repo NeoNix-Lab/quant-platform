@@ -40,6 +40,7 @@ from quant_platform.features import (  # noqa: E402
     ConstituentFeatureOutput,
     FeatureArtifactContentIdentity,
     FeatureArtifactError,
+    FeatureDefinition,
     FeatureDefinitionError,
     InputMaturity,
     ObservationLifecycle,
@@ -288,6 +289,42 @@ class H01FeatureOwnedEvaluationTests(unittest.TestCase):
         with self.assertRaises(FeatureDefinitionError):
             evaluate_stacked_imbalance(diagonal, bucket)
 
+    def test_evaluate_diagonal_imbalance_rejects_noncanonical_definition_version(self):
+        canonical = diagonal_imbalance_definition()
+        noncanonical = FeatureDefinition(
+            feature_key=canonical.feature_key,
+            semantic_version="2",
+            parameter_schema=canonical.parameter_schema,
+            parameters={"imbalance_ratio": "3"},
+            input_contract=canonical.input_contract,
+            support=canonical.support,
+            input_maturity=canonical.input_maturity,
+            availability=canonical.availability,
+            finality=canonical.finality,
+            output_contract=canonical.output_contract,
+        )
+        bucket = h01_bucket((H01LevelInput(level_index=1, buy_volume="10", sell_volume="1"),))
+        with self.assertRaises(FeatureDefinitionError):
+            evaluate_diagonal_imbalance(noncanonical, bucket)
+
+    def test_evaluate_stacked_imbalance_rejects_noncanonical_definition_version(self):
+        canonical = stacked_imbalance_definition()
+        noncanonical = FeatureDefinition(
+            feature_key=canonical.feature_key,
+            semantic_version="2",
+            parameter_schema=canonical.parameter_schema,
+            parameters={"imbalance_ratio": "3", "stacked_min_levels": 3},
+            input_contract=canonical.input_contract,
+            support=canonical.support,
+            input_maturity=canonical.input_maturity,
+            availability=canonical.availability,
+            finality=canonical.finality,
+            output_contract=canonical.output_contract,
+        )
+        bucket = h01_bucket((H01LevelInput(level_index=1, buy_volume="10", sell_volume="1"),))
+        with self.assertRaises(FeatureDefinitionError):
+            evaluate_stacked_imbalance(noncanonical, bucket)
+
 
 class H01CompositionTests(unittest.TestCase):
     def _four_level_trades(self) -> list[TradeRecord]:
@@ -518,6 +555,31 @@ class H01MaterializationTests(unittest.TestCase):
                 content_identity=content_identity(result_b),
             )
 
+    def test_materialize_rejects_evaluation_with_forged_footprint_result_identity(self):
+        result_a = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+        )
+        result_b = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "200", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+        )
+        self.assertEqual(result_a.source_evidence.dataset_identity, result_b.source_evidence.dataset_identity)
+        self.assertEqual(result_a.coverage.covered_intervals, result_b.coverage.covered_intervals)
+        self.assertNotEqual(result_a.result_identity, result_b.result_identity)
+
+        evaluation_a = evaluate_h01_imbalance(result_a)
+        # Forge footprint_result_identity to match result_b.result_identity:
+        # the simple identity check alone would pass, but the observation verification rejects it.
+        tampered = replace(evaluation_a, footprint_result_identity=result_b.result_identity)
+        with self.assertRaises(H01CompositionError):
+            materialize_h01_feature_artifact(
+                tampered, result_b,
+                sources=sources(),
+                implementation_code_identity="impl",
+                content_identity=content_identity(result_b),
+            )
+
     def test_materialize_derives_universe_from_footprint_result_not_tampered_evaluation(self):
         result = footprint_result(
             [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
@@ -549,7 +611,7 @@ class H01MaterializationTests(unittest.TestCase):
             expected_observation_identities=evaluation.expected_observation_identities
             + (extra_observation.observation_identity,),
         )
-        with self.assertRaises(FeatureArtifactError):
+        with self.assertRaises(H01CompositionError):
             materialize_h01_feature_artifact(
                 tampered, result,
                 sources=sources(),

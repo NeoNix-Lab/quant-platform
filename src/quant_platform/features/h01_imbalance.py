@@ -195,10 +195,39 @@ def _price_level_rows(bucket: H01BucketInput) -> tuple[PriceLevelInput, ...]:
     )
 
 
-def _require_feature_key(definition: FeatureDefinition, expected_key: str) -> None:
-    if definition.feature_key != expected_key:
+def _require_canonical_diagonal_definition(definition: FeatureDefinition) -> None:
+    if not isinstance(definition, FeatureDefinition):
+        raise FeatureDefinitionError("definition must be a FeatureDefinition")
+    try:
+        ratio = _parameter_value(definition, "imbalance_ratio")
+        canonical = diagonal_imbalance_definition(imbalance_ratio=ratio)
+    except Exception as exc:
         raise FeatureDefinitionError(
-            f"expected the canonical {expected_key!r} FeatureDefinition, got {definition.feature_key!r}"
+            f"definition does not match canonical diagonal imbalance: {exc}"
+        ) from exc
+    if definition.definition_id != canonical.definition_id:
+        raise FeatureDefinitionError(
+            f"expected the canonical {DIAGONAL_IMBALANCE_FEATURE_KEY!r} FeatureDefinition, got {definition.definition_id}"
+        )
+
+
+def _require_canonical_stacked_definition(definition: FeatureDefinition) -> None:
+    if not isinstance(definition, FeatureDefinition):
+        raise FeatureDefinitionError("definition must be a FeatureDefinition")
+    try:
+        ratio = _parameter_value(definition, "imbalance_ratio")
+        min_levels = int(_parameter_value(definition, "stacked_min_levels"))
+        canonical = stacked_imbalance_definition(
+            imbalance_ratio=ratio,
+            stacked_min_levels=min_levels,
+        )
+    except Exception as exc:
+        raise FeatureDefinitionError(
+            f"definition does not match canonical stacked imbalance: {exc}"
+        ) from exc
+    if definition.definition_id != canonical.definition_id:
+        raise FeatureDefinitionError(
+            f"expected the canonical {STACKED_IMBALANCE_FEATURE_KEY!r} FeatureDefinition, got {definition.definition_id}"
         )
 
 
@@ -236,7 +265,7 @@ def evaluate_diagonal_imbalance(definition: FeatureDefinition, bucket: H01Bucket
     """Evaluate the canonical Diagonal Imbalance FeatureDefinition over one
     concrete FINAL Footprint bucket coordinate."""
 
-    _require_feature_key(definition, DIAGONAL_IMBALANCE_FEATURE_KEY)
+    _require_canonical_diagonal_definition(definition)
     config = ImbalanceConfig(imbalance_ratio=float(_parameter_value(definition, "imbalance_ratio")))
     computed = compute_diagonal_imbalance(_price_level_rows(bucket), config)
     return FeatureObservation(
@@ -259,7 +288,7 @@ def evaluate_stacked_imbalance(definition: FeatureDefinition, bucket: H01BucketI
     constituents remain independent per ADR-0035.
     """
 
-    _require_feature_key(definition, STACKED_IMBALANCE_FEATURE_KEY)
+    _require_canonical_stacked_definition(definition)
     config = ImbalanceConfig(
         imbalance_ratio=float(_parameter_value(definition, "imbalance_ratio")),
         stacked_min_levels=int(_parameter_value(definition, "stacked_min_levels")),
@@ -286,6 +315,8 @@ def derive_h01_expected_observation_identities(
     eligible FINAL bucket identities x {DiagonalDefinitionId, StackedDefinitionId}.
     """
 
+    _require_canonical_diagonal_definition(diagonal_definition)
+    _require_canonical_stacked_definition(stacked_definition)
     identities: list[FeatureObservationIdentity] = []
     for bucket_observation_identity in bucket_observation_identities:
         for definition in (diagonal_definition, stacked_definition):
@@ -305,6 +336,7 @@ __all__ = [
     "STACKED_IMBALANCE_FEATURE_KEY",
     "H01BucketInput",
     "H01LevelInput",
+    "_parameter_value",
     "derive_h01_expected_observation_identities",
     "diagonal_imbalance_definition",
     "evaluate_diagonal_imbalance",
