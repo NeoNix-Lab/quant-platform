@@ -58,6 +58,7 @@ OWNERS = {
     "quant_platform.experiments.identities": "experiment",
     "quant_platform.experiments.persistence": "experiment",
     "quant_platform.research": "research",
+    "quant_platform.research.events": "research",
     "quant_platform.research.hypothesis": "research",
     "quant_platform.source_adapters": "source",
     "quant_platform.source_adapters.bybit": "source",

@@ -1,5 +1,6 @@
 """Feature Engine semantic definitions and pure quantitative kernels."""
 
+from ..data.models import Instant
 from .artifacts import (
     BOUND_INPUT_EVIDENCE_IDENTITY_DOMAIN,
     FEATURE_ARTIFACT_CONTENT_IDENTITY_DOMAIN,
@@ -17,8 +18,11 @@ from .artifacts import (
     FeatureArtifactIdentity,
     FeatureArtifactLifecycle,
     FeatureSetDefinitionIdentity,
+    OBSERVATION_EVIDENCE_DIGEST_DOMAIN,
     SupportShape,
     classify_registration,
+    compute_observation_evidence_digest,
+    compute_observation_evidence_fingerprint,
     recomputation_equivalent,
     rehydrate_feature_artifact,
     require_final_observations,
@@ -130,6 +134,7 @@ __all__ = [
     "InputContractShape",
     "InputContractV1",
     "InputMaturity",
+    "Instant",
     "NonObservation",
     "NonObservationReason",
     "NumericalEquivalence",
@@ -143,6 +148,7 @@ __all__ = [
     "SemanticParameterSpec",
     "SemanticParameterType",
     "StackedImbalanceLevel",
+    "OBSERVATION_EVIDENCE_DIGEST_DOMAIN",
     "SupportIdentity",
     "SupportReference",
     "SupportSelectorKind",
@@ -150,6 +156,8 @@ __all__ = [
     "_ratio",
     "classify_registration",
     "compute_diagonal_imbalance",
+    "compute_observation_evidence_digest",
+    "compute_observation_evidence_fingerprint",
     "compute_stacked_imbalance",
     "derive_h01_expected_observation_identities",
     "diagonal_imbalance_definition",
