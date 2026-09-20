@@ -17,6 +17,7 @@ from typing import Any, Sequence
 from ..features.artifacts import (
     BoundInputEvidence,
     BoundSourceDataset,
+    BoundSourcePartition,
     ConstituentFeatureOutput,
     FeatureArtifact,
     FeatureArtifactContentIdentity,
@@ -151,7 +152,7 @@ def materialize_h01_feature_artifact(
     evaluation: H01Evaluation,
     footprint_result: HistoricalFootprintResult,
     *,
-    sources: Sequence[BoundSourceDataset],
+    sources: Sequence[BoundSourceDataset] | None = None,
     implementation_code_identity: str,
     content_identity: FeatureArtifactContentIdentity,
 ) -> FeatureArtifact:
@@ -177,10 +178,12 @@ def materialize_h01_feature_artifact(
     substitute a competing universe for the one E04 actually verifies
     against.
 
-    ``sources``/``implementation_code_identity``/``content_identity`` remain
-    caller-supplied: real per-partition content/manifest hash evidence and
-    durable output-partition evidence are owned by the existing data-plane
-    and E04 seams, not reconstructed here from D06's own summary evidence.
+    ``sources`` is optional: when omitted, it is constructed directly from
+    D06's immutable ``source_evidence``. When supplied, it must contain
+    exactly one dataset matching ``source_evidence.dataset_identity`` and its
+    partitions must match D06's immutable partition evidence exactly. Zero-partition
+    D06 evidence cannot be bound into an E04 FeatureArtifact.
+    ``implementation_code_identity``/``content_identity`` remain caller-supplied.
     """
 
     if evaluation.footprint_result_identity != footprint_result.result_identity:
@@ -199,18 +202,41 @@ def materialize_h01_feature_artifact(
             "evaluation observations do not match observations derived from the supplied footprint_result"
         )
     source_dataset_identity = footprint_result.source_evidence.dataset_identity
-    bound_sources = tuple(sources)
-    if len(bound_sources) != 1 or bound_sources[0].dataset_identity != source_dataset_identity:
-        raise H01CompositionError(
-            f"sources must contain exactly one BoundSourceDataset matching D06 source_evidence.dataset_identity ({source_dataset_identity})"
-        )
     source_ev = footprint_result.source_evidence
-    if source_ev.natural_partitions:
-        if (
-            len(source_ev.content_hashes) != len(source_ev.natural_partitions)
-            or len(source_ev.manifest_hashes) != len(source_ev.natural_partitions)
-        ):
-            raise H01CompositionError("D06 source_evidence partitions and hashes length mismatch")
+    if (
+        len(source_ev.content_hashes) != len(source_ev.natural_partitions)
+        or len(source_ev.manifest_hashes) != len(source_ev.natural_partitions)
+    ):
+        raise H01CompositionError("D06 source_evidence partitions and hashes length mismatch")
+
+    if sources is None:
+        if not source_ev.natural_partitions:
+            raise H01CompositionError(
+                "D06 source_evidence has zero partitions; E04 FeatureArtifact requires partition-level evidence"
+            )
+        bound_sources = (
+            BoundSourceDataset(
+                source_ev.dataset_identity,
+                tuple(
+                    BoundSourcePartition(
+                        natural_identity=nat,
+                        content_sha256=content_hash,
+                        manifest_sha256=manifest_hash,
+                    )
+                    for nat, content_hash, manifest_hash in zip(
+                        source_ev.natural_partitions,
+                        source_ev.content_hashes,
+                        source_ev.manifest_hashes,
+                    )
+                ),
+            ),
+        )
+    else:
+        bound_sources = tuple(sources)
+        if len(bound_sources) != 1 or bound_sources[0].dataset_identity != source_dataset_identity:
+            raise H01CompositionError(
+                f"sources must contain exactly one BoundSourceDataset matching D06 source_evidence.dataset_identity ({source_dataset_identity})"
+            )
         expected_partition_tuples = {
             (nat, content_hash, manifest_hash)
             for nat, content_hash, manifest_hash in zip(

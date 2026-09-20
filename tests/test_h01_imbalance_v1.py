@@ -694,6 +694,58 @@ class H01MaterializationTests(unittest.TestCase):
             result.coverage.covered_intervals,
         )
 
+    def test_materialize_rejects_zero_partition_d06_evidence_with_arbitrary_sources(self):
+        result = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+            natural_partitions=(),
+            manifest_hashes=(),
+            content_hashes=(),
+        )
+        evaluation = evaluate_h01_imbalance(result)
+        with self.assertRaises(H01CompositionError):
+            materialize_h01_feature_artifact(
+                evaluation, result,
+                sources=sources(),
+                implementation_code_identity="impl",
+                content_identity=content_identity(result),
+            )
+
+    def test_materialize_rejects_zero_partition_d06_evidence_when_sources_omitted(self):
+        result = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+            natural_partitions=(),
+            manifest_hashes=(),
+            content_hashes=(),
+        )
+        evaluation = evaluate_h01_imbalance(result)
+        with self.assertRaises(H01CompositionError):
+            materialize_h01_feature_artifact(
+                evaluation, result,
+                implementation_code_identity="impl",
+                content_identity=content_identity(result),
+            )
+
+    def test_materialize_derives_sources_directly_from_d06_evidence_when_omitted(self):
+        result = footprint_result(
+            [trade("2024-01-01T00:00:01Z", "100", "10", "buy")],
+            "2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z",
+        )
+        evaluation = evaluate_h01_imbalance(result)
+        artifact = materialize_h01_feature_artifact(
+            evaluation, result,
+            implementation_code_identity="impl",
+            content_identity=content_identity(result),
+        )
+        self.assertEqual(len(artifact.bound_input_evidence.sources), 1)
+        derived = artifact.bound_input_evidence.sources[0]
+        self.assertEqual(derived.dataset_identity, result.source_evidence.dataset_identity)
+        self.assertEqual(len(derived.partitions), 1)
+        self.assertEqual(derived.partitions[0].natural_identity, result.source_evidence.natural_partitions[0])
+        self.assertEqual(derived.partitions[0].content_sha256, result.source_evidence.content_hashes[0])
+        self.assertEqual(derived.partitions[0].manifest_sha256, result.source_evidence.manifest_hashes[0])
+
 
 if __name__ == "__main__":
     unittest.main()
