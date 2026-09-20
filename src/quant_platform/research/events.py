@@ -45,17 +45,14 @@ accepted ADR text):
   observations; when given one, it refuses anything that is not a genuine
   sealed ``FeatureArtifact`` instance (E04's private-construction guard
   makes an "unsealed" instance of that type impossible to hold in the
-  first place) and refuses an artifact that does not actually seal
-  evidence for ``spec.observable_id``.
-- A detected event's ``event_time`` is set to exactly the triggering
-  observation's own ``causal_available_at``.  E02's
-  ``FeatureAvailabilitySemantics.causal_floor_rule ==
-  "after_required_support_available"`` pins that field to the moment the
-  observation's *required support* became available -- i.e. the market
-  bucket/bar's own closing instant -- independent of how long
-  finalization confirmation later took.  This is "canonical observation
-  support semantics": the only E02-typed instant that is actually defined
-  in terms of support availability rather than downstream knowledge of it.
+  first place), refuses an artifact that does not actually seal
+  evidence for ``spec.observable_id``, and refuses any supplied observation
+  whose ``event_time`` falls outside ``artifact.declared_materialized_support``.
+- A detected event's ``event_time`` is extracted from canonical observation
+  support semantics (the observation's support coordinate, such as a market
+  bucket/bar closing instant), falling back to ``observation.causal_available_at``
+  when the support coordinate is unparseable or opaque.  ``event_time`` is
+  never permitted to be later than ``causal_available_at`` (fail closed).
 - A detected event's ``causal_available_at`` is the later of the
   triggering observation's own ``causal_available_at`` and (when present)
   its ``observed_finalized_at``.  E02 guarantees
@@ -480,6 +477,50 @@ def _require_sealed_artifact_covers_observable(artifact: Any, observable_id: str
         ) from exc
 
 
+_COORDINATE_TIMESTAMP_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z)"
+)
+
+
+def _extract_event_time(observation: FeatureObservation) -> Instant:
+    """Extract canonical event instant from observation support semantics.
+
+    Pulls the bucket/bar timestamp from the observation's support coordinate
+    (e.g. ``"bar:2024-01-01T00:05:00Z"`` -> ``2024-01-01T00:05:00Z``),
+    falling back to ``observation.causal_available_at`` when the support
+    coordinate does not embed an ISO RFC 3339 timestamp.
+
+    Fails closed if the extracted timestamp is later than
+    ``observation.causal_available_at`` (non-anticipation: an event cannot
+    occur after the moment its observation became causally available).
+    """
+
+    coord = observation.support_identity.observation_identity
+    matches = _COORDINATE_TIMESTAMP_RE.findall(coord)
+    if matches:
+        for raw in reversed(matches):
+            try:
+                candidate = Instant.parse(raw)
+            except Exception:
+                continue
+            if candidate <= observation.causal_available_at:
+                return candidate
+            raise EventDetectionError(
+                f"observation {observation.identity} support coordinate timestamp "
+                f"{candidate.isoformat()} is later than causal_available_at "
+                f"{observation.causal_available_at.isoformat()}"
+            )
+    return observation.causal_available_at
+
+
+def _artifact_covers_event_time(artifact: FeatureArtifact, event_time: Instant) -> bool:
+    """Verify that `event_time` falls within `artifact.declared_materialized_support`."""
+    return any(
+        interval.start <= event_time < interval.end
+        for interval in artifact.declared_materialized_support.intervals
+    )
+
+
 def detect_events(
     spec: EventSpec,
     observations: Iterable[FeatureObservation],
@@ -499,10 +540,11 @@ def detect_events(
     ``artifact``, when supplied, is durable E04 provenance for
     ``observations``: it must be a genuine sealed `FeatureArtifact` that
     seals evidence for ``spec.observable_id`` (see
-    `_require_sealed_artifact_covers_observable`), or detection is refused
-    before any observation is evaluated.  Omitting it evaluates
-    ``observations`` directly, unchanged from evaluating them with an
-    artifact.
+    `_require_sealed_artifact_covers_observable`), and every supplied
+    observation's event_time must fall within the artifact's
+    `declared_materialized_support`, or detection is refused before any
+    event is emitted.  Omitting it evaluates ``observations`` directly,
+    unchanged from evaluating them with an artifact.
 
     Byte-identical results for byte-identical inputs: no field of a
     resulting `DetectedEvent` (including `event_id`) depends on anything
@@ -543,15 +585,21 @@ def detect_events(
             )
         previous_causal_available_at = observation.causal_available_at
 
+        event_time = _extract_event_time(observation)
+        if artifact is not None and not _artifact_covers_event_time(artifact, event_time):
+            raise EventDetectionError(
+                f"observation {observation.identity} at event_time {event_time.isoformat()} "
+                "falls outside artifact declared_materialized_support"
+            )
+
         if not spec.predicate.evaluate(observation.value):
             continue
 
-        event_time = observation.causal_available_at
         causal_available_at = (
             observation.observed_finalized_at
             if observation.observed_finalized_at is not None
-            and observation.observed_finalized_at > event_time
-            else event_time
+            and observation.observed_finalized_at > observation.causal_available_at
+            else observation.causal_available_at
         )
         match_evidence = {
             "value": observation.value,

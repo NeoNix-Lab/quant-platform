@@ -100,12 +100,14 @@ def event_spec(**overrides) -> EventSpec:
 def observation(
     *,
     definition_id: FeatureDefinitionId = STACKED_IMBALANCE_ID,
-    bucket: str = "bar:2024-01-01T00:00:00Z",
+    bucket: str | None = None,
     value=2.5,
     lifecycle: ObservationLifecycle = ObservationLifecycle.FINAL,
     causal_available_at: str = "2024-01-01T00:00:01Z",
     observed_finalized_at: str | None = None,
 ) -> FeatureObservation:
+    if bucket is None:
+        bucket = f"bar:{causal_available_at}"
     support = SupportIdentity(CONTRACT.identity, bucket, SupportReference.current())
     kwargs = dict(
         definition_id=definition_id,
@@ -132,7 +134,10 @@ def artifact_output_dataset_identity(slug: str = "order_flow", version: int = 1)
     )
 
 
-def sealed_artifact_for(definition_id: FeatureDefinitionId) -> FeatureArtifact:
+def sealed_artifact_for(
+    definition_id: FeatureDefinitionId,
+    observations: Sequence[FeatureObservation] | None = None,
+) -> FeatureArtifact:
     """A minimal, genuinely sealed E04 FeatureArtifact covering exactly
     ``definition_id``, built the same way tests/test_feature_artifact_v1.py
     builds one: via `seal_feature_artifact()`, never direct construction."""
@@ -140,13 +145,18 @@ def sealed_artifact_for(definition_id: FeatureDefinitionId) -> FeatureArtifact:
     output_contract = OutputContract(
         OutputValueKind.NUMERIC, "scalar", OutputDimension.DIMENSIONLESS, NumericalEquivalence.exact(),
     )
-    sealed_observation = FeatureObservation(
-        definition_id=definition_id,
-        support_identity=SupportIdentity(CONTRACT.identity, "obs-1", SupportReference.current()),
-        value="1.0",
-        lifecycle=ObservationLifecycle.FINAL,
-        causal_available_at=ARTIFACT_SUPPORT_INTERVAL.start,
-    )
+    if observations is None:
+        sealed_observations = (
+            FeatureObservation(
+                definition_id=definition_id,
+                support_identity=SupportIdentity(CONTRACT.identity, "obs-1", SupportReference.current()),
+                value="1.0",
+                lifecycle=ObservationLifecycle.FINAL,
+                causal_available_at=ARTIFACT_SUPPORT_INTERVAL.start,
+            ),
+        )
+    else:
+        sealed_observations = tuple(observations)
     output_partition = BoundOutputPartition(
         natural_identity=NaturalPartitionIdentity(artifact_output_dataset_identity(), "dt=2024-01-01", 1),
         content_sha256="a" * 64,
@@ -172,8 +182,8 @@ def sealed_artifact_for(definition_id: FeatureDefinitionId) -> FeatureArtifact:
             declared_support=declared_support,
         ),
         constituent_output_contracts=(ConstituentFeatureOutput(definition_id, output_contract),),
-        observations=(sealed_observation,),
-        expected_observation_identities=(sealed_observation.identity,),
+        observations=sealed_observations,
+        expected_observation_identities=tuple(obs.identity for obs in sealed_observations),
     )
 
 
@@ -391,7 +401,7 @@ class DetectEventsTests(unittest.TestCase):
         self.assertEqual(spec.identity, detected.event_spec_id)
         self.assertEqual(str(STACKED_IMBALANCE_ID), detected.observable_id)
         self.assertEqual(match.identity, detected.observation_identity)
-        self.assertEqual("2024-01-01T00:05:01Z", str(detected.event_time))
+        self.assertEqual("2024-01-01T00:05:00Z", str(detected.event_time))
         self.assertEqual("2024-01-01T00:05:01Z", str(detected.causal_available_at))
         self.assertEqual(3.25, detected.match_evidence["value"])
         self.assertTrue(detected.event_id.startswith("detected-event-v1:sha256:"))
@@ -436,9 +446,47 @@ class DetectEventsTests(unittest.TestCase):
     def test_detect_events_accepts_a_sealed_artifact_covering_the_observable(self):
         spec = event_spec()
         match = observation(value=5.0)
-        artifact = sealed_artifact_for(STACKED_IMBALANCE_ID)
+        artifact = sealed_artifact_for(STACKED_IMBALANCE_ID, [match])
         result = detect_events(spec, [match], artifact=artifact)
         self.assertEqual(1, len(result))
+
+    def test_detect_events_refuses_observation_outside_artifact_declared_support(self):
+        spec = event_spec()
+        inside = observation(
+            bucket="bar:2024-01-01T12:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        outside = observation(
+            bucket="bar:2024-01-03T00:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-03T00:00:01Z",
+        )
+        artifact = sealed_artifact_for(STACKED_IMBALANCE_ID, [inside])
+        with self.assertRaisesRegex(EventDetectionError, "falls outside artifact declared_materialized_support"):
+            detect_events(spec, [inside, outside], artifact=artifact)
+
+    def test_event_time_derived_from_canonical_support_coordinate(self):
+        spec = event_spec()
+        obs = observation(
+            bucket="bar:2024-01-01T08:30:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T08:30:05Z",
+            observed_finalized_at="2024-01-01T08:35:00Z",
+        )
+        [detected] = detect_events(spec, [obs])
+        self.assertEqual("2024-01-01T08:30:00Z", str(detected.event_time))
+        self.assertEqual("2024-01-01T08:35:00Z", str(detected.causal_available_at))
+
+    def test_support_coordinate_later_than_causal_availability_fails_closed(self):
+        spec = event_spec()
+        bad_obs = observation(
+            bucket="bar:2024-01-01T10:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T09:00:00Z",
+        )
+        with self.assertRaisesRegex(EventDetectionError, "later than causal_available_at"):
+            detect_events(spec, [bad_obs])
 
     def test_detect_events_refuses_an_unsealed_artifact(self):
         spec = event_spec()
