@@ -53,7 +53,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Research | HypothesisSpec | RESOLVED | COMPLETE | Research | F01 | Depends on FeatureDefinition for the canonical vertical. |
 | Research | EventSpec/detection | RESOLVED | COMPLETE | Research | F02 | Requires FeatureArtifact for the full vertical; implemented, issue #85/PR #89. |
 | Research | OutcomeSpec/Outcome | RESOLVED | COMPLETE | Research | F03 | Future-window identity and availability separated from labels; implemented, issue #86/PR #90. |
-| Research | Event studies/sweeps | RESOLVED | MISSING | Research | F04 | Reproducible study population/aggregates. |
+| Research | Event studies/sweeps | RESOLVED | COMPLETE | Research | F04 | Reproducible study population/aggregates; implemented, issue #92/PR #94. |
 | Validation | Walk-forward schedule | RESOLVED | COMPLETE | Validation | F05 | Deterministic pure temporal atom. |
 | Validation | Availability/purge/embargo | FROZEN | COMPLETE | Validation | F06 | ADR-0031. |
 | Validation | Labels/censoring/lockbox | OPEN_BLOCKING | MISSING | Validation | F07 | DG-E validation branch. |
@@ -118,22 +118,23 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | E06 H01 canonical integration v1 | COMPLETE | ADR-0035 accepted; bounded implementation completed, issue #83/PR #88. |
 | F02 EventSpec/detection v1 | COMPLETE | Traceable event rule + availability evidence implemented, issue #85/PR #89. |
 | F03 OutcomeSpec/Outcome v1 | COMPLETE | Horizon/censoring/availability explicit, implemented, issue #86/PR #90. |
+| F04 Event studies/sweeps v1 | COMPLETE | Reproducible study population/aggregates and parameter sweep runtime implemented, issue #92/PR #94. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 
 ## Current frontier
 
-Wave 2 is **COMPLETE**: `E06`, `F02` and `F03` (the Wave 2 frontier) are now
-`COMPLETE` (issues #83/PR #88, #85/PR #89, #86/PR #90).
+`F04` (Event studies/sweeps v1) is **COMPLETE** (issue #92/PR #94).
+All decision-complete research atoms (`F01`, `F02`, `F03`, `F04`) are now `COMPLETE`.
 
 ```text
-F04
+DG-E (F07, F08)
 ```
 
-`F04` (Event study/sweeps) is the next decision-complete, dependency-satisfied
-atom: its `Requires` (`F02`, `F03`, `B03`) are all `COMPLETE` and its decision
-state is `RESOLVED`. The Validation path beyond it remains blocked by the
-DG-E decision gate (`F07` labels/censoring/lockbox, `OPEN_BLOCKING`).
+The next work on the Research / Validation path is the **DG-E** decision gate
+(`F07` labels/censoring/lockbox, `OPEN_BLOCKING`, dependencies `F03`+`F06` satisfied;
+and `F08` DSR/PBO, `OPEN_BLOCKING`, dependencies `F04`+`F05` satisfied).
+Neither atom may proceed to implementation until a decision gate resolves its semantics.
 
 Frontier membership means planning dependencies and decision gates are satisfied; it does not authorize implementation.
 

@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; post-Wave-2 (E06/F02/F03) reconciliation**.
+Status: **CANONICAL; post-F04 reconciliation (Wave 3)**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,10 +10,10 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after post-Wave-2 reconciliation (E06/F02/F03
-merged via issues #83/#85/#86, PRs #88/#89/#90, and independently reviewed;
-K06/A10/E04/C05/D03/E05/F05/I01/K04/F01/K05/I02/K03/F06 implementation
-previously confirmed against merged PRs; E06 semantics frozen by ADR-0035):
+Current audited inventory after post-F04 reconciliation (F04 merged via issue #92,
+PR #94 on `implement/wave-3`; post-Wave-2 atoms E06/F02/F03 merged via issues
+#83/#85/#86, PRs #88/#89/#90; K06/A10/E04/C05/D03/E05/F05/I01/K04/F01/K05/I02/K03/F06
+implementation previously confirmed against merged PRs; E06 semantics frozen by ADR-0035):
 
 ```text
 TOTAL_ATOMS                     = 87
@@ -24,7 +24,7 @@ OPEN_BLOCKING                   = 17
 OPEN_DEFERABLE                  = 8
 ROADMAP_DEFINED                 = 62 + 17 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         = 42 / 87 = 48.3%  (E06,F02,F03 newly COMPLETE this reconciliation)
+IMPLEMENTATION_COMPLETE         = 43 / 87 = 49.4%  (F04 newly COMPLETE this reconciliation)
 ```
 
 The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 71.3% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
@@ -133,7 +133,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | F01 | HypothesisSpec | Research | E02 | F02,F03 | RESOLVED | COMPLETE | Reproducible hypothesis references canonical observables |
 | F02 | EventSpec/detection | Research | F01,E04 | F04 | RESOLVED | COMPLETE | Traceable event rule + availability evidence; H01-backed rules additionally consume E06 outputs; implemented, issue #85/PR #89 |
 | F03 | OutcomeSpec/Outcome | Research | F01 | F04,F07 | RESOLVED | COMPLETE | Horizon/censoring/availability explicit; implemented, issue #86/PR #90 |
-| F04 | Event study/sweeps | Research | F02,F03,B03 | I01,F08 | RESOLVED | MISSING | Re-run preserves population and aggregates |
+| F04 | Event study/sweeps | Research | F02,F03,B03 | I01,F08 | RESOLVED | COMPLETE | Re-run preserves population and aggregates; implemented, issue #92/PR #94 |
 | F05 | Walk-forward schedule | Validation | shared time primitives | F06,F08 | RESOLVED | COMPLETE | Deterministic temporal fold boundaries |
 | F06 | Availability/purge/embargo | Validation | F05,E02 | F07,I04 | FROZEN | COMPLETE | Adversarial leakage rejected; ADR-0031 |
 | F07 | Labels/censoring/lockbox | Validation | F03,F06 | G01,I04 | OPEN_BLOCKING | MISSING | Explicit boundary/censoring/hidden evaluation; DG-E validation branch |
@@ -319,7 +319,7 @@ Only operational prerequisites of the selected atom are activated.
 | V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | COMPLETE (`C02 + C03`) |
 | V3 | DataGateway -> historical Candle | Bounded trades yield reproducible CLOSED candles | COMPLETE (`D03`) |
 | V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | COMPLETE (`E06`; ADR-0035, issue #83/PR #88) |
-| V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies | COMPLETE (`F02`/`F03`; issues #85/#86, PR #89/#90) |
+| V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies and sweeps | COMPLETE (`F02`/`F03`/`F04`; issues #85/#86/#92, PR #89/#90/#94) |
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | BLOCKED by DG-E validation branch |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |
 | V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | BLOCKED by DG-B live branch + relevant DG-H branches; acyclic |
@@ -328,18 +328,17 @@ Only operational prerequisites of the selected atom are activated.
 
 ## Execution frontier
 
-Wave 2 is **COMPLETE**: E06, F02 and F03 (issues #83/#85/#86, PR #88/#89/#90)
-are now `COMPLETE`. Decision-complete/frozen, missing atoms whose declared
-dependencies are currently satisfied:
+`F04` (Event studies/sweeps v1) is **COMPLETE** (issue #92/PR #94).
+All decision-complete Research atoms (`F01`, `F02`, `F03`, `F04`) are now `COMPLETE`.
 
 ```text
-F04  Event study/sweeps (unblocked by F02 + F03 + B03 COMPLETE)
+DG-E (F07 labels/censoring/lockbox, F08 DSR/PBO)
 ```
 
 Beyond `F04`, the Validation/Strategy path remains blocked by the DG-E
-decision gate (`F07` labels/censoring/lockbox, `OPEN_BLOCKING`): F07's
-`Requires` (`F03`,`F06`) are now both `COMPLETE`, but its decision state is
-not, so it does not join the frontier until DG-E is resolved.
+decision gate (`F07` labels/censoring/lockbox, `OPEN_BLOCKING`, `Requires` `F03`+`F06` satisfied;
+and `F08` DSR/PBO, `OPEN_BLOCKING`, `Requires` `F04`+`F05` satisfied).
+Neither atom may proceed to implementation until DG-E is resolved.
 
 This is a **frontier, not authorization**. `SCOPE.md` must activate exactly one bounded implementation or decision slice before mutation.
 
@@ -358,7 +357,7 @@ exactly which atoms that batch actually finished, no more.
 Wave 0  Architecture foundation                           COMPLETE
 Wave 1  First canonical computation/application slices    COMPLETE (C05,D03,E05,F05,I01,K04)
 Wave 2  Representation / Feature vertical                 COMPLETE (E04,E06; ADR-0034/ADR-0035)
-Wave 3  Research / Validation                             F01,F02,F03,F05,F06 COMPLETE; F04 unblocked (frontier); F07/F08 remain via DG-E validation branch
+Wave 3  Research / Validation                             F01,F02,F03,F04,F05,F06 COMPLETE; F07/F08 remain via DG-E validation branch
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
 Wave 6  Live Data Plane                                   K03,K04,K05,K06,A10,A16 COMPLETE; K02,K07-K10,A11,B06 remain
@@ -366,7 +365,7 @@ Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 whe
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. Wave 2 (E06, F02, F03) is complete; `F04` is now the immediate frontier atom (see Execution frontier above), with DG-E as the next blocking decision gate on the Validation path.
+Parallelism is allowed whenever DAG dependencies are satisfied. F04 (issue #92/PR #94) is COMPLETE; the next frontier on the Research/Validation path is DG-E (F07 labels/censoring/lockbox and F08 DSR/PBO).
 
 ## Macro roadmap relationship
 
