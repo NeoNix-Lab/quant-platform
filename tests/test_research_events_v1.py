@@ -37,6 +37,7 @@ from quant_platform.features import (  # noqa: E402
     SupportIdentity,
     SupportReference,
     SupportShape,
+    rehydrate_feature_artifact,
     seal_feature_artifact,
 )
 from quant_platform.research import (  # noqa: E402
@@ -534,8 +535,63 @@ class DetectEventsTests(unittest.TestCase):
             value=5.0,
             causal_available_at="2024-01-01T12:00:01Z",
         )
-        with self.assertRaisesRegex(EventDetectionError, "does not contain a valid canonical support timestamp"):
+        with self.assertRaisesRegex(EventDetectionError, "governed canonical bucket-time coordinate shape"):
             detect_events(spec, [opaque])
+
+    def test_malformed_support_coordinate_prefix_fails_closed(self):
+        spec = event_spec()
+        malformed_prefix = observation(
+            bucket="opaque:2024-01-01T12:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        with self.assertRaisesRegex(EventDetectionError, "governed canonical bucket-time coordinate shape"):
+            detect_events(spec, [malformed_prefix])
+
+    def test_malformed_support_coordinate_suffix_fails_closed(self):
+        spec = event_spec()
+        malformed_suffix = observation(
+            bucket="bar:2024-01-01T12:00:00Z:junk",
+            value=5.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        with self.assertRaisesRegex(EventDetectionError, "governed canonical bucket-time coordinate shape"):
+            detect_events(spec, [malformed_suffix])
+
+    def test_multiple_timestamps_in_support_coordinate_fails_closed(self):
+        spec = event_spec()
+        multi_ts = observation(
+            bucket="bar:2024-01-01T12:00:00Z:2024-01-01T13:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T13:00:01Z",
+        )
+        with self.assertRaisesRegex(EventDetectionError, "governed canonical bucket-time coordinate shape"):
+            detect_events(spec, [multi_ts])
+
+    def test_rehydrated_artifact_with_empty_evidence_is_refused(self):
+        spec = event_spec()
+        obs = observation(
+            bucket="bar:2024-01-01T12:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        sealed = sealed_artifact_for(STACKED_IMBALANCE_ID, [obs])
+        rehydrated = rehydrate_feature_artifact(
+            expected_identity=sealed.identity,
+            feature_set_definition_identity=sealed.feature_set_definition_identity,
+            bound_input_evidence=sealed.bound_input_evidence,
+            declared_materialized_support=sealed.declared_materialized_support,
+            implementation_code_identity=sealed.implementation_code_identity,
+            content_identity=sealed.content_identity,
+            constituent_output_contracts=sealed.constituent_output_contracts,
+            materialization_contract_version=sealed.materialization_contract_version,
+            physical_locators=sealed.physical_locators,
+            sealed_observation_identities=(),
+            sealed_observations=(),
+            sealed_observation_digest="",
+        )
+        with self.assertRaisesRegex(EventDetectionError, "lacks sealed observation evidence"):
+            detect_events(spec, [obs], artifact=rehydrated)
 
     def test_detect_events_refuses_an_unsealed_artifact(self):
         spec = event_spec()
@@ -576,7 +632,7 @@ class DetectEventsTests(unittest.TestCase):
     def test_equal_causal_available_at_is_accepted_as_non_decreasing(self):
         spec = event_spec()
         first = observation(bucket="bar:2024-01-01T00:00:00Z", value=5.0, causal_available_at="2024-01-01T00:00:01Z")
-        second = observation(bucket="bar:2024-01-01T00:00:00Z-b", value=5.0, causal_available_at="2024-01-01T00:00:01Z")
+        second = observation(bucket="bar:2024-01-01T00:00:00.500Z", value=5.0, causal_available_at="2024-01-01T00:00:01Z")
         result = detect_events(spec, [first, second])
         self.assertEqual(2, len(result))
 

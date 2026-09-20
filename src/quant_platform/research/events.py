@@ -92,6 +92,7 @@ from ..features import (
     FeatureObservation,
     Instant,
     ObservationLifecycle,
+    compute_observation_evidence_digest,
 )
 from .hypothesis import HypothesisSpecError, HypothesisSpecId
 
@@ -479,20 +480,19 @@ def _require_sealed_artifact_covers_observable(artifact: Any, observable_id: str
         ) from exc
 
 
-_COORDINATE_TIMESTAMP_RE = re.compile(
-    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z)"
+_GOVERNED_SUPPORT_COORDINATE_RE = re.compile(
+    r"^(?:bar|bucket):(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z)$"
 )
 
 
 def _extract_event_time(observation: FeatureObservation) -> Instant:
     """Extract canonical event instant from observation support semantics.
 
-    Pulls the bucket/bar timestamp from the observation's support coordinate
-    (e.g. ``"bar:2024-01-01T00:05:00Z"`` -> ``2024-01-01T00:05:00Z``).
+    Requires an explicit canonical support/bucket-time representation conforming
+    to governed coordinate shape ``bar:<RFC3339>`` or ``bucket:<RFC3339>``.
 
-    Fails closed (EventDetectionError) if the support coordinate does not embed
-    a valid RFC 3339 timestamp (event time must not fall back to causal
-    availability; support/bucket time is independent of availability).
+    Fails closed (EventDetectionError) on any coordinate with a malformed prefix,
+    malformed suffix, multiple timestamps, unparseable timestamp, or opaque shape.
 
     Fails closed if the extracted timestamp is later than
     ``observation.causal_available_at`` (non-anticipation: an event cannot
@@ -500,29 +500,29 @@ def _extract_event_time(observation: FeatureObservation) -> Instant:
     """
 
     coord = observation.support_identity.observation_identity
-    matches = _COORDINATE_TIMESTAMP_RE.findall(coord)
-    if not matches:
+    match = _GOVERNED_SUPPORT_COORDINATE_RE.fullmatch(coord)
+    if not match:
         raise EventDetectionError(
             f"observation {observation.identity} support coordinate {coord!r} does not "
-            "contain a valid canonical support timestamp (fail closed; event time cannot "
-            "fall back to causal availability)"
+            "conform to the governed canonical bucket-time coordinate shape "
+            "('bar:<RFC3339>' or 'bucket:<RFC3339>'); fail closed"
         )
-    for raw in reversed(matches):
-        try:
-            candidate = Instant.parse(raw)
-        except Exception:
-            continue
-        if candidate <= observation.causal_available_at:
-            return candidate
+    raw_timestamp = match.group(1)
+    try:
+        candidate = Instant.parse(raw_timestamp)
+    except Exception as exc:
+        raise EventDetectionError(
+            f"observation {observation.identity} support coordinate {coord!r} contains "
+            f"unparseable timestamp {raw_timestamp!r}: {exc}"
+        ) from exc
+
+    if candidate > observation.causal_available_at:
         raise EventDetectionError(
             f"observation {observation.identity} support coordinate timestamp "
             f"{candidate.isoformat()} is later than causal_available_at "
-            f"{observation.causal_available_at.isoformat()}"
+            f"{observation.causal_available_at.isoformat()} (non-anticipation)"
         )
-    raise EventDetectionError(
-        f"observation {observation.identity} support coordinate {coord!r} contains no parseable "
-        "RFC 3339 timestamp"
-    )
+    return candidate
 
 
 def _artifact_covers_event_time(artifact: FeatureArtifact, event_time: Instant) -> bool:
@@ -584,6 +584,20 @@ def detect_events(
 
     if artifact is not None:
         _require_sealed_artifact_covers_observable(artifact, spec.observable_id)
+        if not artifact.sealed_observation_identities or not artifact.sealed_observations:
+            raise EventDetectionError(
+                f"artifact {artifact.identity} lacks sealed observation evidence (fail closed; "
+                "cannot evaluate events without authenticated artifact-bound evidence)"
+            )
+        if not getattr(artifact, "sealed_observation_digest", None):
+            raise EventDetectionError(
+                f"artifact {artifact.identity} lacks an identity-bound sealed observation digest"
+            )
+        expected_digest = compute_observation_evidence_digest(artifact.sealed_observation_identities)
+        if artifact.sealed_observation_digest != expected_digest:
+            raise EventDetectionError(
+                f"artifact {artifact.identity} sealed observation digest mismatch"
+            )
 
     sealed_by_id: dict[str, FeatureObservation] = {}
     if artifact is not None and artifact.sealed_observations:
@@ -625,10 +639,7 @@ def detect_events(
                     f"observation {observation.identity} at event_time {event_time.isoformat()} "
                     "falls outside artifact declared_materialized_support"
                 )
-            if (
-                artifact.sealed_observation_identities
-                and observation.identity not in artifact.sealed_observation_identities
-            ):
+            if observation.identity not in artifact.sealed_observation_identities:
                 raise EventDetectionError(
                     f"observation {observation.identity} was not sealed by artifact {artifact.identity}"
                 )

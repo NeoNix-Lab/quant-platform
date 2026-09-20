@@ -642,6 +642,20 @@ def _feature_artifact_identity_payload(
     }
 
 
+OBSERVATION_EVIDENCE_DIGEST_DOMAIN = "feature-observation-evidence-v1"
+
+
+def compute_observation_evidence_digest(
+    observation_identities: Sequence[FeatureObservationIdentity | str],
+) -> str:
+    """Compute deterministic, canonical SHA256 digest over sealed observation identities."""
+    raw = tuple(sorted(
+        item if isinstance(item, str) else item.identity
+        for item in observation_identities
+    ))
+    return f"{OBSERVATION_EVIDENCE_DIGEST_DOMAIN}:sha256:{_canonical_fingerprint(list(raw))}"
+
+
 @dataclass(frozen=True, slots=True)
 class FeatureArtifact:
     """Immutable downstream metadata/evidence envelope for one FeatureArtifact v1.
@@ -678,6 +692,7 @@ class FeatureArtifact:
     physical_locators: tuple[str, ...] = ()
     sealed_observation_identities: tuple[str, ...] = ()
     sealed_observations: tuple[FeatureObservation, ...] = ()
+    sealed_observation_digest: str = ""
     _seal_token: InitVar[object] = field(default=None, kw_only=True)
 
     def __post_init__(self, _seal_token: object) -> None:
@@ -751,6 +766,7 @@ class FeatureArtifact:
             _non_empty_text(item, f"physical_locators[{index}]")
         object.__setattr__(self, "sealed_observation_identities", tuple(self.sealed_observation_identities))
         object.__setattr__(self, "sealed_observations", tuple(self.sealed_observations))
+        object.__setattr__(self, "sealed_observation_digest", str(self.sealed_observation_digest or ""))
 
     def identity_payload(self) -> dict[str, Any]:
         return _feature_artifact_identity_payload(
@@ -796,6 +812,7 @@ class FeatureArtifact:
             physical_locators=tuple(physical_locators),
             sealed_observation_identities=self.sealed_observation_identities,
             sealed_observations=self.sealed_observations,
+            sealed_observation_digest=self.sealed_observation_digest,
             _seal_token=_SEAL_TOKEN,
         )
 
@@ -843,6 +860,11 @@ def seal_feature_artifact(
         constituent_output_contracts=constituents,
         declared_materialized_support=declared_materialized_support,
     )
+    identities_tuple = tuple(sorted(
+        item if isinstance(item, str) else item.identity
+        for item in expected_observation_identities
+    ))
+    obs_digest = compute_observation_evidence_digest(identities_tuple) if identities_tuple else ""
     return FeatureArtifact(
         feature_set_definition_identity=feature_set_definition_identity,
         bound_input_evidence=bound_input_evidence,
@@ -852,11 +874,9 @@ def seal_feature_artifact(
         constituent_output_contracts=constituents,
         materialization_contract_version=materialization_contract_version,
         physical_locators=tuple(physical_locators),
-        sealed_observation_identities=tuple(sorted(
-            item if isinstance(item, str) else item.identity
-            for item in expected_observation_identities
-        )),
+        sealed_observation_identities=identities_tuple,
         sealed_observations=tuple(observations),
+        sealed_observation_digest=obs_digest,
         _seal_token=_SEAL_TOKEN,
     )
 
@@ -874,6 +894,7 @@ def rehydrate_feature_artifact(
     physical_locators: Sequence[str] = (),
     sealed_observation_identities: Sequence[str] = (),
     sealed_observations: Sequence[FeatureObservation] = (),
+    sealed_observation_digest: str = "",
 ) -> FeatureArtifact:
     """Reconstruct an immutable `FeatureArtifact` from an already-sealed,
     already-authoritative catalog record, without re-running the finality
@@ -903,6 +924,16 @@ def rehydrate_feature_artifact(
         if isinstance(expected_identity, FeatureArtifactIdentity)
         else FeatureArtifactIdentity(_non_empty_text(expected_identity, "expected_identity"))
     )
+    sealed_identities = tuple(sealed_observation_identities)
+    digest = str(sealed_observation_digest or "")
+    if sealed_identities and not digest:
+        digest = compute_observation_evidence_digest(sealed_identities)
+    elif sealed_identities and digest:
+        expected_digest = compute_observation_evidence_digest(sealed_identities)
+        if digest != expected_digest:
+            raise FeatureArtifactError(
+                f"rehydrate_feature_artifact() sealed_observation_digest mismatch: expected {expected_digest}, got {digest}"
+            )
     result = FeatureArtifact(
         feature_set_definition_identity=feature_set_definition_identity,
         bound_input_evidence=bound_input_evidence,
@@ -912,8 +943,9 @@ def rehydrate_feature_artifact(
         constituent_output_contracts=tuple(constituent_output_contracts),
         materialization_contract_version=materialization_contract_version,
         physical_locators=tuple(physical_locators),
-        sealed_observation_identities=tuple(sealed_observation_identities),
+        sealed_observation_identities=sealed_identities,
         sealed_observations=tuple(sealed_observations),
+        sealed_observation_digest=digest,
         _seal_token=_SEAL_TOKEN,
     )
     if result.identity != expected:
@@ -1239,6 +1271,7 @@ __all__ = [
     "FEATURE_ARTIFACT_IDENTITY_DOMAIN",
     "FEATURE_ARTIFACT_CONTENT_IDENTITY_DOMAIN",
     "BOUND_INPUT_EVIDENCE_IDENTITY_DOMAIN",
+    "OBSERVATION_EVIDENCE_DIGEST_DOMAIN",
     "FEATURE_ARTIFACT_MODEL_VERSION",
     "ArtifactRegistrationOutcome",
     "BoundInputEvidence",
@@ -1254,6 +1287,7 @@ __all__ = [
     "FeatureSetDefinitionIdentity",
     "SupportShape",
     "classify_registration",
+    "compute_observation_evidence_digest",
     "recomputation_equivalent",
     "rehydrate_feature_artifact",
     "require_final_observations",
