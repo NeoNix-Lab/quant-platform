@@ -1,20 +1,20 @@
-# Scope: Wave 3 DG-E/F08 semantic freeze and implementation frontier, 2026-09-20
+# Scope: Wave 3 DG-E resolved and implementation frontier, 2026-09-20
 
 ## Objective
 
-Resolve the remaining DG-E decision branch for `F08 — DSR/PBO` under governance-only issue #97 and record the resulting Wave 3 state.
+Record the Wave 3 resting state after resolution of the remaining DG-E decision branch for `F08 — DSR/PBO` under governance-only issue #97.
 
-This scope authorizes **governance/decision mutation only** for F08. It does not authorize F07 or F08 runtime code/tests. Issue #96 remains the already-prepared F07 implementation issue, but it is not the active mutation scope while #97 is being resolved.
+The completed #97 scope authorized **governance/decision mutation only** for F08. This file does not authorize F07 or F08 runtime code/tests. Issue #96 remains the already-prepared F07 implementation issue; F08 implementation requires its own separately bounded issue/scope.
 
 ## Baseline
 
-Authoritative routed baseline at activation:
+Authoritative routed baseline at DG-E/F08 activation:
 
 ```text
 implement/wave-3 @ 7458aa18cadc64a44982cdff7f310819e87b9f8c
 ```
 
-Credited Wave 3 state before this decision:
+Credited Wave 3 state before the F08 decision:
 
 ```text
 F04  Event studies/sweeps          RESOLVED / COMPLETE
@@ -24,11 +24,11 @@ F07  Labels/censoring/lockbox      FROZEN   / MISSING    ADR-0036
 F08  DSR/PBO                       OPEN_BLOCKING / MISSING
 ```
 
-F04/F05/F07 semantics are not reopened by this scope.
+F04/F05/F07 semantics were not reopened by this scope.
 
-## Active decision-gate scope: DG-E / F08
+## Resolved decision-gate scope: DG-E / F08
 
-Issue #97 is the bounded authority. ADR-0037 freezes the robust-comparison v1 semantics.
+Issue #97 is the bounded governance authority. ADR-0037 freezes the robust-comparison v1 semantics.
 
 ### Frozen DSR v1
 
@@ -68,7 +68,7 @@ F05 walk-forward semantics remain separate; F08 does not reinterpret walk-forwar
 
 ### Ownership
 
-The future F08 estimator runtime is Validation-owned and must preserve the current owner DAG. Validation consumes opaque trial/population evidence through Validation-owned projections and does not import Research/Experiment/Strategy runtime types.
+F08 remains a cross-domain Research/Validation capability in the planning DAG. ADR-0037 fixes the bounded estimator **runtime package** under Validation. Validation consumes opaque trial/population evidence through Validation-owned projections and does not import Research/Experiment/Strategy runtime types.
 
 ## Resulting state
 
@@ -82,7 +82,7 @@ F08  DSR/PBO                       FROZEN   / MISSING    ADR-0037
 
 DG-E now has **no remaining open semantic branch**. Missing runtime implementations remain explicit.
 
-Planning metrics become:
+Planning metrics are:
 
 ```text
 TOTAL_ATOMS                     = 87
@@ -96,13 +96,13 @@ ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
 IMPLEMENTATION_COMPLETE         = 43 / 87 = 49.4%
 ```
 
-No implementation count changes in this decision scope.
+No implementation count changed in the decision scope.
 
-## Execution frontier after this freeze
+## Execution frontier after DG-E resolution
 
 ```text
-F07 implementation   FROZEN / MISSING   issue #96 prepared; not activated by this scope
-F08 implementation   FROZEN / MISSING   now eligible for a separate bounded implementation issue
+F07 implementation   FROZEN / MISSING   issue #96 prepared; not authorized by this resting scope
+F08 implementation   FROZEN / MISSING   eligible for a separate bounded implementation issue
 ```
 
 Wave 3 is semantically frozen end-to-end for F01-F08, but is **not implementation-complete** until F07 and F08 runtimes are complete.
