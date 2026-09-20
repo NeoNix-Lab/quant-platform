@@ -57,7 +57,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Validation | Walk-forward schedule | RESOLVED | COMPLETE | Validation | F05 | Deterministic pure temporal atom. |
 | Validation | Availability/purge/embargo | FROZEN | COMPLETE | Validation | F06 | ADR-0031. |
 | Validation | Labels/censoring/lockbox | FROZEN | MISSING | Validation | F07 | ADR-0036; outcome-derived labels/censoring/terminal-lockbox semantics frozen; implementation pending. |
-| Validation | DSR/PBO | OPEN_BLOCKING | MISSING | Research/Validation | F08 | Separate DG-E DSR/PBO branch; does not block Strategy/ML paths that depend on F07. |
+| Validation | DSR/PBO | FROZEN | MISSING | Validation | F08 | ADR-0037; DSR-L and full-CSCV PBO semantics, numerical policy and reference vectors frozen; implementation pending. |
 | Strategy | StrategySpec/DecisionIntent | RESOLVED | MISSING | Strategy | G01 | Strategy remains upstream of execution. |
 | Strategy | Policy composition | RESOLVED | MISSING | Strategy | G02 | Deterministic composition required. |
 | Strategy | Risk/sizing | RESOLVED | MISSING | Strategy | G03 | No client-owned logic. |
@@ -103,7 +103,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Conformity Implementation Gate | PASSED | All ADR-0023 exit criteria satisfied. |
 | Human Golden Bybit BTCUSDT E2E | PASS | Exact accepted reference vertical. |
 | Package Boundary / Modular Monolith Foundation v1 | COMPLETE | Ownership/dependency enforcement established. |
-| Legacy Capability Harvest Audit v1 | COMPLETE | 31 capabilities classified; H01 selected as harvest candidate, H14 retained as REVIEW. |
+| Legacy Capability Harvest Audit v1 | COMPLETE | 31 capabilities classified; H14 REVIEW resolved to ADAPT by ADR-0037. |
 | ASS-01 Application ownership/enforcement | COMPLETE | PR #27 integrated. |
 | ASS-02 semantic selector resolution (C02) | COMPLETE | PR #30 integrated; reviewed exact-head CI passed. |
 | ASS-02 result/error translation (C03) | COMPLETE | PR #41 integrated reviewed head `f382a2e6...`; integrity #91 passed on exact head. |
@@ -120,21 +120,20 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | F03 OutcomeSpec/Outcome v1 | COMPLETE | Horizon/censoring/availability explicit, implemented, issue #86/PR #90. |
 | F04 Event studies/sweeps v1 | COMPLETE | Reproducible study population/aggregates and parameter sweep runtime implemented, issue #92/PR #94. |
 | F07 labels/censoring/lockbox v1 | FROZEN | ADR-0036 accepted under issue #95; implementation remains MISSING. |
+| F08 DSR/PBO robust comparison v1 | FROZEN | ADR-0037 accepted under issue #97; implementation remains MISSING. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 
 ## Current frontier
 
-F07 label/censoring/lockbox semantics are **FROZEN** under ADR-0036; implementation is `MISSING` and its declared dependencies F03/F06 are `COMPLETE`.
+F07 and F08 semantics are both `FROZEN`; implementations are `MISSING` and prerequisites are satisfied.
 
 ```text
-F07 implementation
-DG-E / F08 decision branch (independent)
+F07 implementation   issue #96 prepared; frontier-ready, not authorized by frontier alone
+F08 implementation   separate bounded implementation issue required; frontier-ready, not authorized by frontier alone
 ```
 
-The next implementation-ready atom on the Validation -> Strategy/ML path is F07. It requires a separately bounded implementation issue/scope before runtime mutation.
-
-F08 DSR/PBO remains `OPEN_BLOCKING` in the independent robust-comparison branch. Resolving F07 does not activate or resolve F08.
+F07 remains the dependency path to G01/I04. F08 is an independent robust-comparison capability and does not block Strategy/ML paths that depend on F07.
 
 Frontier membership means planning dependencies and decision gates are satisfied; it does not authorize implementation.
 
