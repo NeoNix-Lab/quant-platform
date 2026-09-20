@@ -1,4 +1,5 @@
-"""Research-owned semantic capabilities (F01 HypothesisSpec, F02 EventSpec)."""
+"""Research-owned semantic capabilities (F01 HypothesisSpec, F02 EventSpec,
+F03 OutcomeSpec/Outcome)."""
 
 from .events import (
     DETECTED_EVENT_IDENTITY_DOMAIN,
@@ -22,6 +23,22 @@ from .hypothesis import (
     HypothesisSpecId,
     ObservableReference,
 )
+from .outcomes import (
+    OUTCOME_IDENTITY_DOMAIN,
+    OUTCOME_SPEC_IDENTITY_DOMAIN,
+    OUTCOME_SPEC_MODEL_VERSION,
+    HorizonKind,
+    MarketObservation,
+    MetricKind,
+    Outcome,
+    OutcomeError,
+    OutcomeEvaluationError,
+    OutcomeSpec,
+    OutcomeSpecId,
+    OutcomeState,
+    PathMetrics,
+    evaluate_outcome,
+)
 
 __all__ = [
     "DETECTED_EVENT_IDENTITY_DOMAIN",
@@ -29,6 +46,9 @@ __all__ = [
     "EVENT_SPEC_MODEL_VERSION",
     "HYPOTHESIS_SPEC_IDENTITY_DOMAIN",
     "HYPOTHESIS_SPEC_MODEL_VERSION",
+    "OUTCOME_IDENTITY_DOMAIN",
+    "OUTCOME_SPEC_IDENTITY_DOMAIN",
+    "OUTCOME_SPEC_MODEL_VERSION",
     "ComparisonOperator",
     "DetectedEvent",
     "DirectionRequirement",
@@ -36,10 +56,21 @@ __all__ = [
     "EventSpec",
     "EventSpecError",
     "EventSpecId",
+    "HorizonKind",
     "HypothesisSpec",
     "HypothesisSpecError",
     "HypothesisSpecId",
+    "MarketObservation",
+    "MetricKind",
     "ObservableReference",
+    "Outcome",
+    "OutcomeError",
+    "OutcomeEvaluationError",
+    "OutcomeSpec",
+    "OutcomeSpecId",
+    "OutcomeState",
+    "PathMetrics",
     "ThresholdPredicate",
     "detect_events",
+    "evaluate_outcome",
 ]

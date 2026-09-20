@@ -60,6 +60,7 @@ OWNERS = {
     "quant_platform.research": "research",
     "quant_platform.research.events": "research",
     "quant_platform.research.hypothesis": "research",
+    "quant_platform.research.outcomes": "research",
     "quant_platform.source_adapters": "source",
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
