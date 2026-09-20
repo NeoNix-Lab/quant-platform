@@ -149,7 +149,11 @@ def sealed_artifact_for(
         sealed_observations = (
             FeatureObservation(
                 definition_id=definition_id,
-                support_identity=SupportIdentity(CONTRACT.identity, "obs-1", SupportReference.current()),
+                support_identity=SupportIdentity(
+                    CONTRACT.identity,
+                    f"bar:{ARTIFACT_SUPPORT_INTERVAL.start.isoformat()}",
+                    SupportReference.current(),
+                ),
                 value="1.0",
                 lifecycle=ObservationLifecycle.FINAL,
                 causal_available_at=ARTIFACT_SUPPORT_INTERVAL.start,
@@ -466,6 +470,41 @@ class DetectEventsTests(unittest.TestCase):
         with self.assertRaisesRegex(EventDetectionError, "falls outside artifact declared_materialized_support"):
             detect_events(spec, [inside, outside], artifact=artifact)
 
+    def test_detect_events_refuses_observation_with_different_identity_in_same_interval(self):
+        spec = event_spec()
+        inside = observation(
+            bucket="bar:2024-01-01T12:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        different_identity_same_interval = observation(
+            bucket="bar:2024-01-01T13:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T13:00:01Z",
+        )
+        different_value_same_coordinate = observation(
+            bucket="bar:2024-01-01T12:00:00Z",
+            value=6.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        artifact = sealed_artifact_for(STACKED_IMBALANCE_ID, [inside])
+        with self.assertRaisesRegex(EventDetectionError, "was not sealed by artifact"):
+            detect_events(spec, [different_identity_same_interval], artifact=artifact)
+        with self.assertRaisesRegex(EventDetectionError, "was not sealed by artifact"):
+            detect_events(spec, [different_value_same_coordinate], artifact=artifact)
+
+    def test_detect_events_consumes_observations_directly_from_artifact(self):
+        spec = event_spec()
+        match = observation(
+            bucket="bar:2024-01-01T12:00:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        artifact = sealed_artifact_for(STACKED_IMBALANCE_ID, [match])
+        result = detect_events(spec, artifact)
+        self.assertEqual(1, len(result))
+        self.assertEqual(match.identity, result[0].observation_identity)
+
     def test_event_time_derived_from_canonical_support_coordinate(self):
         spec = event_spec()
         obs = observation(
@@ -487,6 +526,16 @@ class DetectEventsTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(EventDetectionError, "later than causal_available_at"):
             detect_events(spec, [bad_obs])
+
+    def test_opaque_or_unparseable_support_coordinate_fails_closed(self):
+        spec = event_spec()
+        opaque = observation(
+            bucket="opaque-sequence-42",
+            value=5.0,
+            causal_available_at="2024-01-01T12:00:01Z",
+        )
+        with self.assertRaisesRegex(EventDetectionError, "does not contain a valid canonical support timestamp"):
+            detect_events(spec, [opaque])
 
     def test_detect_events_refuses_an_unsealed_artifact(self):
         spec = event_spec()

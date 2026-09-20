@@ -676,6 +676,8 @@ class FeatureArtifact:
     materialization_contract_version: str = FEATURE_ARTIFACT_MODEL_VERSION
     lifecycle: FeatureArtifactLifecycle = FeatureArtifactLifecycle.FINAL
     physical_locators: tuple[str, ...] = ()
+    sealed_observation_identities: tuple[str, ...] = ()
+    sealed_observations: tuple[FeatureObservation, ...] = ()
     _seal_token: InitVar[object] = field(default=None, kw_only=True)
 
     def __post_init__(self, _seal_token: object) -> None:
@@ -747,6 +749,8 @@ class FeatureArtifact:
         object.__setattr__(self, "physical_locators", tuple(self.physical_locators))
         for index, item in enumerate(self.physical_locators):
             _non_empty_text(item, f"physical_locators[{index}]")
+        object.__setattr__(self, "sealed_observation_identities", tuple(self.sealed_observation_identities))
+        object.__setattr__(self, "sealed_observations", tuple(self.sealed_observations))
 
     def identity_payload(self) -> dict[str, Any]:
         return _feature_artifact_identity_payload(
@@ -790,6 +794,8 @@ class FeatureArtifact:
             materialization_contract_version=self.materialization_contract_version,
             lifecycle=self.lifecycle,
             physical_locators=tuple(physical_locators),
+            sealed_observation_identities=self.sealed_observation_identities,
+            sealed_observations=self.sealed_observations,
             _seal_token=_SEAL_TOKEN,
         )
 
@@ -846,6 +852,11 @@ def seal_feature_artifact(
         constituent_output_contracts=constituents,
         materialization_contract_version=materialization_contract_version,
         physical_locators=tuple(physical_locators),
+        sealed_observation_identities=tuple(sorted(
+            item if isinstance(item, str) else item.identity
+            for item in expected_observation_identities
+        )),
+        sealed_observations=tuple(observations),
         _seal_token=_SEAL_TOKEN,
     )
 
@@ -861,6 +872,8 @@ def rehydrate_feature_artifact(
     constituent_output_contracts: Sequence[ConstituentFeatureOutput],
     materialization_contract_version: str = FEATURE_ARTIFACT_MODEL_VERSION,
     physical_locators: Sequence[str] = (),
+    sealed_observation_identities: Sequence[str] = (),
+    sealed_observations: Sequence[FeatureObservation] = (),
 ) -> FeatureArtifact:
     """Reconstruct an immutable `FeatureArtifact` from an already-sealed,
     already-authoritative catalog record, without re-running the finality
@@ -899,6 +912,8 @@ def rehydrate_feature_artifact(
         constituent_output_contracts=tuple(constituent_output_contracts),
         materialization_contract_version=materialization_contract_version,
         physical_locators=tuple(physical_locators),
+        sealed_observation_identities=tuple(sealed_observation_identities),
+        sealed_observations=tuple(sealed_observations),
         _seal_token=_SEAL_TOKEN,
     )
     if result.identity != expected:
