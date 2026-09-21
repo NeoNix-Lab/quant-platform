@@ -27,5 +27,6 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0035 | H01 canonical integration v1 | Accepted |
 | 0036 | Outcome-derived labels, censoring and lockbox v1 | Accepted |
 | 0037 | DSR/PBO robust-comparison semantics v1 | Accepted |
+| 0038 | F03 Outcome v1 semantic authority | Accepted |
 
 See the individual ADR files for context and consequences.

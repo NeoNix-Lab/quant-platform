@@ -23,9 +23,10 @@ traceable ``Outcome`` record.  It does not:
   canonical D02/D03 candle data project it into that shape before calling
   ``evaluate_outcome``.
 
-Design notes (frozen for this PR only -- not governance-authoritative; a
-later dedicated governance pass materializes whichever of these become the
-accepted ADR text):
+Design notes (governed by ADR-0038, the accepted F03 Outcome v1 semantic
+authority; this summary tracks that ADR and must not silently diverge from
+it -- a genuine semantic change requires a contract-evolution decision, not
+an edit here):
 
 - ``OutcomeSpec`` semantic identity is exactly the tuple (outcome_key,
   semantic_version, horizon_duration, sampling_period, metric_kind,
@@ -54,15 +55,35 @@ accepted ADR text):
   From there the forward path is walked on the fixed ``sampling_period``
   grid: each expected grid instant must be matched exactly by the next
   supplied observation.  A grid instant with no matching observation --
-  whether the series stops there or simply skips past it -- means the
+  the series skips past it while more evidence remains -- means the
   evaluator cannot see through to a trustworthy boundary or path, so the
   result is ``INSUFFICIENT_COVERAGE`` rather than either fabricating a
   metric over an incomplete path or overshooting past the requested
-  horizon to the next available price.  Only the series ending outright
-  before the grid reaches ``horizon_end`` is ``CENSORED_END_OF_DATA``.
-  Both failure modes are honest: neither ever reports a ``horizon_end``
-  that the evaluator did not actually establish from ``spec`` and
-  ``event`` alone.
+  horizon to the next available price.
+- Genuine Python iterator/generator exhaustion is never, by itself,
+  evidence that the authoritative market data source has ended: it proves
+  only that the caller stopped supplying values.  A plain exhausted
+  ``market_series`` before ``horizon_end`` is therefore
+  ``INSUFFICIENT_COVERAGE``, exactly like an interior gap.
+  ``OutcomeState.CENSORED_END_OF_DATA`` requires the caller to supply the
+  explicit local evidence marker ``EndOfData`` as the element of
+  ``market_series`` at the point the authoritative source is known to have
+  ended -- an auditable proposition, not an inference from iterable
+  termination.  ``EndOfData`` may carry its own ``causal_available_at``
+  (when the completeness confirmation itself has a knowable time); like
+  every other consumed evidence, it can only ever push
+  ``Outcome.causal_available_at`` forward, never earlier than
+  ``horizon_end`` or any other consumed evidence.  Both failure modes are
+  honest: neither ever reports a ``horizon_end`` that the evaluator did not
+  actually establish from ``spec`` and ``event`` alone, and
+  ``CENSORED_END_OF_DATA`` never merely guesses completeness from an
+  arbitrary finite iterable running dry.
+- Iterator exhaustion is detected with an implementation-local sentinel
+  object distinct from every valid domain value, including ``None``: a
+  malformed ``None`` (or any other non-``MarketObservation``,
+  non-``EndOfData`` value) consumed at any position -- first or
+  interior -- raises ``OutcomeEvaluationError`` rather than being mistaken
+  for the stream ending.
 - ``causal_available_at`` is the later of ``horizon_end``,
   ``event.causal_available_at``, and every consumed observation's own
   ``causal_available_at`` (anchor included, which itself defaults to the
@@ -478,6 +499,37 @@ class MarketObservation:
         return self.prices[field_name]
 
 
+@dataclass(frozen=True, slots=True)
+class EndOfData:
+    """Explicit, caller-supplied evidence that the authoritative market data
+    source has no further observations beyond this point in
+    ``market_series``.
+
+    Finding B (F03 post-#86 adversarial review): an arbitrary finite
+    iterable running dry proves only that the caller stopped supplying
+    evidence, never that the underlying dataset actually ended.
+    ``evaluate_outcome`` therefore never infers ``CENSORED_END_OF_DATA``
+    from bare iterator exhaustion; a caller who holds genuine authority that
+    no further evidence exists (e.g. a venue/session-close confirmation or
+    their source's own completeness watermark) supplies one ``EndOfData`` as
+    the next element of ``market_series`` in place of the missing
+    observation instead.
+
+    ``causal_available_at`` is when the completeness confirmation itself
+    became knowable; it participates in ``Outcome.causal_available_at``
+    exactly like any other consumed evidence's own causal time -- taken as
+    part of a running maximum -- so it can never pull availability earlier
+    than ``horizon_end`` or any other consumed evidence, only forward or not
+    at all when omitted.
+    """
+
+    causal_available_at: Instant | str | None = None
+
+    def __post_init__(self) -> None:
+        if self.causal_available_at is not None:
+            object.__setattr__(self, "causal_available_at", Instant.parse(self.causal_available_at))
+
+
 # ---------------------------------------------------------------------------
 # Outcome value model.
 # ---------------------------------------------------------------------------
@@ -640,14 +692,32 @@ def _path_metrics(spec: OutcomeSpec, anchor: MarketObservation, path: list[Marke
     )
 
 
+# Implementation-local sentinel distinct from every valid domain value
+# (including ``None``) used to detect genuine iterator exhaustion without
+# ever mistaking a malformed element for the stream ending (Finding A).
+_EXHAUSTED = object()
+
+
 def _validate_remaining_within_horizon(
-    iterator: Iterator[MarketObservation],
+    iterator: Iterator[MarketObservation | EndOfData],
     previous_instant: Instant,
     horizon_end: Instant,
-) -> None:
+    causal_watermark: Instant,
+) -> Instant:
+    """Validate/consume ``iterator`` up through ``horizon_end``, returning
+    ``causal_watermark`` folded with every consumed element's own
+    ``causal_available_at`` (`MarketObservation` or `EndOfData`) -- every
+    element inspected here was genuinely consumed evidence and must
+    participate in ``Outcome.causal_available_at`` exactly like the main
+    walk's own consumed evidence (ADR-0038 §7)."""
+
     if previous_instant > horizon_end:
-        return
+        return causal_watermark
     for remaining in iterator:
+        if isinstance(remaining, EndOfData):
+            if remaining.causal_available_at is not None:
+                causal_watermark = _max_instant(causal_watermark, remaining.causal_available_at)
+            return causal_watermark
         if not isinstance(remaining, MarketObservation):
             raise OutcomeEvaluationError("market_series must contain only MarketObservation values")
         if remaining.instant <= previous_instant:
@@ -655,30 +725,36 @@ def _validate_remaining_within_horizon(
                 "market_series must be supplied in strictly increasing instant order"
             )
         previous_instant = remaining.instant
+        causal_watermark = _max_instant(causal_watermark, remaining.causal_available_at)
         if remaining.instant > horizon_end:
             break
+    return causal_watermark
 
 
 def evaluate_outcome(
     spec: OutcomeSpec,
     event: DetectedEvent,
-    market_series: Iterable[MarketObservation],
+    market_series: Iterable[MarketObservation | EndOfData],
 ) -> Outcome:
     """Deterministically measure ``spec``'s forward horizon/metric relative
     to ``event`` over a strictly time-ordered ``market_series``.
 
-    Fails closed (`OutcomeEvaluationError`) on a non-`MarketObservation`
-    element or observations supplied out of strict increasing ``instant``
-    order within the forward horizon -- rather than silently reordering or
-    deduplicating evidence a caller may not have intended to supply that way.
-    Observations strictly beyond ``horizon_end`` are not consumed once the
-    outcome boundary is reached.
+    Fails closed (`OutcomeEvaluationError`) on any consumed element that is
+    neither a `MarketObservation` nor an `EndOfData` marker -- including
+    `None` -- or observations supplied out of strict increasing ``instant``
+    order within the forward horizon, rather than silently reordering,
+    deduplicating or mistaking malformed evidence for the stream ending.
+    Genuine iterator exhaustion is detected with an implementation-local
+    sentinel distinct from every valid domain value, so it can never be
+    confused with a malformed element.  Observations strictly beyond
+    ``horizon_end`` are not consumed once the outcome boundary is reached.
 
     The first element of ``market_series`` must be the anchor: its
     ``instant`` must equal ``event.event_time`` exactly.  When it is not
-    (including an empty series), the result is
-    `OutcomeState.INSUFFICIENT_COVERAGE`: there is no starting reference
-    price to measure a forward return against.
+    (including an empty series or a series that opens with `EndOfData`), the
+    result is `OutcomeState.INSUFFICIENT_COVERAGE`: there is no starting
+    reference price to measure a forward return against, so there is nothing
+    to censor either.
 
     ``horizon_end`` is always ``event.event_time + spec.horizon_duration_ns``
     -- computed purely from ``spec`` and ``event``, independent of the
@@ -687,21 +763,26 @@ def evaluate_outcome(
     anchored at ``event.event_time``: each expected grid instant must be
     matched exactly by the next observation in ``market_series``.
 
-    - A grid instant with no matching observation (the series skips ahead
-      of it, or ends there without a match) that is *not* the final grid
-      instant means the interior path has a hole no metric can be trusted
-      through: `OutcomeState.INSUFFICIENT_COVERAGE`.
-    - The series ending exactly at (or before) the final grid instant
-      without reaching a match there is `OutcomeState.CENSORED_END_OF_DATA`
-      -- the data genuinely ran out rather than merely skipping a step.
+    - A grid instant with no matching observation -- the series skips ahead
+      of it, or a plain iterator/generator runs dry before reaching it --
+      means the evaluator cannot see through to a trustworthy boundary or
+      path: `OutcomeState.INSUFFICIENT_COVERAGE`.  A bare exhausted iterable
+      is never, by itself, proof the authoritative source ended.
+    - `OutcomeState.CENSORED_END_OF_DATA` is emitted only when the caller
+      supplies an explicit `EndOfData` marker as the element of
+      ``market_series`` at the point the authoritative source is known to
+      have ended, in place of the missing grid observation -- auditable
+      completeness evidence, never inferred from iterable termination.
     - Matching every grid instant up to and including ``horizon_end`` is
       `OutcomeState.COMPLETE`.
 
     `Outcome.causal_available_at` is the later of ``horizon_end``,
-    ``event.causal_available_at``, and every consumed observation's own
-    ``causal_available_at`` (anchor included) -- never merely the boundary
-    observation's -- so a late-finalizing observation anywhere along the
-    path still pushes availability forward, forbidding lookahead.
+    ``event.causal_available_at``, and every consumed observation's or
+    `EndOfData`'s own ``causal_available_at`` (anchor included) -- never
+    merely the boundary observation's -- so a late-finalizing observation
+    anywhere along the path, or a late-confirmed `EndOfData`, still pushes
+    availability forward, forbidding lookahead, and can never pull it
+    earlier than ``horizon_end``.
     """
 
     if not isinstance(spec, OutcomeSpec):
@@ -712,9 +793,16 @@ def evaluate_outcome(
     horizon_end = Instant(event.event_time.epoch_ns + spec.horizon_duration_ns)
 
     iterator = iter(market_series)
-    first = next(iterator, None)
-    if first is None:
+    first = next(iterator, _EXHAUSTED)
+    if first is _EXHAUSTED or isinstance(first, EndOfData):
+        # No anchor was ever established -- with or without explicit
+        # end-of-data evidence there is no starting reference price to
+        # measure a forward return against, so this can never be more than
+        # INSUFFICIENT_COVERAGE (never CENSORED_END_OF_DATA: there is
+        # nothing to censor without an anchor).
         causal_available_at = _max_instant(horizon_end, event.causal_available_at)
+        if isinstance(first, EndOfData) and first.causal_available_at is not None:
+            causal_available_at = _max_instant(causal_available_at, first.causal_available_at)
         return Outcome(
             outcome_spec_id=spec.identity,
             event_id=event.event_id,
@@ -730,8 +818,9 @@ def evaluate_outcome(
         raise OutcomeEvaluationError("market_series must contain only MarketObservation values")
 
     if first.instant != event.event_time:
-        _validate_remaining_within_horizon(iterator, first.instant, horizon_end)
-        causal_available_at = _max_instant(horizon_end, event.causal_available_at)
+        causal_watermark = _max_instant(event.causal_available_at, first.causal_available_at)
+        causal_watermark = _validate_remaining_within_horizon(iterator, first.instant, horizon_end, causal_watermark)
+        causal_available_at = _max_instant(horizon_end, causal_watermark)
         return Outcome(
             outcome_spec_id=spec.identity,
             event_id=event.event_id,
@@ -750,12 +839,23 @@ def evaluate_outcome(
 
     consumed: list[MarketObservation] = []
     boundary: MarketObservation | None = None
-    state = OutcomeState.CENSORED_END_OF_DATA
+    state = OutcomeState.INSUFFICIENT_COVERAGE
     expected_ns = anchor.instant.epoch_ns + sampling_period_ns
 
     while expected_ns <= horizon_end.epoch_ns:
-        candidate = next(iterator, None)
-        if candidate is None:
+        candidate = next(iterator, _EXHAUSTED)
+        if candidate is _EXHAUSTED:
+            # Genuine iterator exhaustion is never, by itself, proof the
+            # authoritative source ended (Finding B): it proves only that
+            # the caller stopped supplying evidence.
+            state = OutcomeState.INSUFFICIENT_COVERAGE
+            break
+
+        if isinstance(candidate, EndOfData):
+            # Explicit, auditable end-of-data evidence: the caller holds
+            # genuine authority that no further evidence exists.
+            if candidate.causal_available_at is not None:
+                causal_watermark = _max_instant(causal_watermark, candidate.causal_available_at)
             state = OutcomeState.CENSORED_END_OF_DATA
             break
 
@@ -768,7 +868,10 @@ def evaluate_outcome(
 
         if candidate.instant.epoch_ns != expected_ns:
             state = OutcomeState.INSUFFICIENT_COVERAGE
-            _validate_remaining_within_horizon(iterator, candidate.instant, horizon_end)
+            causal_watermark = _max_instant(causal_watermark, candidate.causal_available_at)
+            causal_watermark = _validate_remaining_within_horizon(
+                iterator, candidate.instant, horizon_end, causal_watermark
+            )
             break
 
         causal_watermark = _max_instant(causal_watermark, candidate.causal_available_at)
@@ -814,6 +917,7 @@ __all__ = [
     "OUTCOME_IDENTITY_DOMAIN",
     "OUTCOME_SPEC_IDENTITY_DOMAIN",
     "OUTCOME_SPEC_MODEL_VERSION",
+    "EndOfData",
     "HorizonKind",
     "MarketObservation",
     "MetricKind",
