@@ -13,7 +13,7 @@ It preserves package ownership boundaries:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from fractions import Fraction
 import hashlib
@@ -206,9 +206,9 @@ class LabelDefinition:
     semantic_version: str | int
     source_outcome_spec_id: str
     transform_kind: LabelTransformKind | str
-    parameters: Mapping[str, Any] = MappingProxyType({})
+    parameters: Mapping[str, Any] = field(default_factory=dict)
     censoring_policy: LabelCensoringPolicy | str = LabelCensoringPolicy.REQUIRE_COMPLETE
-    output_schema: Mapping[str, Any] = MappingProxyType({})
+    output_schema: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "label_key", _governed_key(self.label_key, "label_key"))
