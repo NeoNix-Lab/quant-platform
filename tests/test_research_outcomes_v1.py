@@ -446,6 +446,46 @@ class CausalAvailabilityTests(unittest.TestCase):
         self.assertEqual(OutcomeState.COMPLETE, outcome.state)
         self.assertEqual(very_late_mid.causal_available_at.epoch_ns, outcome.causal_available_at.epoch_ns)
 
+    def test_late_off_grid_gap_observation_pushes_causal_available_at_forward(self):
+        # P1 regression: the off-grid candidate that establishes the gap is
+        # itself genuinely consumed evidence and must participate in
+        # Outcome.causal_available_at (ADR-0038 §7), not merely horizon_end.
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+        off_grid_instant = bar(0, "100").instant.epoch_ns + 6 * 60_000_000_000
+        late_causal = Instant(off_grid_instant + 24 * 3_600_000_000_000)
+        off_grid = MarketObservation(
+            instant=Instant(off_grid_instant),
+            prices={"close": "101"},
+            causal_available_at=late_causal,
+        )
+        series = [bar(0, "100"), off_grid]  # bar(5) missing -- off_grid lands at +6m
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertEqual(late_causal.epoch_ns, outcome.causal_available_at.epoch_ns)
+
+    def test_late_finalizing_mismatched_anchor_observation_pushes_causal_available_at_forward(self):
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+        late_causal = Instant(bar(5, "101").instant.epoch_ns + 24 * 3_600_000_000_000)
+        mismatched_first = MarketObservation(
+            instant=bar(5, "101").instant,
+            prices={"close": "101"},
+            causal_available_at=late_causal,
+        )
+        outcome = evaluate_outcome(spec, EVENT, [mismatched_first])
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertEqual(late_causal.epoch_ns, outcome.causal_available_at.epoch_ns)
+
+    def test_late_end_of_data_encountered_during_remaining_validation_pushes_causal_available_at_forward(self):
+        # P1 regression: an EndOfData marker consumed by
+        # _validate_remaining_within_horizon (after an earlier gap already
+        # decided the state) must still push causal_available_at forward.
+        spec = outcome_spec(horizon_duration="20m", sampling_period="5m")
+        late_causal = Instant(bar(10, "102").instant.epoch_ns + 24 * 3_600_000_000_000)
+        series = [bar(0, "100"), bar(10, "102"), EndOfData(causal_available_at=late_causal)]  # bar(5) missing
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertEqual(late_causal.epoch_ns, outcome.causal_available_at.epoch_ns)
+
     def test_outcome_construction_rejects_causal_available_at_before_horizon_end(self):
         with self.assertRaises(OutcomeError):
             Outcome(

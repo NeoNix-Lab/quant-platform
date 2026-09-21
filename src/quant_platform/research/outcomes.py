@@ -699,15 +699,25 @@ _EXHAUSTED = object()
 
 
 def _validate_remaining_within_horizon(
-    iterator: Iterator[MarketObservation],
+    iterator: Iterator[MarketObservation | EndOfData],
     previous_instant: Instant,
     horizon_end: Instant,
-) -> None:
+    causal_watermark: Instant,
+) -> Instant:
+    """Validate/consume ``iterator`` up through ``horizon_end``, returning
+    ``causal_watermark`` folded with every consumed element's own
+    ``causal_available_at`` (`MarketObservation` or `EndOfData`) -- every
+    element inspected here was genuinely consumed evidence and must
+    participate in ``Outcome.causal_available_at`` exactly like the main
+    walk's own consumed evidence (ADR-0038 §7)."""
+
     if previous_instant > horizon_end:
-        return
+        return causal_watermark
     for remaining in iterator:
         if isinstance(remaining, EndOfData):
-            return
+            if remaining.causal_available_at is not None:
+                causal_watermark = _max_instant(causal_watermark, remaining.causal_available_at)
+            return causal_watermark
         if not isinstance(remaining, MarketObservation):
             raise OutcomeEvaluationError("market_series must contain only MarketObservation values")
         if remaining.instant <= previous_instant:
@@ -715,14 +725,16 @@ def _validate_remaining_within_horizon(
                 "market_series must be supplied in strictly increasing instant order"
             )
         previous_instant = remaining.instant
+        causal_watermark = _max_instant(causal_watermark, remaining.causal_available_at)
         if remaining.instant > horizon_end:
             break
+    return causal_watermark
 
 
 def evaluate_outcome(
     spec: OutcomeSpec,
     event: DetectedEvent,
-    market_series: Iterable[MarketObservation],
+    market_series: Iterable[MarketObservation | EndOfData],
 ) -> Outcome:
     """Deterministically measure ``spec``'s forward horizon/metric relative
     to ``event`` over a strictly time-ordered ``market_series``.
@@ -806,8 +818,9 @@ def evaluate_outcome(
         raise OutcomeEvaluationError("market_series must contain only MarketObservation values")
 
     if first.instant != event.event_time:
-        _validate_remaining_within_horizon(iterator, first.instant, horizon_end)
-        causal_available_at = _max_instant(horizon_end, event.causal_available_at)
+        causal_watermark = _max_instant(event.causal_available_at, first.causal_available_at)
+        causal_watermark = _validate_remaining_within_horizon(iterator, first.instant, horizon_end, causal_watermark)
+        causal_available_at = _max_instant(horizon_end, causal_watermark)
         return Outcome(
             outcome_spec_id=spec.identity,
             event_id=event.event_id,
@@ -855,7 +868,10 @@ def evaluate_outcome(
 
         if candidate.instant.epoch_ns != expected_ns:
             state = OutcomeState.INSUFFICIENT_COVERAGE
-            _validate_remaining_within_horizon(iterator, candidate.instant, horizon_end)
+            causal_watermark = _max_instant(causal_watermark, candidate.causal_available_at)
+            causal_watermark = _validate_remaining_within_horizon(
+                iterator, candidate.instant, horizon_end, causal_watermark
+            )
             break
 
         causal_watermark = _max_instant(causal_watermark, candidate.causal_available_at)
