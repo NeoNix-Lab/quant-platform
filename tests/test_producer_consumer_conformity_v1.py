@@ -320,8 +320,7 @@ class OrderingProofCorrectlyAttributesNonOverlapEnforcement(unittest.TestCase):
 
     def test_contract_explicitly_rejects_the_overclaim(self):
         text = _read(CONTRACT_PATH)
-        self.assertIn("says nothing, by\
-itself, about whether two different partitions", text)
+        self.assertIn("says nothing, by\nitself, about whether two different partitions", text)
 
     def test_gateway_still_enforces_the_catalog_conflict_check(self):
         text = _read(ROOT / "src" / "quant_platform" / "access" / "gateway.py")
@@ -348,8 +347,7 @@ class PhysicalParquetContractMatchesTheReader(unittest.TestCase):
 
     def test_contract_column_set_has_no_unknown_extra_columns(self):
         text = _read(CONTRACT_PATH)
-        table_row_match = re.search(r"\| Columns \| Exactly (.+?) \|\
-", text)
+        table_row_match = re.search(r"\| Columns \| Exactly (.+?) \|\n", text)
         self.assertIsNotNone(table_row_match, "physical column contract row not found")
         declared = set(re.findall(r"`([a-z_]+)`", table_row_match.group(1)))
         self.assertEqual(declared, set(_REQUIRED) | set(_OPTIONAL))
@@ -398,8 +396,7 @@ class CanonicalContentHashV1AlgorithmIsFullySpecified(unittest.TestCase):
             "sequence",
         ]
         # The exact ordered block appears verbatim as a fenced list.
-        block = "\
-".join(order)
+        block = "\n".join(order)
         self.assertIn(block, self.text)
 
     def test_record_order_is_the_canonical_total_order(self):
@@ -427,10 +424,8 @@ class CanonicalContentHashV1AlgorithmIsFullySpecified(unittest.TestCase):
         self.assertIn("0x0000000000000000", self.text)
 
     def test_scope_is_partition_content_not_dataset_wide(self):
-        self.assertIn("one canonical partition's ordered\
-logical record content", self.text)
-        self.assertIn("not** a dataset-wide or\
-request-result-wide hash", self.text)
+        self.assertIn("one canonical partition's ordered\nlogical record content", self.text)
+        self.assertIn("not** a dataset-wide or\nrequest-result-wide hash", self.text)
 
     def test_worked_example_present(self):
         self.assertIn("Worked example", self.text)
@@ -457,15 +452,13 @@ class PhysicalVsSemanticVsResultIdentityMatrixIsConsistent(unittest.TestCase):
 
     def test_result_identity_stated_as_physical_evidence_sensitive(self):
         self.assertIn("result_identity` keeps identifying exact source artifact provenance", self.text)
-        self.assertIn("remains, by design and unchanged, sensitive to exact\
-physical evidence", self.text)
+        self.assertIn("remains, by design and unchanged, sensitive to exact\nphysical evidence", self.text)
 
     def test_no_contradiction_wording_is_present(self):
         self.assertIn("This is not a contradiction.", self.text)
 
     def test_semantic_identity_phrase_is_pinned_to_canonical_hash_not_result_identity(self):
-        self.assertIn("means\
-`CanonicalContentHashV1`, **never** the current ADR-0019 `result_identity`", self.text)
+        self.assertIn("means\n`CanonicalContentHashV1`, **never** the current ADR-0019 `result_identity`", self.text)
 
     def test_current_implementation_still_couples_content_hashes_into_result_identity(self):
         # Documents today's actual coupling this section reasons about; if a
@@ -490,8 +483,7 @@ class DurableCertificationEvidenceModelUsesExistingTable(unittest.TestCase):
     def test_quality_reports_table_actually_has_the_needed_columns(self):
         # Ground the contract's claim against the real DDL rather than only
         # against itself.
-        create_stmt = re.search(r"CREATE TABLE quality_reports \((.*?)\
-\);", self.ddl_text, re.DOTALL)
+        create_stmt = re.search(r"CREATE TABLE quality_reports \((.*?)\n\);", self.ddl_text, re.DOTALL)
         self.assertIsNotNone(create_stmt, "quality_reports DDL not found")
         columns = create_stmt.group(1)
         for column in ("partition_id", "dataset_id", "check_suite", "status", "metrics", "violations", "code_ref"):
@@ -550,8 +542,7 @@ class CertifierIdentityIsMandatoryForValid(unittest.TestCase):
         # Ground both halves of the distinction against reality: the DDL
         # really does leave code_ref nullable, and this pass did not tighten
         # it -- the stricter rule lives only in the certification profile.
-        create_stmt = re.search(r"CREATE TABLE quality_reports \((.*?)\
-\);", self.ddl_text, re.DOTALL)
+        create_stmt = re.search(r"CREATE TABLE quality_reports \((.*?)\n\);", self.ddl_text, re.DOTALL)
         self.assertIsNotNone(create_stmt)
         code_ref_line = next(
             line for line in create_stmt.group(1).splitlines() if line.strip().startswith("code_ref")
@@ -562,21 +553,15 @@ class CertifierIdentityIsMandatoryForValid(unittest.TestCase):
 
     def test_certifier_and_producer_code_ref_are_distinct_roles(self):
         self.assertIn("Invariant CE7", self.text)
-        self.assertIn("identifies *the\
-certifier implementation*", self.text)
-        self.assertIn("identifies *the\
-producer*", self.text)
+        self.assertIn("identifies *the\ncertifier implementation*", self.text)
+        self.assertIn("identifies *the\nproducer*", self.text)
         # Ground the producer-role half against the real DDL comment/constraint.
         self.assertIn("code_ref        text        NOT NULL", self.ddl_text)
 
     def test_no_duplicate_certifier_field_was_invented_in_metrics(self):
         # CE2's frozen metrics shape must still not carry a second
         # certifier-identity field; CE6/CE7 rely on the existing column only.
-        metrics_block_match = re.search(r"MUST contain at least:\
-\
-```json\
-(.*?)\
-```", self.text, re.DOTALL)
+        metrics_block_match = re.search(r"MUST contain at least:\n\n```json\n(.*?)\n```", self.text, re.DOTALL)
         self.assertIsNotNone(metrics_block_match, "CE2 metrics example block not found")
         self.assertNotIn("code_ref", metrics_block_match.group(1))
         self.assertNotIn("certifier", metrics_block_match.group(1))
@@ -615,8 +600,7 @@ class CertificationSequencingAvoidsCircularity(unittest.TestCase):
                 self.assertIn(phase, self.text)
 
     def test_certification_never_depends_on_its_own_output(self):
-        self.assertIn("each phase depends only on the *output* of\
-an earlier phase, never on its own eventual output", self.text)
+        self.assertIn("each phase depends only on the *output* of\nan earlier phase, never on its own eventual output", self.text)
 
 
 class CatalogRebuildEqualityIgnoresGeneratedIdentifiers(unittest.TestCase):
@@ -624,8 +608,7 @@ class CatalogRebuildEqualityIgnoresGeneratedIdentifiers(unittest.TestCase):
         self.text = _read(CONTRACT_PATH)
 
     def test_uuid_fields_are_explicitly_not_semantic(self):
-        self.assertIn("not** reproducible\
-identities", self.text)
+        self.assertIn("not** reproducible\nidentities", self.text)
         self.assertIn("never** means byte-identical or UUID-identical", self.text)
 
     def test_semantic_field_table_present(self):
