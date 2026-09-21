@@ -518,5 +518,66 @@ class EvaluationRuntimeGuardTests(unittest.TestCase):
             MarketObservation(instant=EVENT_TIME, prices={})
 
 
+class LazyEvaluationStreamTests(unittest.TestCase):
+    def test_evaluator_ignores_out_of_order_or_malformed_tail_after_horizon_end(self):
+        spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
+        # Tail contains out-of-order bars and malformed non-MarketObservation items after 5m horizon.
+        series = [
+            bar(0, "100"),
+            bar(5, "110"),
+            bar(2, "95"),
+            "not_a_market_observation",
+            {"price": "100"},
+            bar(10, "120"),
+        ]
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.COMPLETE, outcome.state)
+        self.assertEqual("1/10", outcome.realized_value)
+
+    def test_evaluator_terminates_on_unbounded_series(self):
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+
+        def unbounded_series():
+            yield bar(0, "100")
+            yield bar(5, "105")
+            yield bar(10, "110")
+            minute = 11
+            while True:
+                yield bar(minute, "110")
+                minute += 1
+
+        outcome = evaluate_outcome(spec, EVENT, unbounded_series())
+        self.assertEqual(OutcomeState.COMPLETE, outcome.state)
+        self.assertEqual("1/10", outcome.realized_value)
+
+    def test_evaluator_terminates_on_unbounded_series_with_gap(self):
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+
+        def unbounded_series_with_gap():
+            yield bar(0, "100")
+            yield bar(6, "106")  # Gap: expected 5m
+            minute = 7
+            while True:
+                yield bar(minute, "110")
+                minute += 1
+
+        outcome = evaluate_outcome(spec, EVENT, unbounded_series_with_gap())
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertIsNone(outcome.realized_value)
+
+    def test_evaluator_ignores_malformed_tail_beyond_horizon_after_gap(self):
+        spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
+        # Series has gap at 5m (first observation is at 10m, beyond 5m horizon), followed by malformed tail.
+        series = [
+            bar(0, "100"),
+            bar(10, "110"),
+            "garbage_after_horizon",
+            bar(2, "90"),
+        ]
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertIsNone(outcome.realized_value)
+
+
 if __name__ == "__main__":
     unittest.main()
