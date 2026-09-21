@@ -85,6 +85,13 @@ F08  DSR/PBO                         FROZEN   / MISSING    ADR-0037
 
 Do not re-prove completed F01-F06 evidence absent a concrete invalidating change.
 
+The completed Producer-Consumer Conformity cycle remains credited under ADR-0023:
+
+```text
+Contract Freeze Gate              PASSED
+Conformity Implementation Gate    PASSED
+```
+
 ## Wave 3 acceptance
 
 Wave 3 is DONE only when all of the following are true:
