@@ -26,15 +26,22 @@ Historical and live acquisition must converge on the existing canonical data mod
 
 ## Baseline
 
-Authoritative baseline at scope selection:
+Authoritative scope baseline after the first Live Ingest semantic freeze:
 
 ```text
-implement/wave-3 @ 3ccada1477c1f995b3c0f88500a34acb4f65d3f3
+implement/wave-3 @ current fast-forward descendant containing ADR-0039..ADR-0042
 ```
 
-Wave 3 is complete through F08 and remains credited. Its final governance reconciliation is part of the baseline, not work to reopen.
+Wave 3 is complete through F08 and remains credited. The following live-ingest semantics are now accepted authority:
 
-Relevant credited state includes:
+```text
+K08  backup / restore v1             FROZEN / MISSING   ADR-0039
+A11  Bybit live trades v1            FROZEN / MISSING   ADR-0040
+K02  live-ingest runtime identity    FROZEN / MISSING   ADR-0041
+K10  checkpoint / recovery v1        FROZEN / MISSING   ADR-0042
+```
+
+Relevant credited implementation state includes:
 
 ```text
 Canonical data plane
@@ -59,137 +66,102 @@ Historical first vertical
   historical import tooling       COMPLETE
 ```
 
-Primary live-path gaps at scope start:
+Primary implementation gaps at this scope state:
 
 ```text
-K08  Backup/restore proof          OPEN_BLOCKING / MISSING
-A11  Live trades acquisition       OPEN_BLOCKING / MISSING
-K10  Checkpoint/recovery           OPEN_BLOCKING / MISSING
-B06  Live access/cursor            MISSING but not required for this scope
+K08  backup/restore proof          MISSING
+A11  live trades acquisition       MISSING
+K10  checkpoint/recovery           MISSING
+K02  deployment mutation           CONDITIONAL / MISSING
+B06  live access/cursor            MISSING but outside this scope
 ```
 
-DG-B live semantics remain unresolved and must be frozen before A11 implementation where they affect correctness.
-
-If the branch advances before a bounded slice starts, use the current fast-forward descendant and verify only directly relevant authority and evidence.
+One semantic proposition remains deliberately open: **long-gap remediation beyond bounded provider reconciliation**. It is tracked in `OPEN_DECISIONS.md` as `OPEN_BLOCKING` for claiming such a gap filled / for lossless Live Ingest Vertical closeout. It is not permission to invent a repair source.
 
 ## Authority
 
-Use the existing canonical authority set rather than recreating live semantics from conversational history.
-
-High-value starting authorities are:
+Start from:
 
 - `AGENTS.md`
+- `docs/decisions/ADR-0039-backup-restore-v1.md`
+- `docs/decisions/ADR-0040-bybit-live-trades-v1.md`
+- `docs/decisions/ADR-0041-live-ingest-runtime-identity-v1.md`
+- `docs/decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md`
 - `docs/product/CAPABILITY_DAG.md`
 - `docs/product/CAPABILITY_MAP.md`
-- `docs/product/ROADMAP.md`
 - `docs/architecture/OPEN_DECISIONS.md`
-- `docs/decisions/ADR-0013-historical-live-semantics.md`
 - existing trade-v1 / Dataset / coverage / publication authorities
-- existing Bybit source-owned historical adapter and first-vertical certification profile
-- existing K03/K04/K05/K06 runtime and evidence
+- existing Bybit historical adapter and certification profile
+- existing K03/K04/K05/K06 runtime/evidence
 
 Use progressive discovery:
 
 ```text
 named authority
-→ directly affected live/source/operations code and proof
+→ directly affected implementation/evidence
 → expand only for a concrete unresolved proposition
 ```
 
-Do not perform repository-wide rediscovery merely because this is a new macro-scope.
+Do not reopen the four accepted Live Ingest ADRs unless current repository/provider evidence directly contradicts them.
 
 ## Execution policy
 
 Only one bounded implementation or decision-gate mutation slice is active at a time.
 
-The intended path is:
+The current path is:
 
 ```text
-1. K08 backup/restore
-   decision freeze + minimum independent restore proof
+1. K08 implementation + isolated restore proof
         ↓
-2. DG-B live semantics
-   historical/live overlap
-   source precedence
-   duplicate semantics
-   live cursor / resume / replay identity
-        ↓
-3. A11 live trades acquisition
+2. A11 implementation
    Bybit BTCUSDT public live trades
    → canonical trade-v1
-   → normal durable publication/catalog lifecycle
+   → existing durable publication/catalog lifecycle
         ↓
-4. Real server proof
-   real provider + real storage/catalog
-   continuous acquisition under actual operational constraints
+3. Real server proof
+   provider + actual storage/catalog/runtime
+   + K02 deployment conformance if authorization boundary changes
         ↓
-5. K10 checkpoint/recovery
-   harden the state that A11 actually creates
-   restart/reconnect proof
+4. K10 implementation
+   checkpoint/recovery against the actual A11 state
         ↓
-6. Live Ingest Vertical v1 COMPLETE
+5. Resolve/execute long-gap remediation only if a real unresolved gap
+   and attributable repair source/path exist
+        ↓
+6. Live Ingest Vertical v1 closeout
 ```
 
-This sequence is an outcome path, not authorization for concurrent implementation of every step. Each bounded slice must preserve the repository single-scope rule.
+The accepted ADRs remove the prior semantic-freeze steps; they do **not** authorize concurrent implementation of K08, A11 and K10.
 
-## First bounded slice — K08
+## Active bounded slice — K08 proof
 
-K08 is the first real blocker on the A11 path.
+K08 is the first active implementation proposition.
 
-The purpose is not to build a generic enterprise backup platform. The minimum required outcome is to freeze the recovery objective/topology necessary for this vertical and prove that the required canonical identities/state can be restored independently enough to permit live acquisition safely.
-
-Do not pull K07 tier relocation or K09 retention/deletion into K08 merely because they are adjacent operational capabilities.
-
-Minimum principle:
+ADR-0039 already freezes the semantics. The exact missing proposition is therefore only the minimum implementation/evidence required to prove:
 
 ```text
-existing canonical state
-        ↓ backup
-independent loss/failure condition
-        ↓ restore
-required identities/state recoverable
-        ↓ proof
+finalized canonical state
+        ↓
+identity-bound RecoverySetV1
+        ↓
+independent primary-storage loss boundary
+        ↓
+restore into empty isolated target
+        ↓
+same canonical identities / coverage / catalog resolution
+        ↓
+existing historical DataGateway reads restored data
 ```
 
-Use existing evidence where sufficient. Add only the missing proof proposition.
+Do not reopen recovery semantics merely to choose a local copy/snapshot mechanism.
 
-## DG-B live semantics
+Do not pull K07 or K09 into K08.
 
-Before A11 materializes behavior that depends on them, freeze only the live semantics required by the first vertical.
+## A11 — next bounded implementation slice
 
-At minimum resolve:
+After K08 proof, implement exactly ADR-0040.
 
-- historical/live overlap semantics;
-- source precedence in the overlap window;
-- duplicate identity and duplicate handling;
-- deterministic ordering assumptions actually supported by Bybit live evidence;
-- reconnect/resume/replay semantics;
-- canonical live cursor/resume identity only to the extent required by A11;
-- coverage/quality evidence required to distinguish genuine absence from missing acquisition;
-- the minimum operational constraints required by the live source.
-
-The central correctness questions are:
-
-```text
-historical coverage ends near T
-live acquisition starts near T
-→ exactly one deterministic canonical history
-```
-
-and:
-
-```text
-connection drops
-→ reconnect / recovery path
-→ no ungoverned loss
-→ no ungoverned duplication
-```
-
-Do not generalize DG-B into multi-venue, generic stream processing or future L2/L3 semantics.
-
-## A11 — first live acquisition vertical
-
-The first live source is intentionally narrow:
+The first live source remains:
 
 ```text
 venue       Bybit
@@ -197,191 +169,180 @@ category    linear
 instrument  BTCUSDT
 dataset     trades
 schema      trade-v1
+source      publicTrade.BTCUSDT
 ```
 
-A11 should materialize the minimum source-owned live acquisition seam necessary to transform real provider evidence into the existing canonical trade path.
+Key frozen semantics include:
 
-Expected conceptual flow:
+- `TradeKeyV1 = (venue, instrument, exchange_ts, trade_id)`;
+- canonical order `(exchange_ts, trade_id)`;
+- provider `seq` is preserved evidence, not a gap-free cursor;
+- `receive_ts` remains null in canonical v1;
+- same-key equivalent observations deduplicate idempotently;
+- same-key conflicting payload fails closed;
+- historical/live cutover is explicit and deterministic;
+- reconnect uses only bounded provider evidence capable of proving continuity;
+- unresolved interruption becomes explicit non-complete coverage, never fabricated completeness;
+- transport is at-least-once, canonical economic effect idempotent.
+
+Reuse the existing canonical data plane. Do not create live-only storage/publication/catalog abstractions.
+
+## Long-gap remediation — explicit open block
+
+ADR-0040 deliberately leaves one proposition open.
+
+Trigger:
 
 ```text
-Bybit live source
-        ↓
-connection/session handling
-        ↓
-source message validation
-        ↓
-source-native ordering / identity evidence
-        ↓
-TradeRecord / trade-v1
-        ↓
-DG-B overlap / duplicate semantics
-        ↓
-existing canonical materialization / certification / publication / catalog
+last durable canonical TradeKeyV1
+cannot be recovered from bounded provider reconciliation evidence
+→ explicit non-complete interval remains
 ```
 
-Reuse existing canonical machinery. Do not build a second live-only publication system.
+A11/K10 may continue with a new governed live segment. They may **not** call the unresolved interval complete.
 
-Do not fabricate source fields the provider does not evidence. In particular, any receive-time, sequence, ordering or continuity field must have explicit source/runtime semantics rather than being filled for convenience.
+Before the gap may be filled, prove:
 
-Coverage remains evidence-based:
+- an authoritative source actually exposes the exact missing interval;
+- its identity/order/economic records map without invention to the accepted Bybit `trade-v1` semantics;
+- the existing A10 repair path can consume that evidence;
+- repaired support can be re-verified strongly enough to supersede prior interruption evidence.
 
-```text
-no trade observed
-≠
-proven data gap
-```
+If no authoritative source exists, the gap remains explicit. Missing sequence numbers, elapsed time or absence of trades are never sufficient proof.
 
-A complete/healthy interval must be supported by the live acquisition evidence actually capable of proving it.
+Do not speculatively implement archive/backfill machinery before the trigger and source evidence exist.
 
-## Real server proof
+## Real server proof and K02
 
-The first vertical is not complete merely because unit/integration tests pass locally.
-
-After A11 is stable, prove the bounded path against the real deployment environment:
+A11 is not complete merely because local tests pass. Prove the bounded path against the real deployment environment:
 
 - real Bybit public live source;
-- real server process/runtime;
+- real server runtime;
 - real canonical storage paths;
 - real publication/catalog state;
-- existing K03 observability;
-- existing K05 pressure policy where applicable;
-- existing K06 source-protection invariants where applicable.
+- K03 observability;
+- K05 pressure behavior where applicable;
+- K06 source-protection invariants where applicable.
 
-The proof must demonstrate that real live-acquired data becomes normal canonical data and is subsequently readable through the existing historical DataGateway path.
+ADR-0041 already freezes runtime-identity semantics. If deployment creates or changes a production identity/ACL/database-role boundary, conform that mutation to ADR-0041 before treating the service as production-governed.
 
-This does **not** require B06 live consumer access.
+For public Bybit trade ingest v1 there is no provider API secret to provision.
 
-## K10 — checkpoint/recovery hardening
+The normal ingest service must not gain general authority to destroy/replace the independent K08 backup merely for convenience.
 
-K10 follows A11 because checkpoint/recovery must be designed around the real state that A11 actually owns.
+## K10 — checkpoint/recovery implementation
 
-Do not create a generic checkpoint framework before that state exists.
+After A11 exists, implement exactly ADR-0042 around the real A11 state.
 
-After A11 is proven, K10 should provide the minimum sufficient persisted/recoverable state needed so that controlled stop, crash/disconnect and restart do not produce ungoverned loss or duplication.
-
-Conceptually:
+The invariant is:
 
 ```text
-A11 real runtime state
-        ↓
-minimum checkpoint identity/state
-        ↓
-stop / disconnect / restart
-        ↓
-resume under frozen DG-B semantics
-        ↓
-canonical history remains governed
+canonical publication durable
+        BEFORE
+checkpoint may advance
 ```
 
-## Conditional K02 activation
+Replay after crash is acceptable; ADR-0040 idempotent deduplication removes already-published duplicates. A checkpoint may never advance beyond durable canonical state.
 
-K02 is not automatically part of A11 implementation.
-
-Activate only the minimum K02 branch if the real server deployment introduces an actual new production boundary requiring a decision about:
-
-- service/runtime identity;
-- credentials;
-- filesystem ACLs;
-- database roles;
-- least privilege.
-
-Do not invent runtime identities or credential systems before a concrete deployment need exists.
+Restart must validate the checkpoint, reconnect, buffer live evidence, perform bounded provider reconciliation, deduplicate and either prove continuity or record an explicit gap. It must never guess a resume cursor.
 
 ## Milestones
 
 ### M1 — Live Ingest Capable
 
 ```text
-real provider connection
+K08 proof
++ real provider connection
 → real trades
 → canonical trade-v1
 → durable canonical publication
 ```
 
-M1 proves the first real acquisition path works.
-
 ### M2 — Live Ingest Hardened
 
 ```text
 M1
-+ backup/restore proof
-+ governed historical/live overlap
++ governed historical/live cutover
 + disconnect/reconnect correctness
++ K02-conformant deployment boundary where activated
 + checkpoint/recovery
 + real restart proof
++ no unresolved gap falsely claimed complete
 ```
 
-The macro-scope closes only at M2.
+The macro-scope closes only at M2 and only with the long-gap proposition honestly represented: either no qualifying long gap occurred, or any occurred gap has been repaired from attributable evidence, or the scope closeout explicitly retains the non-complete interval rather than claiming lossless continuity.
 
 ## Acceptance
 
 `Live Ingest Vertical v1` is DONE only when all of the following are observably true:
 
-1. A real Bybit public live connection acquires BTCUSDT linear trades.
-2. Real live evidence is mapped into canonical `trade-v1` without fabricated source semantics.
-3. Historical-to-live overlap has one deterministic governed result and does not create ungoverned duplicate economic trades.
-4. Disconnect/reconnect behavior follows frozen DG-B semantics and does not create ungoverned data loss or duplication.
-5. Live-acquired trades enter the existing canonical certification/publication/catalog lifecycle rather than a parallel live-only path.
-6. Coverage/completeness claims derive from explicit evidence; absence of trades is never treated by itself as proof of a gap or proof of completeness.
-7. Existing K05 pressure and K06 source-protection semantics remain applicable and are not bypassed.
-8. K08 provides the minimum sufficient independent backup/restore proof required by the live path.
-9. K03 makes the running ingest path operationally observable at the level needed to diagnose source/runtime failure.
-10. Controlled stop/restart and relevant disconnect/recovery cases resume from governed state under K10 without corrupting canonical history.
-11. Data acquired live becomes ordinary canonical historical data readable through the existing DataGateway path after publication.
-12. No B06 live consumer, Strategy, Execution, ML/RL, client or API capability is required to satisfy this scope.
-13. Existing historical Bybit ingestion and canonical data-plane behavior remain valid unless an accepted live authority explicitly requires a bounded compatibility correction.
-14. Repository package/architecture boundaries remain intact.
-15. Required authoritative verification for each bounded slice passes with no unresolved blocker.
+1. K08 isolated restore proof satisfies ADR-0039.
+2. A real Bybit public live connection acquires BTCUSDT linear trades.
+3. Real live evidence maps into canonical `trade-v1` exactly under ADR-0040.
+4. Historical/live overlap has one deterministic governed result with no ungoverned duplicate economic trades.
+5. Disconnect/reconnect follows ADR-0040 and never fabricates continuity.
+6. Live-acquired trades enter the existing certification/publication/catalog lifecycle.
+7. Coverage/completeness claims derive from explicit evidence; absence of trades is not proof.
+8. Existing K05/K06 semantics remain applicable and are not bypassed.
+9. K03 makes the real ingest operationally observable at the needed failure/provenance level.
+10. Any production identity/ACL/role mutation conforms to ADR-0041.
+11. K10 stop/crash/restart proof satisfies ADR-0042.
+12. Data acquired live becomes ordinary canonical historical data readable through the existing DataGateway after publication.
+13. Any long gap that cannot be authoritatively reconstructed remains explicit non-complete coverage; no closeout claim silently erases it.
+14. No B06 live consumer, Strategy, Execution, ML/RL, client or API capability is required.
+15. Existing historical Bybit ingestion and canonical data-plane behavior remain valid.
+16. Package/architecture boundaries remain intact.
+17. Required authoritative verification for each bounded slice passes with no unresolved blocker.
 
 ## Verification proportionality
 
 For every bounded slice:
 
-- CREDIT existing canonical data-plane and operations evidence where unchanged;
-- use targeted tests/checks during implementation;
-- prove only the exact missing proposition introduced by that slice;
+- CREDIT unchanged data-plane/operations evidence;
+- use targeted tests during implementation;
+- prove only the exact missing proposition;
 - run repository-required authoritative verification once on a stable candidate;
-- do not repeat expensive verification absent a relevant mutation, failure, review finding, rebase/merge or newly unresolved proposition;
-- use real-server proof only when the acceptance proposition actually requires the real provider/runtime/storage environment.
-
-Do not add new harnesses/frameworks merely to create a second proof layer for properties already proven elsewhere.
+- do not repeat expensive proof absent relevant mutation/failure/review/rebase;
+- use real-server evidence only where the acceptance proposition requires the real environment.
 
 ## Stop / escalation
 
 Stop only when:
 
-- current repository state contradicts canonical live/data/operations authority;
-- K08 cannot be satisfied without a destructive/shared-state action outside authorization;
-- DG-B requires a genuine semantic choice not owned by existing authority;
-- A11 would require changing frozen historical/canonical semantics rather than a bounded live adaptation;
-- satisfying the first vertical requires loosening package/owner dependency direction;
-- the provider cannot supply evidence needed for a claimed ordering, deduplication, coverage or resume proposition;
-- real deployment requires a production identity/credential mutation beyond the explicitly activated K02 boundary;
-- checkpoint/recovery cannot be represented without changing frozen upstream semantics.
+- current repository/provider state contradicts ADR-0039..ADR-0042;
+- K08 proof requires destructive/shared-state action outside authorization;
+- A11 cannot satisfy its frozen provider/canonical semantics without changing accepted upstream contracts;
+- provider evidence cannot support a claimed ordering/dedup/coverage/reconciliation proposition;
+- real deployment requires authorization beyond ADR-0041;
+- K10 cannot preserve publication/checkpoint invariants without upstream semantic change;
+- filling an actual long gap requires choosing an unproven repair source/semantics.
 
-Do not stop for local reversible choices already inside a bounded slice.
+Do not stop for reversible implementation-local names, module layout or technology choices already inside a frozen contract.
 
 ## Out of scope
 
-Do not pull the following into this macro-scope unless a concrete acceptance blocker proves otherwise:
+Do not pull into this macro-scope unless a concrete acceptance blocker proves otherwise:
 
-- B06 live DataGateway access/cursor for consumers;
-- K07 storage tier relocation;
-- K09 retention/deletion authority;
-- G01+ Strategy / deterministic Replay;
+- B06 live DataGateway consumer cursor;
+- K07 tier relocation;
+- K09 retention/deletion;
+- G01+ Strategy / Replay;
 - Execution / paper / live trading;
-- I04+ supervised ML or RL work;
-- L1 / L2 / L3 / MBO acquisition;
+- supervised ML / RL;
+- L1 / L2 / L3 / MBO;
 - second venue / multi-venue ingest;
-- generic provider framework beyond the minimum second-provider-safe architecture already required by repository boundaries;
-- API / client / UI work;
+- generic provider framework;
+- API / client / UI;
 - generic stream-processing framework;
 - generic job scheduler/executor;
+- generic checkpoint framework;
+- HA/clustering/off-site DR;
+- speculative gap-fill implementation without attributable source evidence;
 - unrelated governance cleanup;
-- mutation of `main` except through the separately authorized integration/promotion workflow.
+- mutation of `main` except through separately authorized integration/promotion workflow.
 
 ## Scope closeout
 
-At closeout, reconcile governance to the strongest propositions actually proven by the integrated runtime and real-server evidence.
+At closeout, reconcile governance to the strongest propositions actually proven by integrated runtime and real-server evidence.
 
 Do not declare the whole Live Data Plane, Wave 6, B06 or the live trading product complete merely because this first ingest vertical is complete.
