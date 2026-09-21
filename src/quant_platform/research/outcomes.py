@@ -97,7 +97,7 @@ accepted ADR text):
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -640,6 +640,25 @@ def _path_metrics(spec: OutcomeSpec, anchor: MarketObservation, path: list[Marke
     )
 
 
+def _validate_remaining_within_horizon(
+    iterator: Iterator[MarketObservation],
+    previous_instant: Instant,
+    horizon_end: Instant,
+) -> None:
+    if previous_instant > horizon_end:
+        return
+    for remaining in iterator:
+        if not isinstance(remaining, MarketObservation):
+            raise OutcomeEvaluationError("market_series must contain only MarketObservation values")
+        if remaining.instant <= previous_instant:
+            raise OutcomeEvaluationError(
+                "market_series must be supplied in strictly increasing instant order"
+            )
+        previous_instant = remaining.instant
+        if remaining.instant > horizon_end:
+            break
+
+
 def evaluate_outcome(
     spec: OutcomeSpec,
     event: DetectedEvent,
@@ -650,8 +669,10 @@ def evaluate_outcome(
 
     Fails closed (`OutcomeEvaluationError`) on a non-`MarketObservation`
     element or observations supplied out of strict increasing ``instant``
-    order -- rather than silently reordering or deduplicating evidence a
-    caller may not have intended to supply that way.
+    order within the forward horizon -- rather than silently reordering or
+    deduplicating evidence a caller may not have intended to supply that way.
+    Observations strictly beyond ``horizon_end`` are not consumed once the
+    outcome boundary is reached.
 
     The first element of ``market_series`` must be the anchor: its
     ``instant`` must equal ``event.event_time`` exactly.  When it is not
@@ -688,21 +709,11 @@ def evaluate_outcome(
     if not isinstance(event, DetectedEvent):
         raise OutcomeEvaluationError("event must be DetectedEvent")
 
-    observations: list[MarketObservation] = []
-    previous_instant: Instant | None = None
-    for observation in market_series:
-        if not isinstance(observation, MarketObservation):
-            raise OutcomeEvaluationError("market_series must contain only MarketObservation values")
-        if previous_instant is not None and observation.instant <= previous_instant:
-            raise OutcomeEvaluationError(
-                "market_series must be supplied in strictly increasing instant order"
-            )
-        previous_instant = observation.instant
-        observations.append(observation)
-
     horizon_end = Instant(event.event_time.epoch_ns + spec.horizon_duration_ns)
 
-    if not observations or observations[0].instant != event.event_time:
+    iterator = iter(market_series)
+    first = next(iterator, None)
+    if first is None:
         causal_available_at = _max_instant(horizon_end, event.causal_available_at)
         return Outcome(
             outcome_spec_id=spec.identity,
@@ -715,31 +726,60 @@ def evaluate_outcome(
             path_metrics=None,
         )
 
-    anchor = observations[0]
-    forward = observations[1:]
+    if not isinstance(first, MarketObservation):
+        raise OutcomeEvaluationError("market_series must contain only MarketObservation values")
+
+    if first.instant != event.event_time:
+        _validate_remaining_within_horizon(iterator, first.instant, horizon_end)
+        causal_available_at = _max_instant(horizon_end, event.causal_available_at)
+        return Outcome(
+            outcome_spec_id=spec.identity,
+            event_id=event.event_id,
+            horizon_start=event.event_time,
+            horizon_end=horizon_end,
+            causal_available_at=causal_available_at,
+            state=OutcomeState.INSUFFICIENT_COVERAGE,
+            realized_value=None,
+            path_metrics=None,
+        )
+
+    anchor = first
+    previous_instant = anchor.instant
+    causal_watermark = _max_instant(event.causal_available_at, anchor.causal_available_at)
     sampling_period_ns = spec.sampling_period_ns
 
     consumed: list[MarketObservation] = []
     boundary: MarketObservation | None = None
-    causal_watermark = _max_instant(event.causal_available_at, anchor.causal_available_at)
     state = OutcomeState.CENSORED_END_OF_DATA
     expected_ns = anchor.instant.epoch_ns + sampling_period_ns
-    index = 0
+
     while expected_ns <= horizon_end.epoch_ns:
-        if index >= len(forward):
+        candidate = next(iterator, None)
+        if candidate is None:
             state = OutcomeState.CENSORED_END_OF_DATA
             break
-        candidate = forward[index]
+
+        if not isinstance(candidate, MarketObservation):
+            raise OutcomeEvaluationError("market_series must contain only MarketObservation values")
+        if candidate.instant <= previous_instant:
+            raise OutcomeEvaluationError(
+                "market_series must be supplied in strictly increasing instant order"
+            )
+
         if candidate.instant.epoch_ns != expected_ns:
             state = OutcomeState.INSUFFICIENT_COVERAGE
+            _validate_remaining_within_horizon(iterator, candidate.instant, horizon_end)
             break
+
         causal_watermark = _max_instant(causal_watermark, candidate.causal_available_at)
+        previous_instant = candidate.instant
+
         if expected_ns == horizon_end.epoch_ns:
             boundary = candidate
             state = OutcomeState.COMPLETE
             break
+
         consumed.append(candidate)
-        index += 1
         expected_ns += sampling_period_ns
 
     causal_available_at = _max_instant(horizon_end, causal_watermark)
