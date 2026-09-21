@@ -266,14 +266,15 @@ class MomentsResult:
 def compute_moments_v1(values: Sequence[float]) -> MomentsResult:
     """gamma3 = m3/m2^1.5 (skew), gamma4 = m4/m2^2 (raw/Pearson kurtosis).
 
-    ADR-0037 s.4 freezes this convention starting at ``T >= 4``: below that,
-    or when ``m2 == 0``, the moments are non-evaluable.
+    The formulas are evaluable for any series of length ``T >= 2`` with non-zero
+    sample variance (``m2 > 0``). For DSR evaluation, ADR-0037 s.4 additionally
+    requires ``T >= 4``.
     """
 
     series = tuple(_finite_float(value, f"return[{i}]") for i, value in enumerate(values))
     observation_count = len(series)
-    if observation_count < 4:
-        return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="observation_count_below_4")
+    if observation_count < 2:
+        return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="observation_count_below_2")
 
     mean = sum(series) / observation_count
     if not math.isfinite(mean):
@@ -365,12 +366,17 @@ class DSRResult:
             raise RobustnessError("status must be an EvaluationStatus")
         _non_empty_text(self.population_id, "population_id")
         _non_empty_text(self.return_semantics_id, "return_semantics_id")
-        if not self.trial_ids:
-            raise RobustnessError("trial_ids must be non-empty")
+        if type(self.trial_ids) is not tuple or not self.trial_ids:
+            raise RobustnessError("trial_ids must be a non-empty tuple")
+        if any(not isinstance(tid, str) or not tid for tid in self.trial_ids):
+            raise RobustnessError("trial_ids must contain non-empty strings")
         if len(set(self.trial_ids)) != len(self.trial_ids):
             raise RobustnessError("trial_ids must not contain duplicates")
-        if not self.observation_ids:
-            raise RobustnessError("observation_ids must be non-empty")
+        if type(self.observation_ids) is not tuple or not self.observation_ids:
+            raise RobustnessError("observation_ids must be a non-empty tuple")
+        for obs_id in self.observation_ids:
+            if isinstance(obs_id, bool) or not isinstance(obs_id, (str, int)):
+                raise RobustnessError("observation identity must be a string or integer")
         _non_empty_text(self.content_digest, "content_digest")
         _non_empty_text(self.numerical_policy_id, "numerical_policy_id")
         _non_empty_text(self.sampling_model, "sampling_model")
@@ -397,6 +403,11 @@ class DSRResult:
                 raise RobustnessError("an evaluable DSRResult requires all formula fields")
             if not all(math.isfinite(field) for field in evaluable_fields):  # type: ignore[arg-type]
                 raise RobustnessError("an evaluable DSRResult requires finite formula fields")
+            assert self.dsr is not None and self.sigma_sr is not None
+            if not (0.0 <= self.dsr <= 1.0):
+                raise RobustnessError("an evaluable DSRResult requires dsr in [0, 1]")
+            if self.sigma_sr < 0.0:
+                raise RobustnessError("an evaluable DSRResult requires non-negative sigma_sr")
         else:
             if not self.reason:
                 raise RobustnessError("a non-evaluable DSRResult requires an explicit reason")
@@ -461,6 +472,10 @@ def evaluate_dsr_v1(
             k_eff_evidence_id=k_eff_evidence.evidence_id,
             observation_count=observation_count,
         )
+
+    if observation_count < 4:
+        # ADR-0037 s.4: If T < 4 or m_2 == 0, DSR is non-evaluable.
+        return non_evaluable("observation_count_below_4")
 
     sharpe_by_trial: dict[str, float] = {}
     for trial_id in panel.trial_ids:
@@ -585,6 +600,8 @@ class CSCVSplitEvidence:
     def __post_init__(self) -> None:
         if type(self.split_index) is not int or self.split_index < 0:
             raise RobustnessError("split_index must be a non-negative integer")
+        if type(self.in_sample_blocks) is not tuple:
+            raise RobustnessError("in_sample_blocks must be a tuple")
         if not self.in_sample_blocks or any(
             type(b) is not int or b < 0 for b in self.in_sample_blocks
         ):
@@ -598,6 +615,9 @@ class CSCVSplitEvidence:
             raise RobustnessError("omega must be finite and strictly within (0, 1)")
         if not math.isfinite(self.logit):
             raise RobustnessError("logit must be finite")
+        expected_logit = math.log(self.omega / (1.0 - self.omega))
+        if abs(self.logit - expected_logit) > 1e-9:
+            raise RobustnessError("logit must equal ln(omega / (1 - omega))")
 
     def stable_dict(self) -> dict[str, Any]:
         return {
@@ -633,16 +653,23 @@ class PBOResult:
             raise RobustnessError("status must be an EvaluationStatus")
         _non_empty_text(self.population_id, "population_id")
         _non_empty_text(self.return_semantics_id, "return_semantics_id")
-        if not self.trial_ids:
-            raise RobustnessError("trial_ids must be non-empty")
+        if type(self.trial_ids) is not tuple or not self.trial_ids:
+            raise RobustnessError("trial_ids must be a non-empty tuple")
+        if any(not isinstance(tid, str) or not tid for tid in self.trial_ids):
+            raise RobustnessError("trial_ids must contain non-empty strings")
         if len(set(self.trial_ids)) != len(self.trial_ids):
             raise RobustnessError("trial_ids must not contain duplicates")
-        if not self.observation_ids:
-            raise RobustnessError("observation_ids must be non-empty")
+        if type(self.observation_ids) is not tuple or not self.observation_ids:
+            raise RobustnessError("observation_ids must be a non-empty tuple")
+        for obs_id in self.observation_ids:
+            if isinstance(obs_id, bool) or not isinstance(obs_id, (str, int)):
+                raise RobustnessError("observation identity must be a string or integer")
         _non_empty_text(self.content_digest, "content_digest")
         _non_empty_text(self.numerical_policy_id, "numerical_policy_id")
         if type(self.block_count) is not int or self.block_count < 4 or self.block_count % 2 != 0:
             raise RobustnessError("block_count must be an even integer >= 4")
+        if type(self.splits) is not tuple:
+            raise RobustnessError("splits must be a tuple")
         if not all(isinstance(split, CSCVSplitEvidence) for split in self.splits):
             raise RobustnessError("splits must contain only CSCVSplitEvidence")
 
@@ -662,6 +689,26 @@ class PBOResult:
                 raise RobustnessError("pbo must equal negative_logit_count / split_count")
             if len(self.splits) != self.split_count:
                 raise RobustnessError("splits must contain exactly split_count entries")
+
+            actual_negative = sum(1 for split in self.splits if split.logit < 0.0)
+            if self.negative_logit_count != actual_negative:
+                raise RobustnessError("negative_logit_count must match count of splits with logit < 0")
+
+            trial_set = set(self.trial_ids)
+            n_trials = len(self.trial_ids)
+            half_s = self.block_count // 2
+            for split in self.splits:
+                if split.winner_trial_id not in trial_set:
+                    raise RobustnessError(f"winner_trial_id {split.winner_trial_id} must be a member of trial_ids")
+                if not (1.0 <= split.oos_rank <= n_trials):
+                    raise RobustnessError(f"split oos_rank {split.oos_rank} out of range [1, {n_trials}]")
+                expected_omega = split.oos_rank / (n_trials + 1.0)
+                if abs(split.omega - expected_omega) > 1e-9:
+                    raise RobustnessError("split omega must equal oos_rank / (N + 1)")
+                if len(split.in_sample_blocks) != half_s:
+                    raise RobustnessError(f"in_sample_blocks length must equal block_count // 2 ({half_s})")
+                if any(b >= self.block_count for b in split.in_sample_blocks):
+                    raise RobustnessError("in_sample_blocks index exceeds block_count")
         else:
             if not self.reason:
                 raise RobustnessError("a non-evaluable PBOResult requires an explicit reason")

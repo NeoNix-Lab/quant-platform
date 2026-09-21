@@ -162,10 +162,23 @@ class MomentsV1Tests(unittest.TestCase):
         self.assertAlmostEqual(0.0, result.gamma3, places=12)
         self.assertAlmostEqual(1.64, result.gamma4, places=12)
 
-    def test_below_four_observations_is_non_evaluable(self):
-        result = compute_moments_v1((1.0, 2.0, 3.0))
+    def test_single_observation_is_non_evaluable(self):
+        result = compute_moments_v1((1.0,))
         self.assertIs(EvaluationStatus.NON_EVALUABLE, result.status)
-        self.assertEqual("observation_count_below_4", result.reason)
+        self.assertEqual("observation_count_below_2", result.reason)
+
+    def test_two_and_three_observations_are_evaluable_with_nonzero_variance(self):
+        # T=3: (1, 2, 3) -> mean 2, m2=2/3, m3=0, m4=2/3 -> gamma3=0, gamma4=1.5
+        result_3 = compute_moments_v1((1.0, 2.0, 3.0))
+        self.assertIs(EvaluationStatus.EVALUABLE, result_3.status)
+        self.assertAlmostEqual(0.0, result_3.gamma3, places=12)
+        self.assertAlmostEqual(1.5, result_3.gamma4, places=12)
+
+        # T=2: (1, -1) -> mean 0, m2=1, m3=0, m4=1 -> gamma3=0, gamma4=1.0
+        result_2 = compute_moments_v1((1.0, -1.0))
+        self.assertIs(EvaluationStatus.EVALUABLE, result_2.status)
+        self.assertAlmostEqual(0.0, result_2.gamma3, places=12)
+        self.assertAlmostEqual(1.0, result_2.gamma4, places=12)
 
     def test_zero_second_moment_is_non_evaluable(self):
         result = compute_moments_v1((1.0, 1.0, 1.0, 1.0))
@@ -214,6 +227,21 @@ class DSRV1Tests(unittest.TestCase):
         result = evaluate_dsr_v1(panel, evidence)
         self.assertIs(EvaluationStatus.NON_EVALUABLE, result.status)
         self.assertEqual("sharpe_dispersion_degenerate", result.reason)
+
+    def test_dsr_below_four_observations_is_non_evaluable_per_adr_0037(self):
+        # ADR-0037 s.4: If T < 4 or m_2 == 0, DSR is non-evaluable.
+        panel = _panel(
+            trial_ids=("T1", "T2"),
+            observation_ids=("o0", "o1", "o2"),
+            returns={
+                "T1": (0.01, 0.02, -0.01),
+                "T2": (0.00, 0.01, 0.02),
+            },
+        )
+        evidence = EffectiveTrialCountEvidence(k_eff=2.0, evidence_id="evidence-v1:manual")
+        result = evaluate_dsr_v1(panel, evidence)
+        self.assertIs(EvaluationStatus.NON_EVALUABLE, result.status)
+        self.assertEqual("observation_count_below_4", result.reason)
 
     def test_single_trial_panel_sigma_sr_is_zero_per_adr_exception(self):
         # ADR-0037 s.5.2 explicitly defines sigma_SR := 0 for N == 1; this is
@@ -602,6 +630,24 @@ class DSRResultInvariantTests(unittest.TestCase):
     def test_valid_evaluable_result_constructs(self):
         DSRResult(**_dsr_result_fields())
 
+    def test_dsr_outside_zero_one_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(dsr=2.0))
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(dsr=-0.1))
+
+    def test_negative_sigma_sr_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(sigma_sr=-0.1))
+
+    def test_mutable_list_for_trial_ids_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(trial_ids=["T1", "T2"]))
+
+    def test_mutable_list_for_observation_ids_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(observation_ids=["o0", "o1"]))
+
     def test_evaluable_result_missing_a_formula_field_rejected(self):
         with self.assertRaises(RobustnessError):
             DSRResult(**_dsr_result_fields(dsr=None))
@@ -670,6 +716,14 @@ class CSCVSplitEvidenceInvariantTests(unittest.TestCase):
     def test_valid_split_constructs(self):
         CSCVSplitEvidence(**_cscv_split_fields())
 
+    def test_mutable_list_for_in_sample_blocks_rejected(self):
+        with self.assertRaises(RobustnessError):
+            CSCVSplitEvidence(**_cscv_split_fields(in_sample_blocks=[0, 1]))
+
+    def test_omega_logit_inconsistency_rejected(self):
+        with self.assertRaises(RobustnessError):
+            CSCVSplitEvidence(**_cscv_split_fields(omega=0.2, logit=0.0))
+
     def test_omega_outside_open_interval_rejected(self):
         with self.assertRaises(RobustnessError):
             CSCVSplitEvidence(**_cscv_split_fields(omega=1.0))
@@ -692,7 +746,7 @@ def _pbo_result_fields(**overrides) -> dict:
         "reason": None,
         "population_id": "population-v1:sha256:" + "b" * 64,
         "return_semantics_id": "excess-return-v1",
-        "trial_ids": ("A", "B"),
+        "trial_ids": ("A", "B", "C", "D"),
         "observation_ids": ("o0", "o1", "o2", "o3"),
         "content_digest": "deadbeef",
         "numerical_policy_id": NUMERICAL_POLICY_ID,
@@ -709,6 +763,25 @@ def _pbo_result_fields(**overrides) -> dict:
 class PBOResultInvariantTests(unittest.TestCase):
     def test_valid_evaluable_result_constructs(self):
         PBOResult(**_pbo_result_fields())
+
+    def test_mutable_list_for_splits_rejected(self):
+        split = CSCVSplitEvidence(**_cscv_split_fields())
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(splits=[split]))
+
+    def test_negative_logit_count_mismatch_with_splits_rejected(self):
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(negative_logit_count=0))
+
+    def test_winner_not_in_trials_rejected(self):
+        split = CSCVSplitEvidence(**_cscv_split_fields(winner_trial_id="UNKNOWN"))
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(splits=(split,)))
+
+    def test_split_omega_inconsistent_with_panel_trials_rejected(self):
+        # 2 trials would require omega = 1 / (2 + 1) = 1/3, but split has omega = 0.2
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(trial_ids=("A", "B")))
 
     def test_negative_logit_count_exceeding_split_count_rejected(self):
         with self.assertRaises(RobustnessError):
