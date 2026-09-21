@@ -7,17 +7,23 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from quant_platform.validation import robustness as robustness_module  # noqa: E402
 from quant_platform.validation.robustness import (  # noqa: E402
+    CSCVSplitEvidence,
     ComparableTrialPanel,
     DSRResult,
     EffectiveTrialCountEvidence,
     EvaluationStatus,
+    MomentsResult,
+    NUMERICAL_POLICY_ID,
     PBOResult,
     RobustnessError,
+    SAMPLING_MODEL_IID_V1,
     compute_moments_v1,
     compute_sharpe_v1,
     evaluate_dsr_v1,
@@ -174,18 +180,89 @@ class MomentsV1Tests(unittest.TestCase):
 
 class DSRV1Tests(unittest.TestCase):
     def test_selected_trial_tie_break_is_lexicographically_smallest(self):
-        # T2 and T1 have identical full-panel Sharpe by construction; T1 < T2.
+        # T2 and T1 are tied for the max full-panel Sharpe; T3 is strictly
+        # lower so cross-trial dispersion is nonzero (a two-trial exact tie
+        # would make sigma_SR degenerate and non-evaluable -- see
+        # test_degenerate_dispersion_from_identical_sharpes_is_non_evaluable).
         panel = _panel(
-            trial_ids=("T2", "T1"),
+            trial_ids=("T2", "T1", "T3"),
             returns={
                 "T2": (1.0, 2.0, 3.0, 4.0),
                 "T1": (1.0, 2.0, 3.0, 4.0),
+                "T3": (-1.0, -2.0, -3.0, -4.0),
             },
         )
         evidence = EffectiveTrialCountEvidence(k_eff=2.0, evidence_id="evidence-v1:manual")
         result = evaluate_dsr_v1(panel, evidence)
-        self.assertIs(EvaluationStatus.EVALUABLE, result.status)
+        self.assertIs(EvaluationStatus.EVALUABLE, result.status, result.reason)
         self.assertEqual("T1", result.selected_trial_id)
+        self.assertGreater(result.sigma_sr, 0.0)
+
+    def test_degenerate_dispersion_from_identical_sharpes_is_non_evaluable(self):
+        # Every trial shares the exact same full-panel Sharpe: ddof=1
+        # cross-trial dispersion is exactly zero, which is degenerate for
+        # N > 1 (not the ADR-0037 N == 1 exception) and must not be silently
+        # accepted as a valid search-adjusted benchmark scale.
+        panel = _panel(
+            trial_ids=("T1", "T2"),
+            returns={
+                "T1": (1.0, 2.0, 3.0, 4.0),
+                "T2": (1.0, 2.0, 3.0, 4.0),
+            },
+        )
+        evidence = EffectiveTrialCountEvidence(k_eff=2.0, evidence_id="evidence-v1:manual")
+        result = evaluate_dsr_v1(panel, evidence)
+        self.assertIs(EvaluationStatus.NON_EVALUABLE, result.status)
+        self.assertEqual("sharpe_dispersion_degenerate", result.reason)
+
+    def test_single_trial_panel_sigma_sr_is_zero_per_adr_exception(self):
+        # ADR-0037 s.5.2 explicitly defines sigma_SR := 0 for N == 1; this is
+        # a frozen exception and must remain evaluable, unlike the N > 1
+        # degenerate-dispersion case above.
+        panel = _panel(
+            trial_ids=("T1",),
+            returns={"T1": (0.01, 0.02, -0.01, 0.03)},
+        )
+        evidence = EffectiveTrialCountEvidence(k_eff=1.0, evidence_id="evidence-v1:manual")
+        result = evaluate_dsr_v1(panel, evidence)
+        self.assertIs(EvaluationStatus.EVALUABLE, result.status, result.reason)
+        self.assertEqual(0.0, result.sigma_sr)
+        self.assertEqual(0.0, result.sr0)
+
+    def test_finite_extreme_inputs_do_not_raise_overflow(self):
+        # `**` raises OverflowError for finite binary64 inputs whose square
+        # overflows; compute_sharpe_v1 must fail closed instead of crashing.
+        result = compute_sharpe_v1((1e308, -1e308))
+        self.assertIs(EvaluationStatus.NON_EVALUABLE, result.status)
+        self.assertEqual("non_finite_intermediate", result.reason)
+
+    def test_moments_finite_extreme_inputs_do_not_raise_overflow(self):
+        result = compute_moments_v1((1e308, -1e308, 1e308, -1e308))
+        self.assertIs(EvaluationStatus.NON_EVALUABLE, result.status)
+        self.assertEqual("non_finite_intermediate", result.reason)
+
+    def test_evaluate_dsr_v1_does_not_raise_on_overflow_inputs(self):
+        panel = _panel(
+            trial_ids=("T1", "T2"),
+            returns={
+                "T1": (1e308, -1e308, 1e308, -1e308),
+                "T2": (0.01, 0.02, -0.01, 0.03),
+            },
+        )
+        evidence = EffectiveTrialCountEvidence(k_eff=2.0, evidence_id="evidence-v1:manual")
+        result = evaluate_dsr_v1(panel, evidence)
+        self.assertIs(EvaluationStatus.NON_EVALUABLE, result.status)
+
+    def test_observation_id_type_is_identity_bearing(self):
+        # Integer and string observation ids must not fingerprint the same.
+        panel_int = _panel(observation_ids=(0, 1, 2, 3))
+        panel_str = _panel(observation_ids=("0", "1", "2", "3"))
+        self.assertNotEqual(panel_int.content_digest, panel_str.content_digest)
+
+        evidence = EffectiveTrialCountEvidence(k_eff=2.0, evidence_id="evidence-v1:manual")
+        result_int = evaluate_dsr_v1(panel_int, evidence)
+        result_str = evaluate_dsr_v1(panel_str, evidence)
+        self.assertNotEqual(result_int.result_id, result_str.result_id)
 
     def test_k_eff_out_of_domain_is_non_evaluable(self):
         panel = _panel()
@@ -226,34 +303,22 @@ class DSRV1Tests(unittest.TestCase):
         self.assertIn("trial_sharpe_non_evaluable:T1", result.reason)
 
     def test_invalid_radicand_domain_is_non_evaluable(self):
-        # A two-point return distribution always saturates the kurtosis floor
-        # gamma4 == gamma3^2 + 1, which makes
-        # A = 1 - gamma3*SR_hat + ((gamma4-1)/4)*SR_hat^2 == (1 - gamma3*SR_hat/2)^2.
-        # For T=4 (one high observation h, three low observations l),
-        # gamma3 = (T-2)/sqrt(T-1) = 2/sqrt(3), so choosing SR_hat = 2/gamma3
-        # drives A to exactly 0 (non-positive), the frozen non-evaluable domain.
-        import math
-
-        t_obs = 4
-        gamma3 = (t_obs - 2) / math.sqrt(t_obs - 1)
-        target_sharpe = 2.0 / gamma3
-        s = 1.0  # target ddof=1 sample std
-        k = s * math.sqrt(t_obs)
-        mean = target_sharpe * s
-        low = mean - k / t_obs
-        high = low + k
-        series = (high, low, low, low)
-
+        # A = 1 - gamma3*SR_hat + ((gamma4-1)/4)*SR_hat^2 is, by Pearson's
+        # inequality (gamma4 >= gamma3^2 + 1 for any real distribution), a sum
+        # of a perfect square and a non-negative term: it can only ever reach
+        # exactly 0 at a two-point knife-edge construction, which is not a
+        # robust floating-point target (the exact boundary crossing depends on
+        # sub-ULP rounding of the squaring method). Patch the moments step
+        # directly with a gamma3/gamma4 pair that drives the radicand clearly
+        # negative, to exercise the domain guard deterministically.
         panel = _panel(
             trial_ids=("T1",),
-            returns={"T1": series},
-            observation_ids=("o0", "o1", "o2", "o3"),
+            returns={"T1": (0.01, 0.02, -0.01, 0.03)},
         )
-        sharpe = compute_sharpe_v1(series)
-        self.assertAlmostEqual(target_sharpe, sharpe.value, places=9)
-
         evidence = EffectiveTrialCountEvidence(k_eff=1.0, evidence_id="evidence-v1:manual")
-        result = evaluate_dsr_v1(panel, evidence)
+        forced_moments = MomentsResult(EvaluationStatus.EVALUABLE, gamma3=100.0, gamma4=3.0)
+        with patch.object(robustness_module, "compute_moments_v1", return_value=forced_moments):
+            result = evaluate_dsr_v1(panel, evidence)
         self.assertIs(EvaluationStatus.NON_EVALUABLE, result.status, result.reason)
         self.assertEqual("dsr_denominator_domain_invalid", result.reason)
 
@@ -487,6 +552,195 @@ class PBOV1Tests(unittest.TestCase):
         )
         result_c = evaluate_pbo_v1(mutated_panel, 4)
         self.assertNotEqual(result_a.result_id, result_c.result_id)
+
+    def test_observation_id_type_is_identity_bearing(self):
+        panel_int = ComparableTrialPanel(
+            population_id="population-v1:sha256:" + "b" * 64,
+            trial_ids=("A", "B", "C", "D"),
+            observation_ids=tuple(range(1, 9)),
+            returns=_PBO_FIXTURE_RETURNS,
+            return_semantics_id="excess-return-v1",
+        )
+        panel_str = _pbo_fixture_panel()
+        result_int = evaluate_pbo_v1(panel_int, 4)
+        result_str = evaluate_pbo_v1(panel_str, 4)
+        self.assertNotEqual(result_int.result_id, result_str.result_id)
+
+
+# ---------------------------------------------------------------------------
+# Exported result-evidence invariants (DSRResult, PBOResult, CSCVSplitEvidence)
+# ---------------------------------------------------------------------------
+
+
+def _dsr_result_fields(**overrides) -> dict:
+    fields = {
+        "status": EvaluationStatus.EVALUABLE,
+        "reason": None,
+        "population_id": "population-v1:sha256:" + "a" * 64,
+        "return_semantics_id": "excess-return-v1",
+        "trial_ids": ("T1", "T2"),
+        "observation_ids": ("o0", "o1", "o2", "o3"),
+        "content_digest": "deadbeef",
+        "numerical_policy_id": NUMERICAL_POLICY_ID,
+        "sampling_model": SAMPLING_MODEL_IID_V1,
+        "k_eff": 2.0,
+        "k_eff_evidence_id": "evidence-v1:manual",
+        "observation_count": 4,
+        "selected_trial_id": "T1",
+        "selected_sharpe": 0.5,
+        "sigma_sr": 0.2,
+        "sr0": 0.1,
+        "gamma3": 0.0,
+        "gamma4": 3.0,
+        "dsr": 0.7,
+    }
+    fields.update(overrides)
+    return fields
+
+
+class DSRResultInvariantTests(unittest.TestCase):
+    def test_valid_evaluable_result_constructs(self):
+        DSRResult(**_dsr_result_fields())
+
+    def test_evaluable_result_missing_a_formula_field_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(dsr=None))
+
+    def test_evaluable_result_with_reason_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(reason="unexpected"))
+
+    def test_evaluable_result_with_non_finite_field_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(dsr=float("nan")))
+
+    def test_evaluable_result_with_selected_trial_outside_panel_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(selected_trial_id="T9"))
+
+    def test_non_evaluable_result_carrying_formula_evidence_rejected(self):
+        fields = _dsr_result_fields(status=EvaluationStatus.NON_EVALUABLE, reason="x")
+        with self.assertRaises(RobustnessError):
+            DSRResult(**fields)  # dsr/gamma3/etc. still populated
+
+    def test_non_evaluable_result_without_reason_rejected(self):
+        fields = _dsr_result_fields(
+            status=EvaluationStatus.NON_EVALUABLE,
+            reason=None,
+            selected_trial_id=None,
+            selected_sharpe=None,
+            sigma_sr=None,
+            sr0=None,
+            gamma3=None,
+            gamma4=None,
+            dsr=None,
+        )
+        with self.assertRaises(RobustnessError):
+            DSRResult(**fields)
+
+    def test_valid_non_evaluable_result_constructs(self):
+        fields = _dsr_result_fields(
+            status=EvaluationStatus.NON_EVALUABLE,
+            reason="k_eff_out_of_domain",
+            selected_trial_id=None,
+            selected_sharpe=None,
+            sigma_sr=None,
+            sr0=None,
+            gamma3=None,
+            gamma4=None,
+            dsr=None,
+        )
+        DSRResult(**fields)
+
+
+def _cscv_split_fields(**overrides) -> dict:
+    fields = {
+        "split_index": 0,
+        "in_sample_blocks": (0, 1),
+        "winner_trial_id": "A",
+        "oos_rank": 1.0,
+        "omega": 0.2,
+        "logit": -1.3862943611198906,
+    }
+    fields.update(overrides)
+    return fields
+
+
+class CSCVSplitEvidenceInvariantTests(unittest.TestCase):
+    def test_valid_split_constructs(self):
+        CSCVSplitEvidence(**_cscv_split_fields())
+
+    def test_omega_outside_open_interval_rejected(self):
+        with self.assertRaises(RobustnessError):
+            CSCVSplitEvidence(**_cscv_split_fields(omega=1.0))
+        with self.assertRaises(RobustnessError):
+            CSCVSplitEvidence(**_cscv_split_fields(omega=0.0))
+
+    def test_non_finite_logit_rejected(self):
+        with self.assertRaises(RobustnessError):
+            CSCVSplitEvidence(**_cscv_split_fields(logit=float("nan")))
+
+    def test_rank_below_one_rejected(self):
+        with self.assertRaises(RobustnessError):
+            CSCVSplitEvidence(**_cscv_split_fields(oos_rank=0.5))
+
+
+def _pbo_result_fields(**overrides) -> dict:
+    split = CSCVSplitEvidence(**_cscv_split_fields())
+    fields = {
+        "status": EvaluationStatus.EVALUABLE,
+        "reason": None,
+        "population_id": "population-v1:sha256:" + "b" * 64,
+        "return_semantics_id": "excess-return-v1",
+        "trial_ids": ("A", "B"),
+        "observation_ids": ("o0", "o1", "o2", "o3"),
+        "content_digest": "deadbeef",
+        "numerical_policy_id": NUMERICAL_POLICY_ID,
+        "block_count": 4,
+        "split_count": 1,
+        "negative_logit_count": 1,
+        "pbo": 1.0,
+        "splits": (split,),
+    }
+    fields.update(overrides)
+    return fields
+
+
+class PBOResultInvariantTests(unittest.TestCase):
+    def test_valid_evaluable_result_constructs(self):
+        PBOResult(**_pbo_result_fields())
+
+    def test_negative_logit_count_exceeding_split_count_rejected(self):
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(negative_logit_count=2))
+
+    def test_pbo_inconsistent_with_counts_rejected(self):
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(pbo=0.5))
+
+    def test_splits_length_mismatch_rejected(self):
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(split_count=2))
+
+    def test_evaluable_result_with_reason_rejected(self):
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(reason="unexpected"))
+
+    def test_non_evaluable_result_carrying_split_evidence_rejected(self):
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(status=EvaluationStatus.NON_EVALUABLE, reason="x"))
+
+    def test_valid_non_evaluable_result_constructs(self):
+        PBOResult(
+            **_pbo_result_fields(
+                status=EvaluationStatus.NON_EVALUABLE,
+                reason="x",
+                split_count=None,
+                negative_logit_count=None,
+                pbo=None,
+                splits=(),
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

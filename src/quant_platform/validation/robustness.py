@@ -79,6 +79,15 @@ def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _encode_observation_ids(observation_ids: Sequence[str | int]) -> list[list[str]]:
+    """Type-tag each observation identity so ``1`` and ``"1"`` fingerprint differently."""
+
+    return [
+        ["int", str(obs_id)] if isinstance(obs_id, int) else ["str", obs_id]
+        for obs_id in observation_ids
+    ]
+
+
 # ---------------------------------------------------------------------------
 # ComparableTrialPanel v1
 # ---------------------------------------------------------------------------
@@ -167,7 +176,7 @@ class ComparableTrialPanel:
             "population_id": self.population_id,
             "return_semantics_id": self.return_semantics_id,
             "trial_ids": list(self.trial_ids),
-            "observation_ids": [str(obs_id) for obs_id in self.observation_ids],
+            "observation_ids": _encode_observation_ids(self.observation_ids),
             "returns": {trial_id: list(series) for trial_id, series in self.returns.items()},
         }
 
@@ -211,7 +220,18 @@ def compute_sharpe_v1(values: Sequence[float]) -> SharpeResult:
         return SharpeResult(EvaluationStatus.NON_EVALUABLE, reason="observation_count_below_2")
 
     mean = sum(series) / observation_count
-    variance = sum((x - mean) ** 2 for x in series) / (observation_count - 1)
+    if not math.isfinite(mean):
+        return SharpeResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_intermediate")
+
+    # `*` saturates to +/-inf on overflow for finite binary64 inputs; `**`
+    # raises OverflowError instead, which must not escape as an exception.
+    sum_sq = sum((x - mean) * (x - mean) for x in series)
+    if not math.isfinite(sum_sq):
+        return SharpeResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_intermediate")
+
+    variance = sum_sq / (observation_count - 1)
+    if not math.isfinite(variance):
+        return SharpeResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_intermediate")
     if variance == 0.0:
         return SharpeResult(EvaluationStatus.NON_EVALUABLE, reason="zero_variance")
 
@@ -244,7 +264,11 @@ class MomentsResult:
 
 
 def compute_moments_v1(values: Sequence[float]) -> MomentsResult:
-    """gamma3 = m3/m2^1.5 (skew), gamma4 = m4/m2^2 (raw/Pearson kurtosis). T < 4 or m2 == 0 is non-evaluable."""
+    """gamma3 = m3/m2^1.5 (skew), gamma4 = m4/m2^2 (raw/Pearson kurtosis).
+
+    ADR-0037 s.4 freezes this convention starting at ``T >= 4``: below that,
+    or when ``m2 == 0``, the moments are non-evaluable.
+    """
 
     series = tuple(_finite_float(value, f"return[{i}]") for i, value in enumerate(values))
     observation_count = len(series)
@@ -252,15 +276,37 @@ def compute_moments_v1(values: Sequence[float]) -> MomentsResult:
         return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="observation_count_below_4")
 
     mean = sum(series) / observation_count
+    if not math.isfinite(mean):
+        return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_intermediate")
     deviations = tuple(x - mean for x in series)
-    m2 = sum(d ** 2 for d in deviations) / observation_count
+
+    # `*` saturates to +/-inf on overflow for finite binary64 inputs; `**`
+    # raises OverflowError instead, which must not escape as an exception.
+    sum_sq = sum(d * d for d in deviations)
+    if not math.isfinite(sum_sq):
+        return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_intermediate")
+    m2 = sum_sq / observation_count
+    if not math.isfinite(m2):
+        return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_intermediate")
     if m2 == 0.0:
         return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="second_moment_zero")
 
-    m3 = sum(d ** 3 for d in deviations) / observation_count
-    m4 = sum(d ** 4 for d in deviations) / observation_count
-    gamma3 = m3 / (m2 ** 1.5)
-    gamma4 = m4 / (m2 ** 2)
+    sum_cube = sum(d * d * d for d in deviations)
+    sum_quad = sum((d * d) * (d * d) for d in deviations)
+    if not (math.isfinite(sum_cube) and math.isfinite(sum_quad)):
+        return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_intermediate")
+    m3 = sum_cube / observation_count
+    m4 = sum_quad / observation_count
+    if not (math.isfinite(m3) and math.isfinite(m4)):
+        return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_intermediate")
+
+    m2_pow_1_5 = m2 * math.sqrt(m2)
+    m2_pow_2 = m2 * m2
+    if not (math.isfinite(m2_pow_1_5) and math.isfinite(m2_pow_2)):
+        return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_intermediate")
+
+    gamma3 = m3 / m2_pow_1_5
+    gamma4 = m4 / m2_pow_2
     if not (math.isfinite(gamma3) and math.isfinite(gamma4)):
         return MomentsResult(EvaluationStatus.NON_EVALUABLE, reason="non_finite_moment")
     return MomentsResult(EvaluationStatus.EVALUABLE, gamma3=gamma3, gamma4=gamma4)
@@ -314,6 +360,49 @@ class DSRResult:
     gamma4: float | None = None
     dsr: float | None = None
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, EvaluationStatus):
+            raise RobustnessError("status must be an EvaluationStatus")
+        _non_empty_text(self.population_id, "population_id")
+        _non_empty_text(self.return_semantics_id, "return_semantics_id")
+        if not self.trial_ids:
+            raise RobustnessError("trial_ids must be non-empty")
+        if len(set(self.trial_ids)) != len(self.trial_ids):
+            raise RobustnessError("trial_ids must not contain duplicates")
+        if not self.observation_ids:
+            raise RobustnessError("observation_ids must be non-empty")
+        _non_empty_text(self.content_digest, "content_digest")
+        _non_empty_text(self.numerical_policy_id, "numerical_policy_id")
+        _non_empty_text(self.sampling_model, "sampling_model")
+        if not math.isfinite(self.k_eff) or self.k_eff <= 0:
+            raise RobustnessError("k_eff must be a finite positive number")
+        _non_empty_text(self.k_eff_evidence_id, "k_eff_evidence_id")
+        if type(self.observation_count) is not int or self.observation_count < 1:
+            raise RobustnessError("observation_count must be a positive integer")
+
+        evaluable_fields = (
+            self.selected_sharpe,
+            self.sigma_sr,
+            self.sr0,
+            self.gamma3,
+            self.gamma4,
+            self.dsr,
+        )
+        if self.status is EvaluationStatus.EVALUABLE:
+            if self.reason is not None:
+                raise RobustnessError("an evaluable DSRResult must not carry a reason")
+            if self.selected_trial_id not in self.trial_ids:
+                raise RobustnessError("selected_trial_id must be a member of trial_ids")
+            if any(field is None for field in evaluable_fields):
+                raise RobustnessError("an evaluable DSRResult requires all formula fields")
+            if not all(math.isfinite(field) for field in evaluable_fields):  # type: ignore[arg-type]
+                raise RobustnessError("an evaluable DSRResult requires finite formula fields")
+        else:
+            if not self.reason:
+                raise RobustnessError("a non-evaluable DSRResult requires an explicit reason")
+            if self.selected_trial_id is not None or any(field is not None for field in evaluable_fields):
+                raise RobustnessError("a non-evaluable DSRResult must not carry formula evidence")
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "identity_domain": DSR_SPEC_VERSION,
@@ -322,7 +411,7 @@ class DSRResult:
             "population_id": self.population_id,
             "return_semantics_id": self.return_semantics_id,
             "trial_ids": list(self.trial_ids),
-            "observation_ids": [str(obs_id) for obs_id in self.observation_ids],
+            "observation_ids": _encode_observation_ids(self.observation_ids),
             "content_digest": self.content_digest,
             "numerical_policy_id": self.numerical_policy_id,
             "sampling_model": self.sampling_model,
@@ -385,12 +474,25 @@ def evaluate_dsr_v1(
     selected_sharpe = sharpe_by_trial[selected_trial_id]
 
     if trial_count == 1:
+        # ADR-0037 s.5.2 explicitly defines sigma_SR := 0 for N == 1; this is
+        # a frozen exception, not a degenerate/undefined computation.
         sigma_sr = 0.0
     else:
         mean_sr = sum(sharpe_by_trial.values()) / trial_count
-        var_sr = sum((v - mean_sr) ** 2 for v in sharpe_by_trial.values()) / (trial_count - 1)
+        if not math.isfinite(mean_sr):
+            return non_evaluable("sharpe_dispersion_non_evaluable")
+        # `*` saturates to +/-inf on overflow instead of raising OverflowError.
+        sum_sq_sr = sum((v - mean_sr) * (v - mean_sr) for v in sharpe_by_trial.values())
+        if not math.isfinite(sum_sq_sr):
+            return non_evaluable("sharpe_dispersion_non_evaluable")
+        var_sr = sum_sq_sr / (trial_count - 1)
         if not math.isfinite(var_sr) or var_sr < 0:
             return non_evaluable("sharpe_dispersion_non_evaluable")
+        if var_sr == 0.0:
+            # For N > 1, zero cross-trial dispersion is degenerate (unlike the
+            # ADR-mandated N == 1 exception above) and must not be silently
+            # accepted as a valid search-adjusted benchmark scale.
+            return non_evaluable("sharpe_dispersion_degenerate")
         sigma_sr = math.sqrt(var_sr)
 
     k_eff = k_eff_evidence.k_eff
@@ -424,7 +526,12 @@ def evaluate_dsr_v1(
     gamma4 = moments.gamma4
     assert gamma3 is not None and gamma4 is not None
 
-    radicand = 1.0 - gamma3 * selected_sharpe + ((gamma4 - 1.0) / 4.0) * selected_sharpe ** 2
+    # `*` saturates to +/-inf on overflow for finite binary64 inputs; `**`
+    # raises OverflowError instead, which must not escape as an exception.
+    selected_sharpe_sq = selected_sharpe * selected_sharpe
+    if not math.isfinite(selected_sharpe_sq):
+        return non_evaluable("dsr_denominator_domain_invalid")
+    radicand = 1.0 - gamma3 * selected_sharpe + ((gamma4 - 1.0) / 4.0) * selected_sharpe_sq
     if not math.isfinite(radicand) or radicand <= 0.0:
         return non_evaluable("dsr_denominator_domain_invalid")
 
@@ -475,6 +582,23 @@ class CSCVSplitEvidence:
     omega: float
     logit: float
 
+    def __post_init__(self) -> None:
+        if type(self.split_index) is not int or self.split_index < 0:
+            raise RobustnessError("split_index must be a non-negative integer")
+        if not self.in_sample_blocks or any(
+            type(b) is not int or b < 0 for b in self.in_sample_blocks
+        ):
+            raise RobustnessError("in_sample_blocks must be non-negative integers")
+        if len(set(self.in_sample_blocks)) != len(self.in_sample_blocks):
+            raise RobustnessError("in_sample_blocks must not contain duplicates")
+        _non_empty_text(self.winner_trial_id, "winner_trial_id")
+        if not math.isfinite(self.oos_rank) or self.oos_rank < 1.0:
+            raise RobustnessError("oos_rank must be finite and >= 1")
+        if not math.isfinite(self.omega) or not (0.0 < self.omega < 1.0):
+            raise RobustnessError("omega must be finite and strictly within (0, 1)")
+        if not math.isfinite(self.logit):
+            raise RobustnessError("logit must be finite")
+
     def stable_dict(self) -> dict[str, Any]:
         return {
             "split_index": self.split_index,
@@ -504,6 +628,51 @@ class PBOResult:
     pbo: float | None = None
     splits: tuple[CSCVSplitEvidence, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, EvaluationStatus):
+            raise RobustnessError("status must be an EvaluationStatus")
+        _non_empty_text(self.population_id, "population_id")
+        _non_empty_text(self.return_semantics_id, "return_semantics_id")
+        if not self.trial_ids:
+            raise RobustnessError("trial_ids must be non-empty")
+        if len(set(self.trial_ids)) != len(self.trial_ids):
+            raise RobustnessError("trial_ids must not contain duplicates")
+        if not self.observation_ids:
+            raise RobustnessError("observation_ids must be non-empty")
+        _non_empty_text(self.content_digest, "content_digest")
+        _non_empty_text(self.numerical_policy_id, "numerical_policy_id")
+        if type(self.block_count) is not int or self.block_count < 4 or self.block_count % 2 != 0:
+            raise RobustnessError("block_count must be an even integer >= 4")
+        if not all(isinstance(split, CSCVSplitEvidence) for split in self.splits):
+            raise RobustnessError("splits must contain only CSCVSplitEvidence")
+
+        if self.status is EvaluationStatus.EVALUABLE:
+            if self.reason is not None:
+                raise RobustnessError("an evaluable PBOResult must not carry a reason")
+            if (
+                type(self.split_count) is not int
+                or self.split_count < 1
+                or type(self.negative_logit_count) is not int
+                or not (0 <= self.negative_logit_count <= self.split_count)
+            ):
+                raise RobustnessError("an evaluable PBOResult requires consistent split counts")
+            if self.pbo is None or not math.isfinite(self.pbo) or not (0.0 <= self.pbo <= 1.0):
+                raise RobustnessError("an evaluable PBOResult requires a finite pbo in [0, 1]")
+            if abs(self.pbo - self.negative_logit_count / self.split_count) > 1e-9:
+                raise RobustnessError("pbo must equal negative_logit_count / split_count")
+            if len(self.splits) != self.split_count:
+                raise RobustnessError("splits must contain exactly split_count entries")
+        else:
+            if not self.reason:
+                raise RobustnessError("a non-evaluable PBOResult requires an explicit reason")
+            if (
+                self.split_count is not None
+                or self.negative_logit_count is not None
+                or self.pbo is not None
+                or self.splits
+            ):
+                raise RobustnessError("a non-evaluable PBOResult must not carry split evidence")
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "identity_domain": PBO_SPEC_VERSION,
@@ -512,7 +681,7 @@ class PBOResult:
             "population_id": self.population_id,
             "return_semantics_id": self.return_semantics_id,
             "trial_ids": list(self.trial_ids),
-            "observation_ids": [str(obs_id) for obs_id in self.observation_ids],
+            "observation_ids": _encode_observation_ids(self.observation_ids),
             "content_digest": self.content_digest,
             "numerical_policy_id": self.numerical_policy_id,
             "block_count": self.block_count,
