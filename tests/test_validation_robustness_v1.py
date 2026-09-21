@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from itertools import combinations
+import math
 from pathlib import Path
 import sys
 import unittest
@@ -698,6 +700,77 @@ class DSRResultInvariantTests(unittest.TestCase):
         )
         DSRResult(**fields)
 
+    def test_evaluable_k_eff_exceeding_trial_count_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(k_eff=3.0))
+
+    def test_evaluable_k_eff_below_one_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(k_eff=0.5))
+
+    def test_evaluable_observation_count_mismatch_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(observation_count=5))
+
+    def test_evaluable_observation_count_below_four_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(
+                **_dsr_result_fields(
+                    observation_ids=("o0", "o1", "o2"),
+                    observation_count=3,
+                )
+            )
+
+    def test_evaluable_single_trial_with_non_zero_dispersion_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(
+                **_dsr_result_fields(
+                    trial_ids=("T1",),
+                    selected_trial_id="T1",
+                    k_eff=1.0,
+                    sigma_sr=0.2,
+                    sr0=0.0,
+                )
+            )
+
+    def test_evaluable_single_trial_with_non_zero_benchmark_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(
+                **_dsr_result_fields(
+                    trial_ids=("T1",),
+                    selected_trial_id="T1",
+                    k_eff=1.0,
+                    sigma_sr=0.0,
+                    sr0=0.1,
+                )
+            )
+
+    def test_evaluable_single_trial_valid_constructs(self):
+        DSRResult(
+            **_dsr_result_fields(
+                trial_ids=("T1",),
+                selected_trial_id="T1",
+                k_eff=1.0,
+                sigma_sr=0.0,
+                sr0=0.0,
+            )
+        )
+
+    def test_evaluable_multi_trial_with_zero_dispersion_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(sigma_sr=0.0))
+
+    def test_evaluable_k_eff_in_open_interval_one_two_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(k_eff=1.5))
+
+    def test_evaluable_multi_trial_k_eff_one_with_non_zero_sr0_rejected(self):
+        with self.assertRaises(RobustnessError):
+            DSRResult(**_dsr_result_fields(k_eff=1.0, sr0=0.1))
+
+    def test_evaluable_multi_trial_k_eff_one_with_zero_sr0_constructs(self):
+        DSRResult(**_dsr_result_fields(k_eff=1.0, sr0=0.0))
+
 
 def _cscv_split_fields(**overrides) -> dict:
     fields = {
@@ -740,7 +813,18 @@ class CSCVSplitEvidenceInvariantTests(unittest.TestCase):
 
 
 def _pbo_result_fields(**overrides) -> dict:
-    split = CSCVSplitEvidence(**_cscv_split_fields())
+    combos = list(combinations(range(4), 2))
+    splits = tuple(
+        CSCVSplitEvidence(
+            split_index=i,
+            in_sample_blocks=combo,
+            winner_trial_id="A",
+            oos_rank=1.0,
+            omega=0.2,
+            logit=math.log(0.2 / (1.0 - 0.2)),
+        )
+        for i, combo in enumerate(combos)
+    )
     fields = {
         "status": EvaluationStatus.EVALUABLE,
         "reason": None,
@@ -751,10 +835,10 @@ def _pbo_result_fields(**overrides) -> dict:
         "content_digest": "deadbeef",
         "numerical_policy_id": NUMERICAL_POLICY_ID,
         "block_count": 4,
-        "split_count": 1,
-        "negative_logit_count": 1,
+        "split_count": 6,
+        "negative_logit_count": 6,
         "pbo": 1.0,
-        "splits": (split,),
+        "splits": splits,
     }
     fields.update(overrides)
     return fields
@@ -765,18 +849,27 @@ class PBOResultInvariantTests(unittest.TestCase):
         PBOResult(**_pbo_result_fields())
 
     def test_mutable_list_for_splits_rejected(self):
-        split = CSCVSplitEvidence(**_cscv_split_fields())
+        fields = _pbo_result_fields()
         with self.assertRaises(RobustnessError):
-            PBOResult(**_pbo_result_fields(splits=[split]))
+            PBOResult(**_pbo_result_fields(splits=list(fields["splits"])))
 
     def test_negative_logit_count_mismatch_with_splits_rejected(self):
         with self.assertRaises(RobustnessError):
             PBOResult(**_pbo_result_fields(negative_logit_count=0))
 
     def test_winner_not_in_trials_rejected(self):
-        split = CSCVSplitEvidence(**_cscv_split_fields(winner_trial_id="UNKNOWN"))
+        fields = _pbo_result_fields()
+        splits = list(fields["splits"])
+        splits[0] = CSCVSplitEvidence(
+            split_index=0,
+            in_sample_blocks=splits[0].in_sample_blocks,
+            winner_trial_id="UNKNOWN",
+            oos_rank=splits[0].oos_rank,
+            omega=splits[0].omega,
+            logit=splits[0].logit,
+        )
         with self.assertRaises(RobustnessError):
-            PBOResult(**_pbo_result_fields(splits=(split,)))
+            PBOResult(**_pbo_result_fields(splits=tuple(splits)))
 
     def test_split_omega_inconsistent_with_panel_trials_rejected(self):
         # 2 trials would require omega = 1 / (2 + 1) = 1/3, but split has omega = 0.2
@@ -785,7 +878,7 @@ class PBOResultInvariantTests(unittest.TestCase):
 
     def test_negative_logit_count_exceeding_split_count_rejected(self):
         with self.assertRaises(RobustnessError):
-            PBOResult(**_pbo_result_fields(negative_logit_count=2))
+            PBOResult(**_pbo_result_fields(negative_logit_count=7))
 
     def test_pbo_inconsistent_with_counts_rejected(self):
         with self.assertRaises(RobustnessError):
@@ -793,7 +886,52 @@ class PBOResultInvariantTests(unittest.TestCase):
 
     def test_splits_length_mismatch_rejected(self):
         with self.assertRaises(RobustnessError):
-            PBOResult(**_pbo_result_fields(split_count=2))
+            PBOResult(**_pbo_result_fields(splits=_pbo_result_fields()["splits"][:3]))
+
+    def test_split_count_not_matching_combinations_rejected(self):
+        # For block_count = 4, C(4, 2) = 6
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(split_count=1))
+
+    def test_split_index_out_of_order_rejected(self):
+        fields = _pbo_result_fields()
+        splits = list(fields["splits"])
+        splits[0] = CSCVSplitEvidence(
+            split_index=5,
+            in_sample_blocks=splits[0].in_sample_blocks,
+            winner_trial_id=splits[0].winner_trial_id,
+            oos_rank=splits[0].oos_rank,
+            omega=splits[0].omega,
+            logit=splits[0].logit,
+        )
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(splits=tuple(splits)))
+
+    def test_in_sample_blocks_mismatch_with_combinations_rejected(self):
+        fields = _pbo_result_fields()
+        splits = list(fields["splits"])
+        splits[0] = CSCVSplitEvidence(
+            split_index=0,
+            in_sample_blocks=(2, 3),
+            winner_trial_id=splits[0].winner_trial_id,
+            oos_rank=splits[0].oos_rank,
+            omega=splits[0].omega,
+            logit=splits[0].logit,
+        )
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(splits=tuple(splits)))
+
+    def test_evaluable_single_trial_rejected(self):
+        with self.assertRaises(RobustnessError):
+            PBOResult(**_pbo_result_fields(trial_ids=("A",)))
+
+    def test_evaluable_observation_count_not_divisible_by_block_count_rejected(self):
+        with self.assertRaises(RobustnessError):
+            PBOResult(
+                **_pbo_result_fields(
+                    observation_ids=("o0", "o1", "o2", "o3", "o4"),
+                )
+            )
 
     def test_evaluable_result_with_reason_rejected(self):
         with self.assertRaises(RobustnessError):

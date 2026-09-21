@@ -399,15 +399,43 @@ class DSRResult:
                 raise RobustnessError("an evaluable DSRResult must not carry a reason")
             if self.selected_trial_id not in self.trial_ids:
                 raise RobustnessError("selected_trial_id must be a member of trial_ids")
+            if not (1.0 <= self.k_eff <= len(self.trial_ids)):
+                raise RobustnessError(
+                    f"an evaluable DSRResult requires 1.0 <= k_eff <= trial_count ({len(self.trial_ids)})"
+                )
+            if 1.0 < self.k_eff < 2.0:
+                raise RobustnessError(
+                    f"an evaluable DSRResult requires k_eff == 1.0 or k_eff >= 2.0, got {self.k_eff}"
+                )
+            if self.observation_count < 4:
+                raise RobustnessError("an evaluable DSRResult requires observation_count >= 4")
+            if self.observation_count != len(self.observation_ids):
+                raise RobustnessError(
+                    f"an evaluable DSRResult requires observation_count ({self.observation_count}) == "
+                    f"len(observation_ids) ({len(self.observation_ids)})"
+                )
             if any(field is None for field in evaluable_fields):
                 raise RobustnessError("an evaluable DSRResult requires all formula fields")
             if not all(math.isfinite(field) for field in evaluable_fields):  # type: ignore[arg-type]
                 raise RobustnessError("an evaluable DSRResult requires finite formula fields")
-            assert self.dsr is not None and self.sigma_sr is not None
+            assert self.dsr is not None and self.sigma_sr is not None and self.sr0 is not None
             if not (0.0 <= self.dsr <= 1.0):
                 raise RobustnessError("an evaluable DSRResult requires dsr in [0, 1]")
-            if self.sigma_sr < 0.0:
-                raise RobustnessError("an evaluable DSRResult requires non-negative sigma_sr")
+            if self.k_eff == 1.0 and self.sr0 != 0.0:
+                raise RobustnessError(
+                    f"an evaluable DSRResult with k_eff == 1.0 requires sr0 == 0.0, got {self.sr0}"
+                )
+            if len(self.trial_ids) == 1:
+                if self.sigma_sr != 0.0 or self.sr0 != 0.0:
+                    raise RobustnessError(
+                        "an evaluable single-trial DSRResult (trial_count == 1) requires "
+                        f"sigma_sr == 0.0 and sr0 == 0.0, got sigma_sr={self.sigma_sr}, sr0={self.sr0}"
+                    )
+            else:
+                if self.sigma_sr <= 0.0:
+                    raise RobustnessError(
+                        f"an evaluable multi-trial DSRResult requires positive sigma_sr, got {self.sigma_sr}"
+                    )
         else:
             if not self.reason:
                 raise RobustnessError("a non-evaluable DSRResult requires an explicit reason")
@@ -676,19 +704,46 @@ class PBOResult:
         if self.status is EvaluationStatus.EVALUABLE:
             if self.reason is not None:
                 raise RobustnessError("an evaluable PBOResult must not carry a reason")
+            if len(self.trial_ids) < 2:
+                raise RobustnessError("an evaluable PBOResult requires at least two trials (N >= 2)")
+            observation_count = len(self.observation_ids)
+            if observation_count % self.block_count != 0:
+                raise RobustnessError(
+                    f"an evaluable PBOResult requires observation_ids length ({observation_count}) to be "
+                    f"divisible by block_count ({self.block_count})"
+                )
+            half_s = self.block_count // 2
+            block_size = observation_count // self.block_count
+            if block_size * half_s < 2:
+                raise RobustnessError(
+                    "an evaluable PBOResult requires each IS/OOS half to contain at least 2 observations"
+                )
+            expected_split_count = math.comb(self.block_count, half_s)
             if (
                 type(self.split_count) is not int
-                or self.split_count < 1
+                or self.split_count != expected_split_count
                 or type(self.negative_logit_count) is not int
                 or not (0 <= self.negative_logit_count <= self.split_count)
             ):
-                raise RobustnessError("an evaluable PBOResult requires consistent split counts")
+                raise RobustnessError(
+                    f"an evaluable PBOResult requires split_count == C({self.block_count}, {half_s}) = {expected_split_count} "
+                    "and 0 <= negative_logit_count <= split_count"
+                )
             if self.pbo is None or not math.isfinite(self.pbo) or not (0.0 <= self.pbo <= 1.0):
                 raise RobustnessError("an evaluable PBOResult requires a finite pbo in [0, 1]")
             if abs(self.pbo - self.negative_logit_count / self.split_count) > 1e-9:
                 raise RobustnessError("pbo must equal negative_logit_count / split_count")
-            if len(self.splits) != self.split_count:
+            if len(self.splits) != expected_split_count:
                 raise RobustnessError("splits must contain exactly split_count entries")
+
+            expected_combos = list(combinations(range(self.block_count), half_s))
+            for i, split in enumerate(self.splits):
+                if split.split_index != i:
+                    raise RobustnessError(f"split at index {i} must have split_index {i}, got {split.split_index}")
+                if split.in_sample_blocks != expected_combos[i]:
+                    raise RobustnessError(
+                        f"split at index {i} must have in_sample_blocks {expected_combos[i]}, got {split.in_sample_blocks}"
+                    )
 
             actual_negative = sum(1 for split in self.splits if split.logit < 0.0)
             if self.negative_logit_count != actual_negative:
@@ -696,7 +751,6 @@ class PBOResult:
 
             trial_set = set(self.trial_ids)
             n_trials = len(self.trial_ids)
-            half_s = self.block_count // 2
             for split in self.splits:
                 if split.winner_trial_id not in trial_set:
                     raise RobustnessError(f"winner_trial_id {split.winner_trial_id} must be a member of trial_ids")
@@ -705,10 +759,6 @@ class PBOResult:
                 expected_omega = split.oos_rank / (n_trials + 1.0)
                 if abs(split.omega - expected_omega) > 1e-9:
                     raise RobustnessError("split omega must equal oos_rank / (N + 1)")
-                if len(split.in_sample_blocks) != half_s:
-                    raise RobustnessError(f"in_sample_blocks length must equal block_count // 2 ({half_s})")
-                if any(b >= self.block_count for b in split.in_sample_blocks):
-                    raise RobustnessError("in_sample_blocks index exceeds block_count")
         else:
             if not self.reason:
                 raise RobustnessError("a non-evaluable PBOResult requires an explicit reason")
