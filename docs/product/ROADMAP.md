@@ -13,7 +13,7 @@ ADRs + contracts    = semantic authority
 SCOPE.md            = active bounded authorization
 ```
 
-A numbered phase is not an executable work packet. Parallel work is allowed when Capability DAG dependencies are satisfied.
+A numbered phase is not an executable work packet. Parallel work is allowed when Capability DAG dependencies are satisfied, but the active scope may impose a stricter one-slice-at-a-time policy.
 
 ## Macro phases 0–15
 
@@ -55,107 +55,122 @@ B04 Non-contiguous coverage reads v1                COMPLETE
 K06 RAW / source protection v1                       COMPLETE
 A10 Backfill / repair v1                             COMPLETE
 E04 FeatureArtifact v1                               COMPLETE
-E06 H01 canonical integration                        COMPLETE (ADR-0035; issue #83/PR #88)
-F02 EventSpec/detection                              COMPLETE (issue #85/PR #89)
-F03 OutcomeSpec/Outcome                              COMPLETE (issue #86/PR #90; ADR-0038 + issue #102/PR #103 closeout)
-F04 Event studies and parameter sweep runtime v1     COMPLETE (issue #92/PR #94)
-F07 labels/censoring/lockbox                         COMPLETE (ADR-0036; issue #96/PR #99)
-F08 DSR/PBO robust comparison                        COMPLETE (ADR-0037; issue #98/PR #104)
-Wave 1 implementation batch (implement/wave-1)       CONCLUDED (2026-09-19)
-Wave 2 implementation batch (implement/wave-2)       COMPLETE (E06,F02,F03; issue #87 reconciliation)
-Wave 3 implementation batch (implement/wave-3)       COMPLETE (F01-F08; final governance reconciliation)
+E06 H01 canonical integration                        COMPLETE
+F02 EventSpec/detection                              COMPLETE
+F03 OutcomeSpec/Outcome                              COMPLETE
+F04 Event studies and parameter sweep runtime v1     COMPLETE
+F07 labels/censoring/lockbox                         COMPLETE
+F08 DSR/PBO robust comparison                        COMPLETE
+Wave 1 implementation batch                         CONCLUDED
+Wave 2 implementation batch                         COMPLETE
+Wave 3 implementation batch                         COMPLETE
 Broad independent Producer/Consumer expansion        UNLOCKED
 ```
 
-The two-stage Producer–Consumer Conformity Gate is governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md): the **Contract Freeze Gate** and **Conformity Implementation Gate** remain PASSED. The gate pair is concluded and is referenced here as credited foundation evidence, not reopened work.
+Wave 3 is implementation-complete through F08. After that closeout, the project selected **Live Ingest Vertical v1** and froze its first semantic authority set:
 
-Package Boundary established modular-monolith ownership/dependency rules. Legacy Harvest classified 31 capabilities and retained H01 as the first **legacy harvest candidate** without activating it. ASS-01 established `quant_platform.application` as the in-process composition owner without adding application use-case runtime, API transport, Job runtime or clients. C02 established the frozen `trades@1` semantic selector-resolution seam through PR #30; C03 completed the frozen result/error translation seam through PR #41 after exact-head `Quant Platform integrity #91` PASS. Together C02 + C03 complete the current in-process ASS-02 Application vertical. C05 configuration convergence and C04/ASS-03 tool orchestration convergence are both complete (C04 via issue #40/PR #44, 2026-09-14). Roadmap vNext governance-state consistency remains a credited foundation capability after the post-C03 reconciliation. E02 FeatureDefinition v1 is frozen and complete under ADR-0026. D06 FootprintDefinition v1 is frozen and complete under ADR-0027. B04 non-contiguous coverage reads v1 is frozen and complete under ADR-0029. K06 RAW/source protection v1 is frozen and complete under ADR-0032. A10 backfill/repair v1 is frozen and complete under ADR-0033. E04 FeatureArtifact v1 is frozen and complete under ADR-0034. E06 H01 canonical integration semantics are frozen under ADR-0035 and implementation is complete (issue #83/PR #88). Wave 2 completed E06/F02/F03 and was reconciled by issue #87. On `implement/wave-3`, F04 Event studies/sweeps v1 completed via issue #92/PR #94. ADR-0038 then reconciled F03 Outcome v1 semantic authority and the adversarial EOD/sentinel findings via issue #102/PR #103. F07 is frozen under ADR-0036 and implemented via issue #96/PR #99. F08 is frozen under ADR-0037 and implemented via issue #98/PR #104. Wave 3 is therefore implementation-complete through F08; this reconciliation updates the planning projections without selecting the next scope.
+```text
+ADR-0039  K08 backup / restore v1
+ADR-0040  A11 Bybit live trades acquisition v1
+ADR-0041  K02 live-ingest runtime identity v1
+ADR-0042  K10 checkpoint / recovery v1
+```
+
+These ADRs freeze semantics only. K08/A11/K10 implementation remains missing, and K02 implementation is conditional on a real deployment authorization mutation.
 
 Completed checkpoints are credited and must not be re-proved absent a concrete invalidating change.
 
 ## Roadmap vNext planning state
 
-The corrected architecture-roadmap inventory is:
-
 ```text
 TOTAL_ATOMS                     87
 CLASSIFIED_ATOMS                87
 UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     64 / 87 = 73.6%
-OPEN_BLOCKING                   15
+SEMANTIC_FROZEN_OR_RESOLVED     68 / 87 = 78.2%
+OPEN_BLOCKING                   11
 OPEN_DEFERABLE                  8
-ROADMAP_DEFINED                 64 + 15 + 8 = 87
+ROADMAP_DEFINED                 68 + 11 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
 IMPLEMENTATION_COMPLETE         45 / 87 = 51.7%
 ```
 
-The 100% planning score means every roadmap atom is classified: frozen/resolved, assigned to an atom-specific blocking gate, or explicitly deferable with a real evidence trigger. It does **not** mean every future semantic choice is frozen.
+The 100% planning score means every roadmap atom is classified. It does **not** mean every future semantic choice is frozen.
 
-The 73.6% value is the current semantic-freeze/resolution metric. Future provider, live, RL, transport and operational choices are not frozen merely to increase it.
+The selected Live Ingest scope additionally carries one scope-level open DG-B proposition that is not a new atom and therefore is not included in these counts: remediation of a live gap that exceeds the provider's bounded reconciliation window.
 
 ## Decision-gate model
-
-Open blockers are grouped into gate families, while resolved gates remain as historical references. Activation is **atom-path specific**:
 
 ```text
 DG-A  Representation / Feature integration
 DG-B  Historical / Live data convergence
 DG-C  Market-data depth (L1/L2)
-DG-D  Application configuration / ASS-03      RESOLVED for C05 semantics
-DG-E  Validation semantics                   RESOLVED and implemented through F07/F08
+DG-D  Application configuration / ASS-03      RESOLVED
+DG-E  Validation semantics                   RESOLVED / IMPLEMENTED
 DG-F  Strategy / Execution semantics
 DG-G  Experiment / RL / Jobs
 DG-H  Operational safety
 ```
 
-Important non-monolithic boundaries:
+Important current boundaries:
 
-- DG-A: Candle materialization `D05` is independent from canonical H01. `D06`, `E02`, `E04`, E05 and E06 are complete/frozen as recorded by their authorities.
-- DG-B: B04 disjoint historical coverage reads, A16 and A10 repair are complete for the accepted first vertical; repair semantics do not automatically activate live cursor semantics.
-- DG-C: L1 may be selected without activating L2.
-- DG-D: C05 semantics and implementation are complete; C04/ASS-03 is also complete.
-- DG-E: F07 is frozen under ADR-0036 and complete via PR #99; F08 is frozen under ADR-0037 and complete via PR #104. F07 completion removes the implementation blocker from G01/I04; F08 remains an independent robustness capability.
-- DG-G: I02 experiment persistence is complete.
-- DG-H: K03, K04, K05 and K06 are complete.
+- DG-A: `D05` remains independent from completed H01.
+- DG-B: A10/B04 historical repair is complete; A11 semantics are now frozen by ADR-0040; B06 consumer-live cursor remains open/outside the selected scope.
+- DG-B long-gap remediation remains `OPEN_BLOCKING` for claiming an unreconciled interruption filled/lossless. A11 may still record an explicit gap and continue with a new governed segment.
+- DG-C: L1 does not activate L2; L3 waits for real feed evidence.
+- DG-E: complete through F08.
+- DG-H: K03/K04/K05/K06 are complete; K02/K08/K10 semantics are frozen by ADR-0041/0039/0042; K07/K09 remain open and are outside current scope.
 
 Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension, multi-asset execution and concrete API transport — remain open until their evidence trigger exists.
 
-## Corrected operational dependency direction
-
-The DAG is acyclic. In particular:
+## Operational dependency direction
 
 ```text
+K06 source protection -> K08 backup/restore proof -> A11 live acquisition
 A11 live acquisition -> K10 checkpoint/recovery implementation
 K06 source protection -> K07 relocation
-K06 source protection -> K08 backup/restore -> K09 deletion authority
+K08 backup/restore proof -> K09 deletion authority
 ```
 
-Implemented recovery is therefore not a prerequisite of implementing the live capability it checkpoints. Backup/restore does not require tier relocation.
+K10 semantics are already frozen, but implementation follows A11 because it must checkpoint actual A11 state. Backup/restore does not require tier relocation.
 
 ## Vertical milestones
 
 ```text
 V1  Source -> canonical -> catalog -> DataGateway         COMPLETE
-V2  DataGateway -> Application service                   COMPLETE (C02 + C03)
-V3  DataGateway -> historical Candle                     COMPLETE (D03)
-V4  Representation -> Feature -> canonical H01           COMPLETE (E06; ADR-0035, issue #83/PR #88)
-V5  Feature -> Research                                  COMPLETE (F02/F03/F04; issues #85/#86/#92, PR #89/#90/#94; F03 authority reconciled by ADR-0038/PR #103)
-V6  Research -> Validation                               COMPLETE (F06/F07; ADR-0031/ADR-0036, issue #96/PR #99)
+V2  DataGateway -> Application service                   COMPLETE
+V3  DataGateway -> historical Candle                     COMPLETE
+V4  Representation -> Feature -> canonical H01           COMPLETE
+V5  Feature -> Research                                  COMPLETE
+V6  Research -> Validation                               COMPLETE
 V7  Strategy -> deterministic Replay                     BLOCKED by DG-F / upstream implementation
-V8  Historical -> Live                                   BLOCKED by DG-B live branch + relevant DG-H; DAG acyclic
+V8  Historical -> Live                                   PARTIAL AUTHORITY FROZEN; runtime missing
 V9  Application -> API -> Client                         application service complete; transport deferred
 V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
 ```
 
-V1 is the accepted Bybit BTCUSDT first vertical. V2 is complete at the in-process semantic service boundary. V5 is complete through F04, with F03's semantic authority reconciled by ADR-0038. V6 is complete: F06 provides leakage-safe availability/purge/embargo and F07 now provides the canonical outcome-derived label/censoring/lockbox runtime. F08 is also complete, but remains an independent robust-comparison capability rather than part of the V6 completion proposition.
+V8 now has the first acquisition/recovery authority frozen, but is not complete: K08 proof, A11 runtime and K10 runtime are still missing, B06 remains outside the selected first-ingest scope, and any long gap beyond bounded provider reconciliation must remain explicit until authoritative repair evidence exists.
 
 ## Current execution frontier
 
-Wave 3 is complete. This roadmap does not select the next bounded scope.
+Wave 3 is complete. The selected macro-scope is now **Live Ingest Vertical v1**, governed by `SCOPE.md`.
 
-F07 completion makes `G01` and `I04` dependency-ready, subject to their own remaining authority/scope. Separately, the live-data path remains governed by its own blockers: `A11` is still `OPEN_BLOCKING / MISSING` and requires the selected DG-B live semantics plus the declared operational prerequisites on that path, including `K08`.
+The current bounded implementation frontier is:
 
-Frontier membership/readiness is **not implementation authorization** and does not select or authorize unrelated atoms. The next bounded scope must be chosen separately.
+```text
+1. K08 implementation + isolated restore proof
+        ↓
+2. A11 Bybit BTCUSDT live acquisition
+        ↓
+3. real-server proof (+ K02 deployment conformance if activated)
+        ↓
+4. K10 checkpoint/recovery implementation
+```
+
+Long-gap remediation is not a speculative pre-A11 implementation task. It activates when a real interruption leaves support that bounded provider reconciliation cannot prove. Until an attributable repair source/path exists, the interval remains explicit non-complete coverage.
+
+B06 live-consumer access remains outside the selected macro-scope.
+
+Frontier/readiness state is **not concurrent authorization**; `SCOPE.md` still allows one bounded mutation slice at a time.
 
 ## Execution waves
 
@@ -163,35 +178,34 @@ Waves are dependency/value groupings, not a new linear phase numbering, and are 
 
 ```text
 Wave 0  Architecture foundation                           COMPLETE
-Wave 1  First canonical computation/application slices    COMPLETE (C05,D03,E05,F05,I01,K04)
-Wave 2  Representation / Feature                          COMPLETE (E04,E06; ADR-0034/ADR-0035)
-Wave 3  Research / Validation                             COMPLETE (F01-F08; ADR-0031/ADR-0036/ADR-0037/ADR-0038)
+Wave 1  First canonical computation/application slices    COMPLETE
+Wave 2  Representation / Feature                          COMPLETE
+Wave 3  Research / Validation                             COMPLETE
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
-Wave 6  Live Data Plane                                   K03,K04,K05,K06,A10,A16 COMPLETE; K02,K07-K10,A11,B06 remain
+Wave 6  Live Data Plane                                   K03,K04,K05,K06,A10,A16 COMPLETE; K02,K08,K10,A11 FROZEN/MISSING; K07,K09,B06 remain open/missing
 Wave 7  Runtime / Clients                                 J02 -> thin clients when real client need exists
 Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. Completion of Wave 3 does not by itself activate Wave 4, Wave 5, Wave 6 or any other bounded scope.
+The selected Live Ingest scope is a bounded path through part of Wave 6, not authorization to implement Wave 6 generally.
 
 ## Producer / storage interpretation
 
-The former producer-side narrative was too linear. Capacity observation, application work, historical representation work, backup design and other independent capabilities may advance in parallel when their declared dependencies are met.
+Capacity observation, application work, historical representation work, backup design and other independent capabilities may advance in parallel when their declared dependencies are met, subject to the active scope's mutation policy.
 
-Backfill/repair does not require the entire storage-tiering program. Backup/restore must precede deletion authority but need not wait for tier relocation. L1/L2 contract work requires real feed evidence, not a second venue. API transport does not precede the completed in-process ASS-02 service.
+Backfill/repair does not require the entire storage-tiering program. Backup/restore must precede A11 under the selected first-live path and must precede deletion authority, but need not wait for tier relocation. API transport does not precede the completed in-process ASS-02 service.
 
 ## Planning rule
 
 Before opening implementation:
 
-1. verify `origin/main`;
-2. select one atom from the current frontier or one required decision branch;
+1. verify the current authoritative branch/ref;
+2. read `SCOPE.md` and the selected atom's accepted ADR;
 3. verify its transitive `Requires` path;
-4. activate only unresolved decisions on that path;
-5. credit existing evidence;
-6. define minimum acceptance/proof;
-7. create a bounded scope/branch;
-8. keep unrelated frontier atoms inactive.
+4. credit existing evidence;
+5. define only the exact missing implementation/proof proposition;
+6. keep unrelated frontier atoms inactive;
+7. reconcile governance only after integrated evidence changes state.
 
 Roadmap state never authorizes production/runtime mutation by itself.
