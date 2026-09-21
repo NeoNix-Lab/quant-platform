@@ -21,10 +21,14 @@ DG-A FeatureArtifact v1 (E04)                        FROZEN / COMPLETE
 DG-A H01 canonical integration v1 (E06)              FROZEN / COMPLETE
 DG-B B04 non-contiguous coverage reads v1            FROZEN / COMPLETE
 DG-B A10 backfill / repair v1                        FROZEN / COMPLETE
+DG-B A11 Bybit live acquisition semantics v1         FROZEN / MISSING
 F03 Outcome v1 semantic authority                    FROZEN / COMPLETE
 DG-E F07 labels/censoring/lockbox v1                 FROZEN / COMPLETE
 DG-E F08 DSR/PBO robust comparison v1                FROZEN / COMPLETE
+DG-H K02 live-ingest runtime identity v1             FROZEN / MISSING
 DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
+DG-H K08 backup / restore v1                         FROZEN / MISSING
+DG-H K10 checkpoint / recovery v1                    FROZEN / MISSING
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -41,7 +45,11 @@ Resolved architecture includes:
 - Consumer API semantic selector/result/error boundary;
 - completed ASS-02 in-process path: C02 semantic selector resolution + C03 result/error translation;
 - `trade-v1`, Declared Coverage, CandleDefinition v1, FeatureDefinition v1, FootprintDefinition v1, B04 non-contiguous coverage reads v1, first-vertical conformity/publication semantics and source-acquired lineage v2;
-- canonical F03 Outcome v1 semantics, including explicit end-of-data evidence, under [ADR-0038](../decisions/ADR-0038-outcome-v1-semantic-authority.md).
+- canonical F03 Outcome v1 semantics, including explicit end-of-data evidence, under [ADR-0038](../decisions/ADR-0038-outcome-v1-semantic-authority.md);
+- K08 backup/restore semantics under [ADR-0039](../decisions/ADR-0039-backup-restore-v1.md);
+- Bybit BTCUSDT live-trade acquisition/cutover/dedup/reconnect semantics under [ADR-0040](../decisions/ADR-0040-bybit-live-trades-v1.md);
+- live-ingest runtime identity/least-privilege semantics under [ADR-0041](../decisions/ADR-0041-live-ingest-runtime-identity-v1.md);
+- live-ingest checkpoint/recovery invariants under [ADR-0042](../decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md).
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
@@ -158,17 +166,44 @@ quality-report -> lifecycle mapping beyond the accepted first vertical,
 duplicate resolution beyond what A10 already resolves -- remains live and
 should only be activated by the selected repair slice actually needing it.
 
-### Live branch (`A11`,`B06` + only required shared decisions)
+### Live acquisition branch (`A11`) — RESOLVED
 
-Before live acquisition/cursor implementation, resolve:
+A11 semantics for the selected first vertical are frozen under [ADR-0040](../decisions/ADR-0040-bybit-live-trades-v1.md).
 
-- historical/live overlap and source precedence;
-- duplicate rules for the selected source;
-- deterministic live cursor identity and resume/replay semantics;
-- only those repair/shared quality/coverage propositions that are on the selected live path;
-- the relevant DG-H operational prerequisites on that path.
+Accepted A11 v1 decisions include:
 
-Implemented checkpoint/recovery (`K10`) follows the live acquisition capability it checkpoints; it is not an implementation prerequisite of `A11`.
+- Bybit public linear `publicTrade.BTCUSDT` is the selected source;
+- canonical mapping preserves provider trade time/ID/price/size/taker-side/cross-sequence while `receive_ts` remains null in v1 rather than inventing semantics;
+- `TradeKeyV1 = (venue, instrument, exchange_ts, trade_id)` and canonical total order remains `(exchange_ts, trade_id)`;
+- provider `seq` is source evidence, not a gap-free resume cursor;
+- same key + equivalent payload is idempotent; same key + conflicting payload fails closed;
+- historical authority owns keys through the explicit historical cutover key and live authority owns keys after it;
+- disconnect/reconnect uses only bounded provider evidence capable of proving continuity; inability to recover the last durable key produces explicit non-complete coverage, never fabricated completeness;
+- transport is at-least-once while the canonical economic effect is idempotent.
+
+A11 implementation remains `MISSING` and still requires K08 proof before activation.
+
+### Live gap remediation beyond bounded reconciliation — **OPEN_BLOCKING for Live Ingest Vertical closeout**
+
+ADR-0040 deliberately does not invent a provider capability for interruptions that exceed the bounded recent-public-trades reconciliation window.
+
+Trigger: after an A11 disconnect/restart, the last durable canonical `TradeKeyV1` cannot be recovered from the provider evidence available to the bounded reconciliation path, leaving an explicit non-complete interval.
+
+Before such an interval may be declared filled/complete, resolve and prove:
+
+- the authoritative source capable of reconstructing the exact missing interval (for example a provider historical/archive source only if its semantics and availability are actually observed and attributable);
+- how that source binds to the existing Bybit `TradeKeyV1`, ordering and `trade-v1` semantics without inventing sequence continuity;
+- how the existing A10 repair-intent/candidate/cutover path consumes that evidence;
+- how the repaired interval is re-verified strongly enough to replace the prior `transport_interruption` / non-complete coverage evidence;
+- what happens when no authoritative source can prove the missing interval (the gap must remain explicit; no guessed completion).
+
+This open block does **not** prevent A11 from running, recording an explicit gap and continuing with a new governed live segment. It **does** prevent the project from claiming that such a gap has been colmato/completed, and prevents Live Ingest Vertical closeout from claiming lossless continuity across that interval, until the missing-evidence proposition is actually satisfied.
+
+Do not solve this by treating missing `seq` values, absence of trades, wall-clock time or a finite local buffer as proof of completeness.
+
+### Live consumer cursor (`B06`) — still OPEN / OUTSIDE CURRENT SCOPE
+
+B06 deterministic consumer resume/replay semantics remain unresolved until a real live consumer is selected. ADR-0040 freezes A11 acquisition/reconciliation state only; it does not silently freeze B06.
 
 ## DG-C — Market-data depth
 
@@ -268,9 +303,13 @@ Before durable long-running operations, freeze submission identity, status/lifec
 
 This family is progressive and non-monolithic.
 
-### Runtime identity (`K02`)
+### Runtime identity (`K02`) — RESOLVED for Live Ingest v1
 
-Before production runtime identities are created/changed, resolve service identities, database roles, filesystem ACLs, credential disposition and least-privilege boundaries. Human/bootstrap E2E privilege is not production authorization.
+Live-ingest runtime identity semantics are frozen under [ADR-0041](../decisions/ADR-0041-live-ingest-runtime-identity-v1.md).
+
+If the real deployment creates/changes a dedicated production identity or authorization boundary, use one non-root least-privileged service identity; public Bybit trades v1 carries no provider secret; filesystem/database authority is restricted to the existing ingest/publication/checkpoint responsibilities; normal ingest authority does not imply backup-destruction authority. Exact OS/service-manager primitives remain deployment-local.
+
+K02 implementation remains conditional: no separate mutation is required if the real-server proof reuses an already-governed identity/ACL boundary without changing production authorization.
 
 ### Observability (`K03`)
 
@@ -295,17 +334,23 @@ type-restricted to K06-owned concerns, tracked for a future narrowing pass.
 
 If relocation is selected, freeze crash-safe old-or-new-valid placement semantics. This is a sibling downstream use of source protection, not a prerequisite of backup/restore.
 
-### Backup/restore (`K08`)
+### Backup/restore (`K08`) — RESOLVED, IMPLEMENTATION MISSING
 
-After source protection, resolve recovery objective, destination/topology/frequency as required, and prove independent restoration of required identities. Tier relocation need not be implemented first.
+K08 semantics are frozen under [ADR-0039](../decisions/ADR-0039-backup-restore-v1.md): protect finalized published canonical state as an identity-bound recovery set; prove restore from storage independent of the tested primary boundary into an empty isolated target; reproduce canonical identities/coverage/catalog resolution and historical DataGateway-visible data. RPO v1 is the last finalized recovery set; no numeric RTO/HA/off-site claim is implied.
+
+K08 implementation/proof remains required before A11 activation. Tier relocation is not a prerequisite.
 
 ### Retention/deletion (`K09`)
 
 Restore proof must precede deletion authority. No protected or sole recoverable evidence may be deleted.
 
-### Checkpoint/recovery (`K10`)
+### Checkpoint/recovery (`K10`) — RESOLVED, IMPLEMENTATION MISSING
 
-`K10` implementation requires live acquisition `A11`, observability `K03` and restore evidence `K08`. Freeze cursor/checkpoint crash/restart semantics before implementing K10. It follows, rather than cyclically precedes, A11 implementation.
+K10 semantics are frozen under [ADR-0042](../decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md).
+
+A checkpoint means the last canonical progress point already durably published; publication must become durable before checkpoint advance. Replay after crash is allowed and relies on ADR-0040 idempotent deduplication. Invalid checkpoints fail closed. Restart uses bounded provider reconciliation and must record an explicit gap when continuity cannot be proven; it never guesses a cursor/completeness state.
+
+K10 implementation still requires actual A11 runtime state, K03 and K08 proof, exactly as the dependency DAG declares.
 
 ## Explicitly deferable decisions
 
