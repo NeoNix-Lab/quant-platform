@@ -52,12 +52,12 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Features | Generic provider extension | OPEN_DEFERABLE | MISSING | Feature Engine | E07 | Wait for a real second provider. |
 | Research | HypothesisSpec | RESOLVED | COMPLETE | Research | F01 | Depends on FeatureDefinition for the canonical vertical. |
 | Research | EventSpec/detection | RESOLVED | COMPLETE | Research | F02 | Requires FeatureArtifact for the full vertical; implemented, issue #85/PR #89. |
-| Research | OutcomeSpec/Outcome | RESOLVED | COMPLETE | Research | F03 | Future-window identity and availability separated from labels; implemented, issue #86/PR #90. |
+| Research | OutcomeSpec/Outcome | FROZEN | COMPLETE | Research | F03 | ADR-0038 ratifies canonical Outcome v1 semantics and EOD evidence; implementation issue #86/PR #90, adversarial closeout issue #102/PR #103. |
 | Research | Event studies/sweeps | RESOLVED | COMPLETE | Research | F04 | Reproducible study population/aggregates; implemented, issue #92/PR #94. |
 | Validation | Walk-forward schedule | RESOLVED | COMPLETE | Validation | F05 | Deterministic pure temporal atom. |
 | Validation | Availability/purge/embargo | FROZEN | COMPLETE | Validation | F06 | ADR-0031. |
-| Validation | Labels/censoring/lockbox | FROZEN | MISSING | Validation | F07 | ADR-0036; outcome-derived labels/censoring/terminal-lockbox semantics frozen; implementation pending. |
-| Validation | DSR/PBO | FROZEN | MISSING | Research/Validation | F08 | ADR-0037; capability remains cross-domain, while the bounded estimator runtime is Validation-owned; DSR-L/full-CSCV semantics and reference vectors frozen. |
+| Validation | Labels/censoring/lockbox | FROZEN | COMPLETE | Validation | F07 | ADR-0036; outcome-derived labels, exact target support and terminal lockbox implemented, issue #96/PR #99. |
+| Validation | DSR/PBO | FROZEN | COMPLETE | Research/Validation | F08 | ADR-0037; Validation-owned DSR-L/full-CSCV runtime implemented, issue #98/PR #104. |
 | Strategy | StrategySpec/DecisionIntent | RESOLVED | MISSING | Strategy | G01 | Strategy remains upstream of execution. |
 | Strategy | Policy composition | RESOLVED | MISSING | Strategy | G02 | Deterministic composition required. |
 | Strategy | Risk/sizing | RESOLVED | MISSING | Strategy | G03 | No client-owned logic. |
@@ -93,7 +93,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Backup/restore proof | OPEN_BLOCKING | MISSING | Operations | K08 | DG-H backup branch; depends on K06, not K07; restore proof precedes deletion authority. |
 | Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
 | Operations | Checkpoint/recovery | OPEN_BLOCKING | MISSING | Operations/Data Plane | K10 | DG-H recovery branch; implementation follows A11 and requires K03/K08. |
-| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Roadmap vNext authority set remains coherent after post-C03 reconciliation. |
+| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Roadmap vNext authority set remains coherent after Wave 3 closeout reconciliation. |
 
 ## Gate / evidence state
 
@@ -108,7 +108,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | ASS-02 semantic selector resolution (C02) | COMPLETE | PR #30 integrated; reviewed exact-head CI passed. |
 | ASS-02 result/error translation (C03) | COMPLETE | PR #41 integrated reviewed head `f382a2e6...`; integrity #91 passed on exact head. |
 | ASS-02 in-process Application vertical | COMPLETE | C02 + C03 complete; does not imply C05/C04/API/jobs/clients. |
-| K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled after C03 integration. |
+| K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled through Wave 3 closeout. |
 | E02 FeatureDefinition v1 semantic foundation | COMPLETE | ADR-0026 accepted; immutable runtime model and targeted tests implemented. |
 | D06 FootprintDefinition v1 representation foundation | COMPLETE | ADR-0027 accepted; immutable historical FINAL Footprint v1 runtime implemented. |
 | B04 Non-contiguous coverage reads v1 | COMPLETE | ADR-0029 accepted; explicit `ALLOW_PARTIAL` DataGateway policy implemented. |
@@ -117,24 +117,22 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | E04 FeatureArtifact v1 | COMPLETE | ADR-0034 accepted; `SupportShape`, FINAL-only sealing, `InitVar` construction guard, exact-Fraction equivalence. |
 | E06 H01 canonical integration v1 | COMPLETE | ADR-0035 accepted; bounded implementation completed, issue #83/PR #88. |
 | F02 EventSpec/detection v1 | COMPLETE | Traceable event rule + availability evidence implemented, issue #85/PR #89. |
-| F03 OutcomeSpec/Outcome v1 | COMPLETE | Horizon/censoring/availability explicit, implemented, issue #86/PR #90. |
+| F03 OutcomeSpec/Outcome v1 | COMPLETE | ADR-0038 canonical semantic authority; issue #86/PR #90 implementation plus issue #102/PR #103 adversarial closeout. |
 | F04 Event studies/sweeps v1 | COMPLETE | Reproducible study population/aggregates and parameter sweep runtime implemented, issue #92/PR #94. |
-| F07 labels/censoring/lockbox v1 | FROZEN | ADR-0036 accepted under issue #95; implementation remains MISSING. |
-| F08 DSR/PBO robust comparison v1 | FROZEN | ADR-0037 accepted under issue #97; implementation remains MISSING. |
+| F07 labels/censoring/lockbox v1 | COMPLETE | ADR-0036; implementation integrated via issue #96/PR #99. |
+| F08 DSR/PBO robust comparison v1 | COMPLETE | ADR-0037; implementation integrated via issue #98/PR #104. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
+| Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
 
 ## Current frontier
 
-F07 and F08 semantics are both `FROZEN`; implementations are `MISSING` and prerequisites are satisfied.
+Wave 3 is complete. No next bounded scope is selected by this state projection.
 
-```text
-F07 implementation   issue #96 prepared; frontier-ready, not authorized by frontier alone
-F08 implementation   separate bounded implementation issue required; frontier-ready, not authorized by frontier alone
-```
+F07 completion removes the dependency blocker from `G01` and `I04`; those atoms are now dependency-ready subject to their own scope/authority. F08 robust comparison is complete and does not create additional downstream authorization by itself.
 
-F07 remains the dependency path to G01/I04. F08 is an independent robust-comparison capability and does not block Strategy/ML paths that depend on F07.
+The live-data path remains separately governed: `A11` is still `OPEN_BLOCKING / MISSING` and requires the selected DG-B live semantics plus its declared operational prerequisites, including `K08`.
 
-Frontier membership means planning dependencies and decision gates are satisfied; it does not authorize implementation.
+Frontier/readiness state is **not implementation authorization**. The next bounded scope must be selected separately.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.
