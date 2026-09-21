@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; post-F08 semantic freeze (Wave 3)**.
+Status: **CANONICAL; Wave 3 implementation complete through F08**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,11 +10,7 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after F08 semantic freeze (ADR-0037 / issue #97; F07 frozen by ADR-0036 / issue #95;
-F04 merged via issue #92, PR #94 on `implement/wave-3`; post-Wave-2 atoms
-E06/F02/F03 merged via issues #83/#85/#86, PRs #88/#89/#90;
-K06/A10/E04/C05/D03/E05/F05/I01/K04/F01/K05/I02/K03/F06 implementation
-previously confirmed against merged PRs; E06 semantics frozen by ADR-0035):
+Current audited inventory after Wave 3 implementation closeout (F08 integrated via issue #98/PR #104; F07 via issue #96/PR #99; F03 semantic/adversarial closeout via ADR-0038 and issue #102/PR #103; F04 via issue #92/PR #94; post-Wave-2 atoms E06/F02/F03 via issues #83/#85/#86, PRs #88/#89/#90; K06/A10/E04/C05/D03/E05/F05/I01/K04/F01/K05/I02/K03/F06 implementation previously confirmed against merged PRs; E06 semantics frozen by ADR-0035):
 
 ```text
 TOTAL_ATOMS                     = 87
@@ -25,7 +21,7 @@ OPEN_BLOCKING                   = 15
 OPEN_DEFERABLE                  = 8
 ROADMAP_DEFINED                 = 64 + 15 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         = 43 / 87 = 49.4%
+IMPLEMENTATION_COMPLETE         = 45 / 87 = 51.7%
 ```
 
 The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved proposition has a bounded activation rule. The 73.6% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, live, RL, transport or operational semantics.
@@ -133,12 +129,12 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 |---|---|---|---|---|---|---|---|
 | F01 | HypothesisSpec | Research | E02 | F02,F03 | RESOLVED | COMPLETE | Reproducible hypothesis references canonical observables |
 | F02 | EventSpec/detection | Research | F01,E04 | F04 | RESOLVED | COMPLETE | Traceable event rule + availability evidence; H01-backed rules additionally consume E06 outputs; implemented, issue #85/PR #89 |
-| F03 | OutcomeSpec/Outcome | Research | F01 | F04,F07 | RESOLVED | COMPLETE | Horizon/censoring/availability explicit; implemented, issue #86/PR #90 |
+| F03 | OutcomeSpec/Outcome | Research | F01 | F04,F07 | FROZEN | COMPLETE | ADR-0038 canonical Outcome v1 authority; issue #86/PR #90 implementation plus issue #102/PR #103 adversarial closeout |
 | F04 | Event study/sweeps | Research | F02,F03,B03 | I01,F08 | RESOLVED | COMPLETE | Re-run preserves population and aggregates; implemented, issue #92/PR #94 |
 | F05 | Walk-forward schedule | Validation | shared time primitives | F06,F08 | RESOLVED | COMPLETE | Deterministic temporal fold boundaries |
 | F06 | Availability/purge/embargo | Validation | F05,E02 | F07,I04 | FROZEN | COMPLETE | Adversarial leakage rejected; ADR-0031 |
-| F07 | Labels/censoring/lockbox | Validation | F03,F06 | G01,I04 | FROZEN | MISSING | Outcome-derived labels, exact target support and terminal hidden-evaluation lockbox; ADR-0036 |
-| F08 | DSR/PBO | Research/Validation | F04,F05 | robust comparison | FROZEN | MISSING | DSR-L + full CSCV PBO, explicit comparable panel/numerical policy and pinned vectors; ADR-0037 |
+| F07 | Labels/censoring/lockbox | Validation | F03,F06 | G01,I04 | FROZEN | COMPLETE | ADR-0036; canonical label/target-support/terminal-lockbox runtime implemented, issue #96/PR #99 |
+| F08 | DSR/PBO | Research/Validation | F04,F05 | robust comparison | FROZEN | COMPLETE | ADR-0037; Validation-owned DSR-L + full CSCV PBO runtime with pinned vectors, issue #98/PR #104 |
 
 ### G — Strategy & Decision
 
@@ -199,7 +195,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | K08 | Backup/restore proof | Operations | K06 | K09,J08,K10,A11 | OPEN_BLOCKING | MISSING | Independent restore reproduces required identities; DG-H backup branch |
 | K09 | Retention/deletion authority | Operations | K08 | sustainable live | OPEN_BLOCKING | MISSING | Never delete protected/sole recoverable evidence; DG-H deletion branch |
 | K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | OPEN_BLOCKING | MISSING | Crash/restart preserves cursor/publication invariants; DG-H recovery branch; follows live acquisition rather than blocking its implementation |
-| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; post-C03 reconciliation maintains coherence |
+| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; Wave 3 closeout reconciliation maintains coherence |
 
 ## Dependency integrity
 
@@ -274,14 +270,14 @@ Resolution precedence is **explicit CLI > environment > declared default > expli
 
 C05 implementation is `COMPLETE`. C04/ASS-03 is also `COMPLETE` (issue #40/PR #44, 2026-09-14) -- this was missed in the 2026-09-19 post-Wave-1 reconciliation pass and corrected here after a fresh issue (#84) was drafted against the stale `MISSING` classification and found to be fully redundant against the current baseline.
 
-### DG-E — Validation semantics — RESOLVED
+### DG-E — Validation semantics — RESOLVED / IMPLEMENTED
 
-Both DG-E branches are semantically frozen:
+Both DG-E branches are semantically frozen and implemented:
 
-- **F07 validation/label path:** ADR-0036 / issue #95; implementation `MISSING`.
-- **F08 robust-comparison path:** ADR-0037 / issue #97; DSR-L, complete comparable excess-return panel, explicit `K_eff`, binary64 numerical policy, full CSCV PBO and pinned vectors; implementation `MISSING`.
+- **F07 validation/label path:** ADR-0036 / issue #95; implementation `COMPLETE` via issue #96/PR #99.
+- **F08 robust-comparison path:** ADR-0037 / issue #97; DSR-L, complete comparable excess-return panel, explicit `K_eff`, binary64 numerical policy, full CSCV PBO and pinned vectors; implementation `COMPLETE` via issue #98/PR #104.
 
-DG-E therefore has no remaining `OPEN_BLOCKING` decision. F08 remains independent from Strategy/Supervised paths that depend on implemented F07 rather than F08.
+DG-E therefore has no remaining `OPEN_BLOCKING` decision or implementation gap through F08. F08 remains independent from Strategy/Supervised paths that depend on implemented F07 rather than F08.
 
 ### DG-F — Strategy / Execution semantics
 
@@ -320,8 +316,8 @@ Only operational prerequisites of the selected atom are activated.
 | V2 | DataGateway -> Application | Semantic historical request reaches canonical bounded data without caller storage identity | COMPLETE (`C02 + C03`) |
 | V3 | DataGateway -> historical Candle | Bounded trades yield reproducible CLOSED candles | COMPLETE (`D03`) |
 | V4 | Representation -> Feature -> H01 | Canonical footprint + FeatureDefinition/Artifact produce H01 with provenance | COMPLETE (`E06`; ADR-0035, issue #83/PR #88) |
-| V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies and sweeps | COMPLETE (`F02`/`F03`/`F04`; issues #85/#86/#92, PR #89/#90/#94) |
-| V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | SEMANTICS FROZEN (`F06` ADR-0031 + `F07` ADR-0036); F07 implementation MISSING |
+| V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies and sweeps | COMPLETE (`F02`/`F03`/`F04`; issues #85/#86/#92, PR #89/#90/#94; F03 authority reconciled by ADR-0038/PR #103) |
+| V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | COMPLETE (`F06` ADR-0031 + `F07` ADR-0036; issue #96/PR #99) |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |
 | V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | BLOCKED by DG-B live branch + relevant DG-H branches; acyclic |
 | V9 | Application -> API -> Client | One application semantic implementation serves thin clients | APPLICATION SERVICE COMPLETE; transport deferred |
@@ -329,15 +325,11 @@ Only operational prerequisites of the selected atom are activated.
 
 ## Execution frontier
 
-`F04` (Event studies/sweeps v1) is **COMPLETE** (issue #92/PR #94).
-F07 and F08 semantics are **FROZEN** under ADR-0036/ADR-0037; both implementations are `MISSING` and their declared prerequisites are complete.
+Wave 3 is **COMPLETE** through F08. No next bounded scope is selected by this dependency projection.
 
-```text
-F07 implementation                  READY BY DEPENDENCY/DECISION STATE; issue #96 prepared; NOT AUTHORIZED by frontier alone
-F08 implementation                  READY BY DEPENDENCY/DECISION STATE; separate bounded issue required; NOT AUTHORIZED by frontier alone
-```
+F07 completion makes `G01` and `I04` dependency-ready, subject to their own scope and any remaining downstream decisions. F08 robust comparison is complete and independent.
 
-F07 remains the required path to G01/I04. F08 is an independent robustness capability and does not block those downstream atoms.
+The live-data path remains separately blocked by its declared gates: `A11` remains `OPEN_BLOCKING / MISSING` and requires the selected DG-B live semantics plus the operational prerequisites on its path, including `K08`.
 
 This is a **frontier, not authorization**. `SCOPE.md` must activate exactly one bounded implementation or decision slice before runtime mutation.
 
@@ -356,7 +348,7 @@ exactly which atoms that batch actually finished, no more.
 Wave 0  Architecture foundation                           COMPLETE
 Wave 1  First canonical computation/application slices    COMPLETE (C05,D03,E05,F05,I01,K04)
 Wave 2  Representation / Feature vertical                 COMPLETE (E04,E06; ADR-0034/ADR-0035)
-Wave 3  Research / Validation                             F01-F06 COMPLETE; F07/F08 FROZEN/MISSING and implementation-ready by state
+Wave 3  Research / Validation                             COMPLETE (F01-F08; ADR-0031/ADR-0036/ADR-0037/ADR-0038)
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
 Wave 6  Live Data Plane                                   K03,K04,K05,K06,A10,A16 COMPLETE; K02,K07-K10,A11,B06 remain
@@ -364,7 +356,7 @@ Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 whe
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. Wave 3 is semantically frozen through F08 but remains implementation-incomplete until F07 and F08 runtimes are completed.
+Parallelism is allowed whenever DAG dependencies are satisfied. Wave 3 completion does not activate another wave or bounded scope by itself.
 
 ## Macro roadmap relationship
 
