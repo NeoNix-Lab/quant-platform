@@ -1,122 +1,348 @@
-# Scope: Post-Wave-2 governance closeout and Wave 3 frontier preparation, 2026-09-28 to 2026-10-02
+# Scope: Live Ingest Vertical v1
 
 ## Objective
 
-Record the resting state at the close of the Wave 2 week (2026-09-21 to
-2026-09-25) and prepare the execution agenda for the following week
-(2026-09-28 to 2026-10-02).
+Move Quant Platform from historical-only Bybit trade ingestion to the first continuously running live-ingest vertical on the real server.
 
-This file is a governance/planning scope. It does not itself authorize any
-implementation or decision-gate mutation; a separately bounded `SCOPE.md`/
-issue is required before any runtime/code-and-tests work is activated.
-
-## Status: Wave 2 resting state (close of 2026-09-25)
-
-The Wave 2 frontier (issues #83 E06, #85 F02, #86 F03) is **COMPLETE**,
-verified by the following exact merge-commit ancestry on
-`implement/wave-2` (identical to `origin/implement/wave-2`):
+The bounded product outcome is:
 
 ```text
-5eb11f1ab97bcd68539715d1b105d2e614b7b9e5  baseline: PR #82 merge (pre-Wave-2, E06 ADR-0035 freeze)
-3e9b0e485d19bd954b2d97d3a97841d06723c98a  Merge PR #88 (issue #83, E06) onto 5eb11f1
-                                           head agent/issue-83-22 @ 13c7cdfe783c37f879779a5c72e4dc90e599b28c
-2eb759f0f82423ccdc7daa66f38e495b19fd548d  Merge PR #89 (issue #85, F02) onto 3e9b0e4
-                                           head agent/issue-85-23 @ 60807ec7bea3f090950b1d0cd6e942f4460db04e
-c4b8498c15c61eec65e731472e74b94975ea3ad5  Merge PR #90 (issue #86, F03) onto 2eb759f
-                                           head agent/issue-86-24 @ 485588c37662a649e10a8d62438ae5cc8beba478
+Bybit BTCUSDT public live trades
+        ↓
+source-owned live acquisition
+        ↓
+canonical trade-v1
+        ↓
+existing quality / source-protection / publication lifecycle
+        ↓
+canonical durable storage + catalog
+        ↓
+restart-safe continuous server operation
 ```
 
-`implement/wave-2` and `origin/implement/wave-2` both point to
-`c4b8498c15c61eec65e731472e74b94975ea3ad5`, the combined Wave 2 baseline
-confirming all three PRs (E06, F02, F03) landed in sequence on the routed
-integration branch.
+The goal is not to implement Wave 6 generally and not to activate the live trading product. The goal is specifically to make real Bybit BTCUSDT trades enter the existing canonical data plane continuously, durably, observably and recoverably.
 
-`main` and `origin/main` remain at
-`5eb11f1ab97bcd68539715d1b105d2e614b7b9e5` (the pre-Wave-2 PR #82 baseline);
-Wave 2 has **not** yet been promoted to `main` (`main` is a strict ancestor of
-`implement/wave-2`'s head). Promotion is a separate, explicit,
-clean-tree-guarded, fast-forward-only operation and is not performed by, or
-claimed as done by, this governance-only reconciliation.
+Historical and live acquisition must converge on the existing canonical data model and publication path. Do not create a second live-only storage, catalog, schema or identity system.
+
+## Baseline
+
+Authoritative scope baseline after the first Live Ingest semantic freeze:
 
 ```text
-E06  H01 canonical integration   COMPLETE   issue #83 / PR #88 / 3e9b0e4
-F02  EventSpec/detection         COMPLETE   issue #85 / PR #89 / 2eb759f
-F03  OutcomeSpec/Outcome         COMPLETE   issue #86 / PR #90 / c4b8498
+implement/wave-3 @ current fast-forward descendant containing ADR-0039..ADR-0042
 ```
 
-This governance issue (#87) performs the reconciliation: `CAPABILITY_MAP.md`,
-`CAPABILITY_DAG.md`, `ROADMAP.md` and `OPEN_DECISIONS.md` now record E06, F02
-and F03 as `COMPLETE`, and Wave 2 as concluded.
-
-C04/ASS-03 remains credited pre-existing evidence (issue #40/PR #44,
-2026-09-14) and was never part of the Wave 2 implementation gate. Issue #73's
-Wave 1 Human Golden E2E closeout (1440-candle 1m D03, official
-`GOLDEN E2E: PASS`) remains closed and credited; the previously stale
-"in progress" notes in `CAPABILITY_MAP.md`/`ROADMAP.md` are corrected by this
-reconciliation.
-
-The completed Producer-Consumer Conformity cycle remains credited under
-ADR-0023:
+Wave 3 is complete through F08 and remains credited. The following live-ingest semantics are now accepted authority:
 
 ```text
-Contract Freeze Gate              PASSED
-Conformity Implementation Gate    PASSED
+K08  backup / restore v1             FROZEN / MISSING   ADR-0039
+A11  Bybit live trades v1            FROZEN / MISSING   ADR-0040
+K02  live-ingest runtime identity    FROZEN / MISSING   ADR-0041
+K10  checkpoint / recovery v1        FROZEN / MISSING   ADR-0042
 ```
 
-## Next week execution agenda (2026-09-28 to 2026-10-02)
-
-The next decision-complete, dependency-satisfied atom is:
+Relevant credited implementation state includes:
 
 ```text
-F04  Event study/sweeps — Requires F02,F03,B03, all COMPLETE; decision RESOLVED
+Canonical data plane
+  trade-v1                         COMPLETE
+  manifests / coverage            COMPLETE
+  Parquet materialization         COMPLETE
+  certification / publication     COMPLETE
+  catalog / eligibility           COMPLETE
+  quality lifecycle               COMPLETE
+  backfill / repair               COMPLETE
+
+Operations
+  K03 Observability               COMPLETE
+  K04 Capacity observation        COMPLETE
+  K05 Pressure policy             COMPLETE
+  K06 RAW/source protection       COMPLETE
+
+Historical first vertical
+  Bybit BTCUSDT trades            COMPLETE
+  deterministic source evidence   COMPLETE
+  canonicalization                COMPLETE
+  historical import tooling       COMPLETE
 ```
 
-Beyond `F04`, the Validation/Strategy path remains blocked by the DG-E
-decision gate (`F07` labels/censoring/lockbox, `OPEN_BLOCKING`). F07's
-dependencies (`F03`,`F06`) are now both `COMPLETE`, but the gate itself is
-not resolved, so it does not join the frontier until a decision-gate scope
-resolves it.
-
-Candidate agenda for the week, in order of readiness:
+Primary implementation gaps at this scope state:
 
 ```text
-2026-09-28  verify current origin/main and origin/implement/wave-2 ancestry
-            (confirm whether Wave 2 promotion to main has occurred since
-            this reconciliation, per the exact commit evidence above);
-            open a bounded SCOPE.md for F04 (Event study/sweeps) if selected
-2026-09-29  continue F04, or open a bounded decision-gate scope for DG-E
-            (F07 labels/censoring/lockbox) if F04 is not selected this week
-2026-09-30  continue the selected bounded scope; avoid duplicate proof
-2026-10-01  continue/review the selected scope
-2026-10-02  close the selected scope; reserve remainder for review/integration
+K08  backup/restore proof          MISSING
+A11  live trades acquisition       MISSING
+K10  checkpoint/recovery           MISSING
+K02  deployment mutation           CONDITIONAL / MISSING
+B06  live access/cursor            MISSING but outside this scope
 ```
 
-Only one bounded implementation or decision-gate scope may be active at a
-time, per the Planning rule in `ROADMAP.md`/`CAPABILITY_DAG.md`.
+One semantic proposition remains deliberately open: **long-gap remediation beyond bounded provider reconciliation**. It is tracked in `OPEN_DECISIONS.md` as `OPEN_BLOCKING` for claiming such a gap filled / for lossless Live Ingest Vertical closeout. It is not permission to invent a repair source.
 
-## Excluded
+## Authority
 
-- Activating `F04` implementation or the DG-E decision gate directly from
-  this governance issue (issue #87 is governance-only; a separate bounded
-  scope/issue is required).
-- Reopening or re-implementing C04 / issue #84, or the Wave 1/Wave 2
-  implementation issues.
-- Reopening the Contract Freeze Gate, Conformity Implementation Gate or
-  Human Golden E2E without concrete invalidating evidence.
-- Claiming API transport, Job runtime, clients, live product mode or other
-  unrelated future capabilities.
+Start from:
+
+- `AGENTS.md`
+- `docs/decisions/ADR-0039-backup-restore-v1.md`
+- `docs/decisions/ADR-0040-bybit-live-trades-v1.md`
+- `docs/decisions/ADR-0041-live-ingest-runtime-identity-v1.md`
+- `docs/decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md`
+- `docs/product/CAPABILITY_DAG.md`
+- `docs/product/CAPABILITY_MAP.md`
+- `docs/architecture/OPEN_DECISIONS.md`
+- existing trade-v1 / Dataset / coverage / publication authorities
+- existing Bybit historical adapter and certification profile
+- existing K03/K04/K05/K06 runtime/evidence
+
+Use progressive discovery:
+
+```text
+named authority
+→ directly affected implementation/evidence
+→ expand only for a concrete unresolved proposition
+```
+
+Do not reopen the four accepted Live Ingest ADRs unless current repository/provider evidence directly contradicts them.
+
+## Execution policy
+
+Only one bounded implementation or decision-gate mutation slice is active at a time.
+
+The current path is:
+
+```text
+1. K08 implementation + isolated restore proof
+        ↓
+2. A11 implementation
+   Bybit BTCUSDT public live trades
+   → canonical trade-v1
+   → existing durable publication/catalog lifecycle
+        ↓
+3. Real server proof
+   provider + actual storage/catalog/runtime
+   + K02 deployment conformance if authorization boundary changes
+        ↓
+4. K10 implementation
+   checkpoint/recovery against the actual A11 state
+        ↓
+5. Resolve/execute long-gap remediation only if a real unresolved gap
+   and attributable repair source/path exist
+        ↓
+6. Live Ingest Vertical v1 closeout
+```
+
+The accepted ADRs remove the prior semantic-freeze steps; they do **not** authorize concurrent implementation of K08, A11 and K10.
+
+## Active bounded slice — K08 proof
+
+K08 is the first active implementation proposition.
+
+ADR-0039 already freezes the semantics. The exact missing proposition is therefore only the minimum implementation/evidence required to prove:
+
+```text
+finalized canonical state
+        ↓
+identity-bound RecoverySetV1
+        ↓
+independent primary-storage loss boundary
+        ↓
+restore into empty isolated target
+        ↓
+same canonical identities / coverage / catalog resolution
+        ↓
+existing historical DataGateway reads restored data
+```
+
+Do not reopen recovery semantics merely to choose a local copy/snapshot mechanism.
+
+Do not pull K07 or K09 into K08.
+
+## A11 — next bounded implementation slice
+
+After K08 proof, implement exactly ADR-0040.
+
+The first live source remains:
+
+```text
+venue       Bybit
+category    linear
+instrument  BTCUSDT
+dataset     trades
+schema      trade-v1
+source      publicTrade.BTCUSDT
+```
+
+Key frozen semantics include:
+
+- `TradeKeyV1 = (venue, instrument, exchange_ts, trade_id)`;
+- canonical order `(exchange_ts, trade_id)`;
+- provider `seq` is preserved evidence, not a gap-free cursor;
+- `receive_ts` remains null in canonical v1;
+- same-key equivalent observations deduplicate idempotently;
+- same-key conflicting payload fails closed;
+- historical/live cutover is explicit and deterministic;
+- reconnect uses only bounded provider evidence capable of proving continuity;
+- unresolved interruption becomes explicit non-complete coverage, never fabricated completeness;
+- transport is at-least-once, canonical economic effect idempotent.
+
+Reuse the existing canonical data plane. Do not create live-only storage/publication/catalog abstractions.
+
+## Long-gap remediation — explicit open block
+
+ADR-0040 deliberately leaves one proposition open.
+
+Trigger:
+
+```text
+last durable canonical TradeKeyV1
+cannot be recovered from bounded provider reconciliation evidence
+→ explicit non-complete interval remains
+```
+
+A11/K10 may continue with a new governed live segment. They may **not** call the unresolved interval complete.
+
+Before the gap may be filled, prove:
+
+- an authoritative source actually exposes the exact missing interval;
+- its identity/order/economic records map without invention to the accepted Bybit `trade-v1` semantics;
+- the existing A10 repair path can consume that evidence;
+- repaired support can be re-verified strongly enough to supersede prior interruption evidence.
+
+If no authoritative source exists, the gap remains explicit. Missing sequence numbers, elapsed time or absence of trades are never sufficient proof.
+
+Do not speculatively implement archive/backfill machinery before the trigger and source evidence exist.
+
+## Real server proof and K02
+
+A11 is not complete merely because local tests pass. Prove the bounded path against the real deployment environment:
+
+- real Bybit public live source;
+- real server runtime;
+- real canonical storage paths;
+- real publication/catalog state;
+- K03 observability;
+- K05 pressure behavior where applicable;
+- K06 source-protection invariants where applicable.
+
+ADR-0041 already freezes runtime-identity semantics. If deployment creates or changes a production identity/ACL/database-role boundary, conform that mutation to ADR-0041 before treating the service as production-governed.
+
+For public Bybit trade ingest v1 there is no provider API secret to provision.
+
+The normal ingest service must not gain general authority to destroy/replace the independent K08 backup merely for convenience.
+
+## K10 — checkpoint/recovery implementation
+
+After A11 exists, implement exactly ADR-0042 around the real A11 state.
+
+The invariant is:
+
+```text
+canonical publication durable
+        BEFORE
+checkpoint may advance
+```
+
+Replay after crash is acceptable; ADR-0040 idempotent deduplication removes already-published duplicates. A checkpoint may never advance beyond durable canonical state.
+
+Restart must validate the checkpoint, reconnect, buffer live evidence, perform bounded provider reconciliation, deduplicate and either prove continuity or record an explicit gap. It must never guess a resume cursor.
+
+## Milestones
+
+### M1 — Live Ingest Capable
+
+```text
+K08 proof
++ real provider connection
+→ real trades
+→ canonical trade-v1
+→ durable canonical publication
+```
+
+### M2 — Live Ingest Hardened
+
+```text
+M1
++ governed historical/live cutover
++ disconnect/reconnect correctness
++ K02-conformant deployment boundary where activated
++ checkpoint/recovery
++ real restart proof
++ no unresolved gap falsely claimed complete
+```
+
+The macro-scope closes only at M2 and only with the long-gap proposition honestly represented: either no qualifying long gap occurred, or any occurred gap has been repaired from attributable evidence, or the scope closeout explicitly retains the non-complete interval rather than claiming lossless continuity.
 
 ## Acceptance
 
-DONE means:
+`Live Ingest Vertical v1` is DONE only when all of the following are observably true:
 
-1. `SCOPE.md` reflects the Wave 2 resting state with exact merge-commit
-   ancestry evidence (E06 `3e9b0e4`, F02 `2eb759f`, F03 `c4b8498`, baseline
-   `5eb11f1`), the corrected Wave 3 frontier candidate (`F04`), and the next
-   blocking decision gate (DG-E).
-2. E06, F02 and F03 are credited as `COMPLETE` across governance documents.
-3. Wave 2 is recorded as `COMPLETE` in `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md`
-   and `ROADMAP.md`.
-4. Issue #73's stale "in progress" note is corrected to closed/credited.
-5. `main` is not mutated by this scope reconciliation beyond the authorized
-   governance files.
+1. K08 isolated restore proof satisfies ADR-0039.
+2. A real Bybit public live connection acquires BTCUSDT linear trades.
+3. Real live evidence maps into canonical `trade-v1` exactly under ADR-0040.
+4. Historical/live overlap has one deterministic governed result with no ungoverned duplicate economic trades.
+5. Disconnect/reconnect follows ADR-0040 and never fabricates continuity.
+6. Live-acquired trades enter the existing certification/publication/catalog lifecycle.
+7. Coverage/completeness claims derive from explicit evidence; absence of trades is not proof.
+8. Existing K05/K06 semantics remain applicable and are not bypassed.
+9. K03 makes the real ingest operationally observable at the needed failure/provenance level.
+10. Any production identity/ACL/role mutation conforms to ADR-0041.
+11. K10 stop/crash/restart proof satisfies ADR-0042.
+12. Data acquired live becomes ordinary canonical historical data readable through the existing DataGateway after publication.
+13. Any long gap that cannot be authoritatively reconstructed remains explicit non-complete coverage; no closeout claim silently erases it.
+14. No B06 live consumer, Strategy, Execution, ML/RL, client or API capability is required.
+15. Existing historical Bybit ingestion and canonical data-plane behavior remain valid.
+16. Package/architecture boundaries remain intact.
+17. Required authoritative verification for each bounded slice passes with no unresolved blocker.
+
+## Verification proportionality
+
+For every bounded slice:
+
+- CREDIT unchanged data-plane/operations evidence;
+- use targeted tests during implementation;
+- prove only the exact missing proposition;
+- run repository-required authoritative verification once on a stable candidate;
+- do not repeat expensive proof absent relevant mutation/failure/review/rebase;
+- use real-server evidence only where the acceptance proposition requires the real environment.
+
+## Stop / escalation
+
+Stop only when:
+
+- current repository/provider state contradicts ADR-0039..ADR-0042;
+- K08 proof requires destructive/shared-state action outside authorization;
+- A11 cannot satisfy its frozen provider/canonical semantics without changing accepted upstream contracts;
+- provider evidence cannot support a claimed ordering/dedup/coverage/reconciliation proposition;
+- real deployment requires authorization beyond ADR-0041;
+- K10 cannot preserve publication/checkpoint invariants without upstream semantic change;
+- filling an actual long gap requires choosing an unproven repair source/semantics.
+
+Do not stop for reversible implementation-local names, module layout or technology choices already inside a frozen contract.
+
+## Out of scope
+
+Do not pull into this macro-scope unless a concrete acceptance blocker proves otherwise:
+
+- B06 live DataGateway consumer cursor;
+- K07 tier relocation;
+- K09 retention/deletion;
+- G01+ Strategy / Replay;
+- Execution / paper / live trading;
+- supervised ML / RL;
+- L1 / L2 / L3 / MBO;
+- second venue / multi-venue ingest;
+- generic provider framework;
+- API / client / UI;
+- generic stream-processing framework;
+- generic job scheduler/executor;
+- generic checkpoint framework;
+- HA/clustering/off-site DR;
+- speculative gap-fill implementation without attributable source evidence;
+- unrelated governance cleanup;
+- mutation of `main` except through separately authorized integration/promotion workflow.
+
+## Scope closeout
+
+At closeout, reconcile governance to the strongest propositions actually proven by integrated runtime and real-server evidence.
+
+Do not declare the whole Live Data Plane, Wave 6, B06 or the live trading product complete merely because this first ingest vertical is complete.

@@ -25,5 +25,12 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0033 | Backfill / repair v1 | Accepted |
 | 0034 | FeatureArtifact v1 | Accepted |
 | 0035 | H01 canonical integration v1 | Accepted |
+| 0036 | Outcome-derived labels, censoring and lockbox v1 | Accepted |
+| 0037 | DSR/PBO robust-comparison semantics v1 | Accepted |
+| 0038 | F03 Outcome v1 semantic authority | Accepted |
+| 0039 | Backup / restore v1 | Accepted |
+| 0040 | Bybit live trades acquisition v1 | Accepted |
+| 0041 | Live-ingest runtime identity v1 | Accepted |
+| 0042 | Live-ingest checkpoint / recovery v1 | Accepted |
 
 See the individual ADR files for context and consequences.

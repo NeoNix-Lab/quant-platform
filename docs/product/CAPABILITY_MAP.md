@@ -18,7 +18,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Data | S13 certification | FROZEN | COMPLETE | Producer | A08 | Durable authoritative quality evidence. |
 | Data | S14 publication/eligibility | FROZEN | COMPLETE | Producer | A09 | First vertical catalog publication proven. |
 | Data | Backfill/repair | FROZEN | COMPLETE | Data Plane | A10 | ADR-0033; deterministic repair-intent/candidate/atomic-cutover foundation. |
-| Data | Live trades acquisition | OPEN_BLOCKING | MISSING | Data Plane | A11 | DG-B live branch + relevant DG-H prerequisites; implemented checkpoint/recovery follows live acquisition. |
+| Data | Live trades acquisition | FROZEN | MISSING | Data Plane | A11 | ADR-0040 freezes Bybit BTCUSDT live mapping/cutover/dedup/reconnect semantics; activation still requires K08 proof. Long-gap remediation remains separately open for vertical closeout. |
 | Data | Second-venue trades | OPEN_DEFERABLE | MISSING | Data Plane | A12 | Triggered by real second-provider evidence; do not design a generic resolver early. |
 | Data | L1 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A13 | DG-C L1 branch, triggered by a concrete feed; does not activate L2. |
 | Data | L2 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A14 | DG-C L2 branch, only when L2 is selected. |
@@ -29,7 +29,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Access | Result identity/provenance | FROZEN | COMPLETE | Data Access | B03 | Semantic/source identity distinct from physical locator. |
 | Access | Non-contiguous coverage read | FROZEN | COMPLETE | Data Access | B04 | Explicit `ALLOW_PARTIAL` coverage reads; ADR-0029. |
 | Access | Durable DatasetSnapshot | OPEN_DEFERABLE | MISSING | Data Access | B05 | Shape waits for a concrete durable-replay requirement. |
-| Access | Live access/cursor | OPEN_BLOCKING | MISSING | Data Access | B06 | DG-B live branch only. |
+| Access | Live access/cursor | OPEN_BLOCKING | MISSING | Data Access | B06 | DG-B live-consumer branch only; intentionally not frozen by ADR-0040. |
 | Access | Schema evolution beyond accepted versions | OPEN_DEFERABLE | MISSING | Data Access | B08 | Resolve against real next-version evidence. |
 | Application | ASS-01 ownership/enforcement | RESOLVED | COMPLETE | Application | C01 | `quant_platform.application` is the canonical in-process composition owner; PR #27 merged. |
 | Application | ASS-02 semantic selector resolution | FROZEN | COMPLETE | Application | C02 | PR #30 integrated the reviewed `trades@1` semantic selector resolution. |
@@ -52,12 +52,12 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Features | Generic provider extension | OPEN_DEFERABLE | MISSING | Feature Engine | E07 | Wait for a real second provider. |
 | Research | HypothesisSpec | RESOLVED | COMPLETE | Research | F01 | Depends on FeatureDefinition for the canonical vertical. |
 | Research | EventSpec/detection | RESOLVED | COMPLETE | Research | F02 | Requires FeatureArtifact for the full vertical; implemented, issue #85/PR #89. |
-| Research | OutcomeSpec/Outcome | RESOLVED | COMPLETE | Research | F03 | Future-window identity and availability separated from labels; implemented, issue #86/PR #90. |
-| Research | Event studies/sweeps | RESOLVED | MISSING | Research | F04 | Reproducible study population/aggregates. |
+| Research | OutcomeSpec/Outcome | FROZEN | COMPLETE | Research | F03 | ADR-0038 ratifies canonical Outcome v1 semantics and EOD evidence; implementation issue #86/PR #90, adversarial closeout issue #102/PR #103. |
+| Research | Event studies/sweeps | RESOLVED | COMPLETE | Research | F04 | Reproducible study population/aggregates; implemented, issue #92/PR #94. |
 | Validation | Walk-forward schedule | RESOLVED | COMPLETE | Validation | F05 | Deterministic pure temporal atom. |
 | Validation | Availability/purge/embargo | FROZEN | COMPLETE | Validation | F06 | ADR-0031. |
-| Validation | Labels/censoring/lockbox | OPEN_BLOCKING | MISSING | Validation | F07 | DG-E validation branch. |
-| Validation | DSR/PBO | OPEN_BLOCKING | MISSING | Research/Validation | F08 | Separate DG-E DSR/PBO branch; does not block Strategy/ML paths that depend on F07. |
+| Validation | Labels/censoring/lockbox | FROZEN | COMPLETE | Validation | F07 | ADR-0036; outcome-derived labels, exact target support and terminal lockbox implemented, issue #96/PR #99. |
+| Validation | DSR/PBO | FROZEN | COMPLETE | Research/Validation | F08 | ADR-0037; Validation-owned DSR-L/full-CSCV runtime implemented, issue #98/PR #104. |
 | Strategy | StrategySpec/DecisionIntent | RESOLVED | MISSING | Strategy | G01 | Strategy remains upstream of execution. |
 | Strategy | Policy composition | RESOLVED | MISSING | Strategy | G02 | Deterministic composition required. |
 | Strategy | Risk/sizing | RESOLVED | MISSING | Strategy | G03 | No client-owned logic. |
@@ -84,16 +84,16 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Runtime | Paper/shadow mode | RESOLVED | MISSING | Runtime | J07 | Vertical gate before live operation. |
 | Runtime | Live product mode | RESOLVED | MISSING | Runtime/Operations | J08 | Requires explicit operational authorization; roadmap state is not authorization. |
 | Operations | Provisioning/fixtures/CI | RESOLVED | COMPLETE | Engineering | K01 | Repository validation foundation complete. |
-| Operations | Server/runtime identity | OPEN_BLOCKING | MISSING | Operations | K02 | DG-H identity branch. |
+| Operations | Server/runtime identity | FROZEN | MISSING | Operations | K02 | ADR-0041; least-privileged public-ingest identity semantics frozen; implementation only if deployment changes authorization boundary. |
 | Operations | Observability | RESOLVED | COMPLETE | Operations | K03 | Minimum externally observable health/provenance/failure transitions. |
 | Operations | Capacity observation | RESOLVED | COMPLETE | Operations | K04 | Observational only. |
 | Operations | Health/pressure policy | FROZEN | COMPLETE | Operations | K05 | ADR-0028. |
 | Operations | RAW/source protection | FROZEN | COMPLETE | Operations/Data Plane | K06 | ADR-0032; attributable-evidence protection-identity/assessment seam, no backup dependency. |
 | Operations | Tier relocation | OPEN_BLOCKING | MISSING | Operations/Data Plane | K07 | DG-H relocation branch; sibling of backup after source protection. |
-| Operations | Backup/restore proof | OPEN_BLOCKING | MISSING | Operations | K08 | DG-H backup branch; depends on K06, not K07; restore proof precedes deletion authority. |
+| Operations | Backup/restore proof | FROZEN | MISSING | Operations | K08 | ADR-0039 freezes recovery-set/isolated-restore semantics; implementation/proof still required before A11. |
 | Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
-| Operations | Checkpoint/recovery | OPEN_BLOCKING | MISSING | Operations/Data Plane | K10 | DG-H recovery branch; implementation follows A11 and requires K03/K08. |
-| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Roadmap vNext authority set remains coherent after post-C03 reconciliation. |
+| Operations | Checkpoint/recovery | FROZEN | MISSING | Operations/Data Plane | K10 | ADR-0042 freezes publication-before-checkpoint/restart invariants; implementation follows A11 and requires K03/K08 proof. |
+| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Roadmap vNext authority set remains coherent after Wave 3 closeout reconciliation. |
 
 ## Gate / evidence state
 
@@ -103,12 +103,12 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Conformity Implementation Gate | PASSED | All ADR-0023 exit criteria satisfied. |
 | Human Golden Bybit BTCUSDT E2E | PASS | Exact accepted reference vertical. |
 | Package Boundary / Modular Monolith Foundation v1 | COMPLETE | Ownership/dependency enforcement established. |
-| Legacy Capability Harvest Audit v1 | COMPLETE | 31 capabilities classified; H01 selected as harvest candidate, H14 retained as REVIEW. |
+| Legacy Capability Harvest Audit v1 | COMPLETE | 31 capabilities classified; H14 REVIEW resolved to ADAPT by ADR-0037. |
 | ASS-01 Application ownership/enforcement | COMPLETE | PR #27 integrated. |
 | ASS-02 semantic selector resolution (C02) | COMPLETE | PR #30 integrated; reviewed exact-head CI passed. |
 | ASS-02 result/error translation (C03) | COMPLETE | PR #41 integrated reviewed head `f382a2e6...`; integrity #91 passed on exact head. |
 | ASS-02 in-process Application vertical | COMPLETE | C02 + C03 complete; does not imply C05/C04/API/jobs/clients. |
-| K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled after C03 integration. |
+| K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled through Wave 3 closeout. |
 | E02 FeatureDefinition v1 semantic foundation | COMPLETE | ADR-0026 accepted; immutable runtime model and targeted tests implemented. |
 | D06 FootprintDefinition v1 representation foundation | COMPLETE | ADR-0027 accepted; immutable historical FINAL Footprint v1 runtime implemented. |
 | B04 Non-contiguous coverage reads v1 | COMPLETE | ADR-0029 accepted; explicit `ALLOW_PARTIAL` DataGateway policy implemented. |
@@ -117,24 +117,28 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | E04 FeatureArtifact v1 | COMPLETE | ADR-0034 accepted; `SupportShape`, FINAL-only sealing, `InitVar` construction guard, exact-Fraction equivalence. |
 | E06 H01 canonical integration v1 | COMPLETE | ADR-0035 accepted; bounded implementation completed, issue #83/PR #88. |
 | F02 EventSpec/detection v1 | COMPLETE | Traceable event rule + availability evidence implemented, issue #85/PR #89. |
-| F03 OutcomeSpec/Outcome v1 | COMPLETE | Horizon/censoring/availability explicit, implemented, issue #86/PR #90. |
+| F03 OutcomeSpec/Outcome v1 | COMPLETE | ADR-0038 canonical semantic authority; issue #86/PR #90 implementation plus issue #102/PR #103 adversarial closeout. |
+| F04 Event studies/sweeps v1 | COMPLETE | Reproducible study population/aggregates and parameter sweep runtime implemented, issue #92/PR #94. |
+| F07 labels/censoring/lockbox v1 | COMPLETE | ADR-0036; implementation integrated via issue #96/PR #99. |
+| F08 DSR/PBO robust comparison v1 | COMPLETE | ADR-0037; implementation integrated via issue #98/PR #104. |
+| K08 backup/restore semantics v1 | FROZEN | ADR-0039 accepted; isolated restore proof still missing. |
+| A11 Bybit live acquisition semantics v1 | FROZEN | ADR-0040 accepted; implementation waits on K08 proof; unresolved long-gap remediation is tracked separately. |
+| K02 live-ingest runtime identity v1 | FROZEN | ADR-0041 accepted; implementation is conditional on an actual deployment authorization change. |
+| K10 live-ingest checkpoint/recovery v1 | FROZEN | ADR-0042 accepted; implementation follows A11 and K08 proof. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
+| Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
 
 ## Current frontier
 
-Wave 2 is **COMPLETE**: `E06`, `F02` and `F03` (the Wave 2 frontier) are now
-`COMPLETE` (issues #83/PR #88, #85/PR #89, #86/PR #90).
+Wave 3 is complete. The selected macro-scope is now `Live Ingest Vertical v1` as recorded in `SCOPE.md`.
 
-```text
-F04
-```
+K08 semantics are frozen, but its minimum backup/isolated-restore proof is the first remaining implementation gate. A11 semantics are also frozen and become implementation-ready only after that K08 proof. K10 semantics are frozen but its implementation intentionally follows the real A11 runtime state.
 
-`F04` (Event study/sweeps) is the next decision-complete, dependency-satisfied
-atom: its `Requires` (`F02`, `F03`, `B03`) are all `COMPLETE` and its decision
-state is `RESOLVED`. The Validation path beyond it remains blocked by the
-DG-E decision gate (`F07` labels/censoring/lockbox, `OPEN_BLOCKING`).
+The DG-B long-gap remediation proposition remains **OPEN_BLOCKING for Live Ingest Vertical closeout**: A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval is filled/lossless until an authoritative repair source/path proves the missing support.
 
-Frontier membership means planning dependencies and decision gates are satisfied; it does not authorize implementation.
+B06 live-consumer cursor remains outside the current scope and unresolved.
+
+Frontier/readiness state is **not concurrent implementation authorization**. `SCOPE.md` still permits only one bounded mutation slice at a time.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.

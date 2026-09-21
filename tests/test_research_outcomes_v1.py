@@ -19,6 +19,7 @@ from quant_platform.research import (  # noqa: E402
     ComparisonOperator,
     DetectedEvent,
     DirectionRequirement,
+    EndOfData,
     EventSpec,
     HorizonKind,
     HypothesisSpec,
@@ -274,9 +275,19 @@ class NoOvershootAndGapDetectionTests(unittest.TestCase):
 
 
 class CensoringTests(unittest.TestCase):
-    def test_duration_horizon_censored_at_end_of_dataset(self):
+    def test_duration_horizon_insufficient_when_data_exhausts_without_eod_proof(self):
+        # Finding B: a plain exhausted iterable is never, by itself, proof
+        # the authoritative source ended -- it proves only that the caller
+        # stopped supplying evidence.
         spec = outcome_spec(horizon_duration="20m", sampling_period="5m")
         series = [bar(0, "100"), bar(5, "101")]
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertIsNone(outcome.realized_value)
+
+    def test_duration_horizon_censored_with_explicit_end_of_data_evidence(self):
+        spec = outcome_spec(horizon_duration="20m", sampling_period="5m")
+        series = [bar(0, "100"), bar(5, "101"), EndOfData()]
         outcome = evaluate_outcome(spec, EVENT, series)
         self.assertEqual(OutcomeState.CENSORED_END_OF_DATA, outcome.state)
         self.assertIsNone(outcome.realized_value)
@@ -289,19 +300,44 @@ class CensoringTests(unittest.TestCase):
         # horizon_end itself.
         self.assertEqual(outcome.horizon_end.epoch_ns, outcome.causal_available_at.epoch_ns)
 
-    def test_duration_horizon_censored_with_no_forward_bars_at_all(self):
+    def test_duration_horizon_insufficient_with_no_forward_bars_and_no_eod_proof(self):
         spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
         series = [bar(0, "100")]
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertIsNone(outcome.realized_value)
+        self.assertIsNone(outcome.path_metrics)
+
+    def test_duration_horizon_censored_with_no_forward_bars_and_explicit_eod_proof(self):
+        spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
+        series = [bar(0, "100"), EndOfData()]
         outcome = evaluate_outcome(spec, EVENT, series)
         self.assertEqual(OutcomeState.CENSORED_END_OF_DATA, outcome.state)
         self.assertIsNone(outcome.realized_value)
         self.assertIsNone(outcome.path_metrics)
 
-    def test_bar_count_horizon_censored_when_insufficient_forward_bars(self):
+    def test_bar_count_horizon_insufficient_when_forward_bars_exhaust_without_eod_proof(self):
         spec = outcome_spec(horizon_duration=5, sampling_period="5m")
         series = [bar(0, "100"), bar(5, "101")]
         outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertIsNone(outcome.realized_value)
+
+    def test_bar_count_horizon_censored_when_insufficient_forward_bars_with_eod_proof(self):
+        spec = outcome_spec(horizon_duration=5, sampling_period="5m")
+        series = [bar(0, "100"), bar(5, "101"), EndOfData()]
+        outcome = evaluate_outcome(spec, EVENT, series)
         self.assertEqual(OutcomeState.CENSORED_END_OF_DATA, outcome.state)
+        self.assertIsNone(outcome.realized_value)
+
+    def test_interior_gap_state_is_not_overridden_by_later_end_of_data_evidence(self):
+        # Credited: interior gaps remain INSUFFICIENT_COVERAGE regardless of
+        # end-of-data provenance -- only the first unmatched grid instant
+        # governs the outcome.
+        spec = outcome_spec(horizon_duration="15m", sampling_period="5m")
+        series = [bar(0, "100"), bar(5, "101"), bar(15, "108"), EndOfData()]  # bar(10) missing
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
         self.assertIsNone(outcome.realized_value)
 
     def test_missing_anchor_is_insufficient_coverage_not_censored(self):
@@ -318,10 +354,20 @@ class CensoringTests(unittest.TestCase):
         self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
         self.assertIsNone(outcome.realized_value)
 
+    def test_end_of_data_as_the_only_element_is_insufficient_coverage_not_censored(self):
+        # No anchor was ever established, so there is nothing to censor,
+        # even though the caller supplied explicit end-of-data evidence.
+        spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
+        outcome = evaluate_outcome(spec, EVENT, [EndOfData()])
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertIsNone(outcome.realized_value)
+        self.assertIsNone(outcome.path_metrics)
+
     def test_never_fabricates_a_price_for_a_censored_outcome(self):
         spec = outcome_spec(horizon_duration="20m", sampling_period="5m")
-        series = [bar(0, "100"), bar(5, "101")]
+        series = [bar(0, "100"), bar(5, "101"), EndOfData()]
         outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.CENSORED_END_OF_DATA, outcome.state)
         with self.assertRaises(OutcomeError):
             Outcome(
                 outcome_spec_id=spec.identity,
@@ -343,14 +389,34 @@ class CausalAvailabilityTests(unittest.TestCase):
 
     def test_censored_outcome_causal_available_at_never_precedes_horizon_end(self):
         spec = outcome_spec(horizon_duration="20m", sampling_period="5m")
-        series = [bar(0, "100"), bar(5, "101")]
+        series = [bar(0, "100"), bar(5, "101"), EndOfData()]
         outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.CENSORED_END_OF_DATA, outcome.state)
         self.assertGreaterEqual(outcome.causal_available_at.epoch_ns, outcome.horizon_end.epoch_ns)
 
     def test_insufficient_coverage_causal_available_at_never_precedes_horizon_end(self):
         spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
         outcome = evaluate_outcome(spec, EVENT, [])
         self.assertGreaterEqual(outcome.causal_available_at.epoch_ns, outcome.horizon_end.epoch_ns)
+
+    def test_end_of_data_causal_available_at_cannot_precede_horizon_end_or_consumed_evidence(self):
+        # Acceptance #7: the EndOfData marker's own causal_available_at must
+        # never pull Outcome.causal_available_at earlier than horizon_end or
+        # any other consumed evidence, even when it is itself very early.
+        spec = outcome_spec(horizon_duration="20m", sampling_period="5m")
+        early = bar(0, "100").instant
+        series = [bar(0, "100"), bar(5, "101"), EndOfData(causal_available_at=early)]
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.CENSORED_END_OF_DATA, outcome.state)
+        self.assertEqual(outcome.horizon_end.epoch_ns, outcome.causal_available_at.epoch_ns)
+
+    def test_end_of_data_causal_available_at_pushes_availability_forward_when_later(self):
+        spec = outcome_spec(horizon_duration="20m", sampling_period="5m")
+        late = Instant(bar(0, "100").instant.epoch_ns + 3_600_000_000_000)
+        series = [bar(0, "100"), bar(5, "101"), EndOfData(causal_available_at=late)]
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.CENSORED_END_OF_DATA, outcome.state)
+        self.assertEqual(late.epoch_ns, outcome.causal_available_at.epoch_ns)
 
     def test_boundary_finalization_later_than_bucket_time_pushes_causal_available_at_forward(self):
         spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
@@ -379,6 +445,46 @@ class CausalAvailabilityTests(unittest.TestCase):
         outcome = evaluate_outcome(spec, EVENT, series)
         self.assertEqual(OutcomeState.COMPLETE, outcome.state)
         self.assertEqual(very_late_mid.causal_available_at.epoch_ns, outcome.causal_available_at.epoch_ns)
+
+    def test_late_off_grid_gap_observation_pushes_causal_available_at_forward(self):
+        # P1 regression: the off-grid candidate that establishes the gap is
+        # itself genuinely consumed evidence and must participate in
+        # Outcome.causal_available_at (ADR-0038 §7), not merely horizon_end.
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+        off_grid_instant = bar(0, "100").instant.epoch_ns + 6 * 60_000_000_000
+        late_causal = Instant(off_grid_instant + 24 * 3_600_000_000_000)
+        off_grid = MarketObservation(
+            instant=Instant(off_grid_instant),
+            prices={"close": "101"},
+            causal_available_at=late_causal,
+        )
+        series = [bar(0, "100"), off_grid]  # bar(5) missing -- off_grid lands at +6m
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertEqual(late_causal.epoch_ns, outcome.causal_available_at.epoch_ns)
+
+    def test_late_finalizing_mismatched_anchor_observation_pushes_causal_available_at_forward(self):
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+        late_causal = Instant(bar(5, "101").instant.epoch_ns + 24 * 3_600_000_000_000)
+        mismatched_first = MarketObservation(
+            instant=bar(5, "101").instant,
+            prices={"close": "101"},
+            causal_available_at=late_causal,
+        )
+        outcome = evaluate_outcome(spec, EVENT, [mismatched_first])
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertEqual(late_causal.epoch_ns, outcome.causal_available_at.epoch_ns)
+
+    def test_late_end_of_data_encountered_during_remaining_validation_pushes_causal_available_at_forward(self):
+        # P1 regression: an EndOfData marker consumed by
+        # _validate_remaining_within_horizon (after an earlier gap already
+        # decided the state) must still push causal_available_at forward.
+        spec = outcome_spec(horizon_duration="20m", sampling_period="5m")
+        late_causal = Instant(bar(10, "102").instant.epoch_ns + 24 * 3_600_000_000_000)
+        series = [bar(0, "100"), bar(10, "102"), EndOfData(causal_available_at=late_causal)]  # bar(5) missing
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertEqual(late_causal.epoch_ns, outcome.causal_available_at.epoch_ns)
 
     def test_outcome_construction_rejects_causal_available_at_before_horizon_end(self):
         with self.assertRaises(OutcomeError):
@@ -516,6 +622,99 @@ class EvaluationRuntimeGuardTests(unittest.TestCase):
     def test_market_observation_rejects_empty_prices_mapping(self):
         with self.assertRaises(OutcomeEvaluationError):
             MarketObservation(instant=EVENT_TIME, prices={})
+
+
+class ExhaustionSentinelTests(unittest.TestCase):
+    """Finding A (F03 post-#86 adversarial review): genuine iterator
+    exhaustion must never be mistaken for a malformed element, and every
+    malformed element -- including a literal ``None`` -- must fail closed
+    rather than being silently treated as the stream ending."""
+
+    def test_none_as_first_element_raises(self):
+        spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
+        with self.assertRaises(OutcomeEvaluationError):
+            evaluate_outcome(spec, EVENT, [None])
+
+    def test_none_after_valid_anchor_raises(self):
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+        series = [bar(0, "100"), None]
+        with self.assertRaises(OutcomeEvaluationError):
+            evaluate_outcome(spec, EVENT, series)
+
+    def test_none_at_interior_grid_step_raises_not_insufficient_coverage(self):
+        # Before the Finding A fix, [valid anchor, None] was silently
+        # mistaken for a real forward observation slot exhausting and
+        # produced a domain state instead of failing closed.
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+        series = [bar(0, "100"), bar(5, "105"), None]
+        with self.assertRaises(OutcomeEvaluationError):
+            evaluate_outcome(spec, EVENT, series)
+
+    def test_genuine_empty_iterator_is_insufficient_coverage_not_an_error(self):
+        spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
+        outcome = evaluate_outcome(spec, EVENT, iter([]))
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+
+
+class LazyEvaluationStreamTests(unittest.TestCase):
+    def test_evaluator_ignores_out_of_order_or_malformed_tail_after_horizon_end(self):
+        spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
+        # Tail contains out-of-order bars and malformed non-MarketObservation items after 5m horizon.
+        series = [
+            bar(0, "100"),
+            bar(5, "110"),
+            bar(2, "95"),
+            "not_a_market_observation",
+            {"price": "100"},
+            bar(10, "120"),
+        ]
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.COMPLETE, outcome.state)
+        self.assertEqual("1/10", outcome.realized_value)
+
+    def test_evaluator_terminates_on_unbounded_series(self):
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+
+        def unbounded_series():
+            yield bar(0, "100")
+            yield bar(5, "105")
+            yield bar(10, "110")
+            minute = 11
+            while True:
+                yield bar(minute, "110")
+                minute += 1
+
+        outcome = evaluate_outcome(spec, EVENT, unbounded_series())
+        self.assertEqual(OutcomeState.COMPLETE, outcome.state)
+        self.assertEqual("1/10", outcome.realized_value)
+
+    def test_evaluator_terminates_on_unbounded_series_with_gap(self):
+        spec = outcome_spec(horizon_duration="10m", sampling_period="5m")
+
+        def unbounded_series_with_gap():
+            yield bar(0, "100")
+            yield bar(6, "106")  # Gap: expected 5m
+            minute = 7
+            while True:
+                yield bar(minute, "110")
+                minute += 1
+
+        outcome = evaluate_outcome(spec, EVENT, unbounded_series_with_gap())
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertIsNone(outcome.realized_value)
+
+    def test_evaluator_ignores_malformed_tail_beyond_horizon_after_gap(self):
+        spec = outcome_spec(horizon_duration="5m", sampling_period="5m")
+        # Series has gap at 5m (first observation is at 10m, beyond 5m horizon), followed by malformed tail.
+        series = [
+            bar(0, "100"),
+            bar(10, "110"),
+            "garbage_after_horizon",
+            bar(2, "90"),
+        ]
+        outcome = evaluate_outcome(spec, EVENT, series)
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, outcome.state)
+        self.assertIsNone(outcome.realized_value)
 
 
 if __name__ == "__main__":

@@ -442,6 +442,9 @@ Invariants:
 - horizon and temporal alignment are explicit;
 - future information is never fed back into features or decision inputs.
 
+OutcomeSpec/Outcome v1 is governed by
+[ADR-0038](../decisions/ADR-0038-outcome-v1-semantic-authority.md).
+
 ---
 
 ## 18. Outcome
@@ -457,6 +460,10 @@ Required concepts:
 - censoring/incomplete-path state where applicable.
 
 Outcome is descriptive, not automatically a training label.
+
+`CENSORED_END_OF_DATA` requires explicit end-of-data/completeness evidence,
+never bare iterator/collection exhaustion; see
+[ADR-0038](../decisions/ADR-0038-outcome-v1-semantic-authority.md).
 
 ---
 

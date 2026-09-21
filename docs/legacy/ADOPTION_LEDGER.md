@@ -33,16 +33,19 @@ Priority vocabulary applies only to worthwhile harvest candidates:
 
 ## Audit result
 
+H14's original `REVIEW` residue was resolved on 2026-09-20 by ADR-0037. The
+current classification inventory is therefore:
+
 ```text
 capabilities assessed = 31
 ADOPT                = 3
-ADAPT                = 20
-REVIEW               = 1
+ADAPT                = 21
+REVIEW               = 0
 REJECT               = 6
 SUPERSEDED           = 1
 
 P1 = H01, H04, H09, H17
-P2 = H02, H03, H05, H06, H07, H08, H10, H11, H12, H15, H16, H18, H19, H20
+P2 = H02, H03, H05, H06, H07, H08, H10, H11, H12, H14, H15, H16, H18, H19, H20
 P3 = H13, H21, H22, H23, H24
 ```
 
@@ -63,7 +66,7 @@ P3 = H13, H21, H22, H23, H24
 | H11 | Train-fit fold normalization | ADOPT | P2 | Supervised ML | `src/core/supervised.py::FoldNormalizer` | Adopt fit/transform/statistics core; require explicit numeric-domain validation. |
 | H12 | Sample uniqueness | ADAPT | P2 | Validation / ML | `src/core/supervised.py::compute_sample_uniqueness_weights` | Preserve concurrency formula; compute only over temporally admissible fold universe. |
 | H13 | Supervised wrappers + centroid baseline | ADAPT | P3 | Supervised ML | `src/core/supervised.py` — `train_model`, `predict_model`, `align_probability_columns` | Keep useful encoding/alignment; make model support, weighting and artifacts explicit. |
-| H14 | DSR / PBO estimators | REVIEW | — | Evaluation | `src/core/supervised.py` — `deflated_sharpe_ratio`, `probability_of_backtest_overfitting` | Exact estimator/input semantics unresolved; see REVIEW residue below. |
+| H14 | DSR / PBO estimators | ADAPT | P2 | Validation / Evaluation | `src/core/supervised.py` — `deflated_sharpe_ratio`, `probability_of_backtest_overfitting` | Preserve robust-comparison intent only. Canonical DSR-L / full-CSCV PBO semantics are frozen by ADR-0037; do not port the legacy estimators unchanged. |
 | H15 | Trial accounting | ADAPT | P2 | Experiment System | `src/core/supervised.py` — `TrialRecord`, `TrialLedger` | Keep attempt accounting; converge on canonical Study/Trial/Run and comparable metrics. |
 | H16 | Research workflow + snapshots | ADAPT | P2 | Experiment System | `src/core/research_pipelines.py::ResearchPipelinesService` | Preserve configuration/state/result linkage; eliminate duplicate run identity/persistence. |
 | H17 | Definition/artifact identity | ADAPT | P1 | Features / Research provenance | `src/core/identity.py` — `feature_definition_id`, `artifact_id` | Preserve definition-vs-content distinction; replace legacy fingerprints with canonical identities and complete inputs. |
@@ -125,11 +128,9 @@ FeatureDefinition provenance
 
 H01 selection therefore does not imply that a complete Feature/Footprint runtime already exists.
 
-## REVIEW residue — H14 DSR/PBO
+## Resolved REVIEW residue — H14 DSR/PBO
 
-H14 is the only unresolved audit classification and is non-blocking for H01.
-
-Exact unresolved proposition:
+H14 was the only unresolved audit classification. ADR-0037 resolves the exact proposition that had kept it in `REVIEW`:
 
 ```text
 Which precisely defined estimators are canonical DSR and PBO,
@@ -139,15 +140,17 @@ which comparable fold semantics,
 and which reference numeric vectors?
 ```
 
-The legacy functions are not accepted as canonical estimators merely from their names. `deflated_sharpe_ratio` does not establish full trial-population semantics, `probability_of_backtest_overfitting` uses a simplified selection rule and bounded combinations, and the legacy call path can label net-PnL percentages as Sharpe.
+Canonical resolution:
 
-Minimum future evidence required before reclassification:
+- DSR v1 is the location-only `DSR-L` variant with explicit comparable-panel, Sharpe, moment, `K_eff`, numerical and failure semantics;
+- PBO v1 is full CSCV over the complete comparable panel with explicit contiguous equal-block partitioning, selection/rank/tie/logit semantics and no bounded-combination shortcut;
+- return inputs are same-frequency excess-return series; F08 does not reinterpret net-PnL percentages as Sharpe;
+- pinned DSR/PBO vectors are part of ADR-0037;
+- the canonical runtime owner is Validation with opaque cross-owner evidence; legacy `ml_core` remains evidence only.
 
-- accepted Evaluation semantics for both estimators;
-- exact input mapping from canonical Trial/Run data;
-- reference numeric vectors.
+The legacy functions are still **not** accepted as canonical implementations merely from their names. `deflated_sharpe_ratio` does not establish complete trial-population/effective-trial semantics, `probability_of_backtest_overfitting` uses a simplified selection rule and bounded combinations, and the legacy call path can label net-PnL percentages as Sharpe.
 
-No new bounded context is required by this residue.
+H14 is therefore reclassified `ADAPT / P2`: preserve the useful robustness intent, but implement the accepted ADR-0037 contract rather than porting legacy code unchanged.
 
 ## Known legacy defects — do not port unchanged
 

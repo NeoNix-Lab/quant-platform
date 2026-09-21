@@ -43,7 +43,6 @@ DECISIONS_INDEX = ROOT / "docs" / "decisions" / "README.md"
 DOCS_INDEX = ROOT / "docs" / "README.md"
 ROADMAP_PATH = ROOT / "docs" / "product" / "ROADMAP.md"
 CAPABILITY_MAP_PATH = ROOT / "docs" / "product" / "CAPABILITY_MAP.md"
-SCOPE_PATH = ROOT / "SCOPE.md"
 OPEN_DECISIONS_PATH = ROOT / "docs" / "architecture" / "OPEN_DECISIONS.md"
 GOLDEN_INTEGRATION_TEST = ROOT / "tests" / "integration_bybit_trades_2024_01_15.py"
 TRADE_V1_SCHEMA = ROOT / "schemas" / "trade-v1.json"
@@ -132,16 +131,11 @@ class GovernanceDocumentsExistAndAreLinked(unittest.TestCase):
 
     def test_roadmap_references_the_gates(self):
         text = _read(ROADMAP_PATH)
-        self.assertIn("ADR-0023", text)
         self.assertIn(CONTRACT_FREEZE_GATE, text)
         self.assertIn(CONFORMITY_IMPLEMENTATION_GATE, text)
 
     def test_capability_map_references_the_gates(self):
         text = _read(CAPABILITY_MAP_PATH)
-        self.assertIn(CONTRACT_FREEZE_GATE, text)
-
-    def test_scope_reflects_the_conformity_cycle(self):
-        text = _read(SCOPE_PATH)
         self.assertIn(CONTRACT_FREEZE_GATE, text)
 
     def test_open_decisions_references_the_gate(self):
