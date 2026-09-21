@@ -1,142 +1,132 @@
-# Scope: Wave 3 DG-E resolved and implementation frontier, 2026-09-20
+# Scope: Complete Wave 3 — F07 then F08
 
 ## Objective
 
-Record the Wave 3 resting state after resolution of the remaining DG-E decision branch for `F08 — DSR/PBO` under governance-only issue #97.
+Complete **Wave 3 — Research / Validation** on `implement/wave-3` by implementing the two remaining runtime atoms whose semantics are already frozen:
 
-The completed #97 scope authorized **governance/decision mutation only** for F08. This file does not authorize F07 or F08 runtime code/tests. Issue #96 remains the already-prepared F07 implementation issue; F08 implementation requires its own separately bounded issue/scope.
+```text
+F07  Labels/censoring/lockbox   FROZEN / MISSING   ADR-0036   issue #96
+F08  DSR/PBO                    FROZEN / MISSING   ADR-0037   issue #98
+```
+
+Wave 3 completion is the current project scope. This is a macro outcome, not authorization for concurrent mutation.
 
 ## Baseline
 
-Authoritative routed baseline at DG-E/F08 activation:
+Authoritative Wave 3 baseline before runtime completion work:
 
 ```text
-implement/wave-3 @ 7458aa18cadc64a44982cdff7f310819e87b9f8c
+implement/wave-3 @ 94ef9cce3e008b1468a1520c109d3b65f834bb0d
 ```
 
-Credited Wave 3 state before the F08 decision:
+This baseline contains the completed DG-E semantic freeze:
+
+- F07 frozen by ADR-0036;
+- F08 frozen by ADR-0037;
+- DG-E has no remaining open semantic branch;
+- F01-F06 are already implementation complete;
+- F07 and F08 are the only remaining Wave 3 runtime gaps.
+
+If the branch advances before an agent starts, use the current fast-forward descendant and verify only directly relevant authority/evidence.
+
+## Execution policy
+
+The repository rule remains: **only one bounded implementation or decision-gate mutation slice is active at a time**.
+
+Therefore Wave 3 completes in this order:
 
 ```text
-F04  Event studies/sweeps          RESOLVED / COMPLETE
-F05  Walk-forward schedule         RESOLVED / COMPLETE
-F06  Availability/purge/embargo    FROZEN   / COMPLETE   ADR-0031
-F07  Labels/censoring/lockbox      FROZEN   / MISSING    ADR-0036
-F08  DSR/PBO                       OPEN_BLOCKING / MISSING
+1. #96  F07 implementation
+        ↓
+   merge + targeted governance reconciliation
+        ↓
+2. #98  F08 implementation
+        ↓
+   merge + final Wave 3 reconciliation
+        ↓
+3. Wave 3 COMPLETE
 ```
 
-F04/F05/F07 semantics were not reopened by this scope.
+Opening/preparing #98 does not make it concurrently active.
 
-## Resolved decision-gate scope: DG-E / F08
+## Active bounded slice
 
-Issue #97 is the bounded governance authority. ADR-0037 freezes the robust-comparison v1 semantics.
+**Issue #96 — F07 outcome-derived labels, censoring and lockbox v1** is the active runtime mutation authority.
 
-### Frozen DSR v1
+Its authority and hard boundaries are defined by the issue itself and ADR-0036. In particular:
 
-F08 v1 uses **DSR-L**, the original location-only search-adjusted form. The newer DSR-LS and full-search-distribution variants remain distinct future extensions.
+- F03 and F06 semantics remain credited and unchanged;
+- Validation must preserve its package boundary;
+- governance documents are not agent-owned implementation scope;
+- F08 runtime is excluded while #96 is active.
 
-Canonical DSR v1 rules include:
+DONE for this slice means #96 acceptance passes, required verification passes, and F07 is integrated into the routed Wave 3 branch.
 
-- one complete comparable same-frequency excess-return panel;
-- canonical non-annualized Sharpe = sample mean / sample standard deviation (`ddof=1`);
-- deterministic raw/Pearson skewness/kurtosis moment formulas;
-- deterministic full-panel max-Sharpe selection with canonical identity tie break;
-- cross-trial sample Sharpe dispersion;
-- explicit caller-supplied `K_eff` evidence; F08 does not estimate trial independence;
-- Bailey/López de Prado expected-maximum location benchmark;
-- PSR evaluation against that benchmark;
-- explicit `IID_V1` sampling assumption;
-- pinned DSR vector in ADR-0037.
+## Next bounded slice
 
-### Frozen PBO v1
+**Issue #98 — F08 canonical DSR-L / CSCV-PBO robust comparison v1** is prepared and implementation-ready, but is **not active while #96 is active**.
 
-F08 v1 uses full **Combinatorially Symmetric Cross-Validation (CSCV)**:
+After F07 integration and the minimum governance reconciliation needed to record `F07 COMPLETE`, activate #98 without reopening ADR-0037.
 
-- common complete `T x N` return panel;
-- explicit even `S >= 4`, with `T` divisible by `S`;
-- `S` equal contiguous temporal blocks;
-- every `C(S, S/2)` symmetric IS/OOS combination;
-- canonical Sharpe for every trial in every half;
-- best IS trial followed to its OOS rank;
-- worst rank `1`, best rank `N`, average rank for exact OOS ties;
-- `omega = rank/(N+1)`;
-- `lambda = ln(omega/(1-omega))`;
-- `PBO = count(lambda < 0) / split_count`;
-- any required non-evaluable Sharpe makes the complete PBO non-evaluable; no silent filtering;
-- pinned 8x4 / `S=4` vector yields exactly `PBO = 1/6`.
+F08 implementation must remain bounded to the Validation-owned estimator foundation frozen by ADR-0037.
 
-F05 walk-forward semantics remain separate; F08 does not reinterpret walk-forward folds as CSCV partitions.
-
-### Ownership
-
-F08 remains a cross-domain Research/Validation capability in the planning DAG. ADR-0037 fixes the bounded estimator **runtime package** under Validation. Validation consumes opaque trial/population evidence through Validation-owned projections and does not import Research/Experiment/Strategy runtime types.
-
-## Resulting state
+## Credited Wave 3 state
 
 ```text
-F04  Event studies/sweeps          RESOLVED / COMPLETE
-F05  Walk-forward schedule         RESOLVED / COMPLETE
-F06  Availability/purge/embargo    FROZEN   / COMPLETE   ADR-0031
-F07  Labels/censoring/lockbox      FROZEN   / MISSING    ADR-0036
-F08  DSR/PBO                       FROZEN   / MISSING    ADR-0037
+F01  HypothesisSpec                  RESOLVED / COMPLETE
+F02  EventSpec/detection             RESOLVED / COMPLETE
+F03  OutcomeSpec/Outcome             RESOLVED / COMPLETE
+F04  Event studies/sweeps            RESOLVED / COMPLETE
+F05  Walk-forward schedule           RESOLVED / COMPLETE
+F06  Availability/purge/embargo      FROZEN   / COMPLETE   ADR-0031
+F07  Labels/censoring/lockbox        FROZEN   / MISSING    ADR-0036
+F08  DSR/PBO                         FROZEN   / MISSING    ADR-0037
 ```
 
-DG-E now has **no remaining open semantic branch**. Missing runtime implementations remain explicit.
+Do not re-prove completed F01-F06 evidence absent a concrete invalidating change.
 
-Planning metrics are:
+## Wave 3 acceptance
 
-```text
-TOTAL_ATOMS                     = 87
-CLASSIFIED_ATOMS                = 87
-UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 64 / 87 = 73.6%
-OPEN_BLOCKING                   = 15
-OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 64 + 15 + 8 = 87
-ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         = 43 / 87 = 49.4%
-```
+Wave 3 is DONE only when all of the following are true:
 
-No implementation count changed in the decision scope.
+1. #96 F07 implementation is integrated and its acceptance/authoritative verification pass.
+2. #98 F08 implementation is integrated and its acceptance/authoritative verification pass.
+3. F07 and F08 are both recorded `FROZEN / COMPLETE` in canonical governance projections.
+4. F01-F08 are implementation complete with no unresolved DG-E decision.
+5. V6 / Research -> Validation state is reconciled to the strongest proposition actually proven by the completed runtime.
+6. No Strategy, Execution, ML, live-data, operations or unrelated atom is pulled into Wave 3 completion.
+7. Final governance reconciliation reflects the integrated repository state without reopening accepted ADR semantics.
 
-The completed Producer-Consumer Conformity cycle remains credited under ADR-0023:
+## Verification proportionality
 
-```text
-Contract Freeze Gate              PASSED
-Conformity Implementation Gate    PASSED
-```
+For each implementation slice:
 
-## Execution frontier after DG-E resolution
+- use targeted tests during implementation;
+- run the repository-required authoritative suite once on the stable candidate;
+- credit existing PASS evidence unless a later relevant change/failure/rebase creates a reason to re-run it;
+- perform governance reconciliation only after integrated runtime evidence exists.
 
-```text
-F07 implementation   FROZEN / MISSING   issue #96 prepared; not authorized by this resting scope
-F08 implementation   FROZEN / MISSING   eligible for a separate bounded implementation issue
-```
+Do not create extra proof layers merely because Wave 3 is the macro scope.
 
-Wave 3 is semantically frozen end-to-end for F01-F08, but is **not implementation-complete** until F07 and F08 runtimes are complete.
+## Stop / escalation
 
-F08 remains independent from the Strategy/Supervised path: F07 completion can unlock its downstream atoms without waiting for F08 runtime.
+Stop only if:
 
-## Excluded
+- current repository state contradicts ADR-0036 or ADR-0037;
+- completing F07/F08 requires changing frozen upstream semantics;
+- package ownership must be loosened to satisfy acceptance;
+- an implementation exposes a genuine production defect outside the bounded atom that cannot be isolated/remediated minimally;
+- completing Wave 3 would require authorization for an atom outside F01-F08.
 
-- mutation under `src/` or `tests/`;
-- F07/F08 runtime implementation;
-- DSR-LS/full-search DSR;
-- serial-correlation-adjusted DSR;
-- effective-trial-count estimation algorithms;
-- Strategy/Execution/PnL/cost semantics;
-- generic metric/plugin/DSL frameworks;
-- Experiment persistence/accounting redesign;
-- unrelated decision-gate work;
-- mutation of `main`.
+Do not escalate local reversible implementation choices already inside #96/#98.
 
-## Acceptance
+## Out of scope
 
-DONE means:
+Until Wave 3 is complete, do not activate as part of this scope:
 
-1. ADR-0037 is accepted and indexed as F08 semantic authority.
-2. H14 REVIEW residue is resolved to ADAPT against ADR-0037 rather than adopting legacy estimators.
-3. F08 is `FROZEN / MISSING` consistently across governance projections.
-4. DG-E has no remaining open branch; F07/F08 runtime gaps remain explicit.
-5. Planning metrics are `64/87` frozen-or-resolved, `15` open blocking, `8` deferable and `43/87` implementation complete.
-6. F04/F05/F07 authority remains unchanged and credited.
-7. No runtime code/tests or unrelated governance are changed.
+- G01+ Strategy / Replay work;
+- I04+ Supervised ML work;
+- DG-F, DG-G or DG-H branches;
+- live-data/runtime/client work;
+- unrelated governance cleanup;
+- mutation of `main` except through the separately authorized integration/promotion workflow.
