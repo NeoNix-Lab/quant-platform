@@ -55,6 +55,7 @@ OWNERS = {
     "quant_platform.validation.availability": "validation",
     "quant_platform.validation.labels": "validation",
     "quant_platform.validation.lockbox": "validation",
+    "quant_platform.validation.robustness": "validation",
     "quant_platform.validation.walk_forward": "validation",
     "quant_platform.experiments": "experiment",
     "quant_platform.experiments.identities": "experiment",
