@@ -316,26 +316,31 @@ class BoundaryCensoringTests(unittest.TestCase):
     def test_mixed_states_are_tracked_without_fabricating_values(self):
         # Events share one continuous forward-looking timeline, so each
         # event's own forward window is exactly "every observation at or
-        # after its event_time" -- ordered chronologically so the censored
-        # event (whose data must genuinely run out) is placed last.
+        # after its event_time".
+        #
+        # ADR-0038 (F03 Finding B): CENSORED_END_OF_DATA requires explicit
+        # end-of-data evidence; run_event_study's market_series is a plain
+        # finite Sequence[MarketObservation] with no such evidence seam, so
+        # a stream that simply runs dry -- like an interior gap -- is
+        # INSUFFICIENT_COVERAGE, never CENSORED_END_OF_DATA.
         spec = study_spec()
         event_complete = detected_event(event_time=EVENT_TIME, observation_suffix="a" * 64)
         gap_time = "2024-01-01T02:00:00Z"
-        event_insufficient = detected_event(event_time=gap_time, observation_suffix="b" * 64)
-        censored_time = "2024-01-01T03:00:00Z"
-        event_censored = detected_event(event_time=censored_time, observation_suffix="c" * 64)
+        event_gap = detected_event(event_time=gap_time, observation_suffix="b" * 64)
+        exhausted_time = "2024-01-01T03:00:00Z"
+        event_exhausted = detected_event(event_time=exhausted_time, observation_suffix="c" * 64)
 
         series = (
             market_series_for(EVENT_TIME, {0: "100", 5: "105", 10: "110"})
             + market_series_for(gap_time, {0: "100", 10: "108"})  # bar(5) missing
-            + market_series_for(censored_time, {0: "100", 5: "101"})  # data runs out, nothing follows
+            + market_series_for(exhausted_time, {0: "100", 5: "101"})  # data runs out, nothing follows
         )
-        result = run_event_study(spec, [event_complete, event_censored, event_insufficient], series)
+        result = run_event_study(spec, [event_complete, event_exhausted, event_gap], series)
 
         states = {record.event_id: record.state for record in result.population_records}
         self.assertEqual(OutcomeState.COMPLETE, states[event_complete.event_id])
-        self.assertEqual(OutcomeState.CENSORED_END_OF_DATA, states[event_censored.event_id])
-        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, states[event_insufficient.event_id])
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, states[event_exhausted.event_id])
+        self.assertEqual(OutcomeState.INSUFFICIENT_COVERAGE, states[event_gap.event_id])
 
         for record in result.population_records:
             if record.state is not OutcomeState.COMPLETE:
@@ -344,8 +349,8 @@ class BoundaryCensoringTests(unittest.TestCase):
         aggregate = result.aggregates[0]
         self.assertEqual(3, aggregate.sample_count)
         self.assertEqual(1, aggregate.completed_count)
-        self.assertEqual(1, aggregate.censored_count)
-        self.assertEqual(1, aggregate.insufficient_coverage_count)
+        self.assertEqual(0, aggregate.censored_count)
+        self.assertEqual(2, aggregate.insufficient_coverage_count)
 
 
 class CausalAvailabilityInvariantTests(unittest.TestCase):
@@ -669,7 +674,8 @@ class AggregateMetricsExactnessTests(unittest.TestCase):
     def test_zero_completed_count_reports_none_for_every_metric(self):
         spec = study_spec(outcome_specs=(outcome_spec(horizon_duration="5m"),))
         event = detected_event(event_time=EVENT_TIME)
-        # No forward bars at all -> CENSORED_END_OF_DATA.
+        # No forward bars at all and no explicit end-of-data evidence
+        # (ADR-0038) -> INSUFFICIENT_COVERAGE.
         series = market_series_for(EVENT_TIME, {0: "100"})
         result = run_event_study(spec, [event], series)
         aggregate = result.aggregates[0]
