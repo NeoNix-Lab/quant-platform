@@ -21,8 +21,9 @@ DG-A FeatureArtifact v1 (E04)                        FROZEN / COMPLETE
 DG-A H01 canonical integration v1 (E06)              FROZEN / COMPLETE
 DG-B B04 non-contiguous coverage reads v1            FROZEN / COMPLETE
 DG-B A10 backfill / repair v1                        FROZEN / COMPLETE
-DG-E F07 labels/censoring/lockbox v1                 FROZEN / MISSING
-DG-E F08 DSR/PBO robust comparison v1                FROZEN / MISSING
+F03 Outcome v1 semantic authority                    FROZEN / COMPLETE
+DG-E F07 labels/censoring/lockbox v1                 FROZEN / COMPLETE
+DG-E F08 DSR/PBO robust comparison v1                FROZEN / COMPLETE
 DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
 ```
 
@@ -39,7 +40,8 @@ Resolved architecture includes:
 - API-first direction: clients/API transport -> application services -> domain/DataGateway;
 - Consumer API semantic selector/result/error boundary;
 - completed ASS-02 in-process path: C02 semantic selector resolution + C03 result/error translation;
-- `trade-v1`, Declared Coverage, CandleDefinition v1, FeatureDefinition v1, FootprintDefinition v1, B04 non-contiguous coverage reads v1, first-vertical conformity/publication semantics and source-acquired lineage v2.
+- `trade-v1`, Declared Coverage, CandleDefinition v1, FeatureDefinition v1, FootprintDefinition v1, B04 non-contiguous coverage reads v1, first-vertical conformity/publication semantics and source-acquired lineage v2;
+- canonical F03 Outcome v1 semantics, including explicit end-of-data evidence, under [ADR-0038](../decisions/ADR-0038-outcome-v1-semantic-authority.md).
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
@@ -119,7 +121,7 @@ E06 canonical H01 integration (FROZEN / COMPLETE by ADR-0035; issue #83/PR #88)
 - one eligible FINAL Footprint bucket yields one structured per-level observation for each constituent feature;
 - covered-empty buckets yield FINAL empty observations; missing support remains non-observation;
 - canonical Diagonal and Stacked RECORD outputs are fixed, including `NaN -> null` normalization for absent-neighbor diagonal ratios;
-- deterministic D06 exact-decimal -> E05 float conversion is accepted for H01 v1 without weakening D06 evidence authority;
+- deterministic D06 exact-decimal -> E05 float calculation semantics are accepted for H01 v1 without weakening D06 evidence authority;
 - E06 derives the true expected H01 observation universe required by ADR-0034;
 - E04 binds exact immutable D06 result/binding evidence rather than a duplicated trade-lineage model;
 - one `h01_imbalance@1` FeatureSetDefinition contains the two independent observables.
@@ -182,18 +184,17 @@ Activate only when L2 is selected, after the declared L1 dependency. Resolve sna
 
 Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
 
-## DG-E — Validation semantics — RESOLVED
+## DG-E — Validation semantics — RESOLVED / IMPLEMENTED
 
-DG-E has no remaining open semantic branch. Runtime implementation states remain separate from this decision status.
+DG-E has no remaining open semantic or implementation branch through F07/F08.
 
-### Validation / labeling branch (`F06`,`F07`) — RESOLVED
+### Validation / labeling branch (`F06`,`F07`) — COMPLETE
 
 F06 availability/purge/embargo is frozen and complete under
 [ADR-0031](../decisions/ADR-0031-availability-purge-embargo-v1.md).
 
 F07 label/censoring/lockbox semantics are frozen under
-[ADR-0036](../decisions/ADR-0036-labels-censoring-lockbox-v1.md) (issue #95).
-Implementation remains `MISSING`.
+[ADR-0036](../decisions/ADR-0036-labels-censoring-lockbox-v1.md) (issue #95), and the bounded runtime is integrated via issue #96 / PR #99.
 
 Accepted F07 v1 decisions include:
 
@@ -207,11 +208,10 @@ Accepted F07 v1 decisions include:
 - F07 freezes semantic isolation, not physical ACL/vault infrastructure;
 - Validation consumes a narrow Validation-owned projection of F03 evidence rather than importing/redefining Research runtime semantics.
 
-### DSR/PBO branch (`F08`) — RESOLVED
+### DSR/PBO branch (`F08`) — COMPLETE
 
 F08 robust-comparison semantics are frozen under
-[ADR-0037](../decisions/ADR-0037-dsr-pbo-robust-comparison-v1.md) (issue #97).
-Implementation remains `MISSING`.
+[ADR-0037](../decisions/ADR-0037-dsr-pbo-robust-comparison-v1.md) (issue #97), and the bounded Validation-owned runtime is integrated via issue #98 / PR #104.
 
 Accepted F08 v1 decisions include:
 
@@ -228,7 +228,7 @@ Accepted F08 v1 decisions include:
 - binary64 numerical policy and pinned DSR/PBO reference vectors are part of the contract;
 - Validation remains the runtime owner and consumes opaque cross-owner evidence without loosening the package DAG.
 
-F08 therefore has no remaining semantic blocker. Its future runtime requires a separate bounded implementation issue/scope.
+DG-E is therefore complete through F08. No future scope should reopen these semantics absent contradictory accepted authority.
 
 ## DG-F — Strategy / Execution semantics
 
