@@ -8,9 +8,11 @@ duplicating them.  This file proves only the K08-specific propositions:
 deterministic recovery-set capture (with semantic linkage validation and
 mandatory K06 applicability) from an already-sealed publication, a durably
 persisted and independently reloadable self-contained backup (target
-revision plus its complete predecessor chain), isolated-target/catalog
-restore refusal/success (path-safety, authoritative storage-locator
-binding, empty-catalog enforcement), atomic verify-before-commit
+revision plus its complete predecessor chain, each with its own bound K06
+evidence), isolated-target/catalog restore refusal/success (path-safety,
+a single connection-bound restore-catalog object, empty-family
+enforcement), full K06 re-verification at restore's own consumption
+boundary (not merely at load time), atomic verify-before-commit
 multi-revision restore, and equivalent historical DataGateway reads from the
 restored target.
 """
@@ -29,6 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.application.backup_restore import (  # noqa: E402
+    PredecessorEvidence,
     capture_recovery_set,
     export_recovery_set,
     load_recovery_backup_export,
@@ -69,15 +72,16 @@ def trade(timestamp: str, trade_id: str) -> TradeRecord:
 
 REVISION_2_RECORDS = [trade("2024-01-16T00:00:01Z", "1"), trade("2024-01-16T00:00:02Z", "2")]
 
-
-def not_applicable(**overrides) -> K06NotApplicableAssertion:
-    kwargs = dict(
-        asserting_authority_id="adr:k08-test-authority-v1",
-        asserted_at=Instant.parse("2024-01-15T00:00:00Z"),
-        rationale="canonical publication is self-contained for this fixture",
-    )
-    kwargs.update(overrides)
-    return K06NotApplicableAssertion(**kwargs)
+# One shared not-applicable assertion (and its persisted document form) used
+# across most fixtures: content-identical calls to K06NotApplicableAssertion
+# always fingerprint the same, but sharing one instance keeps capture/export
+# call sites obviously consistent with each other.
+NOT_APPLICABLE = K06NotApplicableAssertion(
+    asserting_authority_id="adr:k08-test-authority-v1",
+    asserted_at=Instant.parse("2024-01-15T00:00:00Z"),
+    rationale="canonical publication is self-contained for this fixture",
+)
+NOT_APPLICABLE_DOCUMENT = NOT_APPLICABLE.canonical_payload()
 
 
 def protected_assessment():
@@ -109,8 +113,12 @@ def protected_assessment():
 
 
 class FakeRestoreCatalog:
-    """A minimal writer+inspector pair sharing one backing store, mirroring a
-    real Postgres connection's transactional read-your-own-writes semantics.
+    """A single object bound to one backing store implementing the complete
+    ``RestoreCatalog`` protocol (write contract + authoritative inspector),
+    mirroring a real Postgres connection's transactional read-your-own-writes
+    semantics -- and, because it is one object, mirroring the structural
+    guarantee that restore's write and inspection paths cannot be wired to
+    two different catalogs.
 
     ``partitions`` is the working (possibly uncommitted) set that
     ``seal_partition`` reads/writes for its own contiguous-revision-admission
@@ -302,17 +310,25 @@ class BackupRestoreV1Tests(unittest.TestCase):
         return restore_recovery_set(
             export, target,
             forbidden_roots=forbidden_roots if forbidden_roots is not None else [self.root, export.destination_root],
-            catalog_writer=catalog,
-            catalog_inspector=catalog,
+            restore_catalog=catalog,
             storage_root_id=storage_root_id,
         )
+
+    def _export(self):
+        evidence, sealed = self.sealed_evidence()
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
+        backup_root = Path(self.tempdir.name) / "backup"
+        export = export_recovery_set(
+            recovery_set, evidence, backup_root, k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+        )
+        return evidence, sealed, export
 
     # -- capture -----------------------------------------------------------
 
     def test_capture_is_deterministic_for_the_same_finalized_publication(self):
         evidence, sealed = self.sealed_evidence()
-        first = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
-        second = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
+        first = capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
+        second = capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
         self.assertEqual(first.recovery_identity, second.recovery_identity)
         self.assertEqual(first.natural_identity, sealed.natural_identity)
         self.assertIsNone(first.k06_protection_identity)
@@ -323,26 +339,26 @@ class BackupRestoreV1Tests(unittest.TestCase):
             capture_recovery_set(evidence, sealed)
         with self.assertRaises(RecoveryError):
             capture_recovery_set(
-                evidence, sealed, k06_protection=protected_assessment(), k06_not_applicable=not_applicable(),
+                evidence, sealed, k06_protection=protected_assessment(), k06_not_applicable=NOT_APPLICABLE,
             )
 
     def test_capture_refuses_non_closed_publication(self):
         evidence, sealed = self.sealed_evidence()
         writing = replace(sealed, state="writing")
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, writing, k06_not_applicable=not_applicable())
+            capture_recovery_set(evidence, writing, k06_not_applicable=NOT_APPLICABLE)
 
     def test_capture_refuses_manifest_that_does_not_match_the_sealed_generation(self):
         evidence, sealed = self.sealed_evidence()
         evidence.partition_manifest_path.write_text(evidence.partition_manifest_path.read_text() + " ")
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
+            capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
 
     def test_capture_refuses_tampered_physical_artifact(self):
         evidence, sealed = self.sealed_evidence()
         evidence.artifact_path.write_bytes(evidence.artifact_path.read_bytes() + b"corrupt")
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
+            capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
 
     def test_capture_refuses_foreign_dataset_manifest(self):
         evidence, sealed = self.sealed_evidence()
@@ -353,7 +369,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
             transform="canonicalize-trades-v1",
         )
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
+            capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
 
     def test_capture_refuses_unrelated_coverage_evidence(self):
         evidence, sealed = self.sealed_evidence()
@@ -363,7 +379,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
         unrelated["assertions"][0]["partitions"] = [{"partition_key": "dt=2099-01-01", "revision": 1}]
         evidence.coverage_manifest_paths[0].write_text(json.dumps(unrelated))
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
+            capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
 
     def test_capture_refuses_coverage_that_does_not_match_sealed_interval(self):
         evidence, sealed = self.sealed_evidence()
@@ -371,7 +387,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
         narrowed["assertions"][0]["end"] = "2024-01-15T12:00:00Z"
         evidence.coverage_manifest_paths[0].write_text(json.dumps(narrowed))
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
+            capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
 
     def test_capture_binds_protected_k06_evidence_when_supplied(self):
         evidence, sealed = self.sealed_evidence()
@@ -396,14 +412,9 @@ class BackupRestoreV1Tests(unittest.TestCase):
     # -- export / load -------------------------------------------------------
 
     def test_export_is_pure_copy_and_does_not_mutate_primary(self):
-        evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
+        evidence, sealed, export = self._export()
         original_bytes = self.data_path.read_bytes()
-        original_manifest = evidence.partition_manifest_path.read_bytes()
-        backup_root = Path(self.tempdir.name) / "backup"
-        export = export_recovery_set(recovery_set, evidence, backup_root)
         self.assertEqual(self.data_path.read_bytes(), original_bytes)
-        self.assertEqual(evidence.partition_manifest_path.read_bytes(), original_manifest)
         self.assertTrue(export.artifact_path.is_file())
         self.assertEqual(export.artifact_path.read_bytes(), original_bytes)
         self.assertNotEqual(export.artifact_path, evidence.artifact_path)
@@ -411,13 +422,28 @@ class BackupRestoreV1Tests(unittest.TestCase):
 
     def test_export_refuses_when_primary_evidence_changed_since_capture(self):
         evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
         self.data_path.write_bytes(self.data_path.read_bytes() + b"drift")
         backup_root = Path(self.tempdir.name) / "backup"
         with self.assertRaises(RecoveryError):
-            export_recovery_set(recovery_set, evidence, backup_root)
+            export_recovery_set(
+                recovery_set, evidence, backup_root, k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+            )
 
-    def test_export_persists_k06_evidence_and_refuses_mismatched_document(self):
+    def test_export_requires_the_document_matching_the_bound_branch(self):
+        evidence, sealed = self.sealed_evidence()
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
+        backup_root = Path(self.tempdir.name) / "backup"
+        with self.assertRaises(RecoveryError):
+            export_recovery_set(recovery_set, evidence, backup_root)  # neither document
+        with self.assertRaises(RecoveryError):
+            export_recovery_set(
+                recovery_set, evidence, backup_root,
+                k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+                k06_protection_document=protected_assessment().stable_dict(),
+            )  # both documents
+
+    def test_export_persists_protected_evidence_and_refuses_mismatched_document(self):
         evidence, sealed = self.sealed_evidence()
         assessment = protected_assessment()
         recovery_set = capture_recovery_set(evidence, sealed, k06_protection=assessment)
@@ -429,14 +455,30 @@ class BackupRestoreV1Tests(unittest.TestCase):
         with self.assertRaises(RecoveryError):
             export_recovery_set(recovery_set, evidence, backup_root, k06_protection_document=tampered)
         export = export_recovery_set(recovery_set, evidence, backup_root, k06_protection_document=assessment.stable_dict())
-        self.assertIsNotNone(export.k06_protection_document_path)
-        self.assertTrue(export.k06_protection_document_path.is_file())
+        self.assertIsNotNone(export.k06_evidence_path)
+        self.assertTrue(export.k06_evidence_path.is_file())
+
+    def test_export_persists_not_applicable_evidence_and_refuses_mismatched_document(self):
+        evidence, sealed = self.sealed_evidence()
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
+        backup_root = Path(self.tempdir.name) / "backup"
+        tampered = dict(NOT_APPLICABLE_DOCUMENT)
+        tampered["rationale"] = "a different, unattributed rationale"
+        with self.assertRaises(RecoveryError):
+            export_recovery_set(recovery_set, evidence, backup_root, k06_not_applicable_document=tampered)
+        export = export_recovery_set(
+            recovery_set, evidence, backup_root, k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+        )
+        self.assertIsNotNone(export.k06_evidence_path)
+        # The full attributed assertion -- not merely its fingerprint -- is
+        # what is actually persisted and inspectable after process loss.
+        persisted = json.loads(export.k06_evidence_path.read_text())
+        self.assertEqual(persisted["asserting_authority_id"], NOT_APPLICABLE.asserting_authority_id)
+        self.assertEqual(persisted["rationale"], NOT_APPLICABLE.rationale)
 
     def test_load_recovery_backup_export_round_trips_and_reverifies_from_disk(self):
-        evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
-        backup_root = Path(self.tempdir.name) / "backup"
-        export = export_recovery_set(recovery_set, evidence, backup_root)
+        evidence, sealed, export = self._export()
+        recovery_set = export.recovery_set
 
         loaded = load_recovery_backup_export(export.destination_root)
         self.assertEqual(loaded.recovery_set.recovery_identity, recovery_set.recovery_identity)
@@ -447,7 +489,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
         restored = self._restore(loaded, target)
         self.assertEqual(restored.sealed.natural_identity, recovery_set.natural_identity)
 
-    def test_load_recovery_backup_export_detects_tampered_k06_evidence_content(self):
+    def test_load_recovery_backup_export_detects_tampered_protected_evidence_content(self):
         evidence, sealed = self.sealed_evidence()
         assessment = protected_assessment()
         recovery_set = capture_recovery_set(evidence, sealed, k06_protection=assessment)
@@ -455,26 +497,33 @@ class BackupRestoreV1Tests(unittest.TestCase):
         export = export_recovery_set(recovery_set, evidence, backup_root, k06_protection_document=assessment.stable_dict())
         # Tamper a field other than protection_identity/state: the bound full
         # assessment digest must still catch it.
-        document = json.loads(export.k06_protection_document_path.read_text())
+        document = json.loads(export.k06_evidence_path.read_text())
         document["verifier_identity"] = "someone-else"
-        export.k06_protection_document_path.write_text(json.dumps(document))
+        export.k06_evidence_path.write_text(json.dumps(document))
+        with self.assertRaises(RecoveryError):
+            load_recovery_backup_export(export.destination_root)
+
+    def test_load_recovery_backup_export_detects_tampered_not_applicable_evidence_content(self):
+        evidence, sealed = self.sealed_evidence()
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=NOT_APPLICABLE)
+        backup_root = Path(self.tempdir.name) / "backup"
+        export = export_recovery_set(
+            recovery_set, evidence, backup_root, k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+        )
+        document = json.loads(export.k06_evidence_path.read_text())
+        document["asserting_authority_id"] = "someone-unattributed"
+        export.k06_evidence_path.write_text(json.dumps(document))
         with self.assertRaises(RecoveryError):
             load_recovery_backup_export(export.destination_root)
 
     def test_load_recovery_backup_export_detects_tampered_member(self):
-        evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
-        backup_root = Path(self.tempdir.name) / "backup"
-        export = export_recovery_set(recovery_set, evidence, backup_root)
+        evidence, sealed, export = self._export()
         export.artifact_path.write_bytes(export.artifact_path.read_bytes() + b"tamper")
         with self.assertRaises(RecoveryError):
             load_recovery_backup_export(export.destination_root)
 
     def test_load_recovery_backup_export_refuses_manifest_member_path_traversal(self):
-        evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
-        backup_root = Path(self.tempdir.name) / "backup"
-        export = export_recovery_set(recovery_set, evidence, backup_root)
+        evidence, sealed, export = self._export()
         manifest_path = export.destination_root / "recovery-manifest.json"
         document = json.loads(manifest_path.read_text())
         for malicious in ("../../escape.json", "/etc/passwd", "a/../../b"):
@@ -487,13 +536,6 @@ class BackupRestoreV1Tests(unittest.TestCase):
         manifest_path.write_text(json.dumps(document))
 
     # -- restore: refusals ---------------------------------------------------
-
-    def _export(self):
-        evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
-        backup_root = Path(self.tempdir.name) / "backup"
-        export = export_recovery_set(recovery_set, evidence, backup_root)
-        return evidence, sealed, export
 
     def test_restore_refuses_non_empty_target(self):
         evidence, sealed, export = self._export()
@@ -527,14 +569,14 @@ class BackupRestoreV1Tests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             restore_recovery_set(
                 export, target, forbidden_roots=[self.root, export.destination_root],
-                catalog_writer=catalog, catalog_inspector=catalog, storage_root_id="restored",
+                restore_catalog=catalog, storage_root_id="restored",
             )
 
     def test_restore_refuses_non_empty_restore_catalog_family(self):
         evidence, sealed, export = self._export()
         target = Path(self.tempdir.name) / "restored"
         # A catalog that already has a (committed) row for this exact family,
-        # simulating a restore catalog that is not actually empty/isolated.
+        # simulating a restore catalog that is not actually isolated for it.
         pre_existing = SealedCatalogPartition(
             "pre-existing-partition", "pre-existing-dataset", sealed.natural_identity,
             "closed", sealed.ts_start, sealed.ts_end, sealed.row_count, sealed.byte_size,
@@ -554,6 +596,27 @@ class BackupRestoreV1Tests(unittest.TestCase):
     def test_restore_refuses_corrupt_backup_member(self):
         evidence, sealed, export = self._export()
         export.artifact_path.write_bytes(export.artifact_path.read_bytes() + b"tamper")
+        target = Path(self.tempdir.name) / "restored"
+        with self.assertRaises(RecoveryError):
+            self._restore(export, target)
+
+    def test_restore_fully_reverifies_k06_evidence_at_its_own_consumption_boundary(self):
+        # Tamper the exported K06 document directly and pass the SAME
+        # RecoveryBackupExport object straight to restore, bypassing
+        # load_recovery_backup_export entirely -- proving restore itself
+        # (not merely the loader) fully re-validates the complete document,
+        # not just a protection_identity/fingerprint string match.
+        evidence, sealed, export = self._export()
+        document = json.loads(export.k06_evidence_path.read_text())
+        document["rationale"] = "modified immediately before restore"
+        export.k06_evidence_path.write_text(json.dumps(document))
+        target = Path(self.tempdir.name) / "restored"
+        with self.assertRaises(RecoveryError):
+            self._restore(export, target)
+
+    def test_restore_refuses_missing_k06_evidence_file(self):
+        evidence, sealed, export = self._export()
+        export.k06_evidence_path.unlink()
         target = Path(self.tempdir.name) / "restored"
         with self.assertRaises(RecoveryError):
             self._restore(export, target)
@@ -639,7 +702,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
         self.assertNotEqual(primary_partition.storage_root, restored_partition.storage_root)
         self.assertNotEqual(primary_result.metadata.storage_root_ids, restored_result.metadata.storage_root_ids)
 
-    def test_restore_carries_k06_protection_evidence_through(self):
+    def test_restore_carries_protected_k06_evidence_through(self):
         evidence, sealed = self.sealed_evidence()
         assessment = protected_assessment()
         recovery_set = capture_recovery_set(evidence, sealed, k06_protection=assessment)
@@ -647,31 +710,39 @@ class BackupRestoreV1Tests(unittest.TestCase):
         export = export_recovery_set(recovery_set, evidence, backup_root, k06_protection_document=assessment.stable_dict())
         target = Path(self.tempdir.name) / "restored"
         restored = self._restore(export, target)
-        self.assertIsNotNone(restored.k06_protection_document_path)
-        document = json.loads(restored.k06_protection_document_path.read_text())
+        self.assertIsNotNone(restored.k06_evidence_path)
+        document = json.loads(restored.k06_evidence_path.read_text())
         self.assertEqual(document["protection_identity"], assessment.protection_identity)
 
-    # -- multi-revision: self-contained chain, atomic restore --------------
+    # -- multi-revision: self-contained chain (including predecessor K06
+    #    evidence), atomic restore --------------------------------------
 
     def test_export_refuses_wrong_predecessor_count(self):
         writer = FakeRestoreCatalog()
         evidence1, sealed1 = self.sealed_evidence(revision=1, writer=writer)
-        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=not_applicable())
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=NOT_APPLICABLE)
         backup_root = Path(self.tempdir.name) / "backup"
-        export1 = export_recovery_set(recovery_set1, evidence1, backup_root)
+        export_recovery_set(
+            recovery_set1, evidence1, backup_root, k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+        )
 
         evidence2, sealed2 = self.sealed_evidence(
             REVISION_2_RECORDS, revision=2, writer=writer,
             coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
         )
-        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=not_applicable())
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=NOT_APPLICABLE)
         backup_root2 = Path(self.tempdir.name) / "backup2"
-        with self.assertRaises(RecoveryError):
-            export_recovery_set(recovery_set2, evidence2, backup_root2, predecessors=())
         with self.assertRaises(RecoveryError):
             export_recovery_set(
                 recovery_set2, evidence2, backup_root2,
-                predecessors=[(recovery_set1, evidence1), (recovery_set1, evidence1)],
+                k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT, predecessors=(),
+            )
+        predecessor = PredecessorEvidence(recovery_set1, evidence1, k06_document=NOT_APPLICABLE_DOCUMENT)
+        with self.assertRaises(RecoveryError):
+            export_recovery_set(
+                recovery_set2, evidence2, backup_root2,
+                k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+                predecessors=[predecessor, predecessor],
             )
 
     def test_lone_revision_1_export_has_no_predecessors_and_restores_directly(self):
@@ -684,24 +755,28 @@ class BackupRestoreV1Tests(unittest.TestCase):
     def test_multi_revision_export_is_self_contained_and_restores_atomically(self):
         writer = FakeRestoreCatalog()
         evidence1, sealed1 = self.sealed_evidence(revision=1, writer=writer)
-        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=not_applicable())
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=NOT_APPLICABLE)
 
         evidence2, sealed2 = self.sealed_evidence(
             REVISION_2_RECORDS, revision=2, writer=writer,
             coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
         )
-        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=not_applicable())
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=NOT_APPLICABLE)
         backup_root = Path(self.tempdir.name) / "backup"
         export2 = export_recovery_set(
-            recovery_set2, evidence2, backup_root, predecessors=[(recovery_set1, evidence1)],
+            recovery_set2, evidence2, backup_root,
+            k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+            predecessors=[PredecessorEvidence(recovery_set1, evidence1, k06_document=NOT_APPLICABLE_DOCUMENT)],
         )
         self.assertEqual(len(export2.predecessors), 1)
         self.assertEqual(export2.predecessors[0].recovery_set.natural_identity.revision, 1)
+        self.assertIsNotNone(export2.predecessors[0].k06_evidence_path)
 
         # The export alone -- no separately supplied side information -- is
         # everything restore needs, including after a reload from disk.
         loaded = load_recovery_backup_export(export2.destination_root)
         self.assertEqual(len(loaded.predecessors), 1)
+        self.assertIsNotNone(loaded.predecessors[0].k06_evidence_path)
 
         target = Path(self.tempdir.name) / "restored"
         restore_catalog = FakeRestoreCatalog()
@@ -728,13 +803,59 @@ class BackupRestoreV1Tests(unittest.TestCase):
         self.assertTrue(predecessor_artifact.is_file())
         self.assertEqual(predecessor_artifact.read_bytes(), self.data_path.read_bytes())
 
+    def test_protected_predecessor_carries_its_own_k06_evidence_through(self):
+        writer = FakeRestoreCatalog()
+        predecessor_assessment = protected_assessment()
+        evidence1, sealed1 = self.sealed_evidence(revision=1, writer=writer)
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_protection=predecessor_assessment)
+
+        evidence2, sealed2 = self.sealed_evidence(
+            REVISION_2_RECORDS, revision=2, writer=writer,
+            coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
+        )
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=NOT_APPLICABLE)
+        backup_root = Path(self.tempdir.name) / "backup"
+        export2 = export_recovery_set(
+            recovery_set2, evidence2, backup_root,
+            k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+            predecessors=[
+                PredecessorEvidence(recovery_set1, evidence1, k06_document=predecessor_assessment.stable_dict()),
+            ],
+        )
+        loaded = load_recovery_backup_export(export2.destination_root)
+        self.assertIsNotNone(loaded.predecessors[0].k06_evidence_path)
+        document = json.loads(loaded.predecessors[0].k06_evidence_path.read_text())
+        self.assertEqual(document["protection_identity"], predecessor_assessment.protection_identity)
+
+        target = Path(self.tempdir.name) / "restored"
+        restored = self._restore(loaded, target)
+        self.assertEqual(restored.sealed.natural_identity.revision, 2)
+
+    def test_export_refuses_predecessor_missing_its_own_k06_evidence(self):
+        writer = FakeRestoreCatalog()
+        evidence1, sealed1 = self.sealed_evidence(revision=1, writer=writer)
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=NOT_APPLICABLE)
+
+        evidence2, sealed2 = self.sealed_evidence(
+            REVISION_2_RECORDS, revision=2, writer=writer,
+            coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
+        )
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=NOT_APPLICABLE)
+        backup_root = Path(self.tempdir.name) / "backup"
+        with self.assertRaises(RecoveryError):
+            export_recovery_set(
+                recovery_set2, evidence2, backup_root,
+                k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+                predecessors=[PredecessorEvidence(recovery_set1, evidence1, k06_document=None)],
+            )
+
     def test_restore_refuses_two_revisions_claiming_the_same_physical_location(self):
         writer = FakeRestoreCatalog()
         colliding_rel_path = "dt=2024-01-20/part-001.parquet"
         evidence1, sealed1 = self.sealed_evidence(
             revision=1, writer=writer, partition_key="dt=2024-01-20", rel_path=colliding_rel_path,
         )
-        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=not_applicable())
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=NOT_APPLICABLE)
 
         # Revision 2 is independently, validly sealed (own materialization
         # under its own temp dataset_root, so it never overwrites revision
@@ -748,12 +869,14 @@ class BackupRestoreV1Tests(unittest.TestCase):
             coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
             rel_path=colliding_rel_path, dataset_root=second_dataset_root,
         )
-        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=not_applicable())
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=NOT_APPLICABLE)
         self.assertNotEqual(recovery_set1.physical_content_sha256, recovery_set2.physical_content_sha256)
 
         backup_root = Path(self.tempdir.name) / "backup"
         export2 = export_recovery_set(
-            recovery_set2, evidence2, backup_root, predecessors=[(recovery_set1, evidence1)],
+            recovery_set2, evidence2, backup_root,
+            k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+            predecessors=[PredecessorEvidence(recovery_set1, evidence1, k06_document=NOT_APPLICABLE_DOCUMENT)],
         )
         target = Path(self.tempdir.name) / "restored"
         with self.assertRaises(RecoveryError):
@@ -762,25 +885,26 @@ class BackupRestoreV1Tests(unittest.TestCase):
     def test_predecessor_chain_must_be_contiguous_and_same_family(self):
         writer = FakeRestoreCatalog()
         evidence1, sealed1 = self.sealed_evidence(revision=1, writer=writer)
-        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=not_applicable())
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=NOT_APPLICABLE)
 
         evidence2, sealed2 = self.sealed_evidence(
             REVISION_2_RECORDS, revision=2, writer=writer,
             coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
         )
-        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=not_applicable())
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=NOT_APPLICABLE)
 
         foreign_writer = FakeRestoreCatalog()
         foreign_evidence, foreign_sealed = self.sealed_evidence(
             revision=1, writer=foreign_writer, partition_key="dt=2099-01-01",
         )
-        foreign_recovery_set = capture_recovery_set(foreign_evidence, foreign_sealed, k06_not_applicable=not_applicable())
+        foreign_recovery_set = capture_recovery_set(foreign_evidence, foreign_sealed, k06_not_applicable=NOT_APPLICABLE)
 
         backup_root = Path(self.tempdir.name) / "backup"
         with self.assertRaises(RecoveryError):
             export_recovery_set(
                 recovery_set2, evidence2, backup_root,
-                predecessors=[(foreign_recovery_set, foreign_evidence)],
+                k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+                predecessors=[PredecessorEvidence(foreign_recovery_set, foreign_evidence, k06_document=NOT_APPLICABLE_DOCUMENT)],
             )
 
 

@@ -22,43 +22,56 @@ second database; this script reflects that rather than offering a
 same-catalog fallback that could never actually prove isolation.
 
 Real deployment-independence proof additionally requires the operator to
-supply actual distinct mount points and a real, independently verified
-storage-root row, via these optional environment variables:
+supply actual distinct mount points and real, independently attested
+hardware identity for all three roles, via these optional environment
+variables:
 
-    K08_PRIMARY_ROOT               absolute path on the primary storage device
-    K08_BACKUP_ROOT                 absolute path on the backup storage device
+    K08_PRIMARY_ROOT                 absolute path on the primary storage device
+    K08_BACKUP_ROOT                  absolute path on the backup storage device
     K08_RESTORE_ROOT                 absolute path on the restore storage device
-    K08_RESTORE_STORAGE_ROOT_ID      an ALREADY-REGISTERED catalog.storage_roots
-                                      row in the restore database (real
-                                      abs_path == K08_RESTORE_ROOT, real
-                                      device_uuid distinct from the primary
-                                      database's 'hot' row); this script
-                                      never inserts a row when this is
-                                      supplied and always compares its
-                                      device_uuid against primary 'hot'
+    K08_PRIMARY_DEVICE_ID            operator-attested identifier for the real
+    K08_BACKUP_DEVICE_ID              physical device backing each of the three
+    K08_RESTORE_DEVICE_ID             roots above (arbitrary strings the operator
+                                       chooses; the script only requires the
+                                       three -- when all are supplied -- to be
+                                       pairwise distinct); backup has no
+                                       catalog registration of its own; these
+                                       three are the only mechanism that can
+                                       attest its hardware independence
+    K08_RESTORE_STORAGE_ROOT_ID       an ALREADY-REGISTERED catalog.storage_roots
+                                       row in the restore database (real
+                                       abs_path == K08_RESTORE_ROOT, real
+                                       device_uuid distinct from the primary
+                                       database's 'hot' row); this script
+                                       never inserts a row when this is
+                                       supplied and always compares its
+                                       device_uuid against primary 'hot'
 
 Any root left unset falls back to a subdirectory of one process-local
 ``TemporaryDirectory``.  Roots that end up on the SAME filesystem device are
 detected via ``os.stat().st_dev`` (genuine, directly observed evidence, not
-a trusted claim) and reported as such -- this is real evidence the script
-can establish on its own, independent of any operator-supplied topology
-metadata.  ``K08_RESTORE_STORAGE_ROOT_ID`` left unset falls back to
-inserting a placeholder ``storage_roots`` row with a random ``device_uuid``
--- explicitly not evidence, only a mechanically distinct locator.
+a trusted claim) and reported as such.  ``K08_RESTORE_STORAGE_ROOT_ID`` left
+unset falls back to inserting a placeholder ``storage_roots`` row with a
+random ``device_uuid`` -- explicitly not evidence, only a mechanically
+distinct locator.  ``K08_*_DEVICE_ID`` left unset (any of the three) means
+real hardware independence is not claimed for any pair involving it.
 
 What this proves in every invocation, against two real PostgreSQL catalog
 databases and a real filesystem target (never a fake writer/catalog):
 
 - one finalized publication seals through the unmodified
   ``CatalogPublicationWriter``/``PublicationCertification`` path;
-- K08 captures a deterministic ``RecoverySetV1`` and exports it to an
-  explicit, durable, independently reloadable backup without touching
+- K08 captures a deterministic ``RecoverySetV1`` (with an attributed K06
+  not-applicable assertion for this self-contained fixture) and exports it
+  to an explicit, durable, independently reloadable backup without touching
   primary state;
 - restoring into a brand-new isolated filesystem target and a genuinely
-  separate, empty catalog database, whose registered ``catalog.storage_roots``
-  locator is looked up *authoritatively* (never a caller-asserted string)
-  and verified to resolve to exactly that target, reproduces the sealed
-  identities/coverage;
+  separate, empty catalog database, through one ``restore_catalog`` object
+  bound to that single database connection (so the storage-locator lookup
+  and the admission it authorizes can never be split across two different
+  catalogs), whose registered ``catalog.storage_roots`` locator is looked up
+  *authoritatively* (never a caller-asserted string) and verified to resolve
+  to exactly that target, reproduces the sealed identities/coverage;
 - the real ``access.catalog.Catalog``/``access.gateway.DataGateway``,
   pointed at the restore database, resolve and read the restored partition
   from the restored target -- and because that database never held the
@@ -70,20 +83,27 @@ Independence axes and how this script reports them:
 - catalog-instance independence: ALWAYS proven (two distinct DSNs are
   mandatory);
 - storage-locator isolation within the restore side: ALWAYS proven
-  (``storage_root_id`` is authoritatively resolved and checked against
-  ``K08_RESTORE_ROOT``);
+  (``storage_root_id`` is authoritatively resolved, from the SAME connection
+  used to admit, and checked against ``K08_RESTORE_ROOT``);
 - OS-level distinct-device evidence for primary/backup/restore roots:
-  proven whenever ``os.stat().st_dev`` actually differs -- this script
-  observes it directly and reports which roots share a device when they do;
-- real distinct physical hardware (``device_uuid``): proven only when
-  ``K08_RESTORE_STORAGE_ROOT_ID`` names an operator-registered row whose
-  ``device_uuid`` differs from primary ``hot`` -- this script compares them
-  but cannot itself verify the operator's claim is true of real hardware.
+  proven whenever ``os.stat().st_dev`` actually differs -- directly
+  observed, filesystem/mount granularity only (not necessarily distinct
+  physical hardware);
+- real distinct physical hardware for primary vs. restore (``device_uuid``
+  in ``catalog.storage_roots``): proven only when ``K08_RESTORE_STORAGE_ROOT_ID``
+  names an operator-registered row whose ``device_uuid`` differs from
+  primary ``hot``;
+- real distinct physical hardware across ALL THREE roles, backup included
+  (``K08_PRIMARY_DEVICE_ID``/``K08_BACKUP_DEVICE_ID``/``K08_RESTORE_DEVICE_ID``):
+  proven only when all three are supplied and pairwise distinct -- backup
+  has no catalog registration, so this operator attestation is the only
+  mechanism that can ever cover it.
 
-``DEPLOYMENT_INDEPENDENCE_PROOF_PENDING`` is printed only for axes not
-actually established this run; when every axis above is satisfied the
-script instead prints ``DEPLOYMENT_INDEPENDENCE: fully evidenced this run``
--- see ADR-0039 Sec. 2.
+``DEPLOYMENT_INDEPENDENCE_PROOF_PENDING`` is printed listing exactly which
+axes above were not established this run.  ``DEPLOYMENT_INDEPENDENCE: fully
+evidenced this run`` is printed only when every axis -- including backup
+hardware -- is satisfied; storage-locator/catalog-instance independence
+alone is never enough to claim it.  See ADR-0039 Sec. 2.
 """
 
 from __future__ import annotations
@@ -131,6 +151,13 @@ DATASET_WHERE = (
     "AND instrument = 'BTCUSDT' AND schema_id = 'trade-v1'"
 )
 
+NOT_APPLICABLE = K06NotApplicableAssertion(
+    asserting_authority_id="adr:k08-integration-authority-v1",
+    asserted_at=Instant.parse("2026-09-01T10:00:03Z"),
+    rationale="integration fixture publication is self-contained; no RAW source reconstruction is required",
+)
+NOT_APPLICABLE_DOCUMENT = NOT_APPLICABLE.canonical_payload()
+
 
 def trade(timestamp: str, trade_id: str) -> TradeRecord:
     return TradeRecord("bybit", "BTCUSDT", Instant.parse(timestamp), "100.00", "0.5000", "buy", None, trade_id, None)
@@ -167,13 +194,13 @@ def write_evidence(root: Path, dataset_root: Path, dataset_path: Path) -> Sealed
     return SealedPartitionEvidence(dataset_path, partition_path, (coverage_path,), artifact, "hot")
 
 
-def _resolve_root(env_var: str, holder: Path, subdir: str, evidence: list[str]) -> Path:
+def _resolve_root(env_var: str, holder: Path, subdir: str, pending: list[str]) -> Path:
     override = os.environ.get(env_var)
     if override:
         path = Path(override)
         path.mkdir(parents=True, exist_ok=True)
         return path
-    evidence.append(
+    pending.append(
         f"{env_var} was not supplied; {subdir} falls back to a subdirectory of one "
         "process-local TemporaryDirectory."
     )
@@ -199,16 +226,64 @@ def _report_device_evidence(roots: dict[str, Path], proven: list[str], pending: 
     else:
         proven.append(
             "OS-level st_dev evidence: primary/backup/restore roots are on distinct "
-            f"filesystem devices this run ({devices}) -- real, directly observed evidence, "
-            "not merely a trusted claim."
+            f"filesystem devices this run ({devices}) -- directly observed, filesystem/mount "
+            "granularity only (not necessarily distinct physical hardware)."
         )
 
 
-class RestoreCatalogInspectorImpl:
-    """Authoritative lookups against the restore database's real catalog rows."""
+def _report_operator_hardware_evidence(proven: list[str], pending: list[str]) -> None:
+    """The ONLY mechanism that can attest backup hardware independence: backup
+    has no catalog.storage_roots registration of its own to compare via SQL."""
+
+    ids = {
+        "primary": os.environ.get("K08_PRIMARY_DEVICE_ID"),
+        "backup": os.environ.get("K08_BACKUP_DEVICE_ID"),
+        "restore": os.environ.get("K08_RESTORE_DEVICE_ID"),
+    }
+    missing = [name for name, value in ids.items() if not value]
+    if missing:
+        pending.append(
+            "real distinct physical hardware across all three roles (including backup) is "
+            f"unproven: {', '.join(missing)} K08_*_DEVICE_ID not supplied. Set "
+            "K08_PRIMARY_DEVICE_ID/K08_BACKUP_DEVICE_ID/K08_RESTORE_DEVICE_ID to real, "
+            "operator-verified distinct hardware identifiers to close this axis."
+        )
+        return
+    values = list(ids.values())
+    if len(set(values)) != len(values):
+        raise RuntimeError(
+            "K08_PRIMARY_DEVICE_ID/K08_BACKUP_DEVICE_ID/K08_RESTORE_DEVICE_ID must be pairwise "
+            f"distinct; got {ids!r}"
+        )
+    proven.append(
+        f"real distinct physical hardware (operator-attested): primary={ids['primary']!r}, "
+        f"backup={ids['backup']!r}, restore={ids['restore']!r} are pairwise distinct -- "
+        "operator-verified, trusted but not independently re-verified by this script."
+    )
+
+
+class RestoreCatalogImpl:
+    """The complete ``RestoreCatalog`` capability, bound to exactly one connection.
+
+    Wraps the unmodified S13 ``CatalogPublicationWriter`` for admission and
+    adds the authoritative read lookups restore needs, both against the same
+    ``connection`` -- there is only one object and one connection, so the
+    storage-locator lookup that authorizes an admission and the admission
+    itself can never be silently split across two different catalogs.
+    """
 
     def __init__(self, connection):
         self.connection = connection
+        self._writer = CatalogPublicationWriter(connection)
+
+    def seal_partition(self, **kwargs):
+        return self._writer.seal_partition(**kwargs)
+
+    def commit(self):
+        return self._writer.commit()
+
+    def rollback(self):
+        return self._writer.rollback()
 
     def resolve_storage_root_abs_path(self, storage_root_id: str) -> str:
         with self.connection.cursor() as cursor:
@@ -274,10 +349,10 @@ def _prepare_restore_storage_root(
                 "independent storage"
             )
         proven.append(
-            f"real distinct physical hardware: K08_RESTORE_STORAGE_ROOT_ID={declared_id!r} is "
-            f"operator-registered (device_uuid={device_uuid!r}) and differs from primary 'hot' "
-            f"(device_uuid={primary_device_uuid!r}) -- operator-verified, trusted but not "
-            "independently re-verified by this script."
+            f"real distinct physical hardware (primary vs. restore): K08_RESTORE_STORAGE_ROOT_ID="
+            f"{declared_id!r} is operator-registered (device_uuid={device_uuid!r}) and differs "
+            f"from primary 'hot' (device_uuid={primary_device_uuid!r}) -- operator-verified, "
+            "trusted but not independently re-verified by this script."
         )
         return declared_id
 
@@ -291,11 +366,10 @@ def _prepare_restore_storage_root(
         )
     restore_connection.commit()
     pending.append(
-        "real distinct physical hardware: K08_RESTORE_STORAGE_ROOT_ID was not supplied; this "
-        f"script inserted a placeholder storage_roots row ({storage_root_id!r}) with a random "
-        "device_uuid in the restore database -- a mechanically distinct locator only, NOT "
-        "evidence of real distinct hardware. Set K08_RESTORE_STORAGE_ROOT_ID to an operator-"
-        "registered, real third-device storage_roots row to close this axis."
+        "real distinct physical hardware (primary vs. restore): K08_RESTORE_STORAGE_ROOT_ID was "
+        f"not supplied; this script inserted a placeholder storage_roots row ({storage_root_id!r}) "
+        "with a random device_uuid in the restore database -- a mechanically distinct locator "
+        "only, NOT evidence of real distinct hardware."
     )
     return storage_root_id
 
@@ -325,6 +399,7 @@ def main() -> int:
         backup_root = _resolve_root("K08_BACKUP_ROOT", holder, "backup", pending)
         restore_root = _resolve_root("K08_RESTORE_ROOT", holder, "restored", pending)
         _report_device_evidence({"primary": root, "backup": backup_root, "restore": restore_root}, proven, pending)
+        _report_operator_hardware_evidence(proven, pending)
 
         rel_root = "canonical/trades/bybit/BTCUSDT/trade-v1"
         dataset_root = root / rel_root
@@ -359,8 +434,9 @@ def main() -> int:
             bootstrap_schema_registry(restore_connection, read_schema_registration(ROOT / "schemas" / "trade-v1.json"))
             restore_connection.commit()
 
-            restore_storage_root_id, operator_verified = _prepare_restore_storage_root(
-                restore_connection, connection, restore_root, pending,
+            restore_catalog = RestoreCatalogImpl(restore_connection)
+            restore_storage_root_id = _prepare_restore_storage_root(
+                restore_connection, connection, restore_root, proven, pending,
             )
 
             certification = PublicationCertification(
@@ -370,22 +446,15 @@ def main() -> int:
             assert run.sealed_partition.state == "closed"
             assert run.certification.status == "pass"
 
-            recovery_set = capture_recovery_set(
-                evidence, run.sealed_partition,
-                k06_not_applicable=K06NotApplicableAssertion(
-                    asserting_authority_id="adr:k08-integration-authority-v1",
-                    asserted_at=Instant.parse("2026-09-01T10:00:03Z"),
-                    rationale="integration fixture publication is self-contained; no RAW source reconstruction is required",
-                ),
+            recovery_set = capture_recovery_set(evidence, run.sealed_partition, k06_not_applicable=NOT_APPLICABLE)
+            export = export_recovery_set(
+                recovery_set, evidence, backup_root, k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
             )
-            export = export_recovery_set(recovery_set, evidence, backup_root)
 
-            inspector = RestoreCatalogInspectorImpl(restore_connection)
             restored = restore_recovery_set(
                 export, restore_root,
                 forbidden_roots=[root, backup_root],
-                catalog_writer=CatalogPublicationWriter(restore_connection),
-                catalog_inspector=inspector,
+                restore_catalog=restore_catalog,
                 storage_root_id=restore_storage_root_id,
             )
             assert restored.sealed.natural_identity == run.sealed_partition.natural_identity
@@ -417,21 +486,18 @@ def main() -> int:
             assert result.metadata.catalog_partition_ids == (restored.sealed.partition_id,)
 
             print("PASS K08 backup/restore v1 PostgreSQL isolated restore proof")
-            unproven = [line for line in pending if "-- proven this run" not in line and " -- real, directly observed" not in line and "operator-verified distinct hardware" not in line]
-            if not unproven and operator_verified:
+            if not pending:
                 print("DEPLOYMENT_INDEPENDENCE: fully evidenced this run")
-                for line in pending:
+                for line in proven:
                     print(f"  - {line}")
             else:
                 print("DEPLOYMENT_INDEPENDENCE_PROOF_PENDING:")
                 for line in pending:
                     print(f"  - {line}")
-                if not operator_verified:
-                    print(
-                        "  - real distinct physical hardware is unproven: set "
-                        "K08_RESTORE_STORAGE_ROOT_ID to an operator-registered, real "
-                        "third-device storage_roots row to close this axis."
-                    )
+                if proven:
+                    print("Already established this run:")
+                    for line in proven:
+                        print(f"  - {line}")
             return 0
         finally:
             with connection.cursor() as cursor:
