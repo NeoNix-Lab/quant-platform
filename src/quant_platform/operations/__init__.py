@@ -60,6 +60,7 @@ from .recovery import (
     RECOVERY_SET_IDENTITY_DOMAIN,
     RecoveryError,
     RecoverySetV1,
+    recovery_set_from_canonical_payload,
 )
 
 __all__ = [
@@ -113,5 +114,6 @@ __all__ = [
     "compare_signals",
     "evaluate_pressure",
     "observe_capacity",
+    "recovery_set_from_canonical_payload",
     "restrictions_for_state",
 ]

@@ -3,23 +3,35 @@
 Mirrors ``quant_platform.operations.protection``'s discipline: this module
 proves nothing about a filesystem, a catalog or a network topology.  It binds
 caller-supplied, already-authoritative evidence (a finalized publication's
-natural identity, durable manifest digests, declared coverage and physical
-content identity) into one deterministic ``RecoverySetV1`` identity, and
-fails closed when that evidence is not a self-consistent finalized
-generation.  It never crawls storage, copies bytes, opens a catalog
-connection or decides whether a backup destination is independent of a
-primary storage boundary -- independence is an observed deployment property,
-never inferred here.
+natural identity, durable manifest digests, declared coverage, physical
+content identity and, when applicable, the K06 protection identity of the
+source evidence required to reconstruct it) into one deterministic
+``RecoverySetV1`` identity, and fails closed when that evidence is not a
+self-consistent finalized generation.  It never crawls storage, copies
+bytes, opens a catalog connection or decides whether a backup destination is
+independent of a primary storage boundary -- independence is an observed
+deployment property, never inferred here.
+
+``recovery_set_from_canonical_payload`` is the reverse direction: it
+reconstructs a ``RecoverySetV1`` from its own durably persisted
+``canonical_payload`` (see ``quant_platform.application.backup_restore``'s
+recovery manifest), so an export survives process loss without needing a
+surviving in-memory Python object -- every field is re-derived and
+re-validated by the same ``__post_init__`` a fresh capture uses, never
+trusted as an opaque blob.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from typing import Any
 
-from ..data.models import CoverageInterval, NaturalPartitionIdentity
+from ..data.models import CoverageInterval, DatasetIdentity, Instant, NaturalPartitionIdentity
+from .protection import PROTECTION_UNIT_IDENTITY_DOMAIN
 
 
 RECOVERY_SET_IDENTITY_DOMAIN = "recovery-set-v1"
@@ -33,6 +45,9 @@ RECOVERY_SET_IDENTITY_DOMAIN = "recovery-set-v1"
 FINALIZED_PARTITION_STATES = frozenset({"closed", "valid", "degraded"})
 
 _SHA256_HEX_RE_LEN = 64
+_PROTECTION_IDENTITY_RE = re.compile(
+    rf"^{re.escape(PROTECTION_UNIT_IDENTITY_DOMAIN)}:sha256:[0-9a-f]{{64}}$"
+)
 
 
 class RecoveryError(ValueError):
@@ -45,12 +60,20 @@ class RecoverySetV1:
 
     Composite identity (``recovery_identity``) is derived only from the
     dataset/partition natural identity, durable manifest digests, declared
-    coverage and physical content identity -- never from a catalog row UUID,
-    storage root path or discovery order, exactly as
+    coverage, physical content identity, finalized lifecycle state and the
+    K06 protection identity (when applicable) -- never from a catalog row
+    UUID, storage root path or discovery order, exactly as
     ``ProtectionUnitIdentity`` excludes filesystem/host accidents from K06
     identity.  ``catalog_dataset_id``/``catalog_partition_id`` are carried as
     informational locators only and never participate in
     :meth:`canonical_payload`.
+
+    ``k06_protection_identity`` binds the ``protection_identity`` of a K06
+    :class:`~quant_platform.operations.protection.ProtectionAssessment`
+    proving the RAW source evidence required to reconstruct this accepted
+    canonical state is itself protected, when such evidence is applicable
+    (ADR-0039 Sec. 1); it is ``None`` only when no such evidence is
+    applicable to the captured publication.
     """
 
     natural_identity: NaturalPartitionIdentity
@@ -63,6 +86,7 @@ class RecoverySetV1:
     partition_state: str
     catalog_dataset_id: str
     catalog_partition_id: str
+    k06_protection_identity: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.natural_identity, NaturalPartitionIdentity):
@@ -108,6 +132,11 @@ class RecoverySetV1:
             self, "catalog_partition_id",
             _non_empty_text(self.catalog_partition_id, "catalog_partition_id"),
         )
+        if self.k06_protection_identity is not None:
+            object.__setattr__(
+                self, "k06_protection_identity",
+                _protection_identity(self.k06_protection_identity),
+            )
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
@@ -122,6 +151,7 @@ class RecoverySetV1:
             "physical_size_bytes": self.physical_size_bytes,
             "declared_coverage": self.declared_coverage.stable_dict(),
             "partition_state": self.partition_state,
+            "k06_protection_identity": self.k06_protection_identity,
         }
 
     @property
@@ -136,6 +166,60 @@ class RecoverySetV1:
 
     def stable_dict(self) -> dict[str, Any]:
         return {"recovery_identity": self.recovery_identity, "canonical_payload": self.canonical_payload()}
+
+
+def recovery_set_from_canonical_payload(
+    payload: Mapping[str, Any],
+    *,
+    catalog_dataset_id: str,
+    catalog_partition_id: str,
+) -> RecoverySetV1:
+    """Reconstruct a ``RecoverySetV1`` from its own durably persisted ``canonical_payload``.
+
+    Every field is re-derived and re-validated by the same
+    ``RecoverySetV1.__post_init__`` a fresh capture uses; nothing here is
+    trusted as an opaque blob.  ``catalog_dataset_id``/``catalog_partition_id``
+    are supplied by the caller because they are informational locators, not
+    part of the canonical (identity-bearing) payload -- see
+    :meth:`RecoverySetV1.canonical_payload`.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise RecoveryError("recovery set canonical payload must be a mapping")
+    if payload.get("identity_domain") != RECOVERY_SET_IDENTITY_DOMAIN:
+        raise RecoveryError("recovery set canonical payload has an unsupported identity_domain")
+    try:
+        dataset_identity = DatasetIdentity(**payload["dataset_identity"])
+        natural_identity = NaturalPartitionIdentity(
+            dataset_identity, payload["partition_key"], payload["revision"],
+        )
+        coverage_document = payload["declared_coverage"]
+        declared_coverage = CoverageInterval(
+            Instant.parse(coverage_document["start"]), Instant.parse(coverage_document["end"]),
+        )
+        return RecoverySetV1(
+            natural_identity=natural_identity,
+            dataset_manifest_sha256=payload["dataset_manifest_sha256"],
+            partition_manifest_sha256=payload["partition_manifest_sha256"],
+            coverage_manifest_sha256=tuple(payload["coverage_manifest_sha256"]),
+            physical_content_sha256=payload["physical_content_sha256"],
+            physical_size_bytes=payload["physical_size_bytes"],
+            declared_coverage=declared_coverage,
+            partition_state=payload["partition_state"],
+            catalog_dataset_id=catalog_dataset_id,
+            catalog_partition_id=catalog_partition_id,
+            k06_protection_identity=payload.get("k06_protection_identity"),
+        )
+    except RecoveryError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RecoveryError("recovery set canonical payload is malformed") from exc
+
+
+def _protection_identity(value: Any) -> str:
+    if not isinstance(value, str) or not _PROTECTION_IDENTITY_RE.fullmatch(value):
+        raise RecoveryError("k06_protection_identity must be a well-formed K06 protection_identity")
+    return value
 
 
 def _sha256_hex(value: Any, field_name: str) -> str:
@@ -183,4 +267,5 @@ __all__ = [
     "RECOVERY_SET_IDENTITY_DOMAIN",
     "RecoveryError",
     "RecoverySetV1",
+    "recovery_set_from_canonical_payload",
 ]

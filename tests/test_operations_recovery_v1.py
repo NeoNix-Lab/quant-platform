@@ -17,10 +17,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.data.models import CoverageInterval, DatasetIdentity, Instant, NaturalPartitionIdentity  # noqa: E402
+from quant_platform.operations.protection import PROTECTION_UNIT_IDENTITY_DOMAIN  # noqa: E402
 from quant_platform.operations.recovery import (  # noqa: E402
     RECOVERY_SET_IDENTITY_DOMAIN,
     RecoveryError,
     RecoverySetV1,
+    recovery_set_from_canonical_payload,
 )
 
 
@@ -30,6 +32,7 @@ HASH_A = "a" * 64
 HASH_B = "b" * 64
 HASH_C = "c" * 64
 COVERAGE = CoverageInterval(Instant.parse("2024-01-15T00:00:00Z"), Instant.parse("2024-01-16T00:00:00Z"))
+VALID_K06_IDENTITY = f"{PROTECTION_UNIT_IDENTITY_DOMAIN}:sha256:" + "9" * 64
 
 
 def recovery_set(**overrides) -> RecoverySetV1:
@@ -110,6 +113,56 @@ class RecoverySetV1Tests(unittest.TestCase):
     def test_blank_catalog_locator_is_refused(self):
         with self.assertRaises(RecoveryError):
             recovery_set(catalog_dataset_id="   ")
+
+    def test_k06_protection_identity_defaults_to_none_and_is_optional(self):
+        base = recovery_set()
+        self.assertIsNone(base.k06_protection_identity)
+        self.assertIsNone(base.canonical_payload()["k06_protection_identity"])
+
+    def test_k06_protection_identity_changes_recovery_identity(self):
+        base = recovery_set()
+        with_k06 = recovery_set(k06_protection_identity=VALID_K06_IDENTITY)
+        self.assertNotEqual(base.recovery_identity, with_k06.recovery_identity)
+        self.assertEqual(with_k06.k06_protection_identity, VALID_K06_IDENTITY)
+
+    def test_malformed_k06_protection_identity_is_refused(self):
+        for malformed in ("not-a-protection-identity", "protection-unit-identity-v1:sha256:short", ""):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(RecoveryError):
+                    recovery_set(k06_protection_identity=malformed)
+
+    def test_recovery_set_from_canonical_payload_round_trips(self):
+        original = recovery_set(k06_protection_identity=VALID_K06_IDENTITY)
+        reconstructed = recovery_set_from_canonical_payload(
+            original.canonical_payload(),
+            catalog_dataset_id="a-different-catalog-dataset-id",
+            catalog_partition_id="a-different-catalog-partition-id",
+        )
+        self.assertEqual(reconstructed.recovery_identity, original.recovery_identity)
+        self.assertEqual(reconstructed.k06_protection_identity, original.k06_protection_identity)
+        # Catalog locators are informational and legitimately caller-supplied
+        # on reload; they must not affect the reconstructed identity.
+        self.assertNotEqual(reconstructed.catalog_dataset_id, original.catalog_dataset_id)
+
+    def test_recovery_set_from_canonical_payload_refuses_wrong_identity_domain(self):
+        payload = dict(recovery_set().canonical_payload())
+        payload["identity_domain"] = "some-other-domain-v1"
+        with self.assertRaises(RecoveryError):
+            recovery_set_from_canonical_payload(
+                payload, catalog_dataset_id="d", catalog_partition_id="p",
+            )
+
+    def test_recovery_set_from_canonical_payload_refuses_malformed_payload(self):
+        for payload in (
+            {},
+            {"identity_domain": RECOVERY_SET_IDENTITY_DOMAIN},
+            "not-a-mapping",
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(RecoveryError):
+                    recovery_set_from_canonical_payload(
+                        payload, catalog_dataset_id="d", catalog_partition_id="p",
+                    )
 
 
 if __name__ == "__main__":

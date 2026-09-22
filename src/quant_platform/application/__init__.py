@@ -14,10 +14,13 @@ market-data application service.  Transport and job runtime remain J02 and J03.
 """
 
 from .backup_restore import (
+    RECOVERY_MANIFEST_FILENAME,
+    RECOVERY_MANIFEST_SCHEMA_VERSION,
     RecoveryBackupExport,
     RestoredRecoverySet,
     capture_recovery_set,
     export_recovery_set,
+    load_recovery_backup_export,
     restore_recovery_set,
 )
 from .composition import (
@@ -114,6 +117,8 @@ __all__ = [
     "RepresentationRef",
     "PreflightResult",
     "RECORD_SCHEMA_ID",
+    "RECOVERY_MANIFEST_FILENAME",
+    "RECOVERY_MANIFEST_SCHEMA_VERSION",
     "RecoveryBackupExport",
     "RestoredRecoverySet",
     "RunReport",
@@ -141,6 +146,7 @@ __all__ = [
     "golden_field_mismatches",
     "inspect_vertical",
     "load_golden_expectation",
+    "load_recovery_backup_export",
     "materialize_h01_feature_artifact",
     "observe_scan",
     "resolve_market_data_request",
