@@ -55,10 +55,20 @@ from .protection import (
     assess_protection,
     authorize_protection_write,
 )
+from .recovery import (
+    K06_NOT_APPLICABLE_IDENTITY_DOMAIN,
+    RECOVERY_SET_IDENTITY_DOMAIN,
+    K06NotApplicableAssertion,
+    RecoveryError,
+    RecoverySetV1,
+    recovery_set_from_canonical_payload,
+)
 
 __all__ = [
+    "K06_NOT_APPLICABLE_IDENTITY_DOMAIN",
     "PROTECTION_ASSESSMENT_IDENTITY_DOMAIN",
     "PROTECTION_UNIT_IDENTITY_DOMAIN",
+    "RECOVERY_SET_IDENTITY_DOMAIN",
     "OPERATIONAL_SIGNAL_V1_SCHEMA_VERSION",
     "AcceptedReconstructionContract",
     "ArtifactAssessmentResult",
@@ -87,6 +97,9 @@ __all__ = [
     "ProtectionWriteAction",
     "ProtectionWriteAuthorization",
     "ProtectionWriteDecision",
+    "K06NotApplicableAssertion",
+    "RecoveryError",
+    "RecoverySetV1",
     "SafetyRelevanceAssertion",
     "SignalKind",
     "SignalRelation",
@@ -103,5 +116,6 @@ __all__ = [
     "compare_signals",
     "evaluate_pressure",
     "observe_capacity",
+    "recovery_set_from_canonical_payload",
     "restrictions_for_state",
 ]
