@@ -4,13 +4,20 @@ Mirrors ``quant_platform.operations.protection``'s discipline: this module
 proves nothing about a filesystem, a catalog or a network topology.  It binds
 caller-supplied, already-authoritative evidence (a finalized publication's
 natural identity, durable manifest digests, declared coverage, physical
-content identity and, when applicable, the K06 protection identity of the
-source evidence required to reconstruct it) into one deterministic
-``RecoverySetV1`` identity, and fails closed when that evidence is not a
-self-consistent finalized generation.  It never crawls storage, copies
-bytes, opens a catalog connection or decides whether a backup destination is
-independent of a primary storage boundary -- independence is an observed
-deployment property, never inferred here.
+content identity and -- as an explicit, mandatory, attributed choice -- either
+the full K06 protection assessment required to reconstruct it, or an
+attributed assertion that no such evidence is applicable) into one
+deterministic ``RecoverySetV1`` identity, and fails closed when that evidence
+is not a self-consistent finalized generation.  It never crawls storage,
+copies bytes, opens a catalog connection or decides whether a backup
+destination is independent of a primary storage boundary -- independence is
+an observed deployment property, never inferred here.
+
+K08 v1's recovery contract is restricted to the S13 ``closed`` seal state:
+restore always re-admits through the unmodified
+``CertificationCatalogWriter`` contract, which always returns a ``closed``
+row, so a recovery set never carries an unverifiable/unreproduced lifecycle
+label -- what is captured is exactly what is reproduced.
 
 ``recovery_set_from_canonical_payload`` is the reverse direction: it
 reconstructs a ``RecoverySetV1`` from its own durably persisted
@@ -35,14 +42,7 @@ from .protection import PROTECTION_UNIT_IDENTITY_DOMAIN
 
 
 RECOVERY_SET_IDENTITY_DOMAIN = "recovery-set-v1"
-
-# A recovery set protects a *finalized* publication generation only.  These
-# are the same lifecycle states the historical DataGateway can read
-# (LifecyclePolicy.VALID_CLOSED_AND_DEGRADED, access-owned); operations does
-# not import access, so the eligible vocabulary is restated here as the
-# frozen set of terminal-but-readable partition states, never as an
-# open-ended or inferred set.
-FINALIZED_PARTITION_STATES = frozenset({"closed", "valid", "degraded"})
+K06_NOT_APPLICABLE_IDENTITY_DOMAIN = "recovery-k06-not-applicable-v1"
 
 _SHA256_HEX_RE_LEN = 64
 _PROTECTION_IDENTITY_RE = re.compile(
@@ -55,25 +55,67 @@ class RecoveryError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class K06NotApplicableAssertion:
+    """Attributed evidence that no K06-protected source evidence is required.
+
+    Mirrors K06's own ``SafetyRelevanceAssertion``/``ProtectionObligationEvidence``
+    discipline: a claim this module cannot independently verify must be
+    attributed to an explicit accountable authority and instant, never an
+    anonymous boolean or a silently omitted argument.  Binding this into a
+    recovery set makes K06 applicability a deterministic, always-present
+    decision -- a recovery set either carries protected source evidence or an
+    attributed reason it does not, never neither.
+    """
+
+    asserting_authority_id: str
+    asserted_at: Instant
+    rationale: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "asserting_authority_id",
+            _non_empty_text(self.asserting_authority_id, "asserting_authority_id"),
+        )
+        if not isinstance(self.asserted_at, Instant):
+            raise RecoveryError("asserted_at must be a canonical Instant")
+        object.__setattr__(self, "rationale", _non_empty_text(self.rationale, "rationale"))
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return {
+            "identity_domain": K06_NOT_APPLICABLE_IDENTITY_DOMAIN,
+            "asserting_authority_id": self.asserting_authority_id,
+            "asserted_at": self.asserted_at.isoformat(),
+            "rationale": self.rationale,
+        }
+
+    @property
+    def fingerprint(self) -> str:
+        return _canonical_fingerprint(self.canonical_payload())
+
+
+@dataclass(frozen=True, slots=True)
 class RecoverySetV1:
     """The identity-bound recovery unit for one finalized canonical publication.
 
     Composite identity (``recovery_identity``) is derived only from the
     dataset/partition natural identity, durable manifest digests, declared
-    coverage, physical content identity, finalized lifecycle state and the
-    K06 protection identity (when applicable) -- never from a catalog row
-    UUID, storage root path or discovery order, exactly as
-    ``ProtectionUnitIdentity`` excludes filesystem/host accidents from K06
-    identity.  ``catalog_dataset_id``/``catalog_partition_id`` are carried as
+    coverage, physical content identity and the K06 applicability decision
+    (the full bound assessment digest, or the not-applicable assertion's own
+    fingerprint) -- never from a catalog row UUID, storage root path or
+    discovery order, exactly as ``ProtectionUnitIdentity`` excludes
+    filesystem/host accidents from K06 identity.
+    ``catalog_dataset_id``/``catalog_partition_id`` are carried as
     informational locators only and never participate in
     :meth:`canonical_payload`.
 
-    ``k06_protection_identity`` binds the ``protection_identity`` of a K06
-    :class:`~quant_platform.operations.protection.ProtectionAssessment`
-    proving the RAW source evidence required to reconstruct this accepted
-    canonical state is itself protected, when such evidence is applicable
-    (ADR-0039 Sec. 1); it is ``None`` only when no such evidence is
-    applicable to the captured publication.
+    Exactly one of (``k06_protection_identity`` and ``k06_assessment_sha256``,
+    both present) or ``k06_not_applicable_fingerprint`` must be set: K06
+    applicability is a mandatory, attributed decision, never a silent
+    omission.  ``k06_assessment_sha256`` binds the *complete* persisted K06
+    assessment document (state, per-artifact outcomes, verifier, instant --
+    not merely the protection unit's own identity), so a backed-up assessment
+    cannot be silently altered as long as only its unit identity is
+    preserved.
     """
 
     natural_identity: NaturalPartitionIdentity
@@ -83,10 +125,11 @@ class RecoverySetV1:
     physical_content_sha256: str
     physical_size_bytes: int
     declared_coverage: CoverageInterval
-    partition_state: str
     catalog_dataset_id: str
     catalog_partition_id: str
     k06_protection_identity: str | None = None
+    k06_assessment_sha256: str | None = None
+    k06_not_applicable_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.natural_identity, NaturalPartitionIdentity):
@@ -120,11 +163,6 @@ class RecoverySetV1:
             raise RecoveryError("declared_coverage must be CoverageInterval")
         if self.declared_coverage.start >= self.declared_coverage.end:
             raise RecoveryError("declared_coverage must be a non-degenerate half-open interval")
-        if self.partition_state not in FINALIZED_PARTITION_STATES:
-            raise RecoveryError(
-                "a recovery set requires a finalized publication generation; got "
-                f"{self.partition_state!r}"
-            )
         object.__setattr__(
             self, "catalog_dataset_id", _non_empty_text(self.catalog_dataset_id, "catalog_dataset_id")
         )
@@ -132,10 +170,32 @@ class RecoverySetV1:
             self, "catalog_partition_id",
             _non_empty_text(self.catalog_partition_id, "catalog_partition_id"),
         )
-        if self.k06_protection_identity is not None:
+
+        has_protection = self.k06_protection_identity is not None or self.k06_assessment_sha256 is not None
+        has_not_applicable = self.k06_not_applicable_fingerprint is not None
+        if has_protection and (self.k06_protection_identity is None or self.k06_assessment_sha256 is None):
+            raise RecoveryError(
+                "k06_protection_identity and k06_assessment_sha256 must be supplied together"
+            )
+        if has_protection == has_not_applicable:
+            raise RecoveryError(
+                "a recovery set must bind exactly one of (k06_protection_identity + "
+                "k06_assessment_sha256) or k06_not_applicable_fingerprint: K06 applicability "
+                "must be an explicit, attributed decision, never both or neither"
+            )
+        if has_protection:
             object.__setattr__(
                 self, "k06_protection_identity",
                 _protection_identity(self.k06_protection_identity),
+            )
+            object.__setattr__(
+                self, "k06_assessment_sha256",
+                _sha256_hex(self.k06_assessment_sha256, "k06_assessment_sha256"),
+            )
+        else:
+            object.__setattr__(
+                self, "k06_not_applicable_fingerprint",
+                _sha256_hex(self.k06_not_applicable_fingerprint, "k06_not_applicable_fingerprint"),
             )
 
     def canonical_payload(self) -> dict[str, Any]:
@@ -150,8 +210,9 @@ class RecoverySetV1:
             "physical_content_sha256": self.physical_content_sha256,
             "physical_size_bytes": self.physical_size_bytes,
             "declared_coverage": self.declared_coverage.stable_dict(),
-            "partition_state": self.partition_state,
             "k06_protection_identity": self.k06_protection_identity,
+            "k06_assessment_sha256": self.k06_assessment_sha256,
+            "k06_not_applicable_fingerprint": self.k06_not_applicable_fingerprint,
         }
 
     @property
@@ -205,10 +266,11 @@ def recovery_set_from_canonical_payload(
             physical_content_sha256=payload["physical_content_sha256"],
             physical_size_bytes=payload["physical_size_bytes"],
             declared_coverage=declared_coverage,
-            partition_state=payload["partition_state"],
             catalog_dataset_id=catalog_dataset_id,
             catalog_partition_id=catalog_partition_id,
             k06_protection_identity=payload.get("k06_protection_identity"),
+            k06_assessment_sha256=payload.get("k06_assessment_sha256"),
+            k06_not_applicable_fingerprint=payload.get("k06_not_applicable_fingerprint"),
         )
     except RecoveryError:
         raise
@@ -263,8 +325,9 @@ def _canonical_fingerprint(payload: Any) -> str:
 
 
 __all__ = [
-    "FINALIZED_PARTITION_STATES",
+    "K06_NOT_APPLICABLE_IDENTITY_DOMAIN",
     "RECOVERY_SET_IDENTITY_DOMAIN",
+    "K06NotApplicableAssertion",
     "RecoveryError",
     "RecoverySetV1",
     "recovery_set_from_canonical_payload",

@@ -5,12 +5,14 @@ CREDITs S13 seal semantics (``tests/test_publication_certification_v1.py``),
 DataGateway semantics (``tests/test_data_gateway.py``) and K06 protection
 identity discipline (``tests/test_operations_protection_v1.py``) rather than
 duplicating them.  This file proves only the K08-specific propositions:
-deterministic recovery-set capture (with semantic linkage validation) from
-an already-sealed publication, a durably persisted and independently
-reloadable backup export, isolated-target restore refusal/success (including
-path-safety and storage-locator binding), verify-before-commit restore
-admission, ordered multi-revision restore, K06 evidence binding, and
-equivalent historical DataGateway reads from the restored target.
+deterministic recovery-set capture (with semantic linkage validation and
+mandatory K06 applicability) from an already-sealed publication, a durably
+persisted and independently reloadable self-contained backup (target
+revision plus its complete predecessor chain), isolated-target/catalog
+restore refusal/success (path-safety, authoritative storage-locator
+binding, empty-catalog enforcement), atomic verify-before-commit
+multi-revision restore, and equivalent historical DataGateway reads from the
+restored target.
 """
 
 from __future__ import annotations
@@ -45,7 +47,7 @@ from quant_platform.operations.protection import (  # noqa: E402
     ProtectionUnitIdentity,
     assess_protection,
 )
-from quant_platform.operations.recovery import RecoveryError  # noqa: E402
+from quant_platform.operations.recovery import K06NotApplicableAssertion, RecoveryError  # noqa: E402
 from quant_platform.source_adapters.bybit import (  # noqa: E402
     BYBIT_ORDERING_PROVIDER,
     BYBIT_TRADE_V1_ORDERING_POLICY,
@@ -57,15 +59,25 @@ IDENTITY = DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v1"
 REL_ROOT = "canonical/trades/bybit/BTCUSDT/trade-v1"
 START = "2024-01-15T00:00:00Z"
 END = "2024-01-16T00:00:00Z"
+REVISION_2_COVERAGE_START = "2024-01-16T00:00:00Z"
+REVISION_2_COVERAGE_END = "2024-01-17T00:00:00Z"
 
 
 def trade(timestamp: str, trade_id: str) -> TradeRecord:
     return TradeRecord(IDENTITY.venue, IDENTITY.instrument, Instant.parse(timestamp), "100.00", "0.5000", "buy", None, trade_id, None)
 
 
-REVISION_2_COVERAGE_START = "2024-01-16T00:00:00Z"
-REVISION_2_COVERAGE_END = "2024-01-17T00:00:00Z"
 REVISION_2_RECORDS = [trade("2024-01-16T00:00:01Z", "1"), trade("2024-01-16T00:00:02Z", "2")]
+
+
+def not_applicable(**overrides) -> K06NotApplicableAssertion:
+    kwargs = dict(
+        asserting_authority_id="adr:k08-test-authority-v1",
+        asserted_at=Instant.parse("2024-01-15T00:00:00Z"),
+        rationale="canonical publication is self-contained for this fixture",
+    )
+    kwargs.update(overrides)
+    return K06NotApplicableAssertion(**kwargs)
 
 
 def protected_assessment():
@@ -96,18 +108,23 @@ def protected_assessment():
     )
 
 
-class FakeCatalogWriter:
-    """Mirrors test_publication_certification_v1.FakeCatalogWriter, K08-trimmed.
+class FakeRestoreCatalog:
+    """A minimal writer+inspector pair sharing one backing store, mirroring a
+    real Postgres connection's transactional read-your-own-writes semantics.
 
-    Enforces the same contiguous-revision-admission invariant the real
-    ``CatalogPublicationWriter`` does (first admitted revision must be 1;
-    successors must be contiguous), so tests exercising K08's own
-    multi-revision restore logic against this fake are representative of the
-    real write contract, not a looser stand-in for it.
+    ``partitions`` is the working (possibly uncommitted) set that
+    ``seal_partition`` reads/writes for its own contiguous-revision-admission
+    checks -- the same invariant the real ``CatalogPublicationWriter``
+    enforces (first admitted revision must be 1; successors contiguous).
+    ``commit()``/``rollback()`` move the durable boundary; a rollback
+    discards every admission made since the last commit, exactly like a real
+    transaction, so tests can prove atomicity rather than merely assume it.
     """
 
-    def __init__(self):
-        self.partitions: list[SealedCatalogPartition] = []
+    def __init__(self, storage_roots: dict[str, str] | None = None, *, seed: list[SealedCatalogPartition] | None = None):
+        self._committed: list[SealedCatalogPartition] = list(seed or ())
+        self.partitions: list[SealedCatalogPartition] = list(self._committed)
+        self.storage_roots = dict(storage_roots or {})
         self.commits = 0
         self.rollbacks = 0
 
@@ -143,13 +160,28 @@ class FakeCatalogWriter:
         return admitted
 
     def commit(self):
+        self._committed = list(self.partitions)
         self.commits += 1
 
     def rollback(self):
+        self.partitions = list(self._committed)
         self.rollbacks += 1
 
+    def resolve_storage_root_abs_path(self, storage_root_id):
+        try:
+            return self.storage_roots[storage_root_id]
+        except KeyError:
+            raise RuntimeError(f"unknown storage_root_id: {storage_root_id}")
 
-class RiggedCatalogWriter(FakeCatalogWriter):
+    def family_admission_count(self, dataset_identity, partition_key):
+        return sum(
+            1 for item in self._committed
+            if item.natural_identity.dataset_identity == dataset_identity
+            and item.natural_identity.partition_key == partition_key
+        )
+
+
+class RiggedCatalog(FakeRestoreCatalog):
     """Returns a deliberately wrong SealedCatalogPartition to prove restore
     verifies the returned admission before committing it."""
 
@@ -194,158 +226,160 @@ class BackupRestoreV1Tests(unittest.TestCase):
         self.root.mkdir()
         # Physical artifact layout mirrors a real dataset root: <root>/<rel_root>/<partition_key>/...
         self.dataset_root = self.root / REL_ROOT
-        self.data_path = self.dataset_root / "dt=2024-01-15" / "part-000.parquet"
-        self.dataset_path = self.root / "dataset.json"
-        self.partition_path = self.root / "partition.json"
-        self.coverage_path = self.root / "coverage.json"
+        self.data_path = self.dataset_root / "dt=2024-01-15" / "part-001.parquet"
 
     def tearDown(self):
         self.tempdir.cleanup()
 
     def sealed_evidence(self, records=None, *, revision=1, writer=None, identity=IDENTITY,
-                         coverage_start=START, coverage_end=END, partition_key="dt=2024-01-15"):
+                         coverage_start=START, coverage_end=END, partition_key="dt=2024-01-15",
+                         rel_path=None, dataset_root=None):
         if records is None:
             records = [
                 TradeRecord(identity.venue, identity.instrument, Instant.parse("2024-01-15T00:00:01Z"), "100.00", "0.5000", "buy", None, "1", None),
                 TradeRecord(identity.venue, identity.instrument, Instant.parse("2024-01-15T00:00:02Z"), "100.00", "0.5000", "buy", None, "2", None),
             ]
-        rel_path = f"{partition_key}/part-000.parquet"
-        data_path = self.dataset_root / rel_path
+        # Every call gets its own file names (unique counter) and every
+        # revision its own physical filename: neither a second call for a
+        # different partition_key/revision nor a real re-materialized
+        # revision ever silently overwrites another's bytes.  A caller
+        # proving restore's same-location-different-content collision check
+        # passes a distinct ``dataset_root`` with a forced matching
+        # ``rel_path``, so two independently sealed publications can declare
+        # the same rel_path string without one physically overwriting the
+        # other's already-sealed bytes on disk.
+        self._evidence_counter = getattr(self, "_evidence_counter", 0) + 1
+        call_id = self._evidence_counter
+        safe_key = "".join(char if char.isalnum() else "-" for char in partition_key).strip("-").lower()
+        rel_path = rel_path or f"{partition_key}/part-{revision:03d}.parquet"
+        dataset_root = dataset_root or self.dataset_root
+        data_path = dataset_root / rel_path
         materialization = materialize_bybit_trade_v1(data_path, records, dataset_identity=identity)
+        dataset_path = self.root / f"dataset-{call_id}.json"
+        partition_path = self.root / f"partition-{call_id}.json"
+        coverage_path = self.root / f"coverage-{call_id}.json"
         emit_dataset_manifest(
-            self.dataset_path, dataset_identity=identity, created_at="2026-09-01T10:00:00Z",
+            dataset_path, dataset_identity=identity, created_at="2026-09-01T10:00:00Z",
             derived_from=[DatasetIdentity("raw", "trades", identity.venue, identity.instrument, "trade-v1")],
             transform="canonicalize-trades-v1",
         )
         emit_partition_manifest(
-            self.partition_path, materialization, dataset_identity=identity, dataset_root=self.dataset_root,
+            partition_path, materialization, dataset_identity=identity, dataset_root=dataset_root,
             partition_key=partition_key, revision=revision, rel_path=rel_path,
             created_at="2026-09-01T10:00:00Z", closed_at="2026-09-01T10:00:01Z",
             producer="test-materializer", code_ref="producer-ref",
         )
         emit_coverage_manifest(
-            self.coverage_path, dataset_identity=identity, source_dataset_identity=identity,
-            coverage_id=f"coverage-{revision}", supersedes=None, created_at="2026-09-01T10:00:02Z",
+            coverage_path, dataset_identity=identity, source_dataset_identity=identity,
+            coverage_id=f"coverage-{safe_key}-{revision}-{call_id}", supersedes=None, created_at="2026-09-01T10:00:02Z",
             acquisition={
                 "basis": "source_extract", "intent_start": START, "intent_end": "2024-01-18T00:00:00Z",
                 "source_semantics": "bybit-public-trades-sqlite-v1", "mapping": "bybit-sqlite-day-extract-v1",
             },
             assertions=[{
-                "assertion_id": f"assertion-{revision}", "start": coverage_start, "end": coverage_end, "status": "complete",
+                "assertion_id": f"assertion-{safe_key}-{revision}-{call_id}", "start": coverage_start, "end": coverage_end, "status": "complete",
                 "partitions": [{"partition_key": partition_key, "revision": revision}],
                 "evidence": [{"kind": "deterministic_source_extract", "detail": "sqlite extract complete"}],
             }], producer="test-source", code_ref="source-ref",
-            partition_manifests=[json.loads(self.partition_path.read_text())],
+            partition_manifests=[json.loads(partition_path.read_text())],
         )
         evidence = SealedPartitionEvidence(
-            self.dataset_path, self.partition_path, (self.coverage_path,), data_path, "hot",
+            dataset_path, partition_path, (coverage_path,), data_path, "hot",
         )
-        writer = writer or FakeCatalogWriter()
-        partition_document = json.loads(self.partition_path.read_text())
-        partition_document["_manifest_sha256"] = hashlib.sha256(self.partition_path.read_bytes()).hexdigest()
+        writer = writer or FakeRestoreCatalog()
+        partition_document = json.loads(partition_path.read_text())
+        partition_document["_manifest_sha256"] = hashlib.sha256(partition_path.read_bytes()).hexdigest()
         sealed = writer.seal_partition(
-            dataset=json.loads(self.dataset_path.read_text()),
+            dataset=json.loads(dataset_path.read_text()),
             partition=partition_document,
             coverage_start=Instant.parse(coverage_start), coverage_end=Instant.parse(coverage_end), storage_root_id="hot",
         )
         return evidence, sealed
 
-    def _restore(self, export, target, *, writer=None, storage_root_abs_path=None,
-                 storage_root_id="restored", forbidden_roots=None, predecessor_exports=()):
+    def _restore(self, export, target, *, catalog=None, storage_root_abs_path=None, storage_root_id="restored", forbidden_roots=None):
+        catalog = catalog or FakeRestoreCatalog()
+        catalog.storage_roots[storage_root_id] = str(target if storage_root_abs_path is None else storage_root_abs_path)
         return restore_recovery_set(
             export, target,
             forbidden_roots=forbidden_roots if forbidden_roots is not None else [self.root, export.destination_root],
-            catalog_writer=writer or FakeCatalogWriter(),
+            catalog_writer=catalog,
+            catalog_inspector=catalog,
             storage_root_id=storage_root_id,
-            storage_root_abs_path=target if storage_root_abs_path is None else storage_root_abs_path,
-            predecessor_exports=predecessor_exports,
         )
 
     # -- capture -----------------------------------------------------------
 
     def test_capture_is_deterministic_for_the_same_finalized_publication(self):
         evidence, sealed = self.sealed_evidence()
-        first = capture_recovery_set(evidence, sealed)
-        second = capture_recovery_set(evidence, sealed)
+        first = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
+        second = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
         self.assertEqual(first.recovery_identity, second.recovery_identity)
         self.assertEqual(first.natural_identity, sealed.natural_identity)
         self.assertIsNone(first.k06_protection_identity)
 
-    def test_capture_accepts_caller_attested_promoted_partition_state(self):
-        # The durable S13 seal evidence itself is always 'closed'; a caller
-        # backing up an already-promoted live partition attests the current
-        # catalog-observed state explicitly, decoupled from that durable
-        # manifest content.
-        evidence, sealed = self.sealed_evidence()
-        for state in ("valid", "degraded"):
-            with self.subTest(state=state):
-                recovery_set = capture_recovery_set(evidence, sealed, partition_state=state)
-                self.assertEqual(recovery_set.partition_state, state)
-
-    def test_capture_refuses_non_finalized_partition_state_override(self):
+    def test_capture_requires_exactly_one_k06_applicability_declaration(self):
         evidence, sealed = self.sealed_evidence()
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed, partition_state="writing")
+            capture_recovery_set(evidence, sealed)
+        with self.assertRaises(RecoveryError):
+            capture_recovery_set(
+                evidence, sealed, k06_protection=protected_assessment(), k06_not_applicable=not_applicable(),
+            )
 
     def test_capture_refuses_non_closed_publication(self):
         evidence, sealed = self.sealed_evidence()
         writing = replace(sealed, state="writing")
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, writing)
+            capture_recovery_set(evidence, writing, k06_not_applicable=not_applicable())
 
     def test_capture_refuses_manifest_that_does_not_match_the_sealed_generation(self):
         evidence, sealed = self.sealed_evidence()
-        self.partition_path.write_text(self.partition_path.read_text() + " ")
+        evidence.partition_manifest_path.write_text(evidence.partition_manifest_path.read_text() + " ")
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed)
+            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
 
     def test_capture_refuses_tampered_physical_artifact(self):
         evidence, sealed = self.sealed_evidence()
-        self.data_path.write_bytes(self.data_path.read_bytes() + b"corrupt")
+        evidence.artifact_path.write_bytes(evidence.artifact_path.read_bytes() + b"corrupt")
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed)
+            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
 
     def test_capture_refuses_foreign_dataset_manifest(self):
-        # A dataset.json for a wholly different dataset identity, sharing
-        # nothing with the sealed publication except coincidental placement.
         evidence, sealed = self.sealed_evidence()
         foreign = DatasetIdentity("canonical", "trades", "bybit", "ETHUSDT", "trade-v1")
         emit_dataset_manifest(
-            self.dataset_path, dataset_identity=foreign, created_at="2026-09-01T10:00:00Z",
+            evidence.dataset_manifest_path, dataset_identity=foreign, created_at="2026-09-01T10:00:00Z",
             derived_from=[DatasetIdentity("raw", "trades", "bybit", "ETHUSDT", "trade-v1")],
             transform="canonicalize-trades-v1",
         )
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed)
+            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
 
     def test_capture_refuses_unrelated_coverage_evidence(self):
-        # Coverage evidence that never asserts complete coverage for the
-        # sealed partition_key/revision at all -- a foreign/unrelated
-        # coverage document that happens to share a dataset identity.
         evidence, sealed = self.sealed_evidence()
-        unrelated = json.loads(self.coverage_path.read_text())
+        unrelated = json.loads(evidence.coverage_manifest_paths[0].read_text())
         unrelated["coverage_id"] = "unrelated-coverage"
         unrelated["assertions"][0]["assertion_id"] = "unrelated-assertion"
         unrelated["assertions"][0]["partitions"] = [{"partition_key": "dt=2099-01-01", "revision": 1}]
-        self.coverage_path.write_text(json.dumps(unrelated))
+        evidence.coverage_manifest_paths[0].write_text(json.dumps(unrelated))
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed)
+            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
 
     def test_capture_refuses_coverage_that_does_not_match_sealed_interval(self):
-        # Coverage evidence for the right partition but a narrower interval
-        # than what was actually sealed -- mixed/incompatible generation.
         evidence, sealed = self.sealed_evidence()
-        narrowed = json.loads(self.coverage_path.read_text())
+        narrowed = json.loads(evidence.coverage_manifest_paths[0].read_text())
         narrowed["assertions"][0]["end"] = "2024-01-15T12:00:00Z"
-        self.coverage_path.write_text(json.dumps(narrowed))
+        evidence.coverage_manifest_paths[0].write_text(json.dumps(narrowed))
         with self.assertRaises(RecoveryError):
-            capture_recovery_set(evidence, sealed)
+            capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
 
     def test_capture_binds_protected_k06_evidence_when_supplied(self):
         evidence, sealed = self.sealed_evidence()
         assessment = protected_assessment()
         recovery_set = capture_recovery_set(evidence, sealed, k06_protection=assessment)
         self.assertEqual(recovery_set.k06_protection_identity, assessment.protection_identity)
+        self.assertIsNotNone(recovery_set.k06_assessment_sha256)
+        self.assertIsNone(recovery_set.k06_not_applicable_fingerprint)
 
     def test_capture_refuses_non_protected_k06_evidence(self):
         evidence, sealed = self.sealed_evidence()
@@ -363,13 +397,13 @@ class BackupRestoreV1Tests(unittest.TestCase):
 
     def test_export_is_pure_copy_and_does_not_mutate_primary(self):
         evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed)
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
         original_bytes = self.data_path.read_bytes()
-        original_manifest = self.partition_path.read_bytes()
+        original_manifest = evidence.partition_manifest_path.read_bytes()
         backup_root = Path(self.tempdir.name) / "backup"
         export = export_recovery_set(recovery_set, evidence, backup_root)
         self.assertEqual(self.data_path.read_bytes(), original_bytes)
-        self.assertEqual(self.partition_path.read_bytes(), original_manifest)
+        self.assertEqual(evidence.partition_manifest_path.read_bytes(), original_manifest)
         self.assertTrue(export.artifact_path.is_file())
         self.assertEqual(export.artifact_path.read_bytes(), original_bytes)
         self.assertNotEqual(export.artifact_path, evidence.artifact_path)
@@ -377,7 +411,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
 
     def test_export_refuses_when_primary_evidence_changed_since_capture(self):
         evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed)
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
         self.data_path.write_bytes(self.data_path.read_bytes() + b"drift")
         backup_root = Path(self.tempdir.name) / "backup"
         with self.assertRaises(RecoveryError):
@@ -390,19 +424,17 @@ class BackupRestoreV1Tests(unittest.TestCase):
         backup_root = Path(self.tempdir.name) / "backup"
         with self.assertRaises(RecoveryError):
             export_recovery_set(recovery_set, evidence, backup_root, k06_protection_document=None)
-        other_assessment = protected_assessment()
+        tampered = dict(assessment.stable_dict())
+        tampered["verifier_identity"] = "a-different-verifier"
         with self.assertRaises(RecoveryError):
-            export_recovery_set(
-                recovery_set, evidence, backup_root,
-                k06_protection_document={**other_assessment.stable_dict(), "protection_identity": "wrong"},
-            )
+            export_recovery_set(recovery_set, evidence, backup_root, k06_protection_document=tampered)
         export = export_recovery_set(recovery_set, evidence, backup_root, k06_protection_document=assessment.stable_dict())
         self.assertIsNotNone(export.k06_protection_document_path)
         self.assertTrue(export.k06_protection_document_path.is_file())
 
     def test_load_recovery_backup_export_round_trips_and_reverifies_from_disk(self):
         evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed)
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
         backup_root = Path(self.tempdir.name) / "backup"
         export = export_recovery_set(recovery_set, evidence, backup_root)
 
@@ -411,15 +443,27 @@ class BackupRestoreV1Tests(unittest.TestCase):
         self.assertEqual(loaded.dataset_manifest_path, export.dataset_manifest_path)
         self.assertEqual(loaded.artifact_path.read_bytes(), export.artifact_path.read_bytes())
 
-        # A restore driven purely from the on-disk export (no surviving
-        # in-memory RecoverySetV1 needed) succeeds identically.
         target = Path(self.tempdir.name) / "restored"
         restored = self._restore(loaded, target)
         self.assertEqual(restored.sealed.natural_identity, recovery_set.natural_identity)
 
+    def test_load_recovery_backup_export_detects_tampered_k06_evidence_content(self):
+        evidence, sealed = self.sealed_evidence()
+        assessment = protected_assessment()
+        recovery_set = capture_recovery_set(evidence, sealed, k06_protection=assessment)
+        backup_root = Path(self.tempdir.name) / "backup"
+        export = export_recovery_set(recovery_set, evidence, backup_root, k06_protection_document=assessment.stable_dict())
+        # Tamper a field other than protection_identity/state: the bound full
+        # assessment digest must still catch it.
+        document = json.loads(export.k06_protection_document_path.read_text())
+        document["verifier_identity"] = "someone-else"
+        export.k06_protection_document_path.write_text(json.dumps(document))
+        with self.assertRaises(RecoveryError):
+            load_recovery_backup_export(export.destination_root)
+
     def test_load_recovery_backup_export_detects_tampered_member(self):
         evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed)
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
         backup_root = Path(self.tempdir.name) / "backup"
         export = export_recovery_set(recovery_set, evidence, backup_root)
         export.artifact_path.write_bytes(export.artifact_path.read_bytes() + b"tamper")
@@ -428,7 +472,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
 
     def test_load_recovery_backup_export_refuses_manifest_member_path_traversal(self):
         evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed)
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
         backup_root = Path(self.tempdir.name) / "backup"
         export = export_recovery_set(recovery_set, evidence, backup_root)
         manifest_path = export.destination_root / "recovery-manifest.json"
@@ -446,7 +490,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
 
     def _export(self):
         evidence, sealed = self.sealed_evidence()
-        recovery_set = capture_recovery_set(evidence, sealed)
+        recovery_set = capture_recovery_set(evidence, sealed, k06_not_applicable=not_applicable())
         backup_root = Path(self.tempdir.name) / "backup"
         export = export_recovery_set(recovery_set, evidence, backup_root)
         return evidence, sealed, export
@@ -466,7 +510,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
                 with self.assertRaises(RecoveryError):
                     self._restore(export, alias)
 
-    def test_restore_refuses_storage_root_abs_path_not_matching_target(self):
+    def test_restore_refuses_when_storage_root_does_not_resolve_to_target(self):
         evidence, sealed, export = self._export()
         target = Path(self.tempdir.name) / "restored"
         other = Path(self.tempdir.name) / "not-the-target"
@@ -475,6 +519,30 @@ class BackupRestoreV1Tests(unittest.TestCase):
         # In particular, claiming the primary's own location is refused too.
         with self.assertRaises(RecoveryError):
             self._restore(export, target, storage_root_abs_path=self.root)
+
+    def test_restore_refuses_when_storage_root_id_is_unregistered_in_the_restore_catalog(self):
+        evidence, sealed, export = self._export()
+        target = Path(self.tempdir.name) / "restored"
+        catalog = FakeRestoreCatalog()  # no storage_roots registered at all
+        with self.assertRaises(RuntimeError):
+            restore_recovery_set(
+                export, target, forbidden_roots=[self.root, export.destination_root],
+                catalog_writer=catalog, catalog_inspector=catalog, storage_root_id="restored",
+            )
+
+    def test_restore_refuses_non_empty_restore_catalog_family(self):
+        evidence, sealed, export = self._export()
+        target = Path(self.tempdir.name) / "restored"
+        # A catalog that already has a (committed) row for this exact family,
+        # simulating a restore catalog that is not actually empty/isolated.
+        pre_existing = SealedCatalogPartition(
+            "pre-existing-partition", "pre-existing-dataset", sealed.natural_identity,
+            "closed", sealed.ts_start, sealed.ts_end, sealed.row_count, sealed.byte_size,
+            sealed.content_sha256, sealed.manifest_sha256, sealed.producer, sealed.code_ref,
+        )
+        catalog = FakeRestoreCatalog(seed=[pre_existing])
+        with self.assertRaises(RecoveryError):
+            self._restore(export, target, catalog=catalog)
 
     def test_restore_refuses_missing_backup_member(self):
         evidence, sealed, export = self._export()
@@ -507,7 +575,6 @@ class BackupRestoreV1Tests(unittest.TestCase):
                     source_path.write_bytes(json.dumps(document).encode("utf-8"))
                     with self.assertRaises(RecoveryError):
                         self._restore(export, target)
-                    # Refused before any member was ever copied into target.
                     self.assertEqual(list(target.iterdir()) if target.exists() else [], [])
                 finally:
                     source_path.write_bytes(original)
@@ -515,11 +582,13 @@ class BackupRestoreV1Tests(unittest.TestCase):
     def test_restore_refuses_before_commit_when_returned_admission_mismatches(self):
         evidence, sealed, export = self._export()
         target = Path(self.tempdir.name) / "restored"
-        writer = RiggedCatalogWriter()
+        rigged = RiggedCatalog()
         with self.assertRaises(RecoveryError):
-            self._restore(export, target, writer=writer)
-        self.assertEqual(writer.commits, 0)
-        self.assertEqual(writer.rollbacks, 1)
+            self._restore(export, target, catalog=rigged)
+        self.assertEqual(rigged.commits, 0)
+        self.assertEqual(rigged.rollbacks, 1)
+        # Nothing durable: the family remains admittable afterward.
+        self.assertEqual(rigged.family_admission_count(sealed.natural_identity.dataset_identity, sealed.natural_identity.partition_key), 0)
 
     # -- restore: success ------------------------------------------------
 
@@ -544,7 +613,7 @@ class BackupRestoreV1Tests(unittest.TestCase):
         primary_dataset = CatalogDataset(IDENTITY, sealed.dataset_id, REL_ROOT, "b" * 64, 1, "a" * 64)
         primary_partition = CatalogPartition(
             sealed.natural_identity, sealed.partition_id, "hot", str(self.root),
-            REL_ROOT, "dt=2024-01-15/part-000.parquet",
+            REL_ROOT, "dt=2024-01-15/part-001.parquet",
             sealed.ts_start, sealed.ts_end, sealed.row_count, sealed.content_sha256, sealed.manifest_sha256,
             "closed", sealed.producer, sealed.code_ref,
         )
@@ -582,26 +651,12 @@ class BackupRestoreV1Tests(unittest.TestCase):
         document = json.loads(restored.k06_protection_document_path.read_text())
         self.assertEqual(document["protection_identity"], assessment.protection_identity)
 
-    # -- multi-revision -------------------------------------------------
+    # -- multi-revision: self-contained chain, atomic restore --------------
 
-    def test_lone_successor_revision_is_refused_without_its_predecessor_chain(self):
-        writer = FakeCatalogWriter()
-        self.sealed_evidence(revision=1, writer=writer)
-        evidence2, sealed2 = self.sealed_evidence(
-            REVISION_2_RECORDS, revision=2, writer=writer,
-            coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
-        )
-        recovery_set2 = capture_recovery_set(evidence2, sealed2)
-        backup_root = Path(self.tempdir.name) / "backup"
-        export2 = export_recovery_set(recovery_set2, evidence2, backup_root)
-        target = Path(self.tempdir.name) / "restored"
-        with self.assertRaisesRegex(RecoveryError, "predecessor_exports"):
-            self._restore(export2, target)
-
-    def test_multi_revision_restore_replays_predecessor_chain_and_reproduces_live_revision(self):
-        writer = FakeCatalogWriter()
+    def test_export_refuses_wrong_predecessor_count(self):
+        writer = FakeRestoreCatalog()
         evidence1, sealed1 = self.sealed_evidence(revision=1, writer=writer)
-        recovery_set1 = capture_recovery_set(evidence1, sealed1)
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=not_applicable())
         backup_root = Path(self.tempdir.name) / "backup"
         export1 = export_recovery_set(recovery_set1, evidence1, backup_root)
 
@@ -609,60 +664,124 @@ class BackupRestoreV1Tests(unittest.TestCase):
             REVISION_2_RECORDS, revision=2, writer=writer,
             coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
         )
-        recovery_set2 = capture_recovery_set(evidence2, sealed2)
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=not_applicable())
         backup_root2 = Path(self.tempdir.name) / "backup2"
-        export2 = export_recovery_set(recovery_set2, evidence2, backup_root2)
+        with self.assertRaises(RecoveryError):
+            export_recovery_set(recovery_set2, evidence2, backup_root2, predecessors=())
+        with self.assertRaises(RecoveryError):
+            export_recovery_set(
+                recovery_set2, evidence2, backup_root2,
+                predecessors=[(recovery_set1, evidence1), (recovery_set1, evidence1)],
+            )
 
+    def test_lone_revision_1_export_has_no_predecessors_and_restores_directly(self):
+        evidence, sealed, export = self._export()
+        self.assertEqual(export.predecessors, ())
         target = Path(self.tempdir.name) / "restored"
-        restore_writer = FakeCatalogWriter()
-        restored = self._restore(export2, target, writer=restore_writer, predecessor_exports=(export1,))
+        restored = self._restore(export, target)
+        self.assertEqual(restored.sealed.natural_identity.revision, 1)
 
-        self.assertEqual(restored.sealed.natural_identity, sealed2.natural_identity)
-        self.assertEqual(restored.sealed.natural_identity.revision, 2)
-        self.assertEqual(restored.sealed.ts_start, Instant.parse("2024-01-16T00:00:00Z"))
-        # The predecessor was admitted (then superseded) in the restore
-        # target's own catalog -- proving the contiguous history was
-        # actually replayed there, not merely accepted as a bare claim.
-        self.assertEqual(len(restore_writer.partitions), 2)
-        self.assertEqual(restore_writer.partitions[0].natural_identity.revision, 1)
-        self.assertEqual(restore_writer.partitions[0].state, "superseded")
-        self.assertEqual(restore_writer.partitions[1].state, "closed")
-
-    def test_predecessor_exports_must_be_contiguous_and_same_family(self):
-        writer = FakeCatalogWriter()
+    def test_multi_revision_export_is_self_contained_and_restores_atomically(self):
+        writer = FakeRestoreCatalog()
         evidence1, sealed1 = self.sealed_evidence(revision=1, writer=writer)
-        recovery_set1 = capture_recovery_set(evidence1, sealed1)
-        backup_root1 = Path(self.tempdir.name) / "backup1"
-        export1 = export_recovery_set(recovery_set1, evidence1, backup_root1)
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=not_applicable())
 
         evidence2, sealed2 = self.sealed_evidence(
             REVISION_2_RECORDS, revision=2, writer=writer,
             coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
         )
-        recovery_set2 = capture_recovery_set(evidence2, sealed2)
-        backup_root2 = Path(self.tempdir.name) / "backup2"
-        export2 = export_recovery_set(recovery_set2, evidence2, backup_root2)
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=not_applicable())
+        backup_root = Path(self.tempdir.name) / "backup"
+        export2 = export_recovery_set(
+            recovery_set2, evidence2, backup_root, predecessors=[(recovery_set1, evidence1)],
+        )
+        self.assertEqual(len(export2.predecessors), 1)
+        self.assertEqual(export2.predecessors[0].recovery_set.natural_identity.revision, 1)
 
-        # Wrong count: revision 2 needs exactly one predecessor, not two.
-        target_count = Path(self.tempdir.name) / "restored-wrong-count"
+        # The export alone -- no separately supplied side information -- is
+        # everything restore needs, including after a reload from disk.
+        loaded = load_recovery_backup_export(export2.destination_root)
+        self.assertEqual(len(loaded.predecessors), 1)
+
+        target = Path(self.tempdir.name) / "restored"
+        restore_catalog = FakeRestoreCatalog()
+        restored = self._restore(loaded, target, catalog=restore_catalog)
+
+        self.assertEqual(restored.sealed.natural_identity, sealed2.natural_identity)
+        self.assertEqual(restored.sealed.natural_identity.revision, 2)
+        self.assertEqual(restored.sealed.ts_start, Instant.parse(REVISION_2_COVERAGE_START))
+        # Both revisions were actually admitted (then rev 1 superseded) in
+        # the restore catalog's own durable state -- the chain was truly
+        # replayed there, not merely accepted as a bare claim -- and both
+        # commits happened as a single atomic transaction (one commit call).
+        self.assertEqual(restore_catalog.commits, 1)
+        self.assertEqual(restore_catalog.rollbacks, 0)
+        self.assertEqual(len(restore_catalog.partitions), 2)
+        self.assertEqual(restore_catalog.partitions[0].natural_identity.revision, 1)
+        self.assertEqual(restore_catalog.partitions[0].state, "superseded")
+        self.assertEqual(restore_catalog.partitions[1].state, "closed")
+
+        # Predecessor artifact bytes were genuinely restored to the target,
+        # not merely referenced -- a 'closed' catalog row is never left
+        # pointing at a physically absent file.
+        predecessor_artifact = target / REL_ROOT / "dt=2024-01-15" / "part-001.parquet"
+        self.assertTrue(predecessor_artifact.is_file())
+        self.assertEqual(predecessor_artifact.read_bytes(), self.data_path.read_bytes())
+
+    def test_restore_refuses_two_revisions_claiming_the_same_physical_location(self):
+        writer = FakeRestoreCatalog()
+        colliding_rel_path = "dt=2024-01-20/part-001.parquet"
+        evidence1, sealed1 = self.sealed_evidence(
+            revision=1, writer=writer, partition_key="dt=2024-01-20", rel_path=colliding_rel_path,
+        )
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=not_applicable())
+
+        # Revision 2 is independently, validly sealed (own materialization
+        # under its own temp dataset_root, so it never overwrites revision
+        # 1's already-sealed bytes on disk) but its own durable partition
+        # manifest declares the SAME rel_path string as revision 1 --
+        # simulating a producer bug/attack that reuses a physical location
+        # across revisions -- with genuinely different content.
+        second_dataset_root = Path(self.tempdir.name) / "primary-rev2" / REL_ROOT
+        evidence2, sealed2 = self.sealed_evidence(
+            REVISION_2_RECORDS, revision=2, writer=writer, partition_key="dt=2024-01-20",
+            coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
+            rel_path=colliding_rel_path, dataset_root=second_dataset_root,
+        )
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=not_applicable())
+        self.assertNotEqual(recovery_set1.physical_content_sha256, recovery_set2.physical_content_sha256)
+
+        backup_root = Path(self.tempdir.name) / "backup"
+        export2 = export_recovery_set(
+            recovery_set2, evidence2, backup_root, predecessors=[(recovery_set1, evidence1)],
+        )
+        target = Path(self.tempdir.name) / "restored"
         with self.assertRaises(RecoveryError):
-            self._restore(export2, target_count, predecessor_exports=(export1, export1))
+            self._restore(export2, target)
 
-        # Wrong family: a "predecessor" for an unrelated partition_key within
-        # the same dataset identity (the Bybit materializer only accepts its
-        # own fixed venue/instrument, so partition_key is the family axis
-        # this fixture can vary independently of dataset identity).
-        foreign_writer = FakeCatalogWriter()
+    def test_predecessor_chain_must_be_contiguous_and_same_family(self):
+        writer = FakeRestoreCatalog()
+        evidence1, sealed1 = self.sealed_evidence(revision=1, writer=writer)
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=not_applicable())
+
+        evidence2, sealed2 = self.sealed_evidence(
+            REVISION_2_RECORDS, revision=2, writer=writer,
+            coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
+        )
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=not_applicable())
+
+        foreign_writer = FakeRestoreCatalog()
         foreign_evidence, foreign_sealed = self.sealed_evidence(
             revision=1, writer=foreign_writer, partition_key="dt=2099-01-01",
         )
-        foreign_recovery_set = capture_recovery_set(foreign_evidence, foreign_sealed)
-        foreign_backup_root = Path(self.tempdir.name) / "backup-foreign"
-        foreign_export = export_recovery_set(foreign_recovery_set, foreign_evidence, foreign_backup_root)
+        foreign_recovery_set = capture_recovery_set(foreign_evidence, foreign_sealed, k06_not_applicable=not_applicable())
 
-        target_family = Path(self.tempdir.name) / "restored-wrong-family"
+        backup_root = Path(self.tempdir.name) / "backup"
         with self.assertRaises(RecoveryError):
-            self._restore(export2, target_family, predecessor_exports=(foreign_export,))
+            export_recovery_set(
+                recovery_set2, evidence2, backup_root,
+                predecessors=[(foreign_recovery_set, foreign_evidence)],
+            )
 
 
 if __name__ == "__main__":

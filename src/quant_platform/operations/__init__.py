@@ -56,15 +56,16 @@ from .protection import (
     authorize_protection_write,
 )
 from .recovery import (
-    FINALIZED_PARTITION_STATES,
+    K06_NOT_APPLICABLE_IDENTITY_DOMAIN,
     RECOVERY_SET_IDENTITY_DOMAIN,
+    K06NotApplicableAssertion,
     RecoveryError,
     RecoverySetV1,
     recovery_set_from_canonical_payload,
 )
 
 __all__ = [
-    "FINALIZED_PARTITION_STATES",
+    "K06_NOT_APPLICABLE_IDENTITY_DOMAIN",
     "PROTECTION_ASSESSMENT_IDENTITY_DOMAIN",
     "PROTECTION_UNIT_IDENTITY_DOMAIN",
     "RECOVERY_SET_IDENTITY_DOMAIN",
@@ -96,6 +97,7 @@ __all__ = [
     "ProtectionWriteAction",
     "ProtectionWriteAuthorization",
     "ProtectionWriteDecision",
+    "K06NotApplicableAssertion",
     "RecoveryError",
     "RecoverySetV1",
     "SafetyRelevanceAssertion",

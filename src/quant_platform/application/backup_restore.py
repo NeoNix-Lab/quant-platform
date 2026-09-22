@@ -2,46 +2,52 @@
 
 This is the composition seam over already-CREDITed capabilities: it captures
 one identity-bound recovery set from an already-sealed S13 publication
-(:mod:`quant_platform.data.publication`), persists it as a durable,
-independently reloadable backup at an explicit destination, and restores
-that evidence into an empty isolated target by re-admitting it through the
-existing :class:`~quant_platform.data.publication.CertificationCatalogWriter`
-write contract -- never a parallel catalog-write path, never a generalized
+(:mod:`quant_platform.data.publication`), persists it -- together with the
+complete ordered predecessor-revision chain required to admit it -- as one
+self-contained, durable, independently reloadable backup at an explicit
+destination, and restores that evidence into an empty isolated target/catalog
+by re-admitting it through the existing
+:class:`~quant_platform.data.publication.CertificationCatalogWriter` write
+contract -- never a parallel catalog-write path, never a generalized
 backup-provider abstraction.
 
 Only the smallest seam needed for ADR-0039 is implemented here:
 
 - capture cross-checks every durable member (dataset identity, partition
-  manifest, folded declared coverage, physical artifact, and -- when
-  applicable -- K06 source-protection evidence) against the authoritative
-  sealed publication before binding a recovery identity, so a
+  manifest, folded declared coverage, physical artifact, and the complete K06
+  applicability decision -- protected evidence or an attributed
+  not-applicable assertion, never a silent omission) against the
+  authoritative sealed publication before binding a recovery identity, so a
   mixed/incompatible or foreign generation is refused rather than silently
   captured;
-- backup creation is a pure copy of the exact bound evidence plus a durable
-  recovery manifest (recording the canonical payload, recovery identity,
-  member names/digests and catalog-admission locators), so the backup is
-  independently verifiable/restorable from disk after process loss, never a
-  mutation of primary state, and never touches staging/cache/volatile files;
+- backup creation is a pure copy of the exact bound evidence -- target
+  revision plus its complete ordered predecessor chain -- plus a durable
+  recovery manifest recording every member's canonical payload, recovery
+  identity and digests, so the backup alone (no separately supplied side
+  parameters, no surviving in-memory object) is independently
+  verifiable/restorable from disk after process loss, never a mutation of
+  primary state, and never touches staging/cache/volatile files;
 - restore requires an explicitly empty target whose registered storage-root
-  locator resolves to exactly that target (never a surviving primary
-  locator), validates every restored path stays inside the target, fails
-  closed on any missing/content-mismatched/foreign member, and verifies the
-  returned catalog admission *before* committing it -- never durably admits
-  an unverified row;
+  locator is looked up *authoritatively* from the same catalog
+  ``catalog_writer`` admits into (never trusted as a caller-supplied bare
+  string) and resolves to exactly that target, requires that catalog to hold
+  no existing admission for the recovered dataset/partition_key family,
+  validates every restored path stays inside the target, detects two
+  admitted revisions claiming the same physical location with different
+  content, and admits the complete predecessor chain plus the target
+  revision as **one atomic transaction** -- every returned admission's
+  identity, digests, coverage and state are verified before the single
+  ``commit()``, so a later failure can never leave partial, physically-false
+  catalog state durable;
 - restore re-admission reuses ``CertificationCatalogWriter.seal_partition``
-  unchanged, so the restored catalog resolves the restored publication using
-  the same contract a fresh S13 seal would use -- this module defines no new
-  catalog semantics.  A live revision N > 1 is restored by supplying the
-  ordered ``predecessor_exports`` chain (revisions 1..N-1) alongside the
-  target export: each predecessor is re-admitted (catalog metadata only --
-  a superseded revision is never DataGateway-read) before the target
-  revision seals, exactly reproducing the contiguous-admission history the
-  unmodified catalog contract already requires.  This is not a new
-  persistence contract; it is the existing one, driven in order.
+  unchanged for every revision, so the restored catalog resolves the
+  restored publication using the same contract a fresh S13 seal would use --
+  this module defines no new catalog semantics, just drives the existing one
+  in order.
 
-Whether a given ``target_root``/``catalog_writer`` pair is genuinely on
-storage independent of the tested primary boundary is a deployment-topology
-fact this module cannot observe and never asserts -- see ADR-0039 Sec. 2.
+Whether a given ``target_root``/catalog instance is genuinely on storage
+independent of the tested primary boundary is a deployment-topology fact
+this module cannot observe and never asserts -- see ADR-0039 Sec. 2.
 """
 
 from __future__ import annotations
@@ -53,7 +59,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import tempfile
-from typing import Any
+from typing import Any, Protocol
 
 from ..data.coverage import reconstruct_catalog_coverage
 from ..data.materializer import physical_artifact_sha256
@@ -61,7 +67,7 @@ from ..data.models import CoverageInterval, DatasetIdentity
 from ..data.publication import CertificationCatalogWriter, SealedCatalogPartition, SealedPartitionEvidence
 from ..operations.protection import ProtectionAssessment, ProtectionState
 from ..operations.recovery import (
-    FINALIZED_PARTITION_STATES,
+    K06NotApplicableAssertion,
     RecoveryError,
     RecoverySetV1,
     recovery_set_from_canonical_payload,
@@ -72,9 +78,36 @@ RECOVERY_MANIFEST_FILENAME = "recovery-manifest.json"
 RECOVERY_MANIFEST_SCHEMA_VERSION = "recovery-manifest-v1"
 
 
+class RestoreCatalogInspector(Protocol):
+    """Authoritative, read-only lookups against the exact catalog ``catalog_writer`` admits into.
+
+    K08 never opens its own catalog connection or crawls a catalog schema;
+    the caller binds these lookups to the same connection/catalog instance
+    used by ``catalog_writer`` so restore can verify claims about it rather
+    than trust a caller-supplied locator string or an unverified "it's
+    empty" assumption.
+    """
+
+    def resolve_storage_root_abs_path(self, storage_root_id: str) -> str:
+        """Return the real registered absolute path for this storage root."""
+        ...
+
+    def family_admission_count(self, dataset_identity: DatasetIdentity, partition_key: str) -> int:
+        """Return how many catalog rows already exist for this dataset/partition_key family."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class RecoveryBackupExport:
-    """Evidence for one recovery set's durable, independently reloadable backup."""
+    """Evidence for one recovery set's durable, independently reloadable backup.
+
+    ``predecessors`` -- when the recovered revision is not the first admitted
+    one -- holds the complete ordered backup for every prior revision
+    (1..N-1) of the same dataset/partition_key required to admit this one
+    into an empty catalog, nested under the same ``destination_root``.  A
+    revision-N export therefore needs no separately supplied or discovered
+    side information to be restored.
+    """
 
     recovery_set: RecoverySetV1
     destination_root: Path
@@ -83,6 +116,7 @@ class RecoveryBackupExport:
     coverage_manifest_paths: tuple[Path, ...]
     artifact_path: Path
     k06_protection_document_path: Path | None = None
+    predecessors: tuple["RecoveryBackupExport", ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,8 +138,8 @@ def capture_recovery_set(
     evidence: SealedPartitionEvidence,
     sealed: SealedCatalogPartition,
     *,
-    partition_state: str = "closed",
     k06_protection: ProtectionAssessment | None = None,
+    k06_not_applicable: K06NotApplicableAssertion | None = None,
 ) -> RecoverySetV1:
     """Bind one already-sealed S13 publication's durable evidence to a ``RecoverySetV1``.
 
@@ -119,15 +153,18 @@ def capture_recovery_set(
     so a foreign or mixed/incompatible generation can never be captured as
     one recovery set.
 
-    ``partition_state`` records which finalized lifecycle state this backup
-    is labeled under (the durable seal evidence itself is always ``closed``;
-    a caller backing up an already-promoted live partition should pass the
-    catalog-observed ``"valid"``/``"degraded"`` state here instead).
-    ``k06_protection``, when the backed-up publication has applicable
-    K06-protected source evidence, must be an already-``PROTECTED``
+    Exactly one of ``k06_protection`` or ``k06_not_applicable`` is required
+    (never both, never neither): K06 applicability is a mandatory, attributed
+    decision.  ``k06_protection``, when the backed-up publication has
+    applicable K06-protected source evidence, must be an already-``PROTECTED``
     :class:`~quant_platform.operations.protection.ProtectionAssessment`; its
-    identity is bound into the recovery set so that evidence is backed up
-    and restored alongside the canonical publication, not merely credited.
+    *complete* assessment document (state, per-artifact outcomes, verifier,
+    instant) is digest-bound into the recovery set, not merely its unit
+    identity, so that evidence is backed up and restored alongside the
+    canonical publication with tamper-evidence on its full content.
+    ``k06_not_applicable``, when no such evidence is required to reconstruct
+    this accepted state, is an attributed assertion recording who determined
+    that and why.
     """
 
     if sealed.state != "closed":
@@ -135,9 +172,10 @@ def capture_recovery_set(
             "K08 v1 requires already-sealed (closed) durable evidence as its capture "
             f"input; got {sealed.state!r}"
         )
-    if partition_state not in FINALIZED_PARTITION_STATES:
+    if (k06_protection is None) == (k06_not_applicable is None):
         raise RecoveryError(
-            f"partition_state must be a finalized lifecycle state; got {partition_state!r}"
+            "capture requires exactly one of k06_protection or k06_not_applicable: K06 "
+            "applicability must be an explicit, attributed decision, never a silent omission"
         )
 
     dataset_manifest_sha256 = _sha256_file(evidence.dataset_manifest_path)
@@ -188,6 +226,8 @@ def capture_recovery_set(
         )
 
     k06_protection_identity = None
+    k06_assessment_sha256 = None
+    k06_not_applicable_fingerprint = None
     if k06_protection is not None:
         if not isinstance(k06_protection, ProtectionAssessment):
             raise RecoveryError("k06_protection must be a ProtectionAssessment")
@@ -197,6 +237,11 @@ def capture_recovery_set(
                 f"evidence into a recovery set; got {k06_protection.state!r}"
             )
         k06_protection_identity = k06_protection.protection_identity
+        k06_assessment_sha256 = _canonical_document_sha256(k06_protection.stable_dict())
+    else:
+        if not isinstance(k06_not_applicable, K06NotApplicableAssertion):
+            raise RecoveryError("k06_not_applicable must be a K06NotApplicableAssertion")
+        k06_not_applicable_fingerprint = k06_not_applicable.fingerprint
 
     return RecoverySetV1(
         natural_identity=sealed.natural_identity,
@@ -206,10 +251,11 @@ def capture_recovery_set(
         physical_content_sha256=physical_content_sha256,
         physical_size_bytes=sealed.byte_size,
         declared_coverage=CoverageInterval(sealed.ts_start, sealed.ts_end),
-        partition_state=partition_state,
         catalog_dataset_id=sealed.dataset_id,
         catalog_partition_id=sealed.partition_id,
         k06_protection_identity=k06_protection_identity,
+        k06_assessment_sha256=k06_assessment_sha256,
+        k06_not_applicable_fingerprint=k06_not_applicable_fingerprint,
     )
 
 
@@ -219,24 +265,37 @@ def export_recovery_set(
     destination_root: str | Path,
     *,
     k06_protection_document: Mapping[str, Any] | None = None,
+    predecessors: Sequence[tuple[RecoverySetV1, SealedPartitionEvidence]] = (),
 ) -> RecoveryBackupExport:
     """Copy one finalized recovery set's durable evidence to an explicit backup destination.
 
     Every source file is opened read-only and copied, never moved, truncated
     or rewritten: backup creation cannot mutate or destroy finalized primary
-    state.  Only the exact files bound to ``recovery_set`` are copied -- no
-    staging, cache or other volatile runtime state.  A durable recovery
-    manifest (:data:`RECOVERY_MANIFEST_FILENAME`) is written last, recording
-    the canonical payload, recovery identity and member index, so the export
-    is independently reloadable and verifiable via
-    :func:`load_recovery_backup_export` without a surviving in-memory
-    ``RecoverySetV1``.
+    state.  Only the exact files bound to ``recovery_set`` (and, when
+    supplied, each ``predecessors`` entry) are copied -- no staging, cache or
+    other volatile runtime state.  A durable recovery manifest
+    (:data:`RECOVERY_MANIFEST_FILENAME`) is written last, recording the
+    canonical payload, recovery identity and member index for the target
+    revision *and* every predecessor, so the export is independently
+    reloadable and verifiable via :func:`load_recovery_backup_export` without
+    a surviving in-memory ``RecoverySetV1`` or any separately supplied
+    predecessor information.
+
+    ``predecessors`` must be the ordered ``(recovery_set, evidence)`` pairs
+    for revisions 1..N-1 of the same dataset/partition_key, where N is
+    ``recovery_set.natural_identity.revision``; this is validated the same
+    way restore validates it (fail closed on a wrong count or a
+    non-contiguous/foreign family).
 
     ``k06_protection_document`` (a K06
     :class:`~quant_platform.operations.protection.ProtectionAssessment`'s
     ``stable_dict()``) must be supplied exactly when ``recovery_set`` binds a
-    ``k06_protection_identity``, and must match it.
+    ``k06_protection_identity``, and its *complete* content must hash to
+    ``recovery_set.k06_assessment_sha256``.
     """
+
+    predecessor_sets = [item[0] for item in predecessors]
+    _validate_predecessor_chain(recovery_set.natural_identity, predecessor_sets)
 
     if (recovery_set.k06_protection_identity is None) != (k06_protection_document is None):
         raise RecoveryError(
@@ -248,6 +307,10 @@ def export_recovery_set(
             raise RecoveryError("k06_protection_document does not match the bound k06_protection_identity")
         if k06_protection_document.get("state") != "PROTECTED":
             raise RecoveryError("k06_protection_document must record a PROTECTED state")
+        if _canonical_document_sha256(k06_protection_document) != recovery_set.k06_assessment_sha256:
+            raise RecoveryError(
+                "k06_protection_document content does not match the bound k06_assessment_sha256"
+            )
 
     root = Path(destination_root) / recovery_set.fingerprint_hex
     if root.exists() and any(root.iterdir()):
@@ -273,25 +336,60 @@ def export_recovery_set(
     if k06_protection_document is not None:
         k06_copy = _atomic_write_json(root / "k06-protection.json", k06_protection_document)
 
+    predecessor_exports = tuple(
+        _export_predecessor_member(root, index + 1, p_recovery_set, p_evidence)
+        for index, (p_recovery_set, p_evidence) in enumerate(predecessors)
+    )
+
     _write_recovery_manifest(
         root, recovery_set,
         coverage_count=len(coverage_copies),
         has_k06_document=k06_copy is not None,
+        predecessor_exports=predecessor_exports,
     )
 
     return RecoveryBackupExport(
-        recovery_set, root, dataset_copy, partition_copy, coverage_copies, artifact_copy, k06_copy,
+        recovery_set, root, dataset_copy, partition_copy, coverage_copies, artifact_copy,
+        k06_copy, predecessor_exports,
     )
+
+
+def _export_predecessor_member(
+    root: Path, revision: int, recovery_set: RecoverySetV1, evidence: SealedPartitionEvidence,
+) -> RecoveryBackupExport:
+    sub = root / "predecessors" / f"{revision:03d}"
+    if sub.exists() and any(sub.iterdir()):
+        raise RecoveryError("backup destination for this predecessor revision is not empty")
+    sub.mkdir(parents=True, exist_ok=True)
+
+    _verify_hash(evidence.dataset_manifest_path, recovery_set.dataset_manifest_sha256)
+    _verify_hash(evidence.partition_manifest_path, recovery_set.partition_manifest_sha256)
+    _verify_file(evidence.artifact_path, recovery_set.physical_content_sha256, recovery_set.physical_size_bytes)
+
+    dataset_copy = _atomic_copy(Path(evidence.dataset_manifest_path), sub / "dataset.json")
+    partition_copy = _atomic_copy(Path(evidence.partition_manifest_path), sub / "partition.json")
+    coverage_copies = tuple(
+        _atomic_copy(Path(path), sub / f"coverage-{index:03d}.json")
+        for index, path in enumerate(evidence.coverage_manifest_paths)
+    )
+    copied_hashes = tuple(sorted(_sha256_file(path) for path in coverage_copies))
+    if copied_hashes != recovery_set.coverage_manifest_sha256:
+        raise RecoveryError(
+            "exported predecessor coverage evidence does not match its bound recovery set identity"
+        )
+    artifact_copy = _atomic_copy(Path(evidence.artifact_path), sub / "artifact.parquet")
+    return RecoveryBackupExport(recovery_set, sub, dataset_copy, partition_copy, coverage_copies, artifact_copy)
 
 
 def load_recovery_backup_export(destination_root: str | Path) -> RecoveryBackupExport:
     """Reconstruct and re-verify a ``RecoveryBackupExport`` purely from disk.
 
-    No in-memory ``RecoverySetV1`` needs to have survived process loss: every
-    field is reloaded from the durable recovery manifest
-    (:data:`RECOVERY_MANIFEST_FILENAME`) and every member's content is
-    re-hashed against it before anything is trusted, exactly as
-    :func:`export_recovery_set` bound it.
+    No in-memory ``RecoverySetV1`` (or separately discovered predecessor
+    chain) needs to have survived process loss: every field -- the target
+    revision and its complete ordered predecessor chain -- is reloaded from
+    the durable recovery manifest (:data:`RECOVERY_MANIFEST_FILENAME`) and
+    every member's content is re-hashed against it before anything is
+    trusted, exactly as :func:`export_recovery_set` bound it.
     """
 
     root = Path(destination_root)
@@ -300,34 +398,80 @@ def load_recovery_backup_export(destination_root: str | Path) -> RecoveryBackupE
     if document.get("schema_version") != RECOVERY_MANIFEST_SCHEMA_VERSION:
         raise RecoveryError(f"unsupported recovery manifest schema_version at {manifest_path}")
 
-    catalog_dataset_id = document.get("catalog_dataset_id")
-    catalog_partition_id = document.get("catalog_partition_id")
-    recovery_set = recovery_set_from_canonical_payload(
-        document.get("canonical_payload"),
-        catalog_dataset_id=catalog_dataset_id,
-        catalog_partition_id=catalog_partition_id,
+    recovery_set = _load_member_recovery_set(
+        document, document.get("catalog_dataset_id"), document.get("catalog_partition_id"),
     )
     if recovery_set.recovery_identity != document.get("recovery_identity"):
         raise RecoveryError("recovery manifest recovery_identity does not match its own canonical payload")
 
+    dataset_manifest_path, partition_manifest_path, coverage_manifest_paths, artifact_path, k06_path = (
+        _load_member_paths(root, document, recovery_set, "recovery manifest")
+    )
+
+    predecessor_entries = document.get("predecessors") or []
+    if not isinstance(predecessor_entries, list):
+        raise RecoveryError("recovery manifest predecessors must be a list")
+    predecessors = tuple(
+        _load_predecessor_export(root, entry, index + 1)
+        for index, entry in enumerate(predecessor_entries)
+    )
+    _validate_predecessor_chain(recovery_set.natural_identity, [item.recovery_set for item in predecessors])
+
+    return RecoveryBackupExport(
+        recovery_set, root, dataset_manifest_path, partition_manifest_path,
+        coverage_manifest_paths, artifact_path, k06_path, predecessors,
+    )
+
+
+def _load_predecessor_export(root: Path, entry: Any, expected_revision: int) -> RecoveryBackupExport:
+    if not isinstance(entry, Mapping):
+        raise RecoveryError("recovery manifest predecessor entry is malformed")
+    recovery_set = _load_member_recovery_set(
+        entry, entry.get("catalog_dataset_id"), entry.get("catalog_partition_id"),
+    )
+    if recovery_set.recovery_identity != entry.get("recovery_identity"):
+        raise RecoveryError("predecessor recovery_identity does not match its own canonical payload")
+    if recovery_set.natural_identity.revision != expected_revision:
+        raise RecoveryError(
+            f"predecessor chain is not contiguous: expected revision {expected_revision}, "
+            f"got {recovery_set.natural_identity.revision}"
+        )
+    dataset_manifest_path, partition_manifest_path, coverage_manifest_paths, artifact_path, _k06 = (
+        _load_member_paths(root, entry, recovery_set, "predecessor entry")
+    )
+    return RecoveryBackupExport(
+        recovery_set, root, dataset_manifest_path, partition_manifest_path,
+        coverage_manifest_paths, artifact_path,
+    )
+
+
+def _load_member_recovery_set(document: Mapping[str, Any], catalog_dataset_id: Any, catalog_partition_id: Any) -> RecoverySetV1:
+    return recovery_set_from_canonical_payload(
+        document.get("canonical_payload"),
+        catalog_dataset_id=catalog_dataset_id,
+        catalog_partition_id=catalog_partition_id,
+    )
+
+
+def _load_member_paths(
+    root: Path, document: Mapping[str, Any], recovery_set: RecoverySetV1, label: str,
+) -> tuple[Path, Path, tuple[Path, ...], Path, Path | None]:
     members = document.get("members")
     if not isinstance(members, Mapping):
-        raise RecoveryError("recovery manifest is missing its members index")
+        raise RecoveryError(f"{label} is missing its members index")
     dataset_manifest_path = _member_path(root, members.get("dataset_manifest"), "dataset_manifest")
     partition_manifest_path = _member_path(root, members.get("partition_manifest"), "partition_manifest")
     coverage_names = members.get("coverage_manifests")
     if not isinstance(coverage_names, list) or not coverage_names:
-        raise RecoveryError("recovery manifest coverage_manifests must be a non-empty list")
+        raise RecoveryError(f"{label} coverage_manifests must be a non-empty list")
     coverage_manifest_paths = tuple(
         _member_path(root, name, "coverage_manifests") for name in coverage_names
     )
     artifact_path = _member_path(root, members.get("artifact"), "artifact")
     k06_name = members.get("k06_protection")
-    k06_protection_document_path = (
-        _member_path(root, k06_name, "k06_protection") if k06_name is not None else None
-    )
+    k06_protection_document_path = _member_path(root, k06_name, "k06_protection") if k06_name is not None else None
     if (recovery_set.k06_protection_identity is None) != (k06_protection_document_path is None):
-        raise RecoveryError("recovery manifest k06 evidence presence does not match its bound identity")
+        raise RecoveryError(f"{label} k06 evidence presence does not match its bound identity")
 
     _verify_hash(dataset_manifest_path, recovery_set.dataset_manifest_sha256)
     _verify_hash(partition_manifest_path, recovery_set.partition_manifest_sha256)
@@ -339,11 +483,10 @@ def load_recovery_backup_export(destination_root: str | Path) -> RecoveryBackupE
         k06_document = _load_json(k06_protection_document_path)
         if k06_document.get("protection_identity") != recovery_set.k06_protection_identity:
             raise RecoveryError("backup k06 protection evidence does not match the bound recovery set identity")
+        if _canonical_document_sha256(k06_document) != recovery_set.k06_assessment_sha256:
+            raise RecoveryError("backup k06 protection evidence content does not match its bound digest")
 
-    return RecoveryBackupExport(
-        recovery_set, root, dataset_manifest_path, partition_manifest_path,
-        coverage_manifest_paths, artifact_path, k06_protection_document_path,
-    )
+    return dataset_manifest_path, partition_manifest_path, coverage_manifest_paths, artifact_path, k06_protection_document_path
 
 
 def restore_recovery_set(
@@ -352,48 +495,56 @@ def restore_recovery_set(
     *,
     forbidden_roots: Iterable[str | Path],
     catalog_writer: CertificationCatalogWriter,
+    catalog_inspector: RestoreCatalogInspector,
     storage_root_id: str,
-    storage_root_abs_path: str | Path,
-    predecessor_exports: Sequence[RecoveryBackupExport] = (),
 ) -> RestoredRecoverySet:
-    """Restore one exported recovery set into an empty isolated target.
+    """Restore one exported recovery set into an empty isolated target and catalog.
 
     ``target_root`` must not already hold content and must not resolve to or
     inside any of ``forbidden_roots`` (the primary/backup locators this
-    restore is proving independent of).  ``storage_root_abs_path`` -- the
-    absolute path the catalog has *already* registered for
-    ``storage_root_id`` -- must resolve to exactly ``target_root``; otherwise
-    the restored catalog row could resolve reads to a surviving primary (or
-    any other) location instead of the isolated target, which this function
-    refuses rather than silently permit.  Every restored member path is
-    proven to stay inside ``target_root`` before any directory is created or
-    file copied.
+    restore is proving independent of).  ``catalog_inspector`` -- bound by
+    the caller to the *same* catalog/connection instance as ``catalog_writer``
+    -- is used to authoritatively look up where ``storage_root_id`` actually
+    resolves (never a caller-asserted bare path) and to require that catalog
+    hold no existing admission for the recovered dataset/partition_key family
+    before restore begins; either check failing refuses the restore rather
+    than silently permit a primary-resolving or non-isolated admission.
 
-    A live revision N > 1 requires ``predecessor_exports`` to be the ordered,
-    contiguous exports for revisions 1..N-1 of the same dataset/partition_key
-    family: each is re-admitted (catalog metadata only) before the target
-    revision itself seals, exactly reproducing the contiguous-admission
-    history the unmodified ``catalog_writer`` contract already requires --
-    this is not a new persistence contract, just that existing one driven in
-    order.  ``catalog_writer`` re-admits the restored evidence under
-    ``storage_root_id`` through the unchanged S13
-    :class:`~quant_platform.data.publication.CertificationCatalogWriter`
-    write contract.  The returned admission's identity, digests and coverage
-    are verified *before* ``commit()`` is called -- any mismatch rolls back
-    rather than leaving unverified state durable.  A missing or
-    content-mismatched backup member fails the restore rather than silently
-    substituting.
+    ``export.predecessors`` -- the complete ordered revision-1..N-1 chain
+    bound in the backup itself -- is re-validated for contiguity and, for
+    every member (each predecessor, then the target revision), its physical
+    artifact and manifest evidence are restored into the target with a
+    collision check (two admitted revisions must never claim the same
+    physical location with different content).  All admissions are then
+    sealed through the unchanged ``catalog_writer`` contract inside **one**
+    transaction: every returned admission's identity, digests, coverage and
+    state are verified before a single ``commit()`` -- any mismatch anywhere
+    in the chain rolls back the entire attempt, never leaving partial,
+    physically-false catalog state durable.
     """
 
     recovery_set = export.recovery_set
     target = Path(target_root)
     _refuse_alias(target, forbidden_roots)
     resolved_target = _resolve_maybe(target)
+
+    storage_root_abs_path = catalog_inspector.resolve_storage_root_abs_path(storage_root_id)
     if _resolve_maybe(Path(storage_root_abs_path)) != resolved_target:
         raise RecoveryError(
-            "storage_root_abs_path must resolve to exactly target_root, or the restored "
-            "catalog could resolve reads to a location other than the isolated restore target"
+            "storage_root_id does not authoritatively resolve to target_root in the "
+            "restore catalog; the restored catalog could resolve reads to a location "
+            "other than the isolated restore target"
         )
+
+    family = recovery_set.natural_identity
+    if catalog_inspector.family_admission_count(family.dataset_identity, family.partition_key):
+        raise RecoveryError(
+            "the restore catalog already contains admitted rows for this "
+            "dataset/partition_key family; restore requires an empty isolated catalog"
+        )
+
+    _validate_predecessor_chain(family, [item.recovery_set for item in export.predecessors])
+
     if target.exists():
         if not target.is_dir():
             raise RecoveryError("restore target must be a directory")
@@ -402,131 +553,143 @@ def restore_recovery_set(
     else:
         target.mkdir(parents=True)
 
-    family = recovery_set.natural_identity
-    expected_revision = len(predecessor_exports) + 1
-    if family.revision != expected_revision:
-        raise RecoveryError(
-            f"restoring revision {family.revision} requires exactly "
-            f"{family.revision - 1} ordered predecessor_exports (got "
-            f"{len(predecessor_exports)}); the unmodified catalog admission contract "
-            "requires every prior revision to admit first in an empty topology"
-        )
-    for index, predecessor in enumerate(predecessor_exports, start=1):
-        predecessor_identity = predecessor.recovery_set.natural_identity
-        if (
-            predecessor_identity.dataset_identity != family.dataset_identity
-            or predecessor_identity.partition_key != family.partition_key
-            or predecessor_identity.revision != index
-        ):
-            raise RecoveryError(
-                "predecessor_exports must be the contiguous ordered revision chain for "
-                "the same dataset/partition_key, starting at revision 1"
-            )
-        _admit_predecessor(predecessor, catalog_writer, storage_root_id)
+    placed_artifacts: dict[Path, str] = {}
+    staged: list[_StagedAdmission] = []
+    for predecessor in export.predecessors:
+        revision = predecessor.recovery_set.natural_identity.revision
+        manifest_dir = target / "_recovery" / "predecessors" / f"{revision:03d}"
+        staged.append(_stage_member(target, resolved_target, predecessor, manifest_dir, placed_artifacts))
+    staged.append(_stage_member(target, resolved_target, export, target, placed_artifacts))
 
-    dataset_bytes = _read_verified(export.dataset_manifest_path, recovery_set.dataset_manifest_sha256)
-    partition_bytes = _read_verified(export.partition_manifest_path, recovery_set.partition_manifest_sha256)
-    coverage_hashes = tuple(sorted(_sha256_file(path) for path in export.coverage_manifest_paths))
+    try:
+        sealed: SealedCatalogPartition | None = None
+        for admission in staged:
+            sealed = catalog_writer.seal_partition(
+                dataset=admission.dataset_document,
+                partition=admission.partition_document,
+                coverage_start=admission.recovery_set.declared_coverage.start,
+                coverage_end=admission.recovery_set.declared_coverage.end,
+                storage_root_id=storage_root_id,
+            )
+            if sealed.natural_identity != admission.recovery_set.natural_identity:
+                raise RecoveryError("restored catalog admission produced a different publication identity")
+            if sealed.state != "closed":
+                raise RecoveryError("restored catalog admission did not return a closed partition")
+            if (
+                sealed.content_sha256 != admission.recovery_set.physical_content_sha256
+                or sealed.manifest_sha256 != admission.recovery_set.partition_manifest_sha256
+            ):
+                raise RecoveryError("restored catalog admission does not match the bound recovery set identity")
+            if (
+                sealed.ts_start != admission.recovery_set.declared_coverage.start
+                or sealed.ts_end != admission.recovery_set.declared_coverage.end
+            ):
+                raise RecoveryError("restored catalog admission does not reproduce declared coverage")
+        catalog_writer.commit()
+    except Exception:
+        catalog_writer.rollback()
+        raise
+
+    target_admission = staged[-1]
+    return RestoredRecoverySet(
+        recovery_set, sealed,
+        target_admission.dataset_target, target_admission.partition_target, target_admission.coverage_targets,
+        target_admission.artifact_target, target_admission.rel_root, target_admission.rel_path,
+        target_admission.k06_target,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedAdmission:
+    recovery_set: RecoverySetV1
+    dataset_document: dict[str, Any]
+    partition_document: dict[str, Any]
+    dataset_target: Path
+    partition_target: Path
+    coverage_targets: tuple[Path, ...]
+    artifact_target: Path
+    rel_root: str
+    rel_path: str
+    k06_target: Path | None
+
+
+def _stage_member(
+    target: Path,
+    resolved_target: Path,
+    member: RecoveryBackupExport,
+    manifest_dir: Path,
+    placed_artifacts: dict[Path, str],
+) -> _StagedAdmission:
+    recovery_set = member.recovery_set
+    dataset_bytes = _read_verified(member.dataset_manifest_path, recovery_set.dataset_manifest_sha256)
+    partition_bytes = _read_verified(member.partition_manifest_path, recovery_set.partition_manifest_sha256)
+    coverage_hashes = tuple(sorted(_sha256_file(path) for path in member.coverage_manifest_paths))
     if coverage_hashes != recovery_set.coverage_manifest_sha256:
         raise RecoveryError("backup coverage evidence is missing or corrupt")
-    _verify_file(export.artifact_path, recovery_set.physical_content_sha256, recovery_set.physical_size_bytes)
-    if export.k06_protection_document_path is not None:
-        k06_document = _load_json(export.k06_protection_document_path)
-        if k06_document.get("protection_identity") != recovery_set.k06_protection_identity:
-            raise RecoveryError("backup k06 protection evidence does not match the bound recovery set identity")
+    _verify_file(member.artifact_path, recovery_set.physical_content_sha256, recovery_set.physical_size_bytes)
 
     dataset_document = json.loads(dataset_bytes)
     partition_document = json.loads(partition_bytes)
     rel_root = _validate_safe_relative(dataset_document.get("rel_root"), "dataset manifest rel_root")
     rel_path = _validate_safe_relative(partition_document.get("rel_path"), "partition manifest rel_path")
-
     artifact_target = target / rel_root / rel_path
     if not _is_relative_to(_resolve_maybe(artifact_target), resolved_target):
         raise RecoveryError("restored artifact destination resolves outside the isolated restore target")
 
-    dataset_target = _atomic_copy(export.dataset_manifest_path, target / "dataset.json")
-    partition_target = _atomic_copy(export.partition_manifest_path, target / "partition.json")
+    previous_hash = placed_artifacts.get(artifact_target)
+    if previous_hash is not None and previous_hash != recovery_set.physical_content_sha256:
+        raise RecoveryError(
+            "two admitted revisions in this restore claim the same physical artifact "
+            f"location with different content: {artifact_target}"
+        )
+    placed_artifacts[artifact_target] = recovery_set.physical_content_sha256
+    if not artifact_target.exists():
+        artifact_target.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_copy(member.artifact_path, artifact_target)
+
+    dataset_target = _atomic_copy(member.dataset_manifest_path, manifest_dir / "dataset.json")
+    partition_target = _atomic_copy(member.partition_manifest_path, manifest_dir / "partition.json")
     coverage_targets = tuple(
-        _atomic_copy(source, target / f"coverage-{index:03d}.json")
-        for index, source in enumerate(export.coverage_manifest_paths)
+        _atomic_copy(source, manifest_dir / f"coverage-{index:03d}.json")
+        for index, source in enumerate(member.coverage_manifest_paths)
     )
-    artifact_target.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_copy(export.artifact_path, artifact_target)
     k06_target = None
-    if export.k06_protection_document_path is not None:
-        k06_target = _atomic_copy(export.k06_protection_document_path, target / "k06-protection.json")
+    if member.k06_protection_document_path is not None:
+        k06_document = _load_json(member.k06_protection_document_path)
+        if k06_document.get("protection_identity") != recovery_set.k06_protection_identity:
+            raise RecoveryError("backup k06 protection evidence does not match the bound recovery set identity")
+        k06_target = _atomic_copy(member.k06_protection_document_path, manifest_dir / "k06-protection.json")
 
     dataset_document = dict(dataset_document, _manifest_sha256=recovery_set.dataset_manifest_sha256)
     partition_document = dict(partition_document, _manifest_sha256=recovery_set.partition_manifest_sha256)
-    try:
-        sealed = catalog_writer.seal_partition(
-            dataset=dataset_document,
-            partition=partition_document,
-            coverage_start=recovery_set.declared_coverage.start,
-            coverage_end=recovery_set.declared_coverage.end,
-            storage_root_id=storage_root_id,
-        )
-        if sealed.natural_identity != recovery_set.natural_identity:
-            raise RecoveryError("restored catalog admission produced a different publication identity")
-        if (
-            sealed.content_sha256 != recovery_set.physical_content_sha256
-            or sealed.manifest_sha256 != recovery_set.partition_manifest_sha256
-        ):
-            raise RecoveryError("restored catalog admission does not match the bound recovery set identity")
-        if (
-            sealed.ts_start != recovery_set.declared_coverage.start
-            or sealed.ts_end != recovery_set.declared_coverage.end
-        ):
-            raise RecoveryError("restored catalog admission does not reproduce declared coverage")
-        catalog_writer.commit()
-    except Exception:
-        catalog_writer.rollback()
-        raise
 
-    return RestoredRecoverySet(
-        recovery_set, sealed, dataset_target, partition_target, coverage_targets,
-        artifact_target, rel_root, rel_path, k06_target,
+    return _StagedAdmission(
+        recovery_set, dataset_document, partition_document,
+        dataset_target, partition_target, coverage_targets, artifact_target,
+        rel_root, rel_path, k06_target,
     )
 
 
-def _admit_predecessor(
-    export: RecoveryBackupExport,
-    catalog_writer: CertificationCatalogWriter,
-    storage_root_id: str,
-) -> None:
-    """Re-admit one already-restored predecessor revision's catalog metadata only.
-
-    A superseded revision is never read by DataGateway (no ``LifecyclePolicy``
-    includes ``superseded``), so its physical artifact never needs to occupy
-    the isolated target -- only its manifest evidence, verified the same way
-    as every other member, and admitted through the same unmodified catalog
-    contract.
-    """
-
-    recovery_set = export.recovery_set
-    dataset_bytes = _read_verified(export.dataset_manifest_path, recovery_set.dataset_manifest_sha256)
-    partition_bytes = _read_verified(export.partition_manifest_path, recovery_set.partition_manifest_sha256)
-    coverage_hashes = tuple(sorted(_sha256_file(path) for path in export.coverage_manifest_paths))
-    if coverage_hashes != recovery_set.coverage_manifest_sha256:
-        raise RecoveryError("predecessor backup coverage evidence is missing or corrupt")
-    _verify_file(export.artifact_path, recovery_set.physical_content_sha256, recovery_set.physical_size_bytes)
-
-    dataset_document = dict(json.loads(dataset_bytes), _manifest_sha256=recovery_set.dataset_manifest_sha256)
-    partition_document = dict(json.loads(partition_bytes), _manifest_sha256=recovery_set.partition_manifest_sha256)
-    try:
-        sealed = catalog_writer.seal_partition(
-            dataset=dataset_document,
-            partition=partition_document,
-            coverage_start=recovery_set.declared_coverage.start,
-            coverage_end=recovery_set.declared_coverage.end,
-            storage_root_id=storage_root_id,
+def _validate_predecessor_chain(family: Any, predecessors: Sequence[RecoverySetV1]) -> None:
+    expected_revision = len(predecessors) + 1
+    if family.revision != expected_revision:
+        raise RecoveryError(
+            f"restoring/exporting revision {family.revision} requires exactly "
+            f"{family.revision - 1} ordered predecessor revisions (got {len(predecessors)}); "
+            "the unmodified catalog admission contract requires every prior revision to "
+            "admit first in an empty topology"
         )
-        if sealed.natural_identity != recovery_set.natural_identity:
-            raise RecoveryError("predecessor catalog admission produced a different publication identity")
-        catalog_writer.commit()
-    except Exception:
-        catalog_writer.rollback()
-        raise
+    for index, predecessor in enumerate(predecessors, start=1):
+        identity = predecessor.natural_identity
+        if (
+            identity.dataset_identity != family.dataset_identity
+            or identity.partition_key != family.partition_key
+            or identity.revision != index
+        ):
+            raise RecoveryError(
+                "predecessor chain must be the contiguous ordered revision history for "
+                "the same dataset/partition_key, starting at revision 1"
+            )
 
 
 def _dataset_identity_from_document(document: Mapping[str, Any]) -> DatasetIdentity:
@@ -550,6 +713,7 @@ def _write_recovery_manifest(
     *,
     coverage_count: int,
     has_k06_document: bool,
+    predecessor_exports: tuple[RecoveryBackupExport, ...] = (),
 ) -> Path:
     document = {
         "schema_version": RECOVERY_MANIFEST_SCHEMA_VERSION,
@@ -564,8 +728,31 @@ def _write_recovery_manifest(
             "artifact": "artifact.parquet",
             "k06_protection": "k06-protection.json" if has_k06_document else None,
         },
+        "predecessors": [
+            _predecessor_manifest_entry(index + 1, member)
+            for index, member in enumerate(predecessor_exports)
+        ],
     }
     return _atomic_write_json(root / RECOVERY_MANIFEST_FILENAME, document)
+
+
+def _predecessor_manifest_entry(revision: int, member: RecoveryBackupExport) -> dict[str, Any]:
+    prefix = PurePosixPath("predecessors", f"{revision:03d}")
+    return {
+        "recovery_identity": member.recovery_set.recovery_identity,
+        "canonical_payload": member.recovery_set.canonical_payload(),
+        "catalog_dataset_id": member.recovery_set.catalog_dataset_id,
+        "catalog_partition_id": member.recovery_set.catalog_partition_id,
+        "members": {
+            "dataset_manifest": str(prefix / "dataset.json"),
+            "partition_manifest": str(prefix / "partition.json"),
+            "coverage_manifests": [
+                str(prefix / f"coverage-{index:03d}.json")
+                for index in range(len(member.coverage_manifest_paths))
+            ],
+            "artifact": str(prefix / "artifact.parquet"),
+        },
+    }
 
 
 def _member_path(root: Path, name: Any, field_name: str) -> Path:
@@ -624,6 +811,13 @@ def _sha256_file(path: str | Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_document_sha256(document: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        document, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _load_json(path: str | Path) -> dict[str, Any]:
@@ -713,6 +907,7 @@ __all__ = [
     "RECOVERY_MANIFEST_FILENAME",
     "RECOVERY_MANIFEST_SCHEMA_VERSION",
     "RecoveryBackupExport",
+    "RestoreCatalogInspector",
     "RestoredRecoverySet",
     "capture_recovery_set",
     "export_recovery_set",
