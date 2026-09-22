@@ -13,6 +13,13 @@ C05 adds typed immutable configuration and concrete composition for the current
 market-data application service.  Transport and job runtime remain J02 and J03.
 """
 
+from .backup_restore import (
+    RecoveryBackupExport,
+    RestoredRecoverySet,
+    capture_recovery_set,
+    export_recovery_set,
+    restore_recovery_set,
+)
 from .composition import (
     DEFAULT_MARKET_DATA_BATCH_SIZE,
     MarketDataApplication,
@@ -107,6 +114,8 @@ __all__ = [
     "RepresentationRef",
     "PreflightResult",
     "RECORD_SCHEMA_ID",
+    "RecoveryBackupExport",
+    "RestoredRecoverySet",
     "RunReport",
     "SUPPORTED_CATEGORY",
     "SUPPORTED_INSTRUMENT",
@@ -120,11 +129,13 @@ __all__ = [
     "VerificationMismatch",
     "WriteResult",
     "bucket_observation_identity",
+    "capture_recovery_set",
     "collect_preflight",
     "compose_market_data_application",
     "encode_record",
     "evaluate_h01_imbalance",
     "execute_market_data_query",
+    "export_recovery_set",
     "format_exchange_ts",
     "format_observation",
     "golden_field_mismatches",
@@ -133,6 +144,7 @@ __all__ = [
     "materialize_h01_feature_artifact",
     "observe_scan",
     "resolve_market_data_request",
+    "restore_recovery_set",
     "run_import",
     "run_vertical",
     "verify_vertical",

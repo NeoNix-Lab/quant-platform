@@ -55,10 +55,18 @@ from .protection import (
     assess_protection,
     authorize_protection_write,
 )
+from .recovery import (
+    FINALIZED_PARTITION_STATES,
+    RECOVERY_SET_IDENTITY_DOMAIN,
+    RecoveryError,
+    RecoverySetV1,
+)
 
 __all__ = [
+    "FINALIZED_PARTITION_STATES",
     "PROTECTION_ASSESSMENT_IDENTITY_DOMAIN",
     "PROTECTION_UNIT_IDENTITY_DOMAIN",
+    "RECOVERY_SET_IDENTITY_DOMAIN",
     "OPERATIONAL_SIGNAL_V1_SCHEMA_VERSION",
     "AcceptedReconstructionContract",
     "ArtifactAssessmentResult",
@@ -87,6 +95,8 @@ __all__ = [
     "ProtectionWriteAction",
     "ProtectionWriteAuthorization",
     "ProtectionWriteDecision",
+    "RecoveryError",
+    "RecoverySetV1",
     "SafetyRelevanceAssertion",
     "SignalKind",
     "SignalRelation",
