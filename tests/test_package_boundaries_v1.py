@@ -69,9 +69,11 @@ OWNERS = {
     "quant_platform.source_adapters": "source",
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
+    "quant_platform.source_adapters.bybit_live": "source",
     "quant_platform.application": "application",
     "quant_platform.application.backup_restore": "application",
     "quant_platform.application.bybit_import": "application",
+    "quant_platform.application.bybit_live": "application",
     "quant_platform.application.composition": "application",
     "quant_platform.application.conformity": "application",
     "quant_platform.application.golden_conformity": "application",
@@ -224,7 +226,7 @@ APPLICATION = "quant_platform.application"
 # Declared runtime dependencies from pyproject.  Executables may use them; the
 # rule below constrains which *repository* code a tool may reach, not which
 # third-party libraries it links.
-THIRD_PARTY = {"psycopg", "pyarrow"}
+THIRD_PARTY = {"psycopg", "pyarrow", "websockets"}
 
 # ASS-03 is complete when no tools bypass the application seam.
 TOOLS_PENDING_ASS03 = set()
