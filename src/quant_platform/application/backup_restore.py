@@ -71,6 +71,7 @@ from ..data.coverage import reconstruct_catalog_coverage
 from ..data.materializer import physical_artifact_sha256
 from ..data.models import CoverageInterval, DatasetIdentity
 from ..data.publication import SealedCatalogPartition, SealedPartitionEvidence
+from ..data.publication_catalog import CatalogPublicationWriter
 from ..operations.protection import ProtectionAssessment, ProtectionState
 from ..operations.recovery import (
     K06_NOT_APPLICABLE_IDENTITY_DOMAIN,
@@ -86,18 +87,17 @@ RECOVERY_MANIFEST_SCHEMA_VERSION = "recovery-manifest-v1"
 
 
 class RestoreCatalog(Protocol):
-    """The complete catalog capability restore needs, bound to one connection/instance.
+    """Test-double protocol for the complete catalog capability restore needs.
 
     This combines the unchanged S13 write contract
     (``seal_partition``/``commit``/``rollback``, matching
     :class:`~quant_platform.data.publication.CertificationCatalogWriter`)
     with authoritative, read-only lookups against that *same* catalog.
-    Restore takes exactly one object implementing all five methods rather
-    than a separately supplied writer and inspector, so it is structurally
-    impossible to admit into one catalog while an independently constructed
-    inspector approves a different one -- there is only one object, and it
-    is the caller's responsibility to construct it bound to one real
-    connection.
+
+    Production callers should use :class:`CatalogRestoreSession`, which
+    derives the writer and inspection methods from exactly one catalog
+    connection.  This protocol remains only so hermetic tests can exercise
+    transaction behavior without a PostgreSQL server.
     """
 
     def seal_partition(self, *, dataset, partition, coverage_start, coverage_end, storage_root_id) -> SealedCatalogPartition:
@@ -121,6 +121,67 @@ class RestoreCatalog(Protocol):
         sense; a catalog may legitimately hold unrelated families.
         """
         ...
+
+
+class CatalogRestoreSession:
+    """Concrete restore-catalog session bound to exactly one catalog connection.
+
+    The S13 writer and K08 inspection queries are both constructed from the
+    same ``connection`` object.  Production restore therefore cannot validate
+    storage-root binding or family absence against one catalog while admitting
+    rows into another.
+    """
+
+    def __init__(self, connection: Any) -> None:
+        self.connection = connection
+        self._writer = CatalogPublicationWriter(connection)
+
+    def seal_partition(self, *, dataset, partition, coverage_start, coverage_end, storage_root_id) -> SealedCatalogPartition:
+        return self._writer.seal_partition(
+            dataset=dataset,
+            partition=partition,
+            coverage_start=coverage_start,
+            coverage_end=coverage_end,
+            storage_root_id=storage_root_id,
+        )
+
+    def commit(self) -> None:
+        self._writer.commit()
+
+    def rollback(self) -> None:
+        self._writer.rollback()
+
+    def resolve_storage_root_abs_path(self, storage_root_id: str) -> str:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT abs_path FROM storage_roots WHERE storage_root_id = %s",
+                (storage_root_id,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError(f"storage_root_id {storage_root_id!r} is not registered in the restore catalog")
+        return row[0]
+
+    def family_admission_count(self, dataset_identity: DatasetIdentity, partition_key: str) -> int:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT count(*) FROM catalog.partitions p
+                  JOIN catalog.datasets d ON d.dataset_id = p.dataset_id
+                 WHERE d.layer = %s AND d.kind = %s AND d.venue = %s
+                   AND d.instrument = %s AND d.schema_id = %s
+                   AND p.partition_key = %s
+                """,
+                (
+                    dataset_identity.layer,
+                    dataset_identity.dataset_kind,
+                    dataset_identity.venue,
+                    dataset_identity.instrument,
+                    dataset_identity.record_schema_id,
+                    partition_key,
+                ),
+            )
+            return cursor.fetchone()[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,8 +419,13 @@ def export_recovery_set(
     # created, so a failed export call -- including a rejected K06 document
     # -- never leaves a partially populated destination behind for a retry
     # to trip over.
-    k06_kind, k06_document = _resolve_k06_export_document(
-        recovery_set, k06_protection_document, k06_not_applicable_document,
+    target_member = _prepare_export_member(
+        recovery_set, evidence,
+        k06_protection_document=k06_protection_document,
+        k06_not_applicable_document=k06_not_applicable_document,
+    )
+    predecessor_members = tuple(
+        _prepare_predecessor_export_member(member) for member in predecessors
     )
 
     root = Path(destination_root) / recovery_set.fingerprint_hex
@@ -367,32 +433,25 @@ def export_recovery_set(
         raise RecoveryError("backup destination for this recovery identity is not empty")
     root.mkdir(parents=True, exist_ok=True)
 
-    _verify_hash(evidence.dataset_manifest_path, recovery_set.dataset_manifest_sha256)
-    _verify_hash(evidence.partition_manifest_path, recovery_set.partition_manifest_sha256)
-    _verify_file(evidence.artifact_path, recovery_set.physical_content_sha256, recovery_set.physical_size_bytes)
-
     dataset_copy = _atomic_copy(Path(evidence.dataset_manifest_path), root / "dataset.json")
     partition_copy = _atomic_copy(Path(evidence.partition_manifest_path), root / "partition.json")
     coverage_copies = tuple(
         _atomic_copy(Path(path), root / f"coverage-{index:03d}.json")
         for index, path in enumerate(evidence.coverage_manifest_paths)
     )
-    copied_coverage_hashes = tuple(sorted(_sha256_file(path) for path in coverage_copies))
-    if copied_coverage_hashes != recovery_set.coverage_manifest_sha256:
-        raise RecoveryError("exported coverage evidence does not match the bound recovery set identity")
     artifact_copy = _atomic_copy(Path(evidence.artifact_path), root / "artifact.parquet")
 
-    k06_copy = _atomic_write_json(root / _K06_FILENAMES[k06_kind], k06_document)
+    k06_copy = _atomic_write_json(root / _K06_FILENAMES[target_member.k06_kind], target_member.k06_document)
 
     predecessor_exports = tuple(
         _export_predecessor_member(root, index + 1, member)
-        for index, member in enumerate(predecessors)
+        for index, member in enumerate(predecessor_members)
     )
 
     _write_recovery_manifest(
         root, recovery_set,
         coverage_count=len(coverage_copies),
-        k06_kind=k06_kind,
+        k06_kind=target_member.k06_kind,
         predecessor_exports=predecessor_exports,
     )
 
@@ -402,7 +461,49 @@ def export_recovery_set(
     )
 
 
-def _export_predecessor_member(root: Path, revision: int, member: PredecessorEvidence) -> RecoveryBackupExport:
+@dataclass(frozen=True, slots=True)
+class _PreparedExportMember:
+    recovery_set: RecoverySetV1
+    evidence: SealedPartitionEvidence
+    k06_kind: str
+    k06_document: Mapping[str, Any]
+
+
+def _prepare_predecessor_export_member(member: PredecessorEvidence) -> _PreparedExportMember:
+    recovery_set = member.recovery_set
+    if recovery_set.k06_protection_identity is not None:
+        return _prepare_export_member(
+            recovery_set, member.evidence,
+            k06_protection_document=member.k06_document,
+            k06_not_applicable_document=None,
+        )
+    return _prepare_export_member(
+        recovery_set, member.evidence,
+        k06_protection_document=None,
+        k06_not_applicable_document=member.k06_document,
+    )
+
+
+def _prepare_export_member(
+    recovery_set: RecoverySetV1,
+    evidence: SealedPartitionEvidence,
+    *,
+    k06_protection_document: Mapping[str, Any] | None,
+    k06_not_applicable_document: Mapping[str, Any] | None,
+) -> _PreparedExportMember:
+    _verify_hash(evidence.dataset_manifest_path, recovery_set.dataset_manifest_sha256)
+    _verify_hash(evidence.partition_manifest_path, recovery_set.partition_manifest_sha256)
+    coverage_hashes = tuple(sorted(_sha256_file(path) for path in evidence.coverage_manifest_paths))
+    if coverage_hashes != recovery_set.coverage_manifest_sha256:
+        raise RecoveryError("backup coverage evidence does not match its bound recovery set identity")
+    _verify_file(evidence.artifact_path, recovery_set.physical_content_sha256, recovery_set.physical_size_bytes)
+    k06_kind, k06_document = _resolve_k06_export_document(
+        recovery_set, k06_protection_document, k06_not_applicable_document,
+    )
+    return _PreparedExportMember(recovery_set, evidence, k06_kind, k06_document)
+
+
+def _export_predecessor_member(root: Path, revision: int, member: _PreparedExportMember) -> RecoveryBackupExport:
     recovery_set = member.recovery_set
     evidence = member.evidence
     sub = root / "predecessors" / f"{revision:03d}"
@@ -410,28 +511,15 @@ def _export_predecessor_member(root: Path, revision: int, member: PredecessorEvi
         raise RecoveryError("backup destination for this predecessor revision is not empty")
     sub.mkdir(parents=True, exist_ok=True)
 
-    _verify_hash(evidence.dataset_manifest_path, recovery_set.dataset_manifest_sha256)
-    _verify_hash(evidence.partition_manifest_path, recovery_set.partition_manifest_sha256)
-    _verify_file(evidence.artifact_path, recovery_set.physical_content_sha256, recovery_set.physical_size_bytes)
-
     dataset_copy = _atomic_copy(Path(evidence.dataset_manifest_path), sub / "dataset.json")
     partition_copy = _atomic_copy(Path(evidence.partition_manifest_path), sub / "partition.json")
     coverage_copies = tuple(
         _atomic_copy(Path(path), sub / f"coverage-{index:03d}.json")
         for index, path in enumerate(evidence.coverage_manifest_paths)
     )
-    copied_hashes = tuple(sorted(_sha256_file(path) for path in coverage_copies))
-    if copied_hashes != recovery_set.coverage_manifest_sha256:
-        raise RecoveryError(
-            "exported predecessor coverage evidence does not match its bound recovery set identity"
-        )
     artifact_copy = _atomic_copy(Path(evidence.artifact_path), sub / "artifact.parquet")
 
-    if recovery_set.k06_protection_identity is not None:
-        k06_kind, k06_document = _resolve_k06_export_document(recovery_set, member.k06_document, None)
-    else:
-        k06_kind, k06_document = _resolve_k06_export_document(recovery_set, None, member.k06_document)
-    k06_copy = _atomic_write_json(sub / _K06_FILENAMES[k06_kind], k06_document)
+    k06_copy = _atomic_write_json(sub / _K06_FILENAMES[member.k06_kind], member.k06_document)
 
     return RecoveryBackupExport(
         recovery_set, sub, dataset_copy, partition_copy, coverage_copies, artifact_copy, k06_copy,
@@ -1046,6 +1134,7 @@ def _atomic_write_json(path: Path, document: Mapping[str, Any]) -> Path:
 __all__ = [
     "RECOVERY_MANIFEST_FILENAME",
     "RECOVERY_MANIFEST_SCHEMA_VERSION",
+    "CatalogRestoreSession",
     "PredecessorEvidence",
     "RecoveryBackupExport",
     "RestoreCatalog",

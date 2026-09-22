@@ -16,6 +16,7 @@ market-data application service.  Transport and job runtime remain J02 and J03.
 from .backup_restore import (
     RECOVERY_MANIFEST_FILENAME,
     RECOVERY_MANIFEST_SCHEMA_VERSION,
+    CatalogRestoreSession,
     PredecessorEvidence,
     RecoveryBackupExport,
     RestoreCatalog,
@@ -121,6 +122,7 @@ __all__ = [
     "RECORD_SCHEMA_ID",
     "RECOVERY_MANIFEST_FILENAME",
     "RECOVERY_MANIFEST_SCHEMA_VERSION",
+    "CatalogRestoreSession",
     "PredecessorEvidence",
     "RecoveryBackupExport",
     "RestoreCatalog",

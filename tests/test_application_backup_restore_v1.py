@@ -848,6 +848,41 @@ class BackupRestoreV1Tests(unittest.TestCase):
                 k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
                 predecessors=[PredecessorEvidence(recovery_set1, evidence1, k06_document=None)],
             )
+        self.assertFalse((backup_root / recovery_set2.fingerprint_hex).exists())
+
+    def test_invalid_predecessor_k06_preflight_leaves_no_partial_destination_and_retry_succeeds(self):
+        writer = FakeRestoreCatalog()
+        evidence1, sealed1 = self.sealed_evidence(revision=1, writer=writer)
+        recovery_set1 = capture_recovery_set(evidence1, sealed1, k06_not_applicable=NOT_APPLICABLE)
+
+        evidence2, sealed2 = self.sealed_evidence(
+            REVISION_2_RECORDS, revision=2, writer=writer,
+            coverage_start=REVISION_2_COVERAGE_START, coverage_end=REVISION_2_COVERAGE_END,
+        )
+        recovery_set2 = capture_recovery_set(evidence2, sealed2, k06_not_applicable=NOT_APPLICABLE)
+        backup_root = Path(self.tempdir.name) / "backup"
+        final_destination = backup_root / recovery_set2.fingerprint_hex
+        invalid_document = dict(NOT_APPLICABLE_DOCUMENT, rationale="tampered predecessor assertion")
+
+        with self.assertRaises(RecoveryError):
+            export_recovery_set(
+                recovery_set2, evidence2, backup_root,
+                k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+                predecessors=[
+                    PredecessorEvidence(recovery_set1, evidence1, k06_document=invalid_document),
+                ],
+            )
+        self.assertFalse(final_destination.exists())
+
+        export2 = export_recovery_set(
+            recovery_set2, evidence2, backup_root,
+            k06_not_applicable_document=NOT_APPLICABLE_DOCUMENT,
+            predecessors=[
+                PredecessorEvidence(recovery_set1, evidence1, k06_document=NOT_APPLICABLE_DOCUMENT),
+            ],
+        )
+        self.assertEqual(export2.destination_root, final_destination)
+        self.assertTrue((final_destination / "predecessors" / "001" / "k06-not-applicable.json").is_file())
 
     def test_restore_refuses_two_revisions_claiming_the_same_physical_location(self):
         writer = FakeRestoreCatalog()
