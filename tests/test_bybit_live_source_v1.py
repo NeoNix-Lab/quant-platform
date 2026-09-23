@@ -267,6 +267,36 @@ class BybitLiveSourceV1Tests(unittest.TestCase):
         self.assertEqual(missing.accepted_records, ())
         self.assertEqual(missing.evidence["coverage_status"], "non_complete")
 
+    def test_bounded_reconnect_fails_closed_on_unproven_rest_to_ws_boundary(self):
+        # The anchor is present in `rest`, but nothing in `rest` overlaps
+        # with `buffered` -- there is no evidence the WS buffer picked up
+        # where REST's window ends, so a real gap between them (trades that
+        # were neither in the bounded REST window nor yet buffered over WS)
+        # must not be silently accepted as CONTINUITY_RESTORED.
+        durable = TradeKeyV1("bybit", "BTCUSDT", Instant(1000), "anchor")
+        anchor = TradeRecord("bybit", "BTCUSDT", Instant(1000), "100", "1", "buy", trade_id="anchor", sequence="10")
+        rest_after = TradeRecord("bybit", "BTCUSDT", Instant(1001), "101", "1", "buy", trade_id="after", sequence="11")
+        ws_disconnected = TradeRecord("bybit", "BTCUSDT", Instant(5000), "105", "1", "buy", trade_id="resumed", sequence="99")
+        result = reconcile_after_disconnect(
+            last_durable_key=durable,
+            recent_rest_records=(anchor, rest_after),
+            buffered_ws_records=(ws_disconnected,),
+        )
+        self.assertEqual(result.status, ReconnectStatus.UNRESOLVED_GAP)
+        self.assertEqual(result.accepted_records, ())
+        self.assertEqual(result.evidence["coverage_status"], "non_complete")
+        self.assertIn("REST-to-WS boundary is unproven", result.evidence["reason"])
+
+        # A genuinely empty WS buffer is not a boundary claim at all -- REST
+        # alone, anchored, still restores continuity.
+        rest_only = reconcile_after_disconnect(
+            last_durable_key=durable,
+            recent_rest_records=(anchor, rest_after),
+            buffered_ws_records=(),
+        )
+        self.assertEqual(rest_only.status, ReconnectStatus.CONTINUITY_RESTORED)
+        self.assertEqual([record.trade_id for record in rest_only.accepted_records], ["after"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

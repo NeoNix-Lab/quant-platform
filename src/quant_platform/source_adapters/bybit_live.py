@@ -357,6 +357,34 @@ def reconcile_after_disconnect(
                 "evidence_kind": "transport_interruption",
             },
         )
+    if buffered:
+        # The anchor check above only proves REST's own window is
+        # continuous from `last_durable_key`. When a WS buffer is also
+        # being merged in, REST's tail and the buffer's head must be
+        # proven to meet -- otherwise a real gap between "REST stopped
+        # covering" and "WS buffering resumed" would be silently accepted
+        # as CONTINUITY_RESTORED. The only evidence available from opaque
+        # provider trade IDs is a real TradeKeyV1 present in both windows;
+        # absent that, the boundary is unproven and must fail closed.
+        rest_keys = {bybit_trade_v1_ordering_key(record) for record in rest}
+        buffered_keys = {bybit_trade_v1_ordering_key(record) for record in buffered}
+        if rest_keys.isdisjoint(buffered_keys):
+            return ReconnectResult(
+                status=ReconnectStatus.UNRESOLVED_GAP,
+                accepted_records=(),
+                evidence={
+                    "reason": (
+                        "no TradeKeyV1 overlap between the bounded recent-public-trades "
+                        "window and the buffered WebSocket records; the REST-to-WS "
+                        "boundary is unproven"
+                    ),
+                    "last_durable_key": last_durable_key.stable_dict(),
+                    "recent_window_records": len(rest),
+                    "buffered_ws_records": len(buffered),
+                    "coverage_status": "non_complete",
+                    "evidence_kind": "transport_interruption",
+                },
+            )
     later = [
         record for record in (*rest, *buffered)
         if bybit_trade_v1_ordering_key(record) > durable
