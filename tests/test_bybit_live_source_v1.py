@@ -196,6 +196,34 @@ class BybitLiveSourceV1Tests(unittest.TestCase):
         self.assertEqual(document["assertions"][0]["status"], "known_gap")
         self.assertEqual(document["assertions"][0]["evidence"][1]["kind"], "transport_interruption")
 
+    def test_unresolved_integrity_conflict_refuses_coverage_document(self):
+        # data/manifests.py's frozen evidence-kind vocabulary has no honest
+        # way to represent a Bybit integrity conflict (ADR-0040: `seq` is not
+        # a gap-free +1 cursor, so `sequence_discontinuity` would misdescribe
+        # it); refuse to build a coverage document rather than misdescribe.
+        tracker = LiveSessionTracker()
+        tracker.connected(conn_id="c1")
+        tracker.subscribed(topic="publicTrade.BTCUSDT", conn_id="c1")
+        tracker.integrity_conflict("conflicting duplicate TradeKeyV1")
+        evidence = tracker.evidence()
+        self.assertEqual(evidence.integrity_conflicts, ("conflicting duplicate TradeKeyV1",))
+        with self.assertRaises(BybitLiveSourceError):
+            build_bybit_live_coverage_document(
+                dataset_identity=bybit_live_dataset_identity(),
+                coverage_id="coverage-live-conflict",
+                intent_start="2024-01-15T00:00:00Z",
+                intent_end="2024-01-15T00:01:00Z",
+                assertion_id="assertion-conflict",
+                assertion_start="2024-01-15T00:00:00Z",
+                assertion_end="2024-01-15T00:01:00Z",
+                partition_key="dt=2024-01-15",
+                revision=1,
+                session_evidence=evidence,
+                created_at="2024-01-15T00:01:01Z",
+                producer="test",
+                code_ref="test",
+            )
+
     def test_zero_trade_message_alone_is_not_absence_heuristic(self):
         tracker = LiveSessionTracker()
         tracker.connected(conn_id="c1")
@@ -221,8 +249,9 @@ class BybitLiveSourceV1Tests(unittest.TestCase):
             code_ref="test",
         )
         self.assertEqual(document["assertions"][0]["status"], "complete")
-        self.assertEqual(document["assertions"][0]["evidence"][0]["accepted_records"], 0)
-        self.assertIn("ACQUIRING", document["assertions"][0]["evidence"][0]["states"])
+        detail = document["assertions"][0]["evidence"][0]["detail"]
+        self.assertIn("accepted_records=0", detail)
+        self.assertIn("ACQUIRING", detail)
 
     def test_recent_public_trade_mapping_matches_live_identity_and_order(self):
         record = canonicalize_bybit_recent_public_trade(rest_row())

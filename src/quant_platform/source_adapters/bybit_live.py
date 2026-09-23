@@ -19,14 +19,28 @@ import re
 from typing import Any
 
 from ..data.models import DataIntegrityError, DatasetIdentity, Instant, TradeRecord
-from .bybit import bybit_trade_v1_applies_to, bybit_trade_v1_ordering_key
+from .bybit import (
+    bybit_trade_v1_applies_to,
+    bybit_trade_v1_ordering_key,
+    validate_bybit_trade_v1_eligibility,
+)
 
 
 BYBIT_LIVE_SOURCE_SEMANTICS_V1 = "bybit-public-trades-websocket-v1"
 BYBIT_LIVE_MAPPING_V1 = "bybit-public-trade-live-v1"
 BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1 = "bybit-recent-public-trades-v5-v1"
 BYBIT_RECENT_PUBLIC_TRADES_MAPPING_V1 = "bybit-recent-public-trades-v5-to-trade-v1"
-BYBIT_LIVE_COVERAGE_EVIDENCE_KIND = "bybit_live_session_evidence"
+# Must be one of data/manifests.py's frozen coverage-manifest-v1
+# `_EVIDENCE_KINDS`; that vocabulary is shared/frozen and not extended here.
+# "connection_continuity" is the closest existing fit for "the session
+# stayed connected/subscribed/acquiring across the asserted interval".
+BYBIT_LIVE_COVERAGE_EVIDENCE_KIND = "connection_continuity"
+# Distinct from bybit.py's BYBIT_TRADE_V1_CHECK_SUITE/_CERTIFICATION_PROFILE
+# (#107: "do not weaken or reinterpret the historical profile" -- live
+# evidence is certified under its own profile_id/check_suite so publication
+# evidence records which profile actually certified a given partition).
+BYBIT_LIVE_TRADE_V1_CHECK_SUITE = "producer-consumer-conformity-v1/bybit-trade-v1-live"
+BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE = "producer-consumer-conformity-v1/bybit-trade-v1-live-v1"
 SUPPORTED_CATEGORY = "linear"
 SUPPORTED_SYMBOL = "BTCUSDT"
 SUPPORTED_TOPIC = "publicTrade.BTCUSDT"
@@ -421,14 +435,32 @@ def build_bybit_live_coverage_document(
 ) -> dict[str, Any]:
     if not bybit_trade_v1_applies_to(dataset_identity):
         raise BybitLiveSourceError("Bybit live coverage requires canonical Bybit trade-v1 identity")
+    if session_evidence.integrity_conflicts:
+        # ADR-0040: Bybit `seq` is not a gap-free +1 cursor and multiple
+        # messages may legitimately share one seq, so an unresolved
+        # integrity conflict (a real conflicting-payload duplicate,
+        # already fail-closed at acquisition time -- see
+        # BybitLiveIntegrityError) cannot be honestly expressed through
+        # data/manifests.py's frozen evidence-kind vocabulary:
+        # "sequence_discontinuity" would falsely imply a gap-detecting
+        # sequence cursor Bybit's `seq` does not provide. Refuse to build
+        # a coverage document at all rather than misdescribe it.
+        raise BybitLiveSourceError(
+            "cannot build live coverage while unresolved integrity conflicts remain: "
+            + "; ".join(session_evidence.integrity_conflicts)
+        )
     status = "complete" if session_evidence.can_assert_complete_interval else "known_gap"
+    # data/manifests.py's frozen evidence-item shape is exactly {kind, detail}
+    # (no additional fields); session detail is folded into `detail` text.
     evidence: list[dict[str, Any]] = [
         {
             "kind": BYBIT_LIVE_COVERAGE_EVIDENCE_KIND,
-            "final_state": session_evidence.final_state.value,
-            "validated_messages": session_evidence.validated_messages,
-            "accepted_records": session_evidence.accepted_records,
-            "states": [event.state.value for event in session_evidence.events],
+            "detail": (
+                f"final_state={session_evidence.final_state.value}; "
+                f"states={[event.state.value for event in session_evidence.events]}; "
+                f"validated_messages={session_evidence.validated_messages}; "
+                f"accepted_records={session_evidence.accepted_records}"
+            ),
         }
     ]
     if session_evidence.interruptions:
@@ -436,18 +468,16 @@ def build_bybit_live_coverage_document(
             "kind": "transport_interruption",
             "detail": "; ".join(session_evidence.interruptions),
         })
-    if session_evidence.integrity_conflicts:
-        evidence.append({
-            "kind": "integrity_conflict",
-            "detail": "; ".join(session_evidence.integrity_conflicts),
-        })
     return {
         "source_dataset_identity": dataset_identity,
         "coverage_id": coverage_id,
         "supersedes": supersedes,
         "created_at": created_at,
         "acquisition": {
-            "basis": "live_session",
+            # One of data/manifests.py's frozen `_COVERAGE_BASES`; a bounded
+            # connected session to the source, as opposed to e.g. an
+            # open-ended "live_stream" segment.
+            "basis": "source_session",
             "intent_start": intent_start,
             "intent_end": intent_end,
             "source_semantics": BYBIT_LIVE_SOURCE_SEMANTICS_V1,
@@ -466,6 +496,74 @@ def build_bybit_live_coverage_document(
         "producer": producer,
         "code_ref": code_ref,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class BybitLiveTradeV1CertificationProfile:
+    """Live-session counterpart to bybit.py's BybitTradeV1CertificationProfile.
+
+    #107's "Important existing compatibility fact" is explicit: the
+    historical profile must not be weakened or reinterpreted, and live
+    evidence gets its own minimal source-owned profile instead. Canonical
+    identity/order (AC4) is shared with the historical profile via
+    bybit_trade_v1_applies_to/bybit_trade_v1_ordering_key -- both profiles
+    certify the same `trade-v1`/`TradeKeyV1` domain -- but the source-
+    specific evidence rules are the opposite of the historical profile's:
+    live coverage carries its own source_semantics/mapping, and `sequence`
+    is required (ADR-0040 requires it be preserved as canonical evidence
+    for the live path) rather than forbidden.
+    """
+
+    code_ref: str
+    profile_id: str = BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE
+    check_suite: str = BYBIT_LIVE_TRADE_V1_CHECK_SUITE
+
+    def applies_to(self, identity: DatasetIdentity) -> bool:
+        return bybit_trade_v1_applies_to(identity)
+
+    def ordering_key(self, record: TradeRecord) -> tuple[Instant, str]:
+        return bybit_trade_v1_ordering_key(record)
+
+    def validate_source(
+        self,
+        identity: DatasetIdentity,
+        coverage_documents: Sequence[Mapping[str, Any]],
+    ) -> Mapping[str, Any]:
+        if not self.applies_to(identity):
+            raise BybitLiveSourceError("Bybit live certification profile does not apply")
+        if not coverage_documents:
+            raise BybitLiveSourceError("certification requires durable live session coverage evidence")
+        for document in coverage_documents:
+            acquisition = document.get("acquisition") or {}
+            if acquisition.get("source_semantics") != BYBIT_LIVE_SOURCE_SEMANTICS_V1:
+                raise BybitLiveSourceError("coverage source_semantics is not the frozen Bybit live-session profile")
+            if acquisition.get("mapping") != BYBIT_LIVE_MAPPING_V1:
+                raise BybitLiveSourceError("coverage mapping is not the frozen Bybit live-session mapping")
+            for assertion in document.get("assertions") or ():
+                if assertion.get("status") != "complete":
+                    continue
+                if not any(
+                    item.get("kind") == BYBIT_LIVE_COVERAGE_EVIDENCE_KIND
+                    for item in assertion.get("evidence") or ()
+                ):
+                    raise BybitLiveSourceError("complete Bybit live coverage lacks session evidence")
+        return {
+            "source_semantics": BYBIT_LIVE_SOURCE_SEMANTICS_V1,
+            "mapping": BYBIT_LIVE_MAPPING_V1,
+            "documents": len(coverage_documents),
+        }
+
+    def validate_records(
+        self,
+        identity: DatasetIdentity,
+        records: Sequence[TradeRecord],
+    ) -> Mapping[str, Any]:
+        validate_bybit_trade_v1_eligibility(identity, tuple(records))
+        if any(record.receive_ts is not None for record in records):
+            raise BybitLiveSourceError("Bybit live records must not fabricate receive_ts")
+        if any(record.sequence is None for record in records):
+            raise BybitLiveSourceError("Bybit live records must carry provider sequence evidence")
+        return {"records": len(records), "trade_id_policy": "non-null-unique-(exchange_ts,trade_id)"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,12 +679,15 @@ __all__ = [
     "BYBIT_LIVE_COVERAGE_EVIDENCE_KIND",
     "BYBIT_LIVE_MAPPING_V1",
     "BYBIT_LIVE_SOURCE_SEMANTICS_V1",
+    "BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE",
+    "BYBIT_LIVE_TRADE_V1_CHECK_SUITE",
     "BYBIT_RECENT_PUBLIC_TRADES_MAPPING_V1",
     "BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1",
     "BybitLiveIntegrityError",
     "BybitLiveMessageEvidence",
     "BybitLiveSessionEvidence",
     "BybitLiveSourceError",
+    "BybitLiveTradeV1CertificationProfile",
     "LiveSessionTracker",
     "LiveTradeBatch",
     "RECORD_SCHEMA_ID",
