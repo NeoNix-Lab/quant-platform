@@ -15,8 +15,9 @@ from urllib.request import urlopen
 from quant_platform.access.catalog import Catalog
 from quant_platform.access.gateway import DataGateway
 from quant_platform.access.models import DataRequest, LifecyclePolicy
-from quant_platform.data import DatasetIdentity, Instant
+from quant_platform.data import Instant
 from quant_platform.data.manifests import (
+    DATASET_MANIFEST_V2,
     emit_coverage_manifest,
     emit_dataset_manifest,
     emit_partition_manifest,
@@ -264,9 +265,15 @@ def run_real_server_publish_proof(
     # at this shared path instead of re-emitting it on every run.
     dataset_emission = None
     if not dataset_manifest_path.exists():
+        # Matches application/conformity.py's real production dataset-manifest
+        # emission for this same shared canonical identity exactly (v2,
+        # origin=source_acquired -- no raw-dataset lineage row required),
+        # not the derived_from=[raw] shape used only by hermetic test
+        # fixtures. A mismatched schema here is exactly what produced the
+        # first DATASET_MANIFEST_CONFLICT/PublicationEligibilityRefusal.
         dataset_emission = emit_dataset_manifest(
             dataset_manifest_path, dataset_identity=identity, created_at=intent_end,
-            derived_from=[DatasetIdentity("raw", "trades", identity.venue, identity.instrument, identity.record_schema_id)],
+            schema_version=DATASET_MANIFEST_V2, origin="source_acquired",
             transform="canonicalize-trades-v1",
         )
     partition_emission = emit_partition_manifest(
