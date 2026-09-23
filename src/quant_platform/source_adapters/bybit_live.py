@@ -34,6 +34,11 @@ SUPPORTED_VENUE = "bybit"
 RECORD_SCHEMA_ID = "trade-v1"
 
 _POSITIVE_DECIMAL_RE = re.compile(r"^(?:0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$")
+# schemas/trade-v1.json's `digit_string`: non-negative integer text, no
+# leading zeros ("7" and "007" are distinct strings for the same value).
+# Matches the `_DIGITS` convention used elsewhere for this same schema type
+# (data/manifests.py, data/parquet.py).
+_DIGIT_STRING_RE = re.compile(r"^(0|[1-9][0-9]*)$")
 _FINGERPRINT_DOMAIN = b"quant-platform/bybit-live-acquisition-v1\x00"
 
 
@@ -509,7 +514,9 @@ def _sequence_int(value: Any, *, field: str, trade_id: str | None = None) -> str
 
 
 def _sequence_text(value: Any, *, field: str, trade_id: str | None = None) -> str:
-    if not isinstance(value, str) or not value.isdigit():
+    # `str.isdigit()` alone accepts zero-padded text ("007") and non-ASCII
+    # digit characters; schemas/trade-v1.json's `digit_string` rejects both.
+    if not isinstance(value, str) or _DIGIT_STRING_RE.fullmatch(value) is None:
         raise BybitLiveSourceError(f"{field} must be non-negative integer text", field=field, trade_id=trade_id)
     return value
 

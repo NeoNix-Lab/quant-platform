@@ -231,6 +231,20 @@ class BybitLiveSourceV1Tests(unittest.TestCase):
         self.assertEqual(record.sequence, "1783284617")
         self.assertIsNone(record.receive_ts)
 
+    def test_recent_public_trade_rejects_non_canonical_sequence_text(self):
+        # schemas/trade-v1.json's digit_string forbids leading zeros: "7" and
+        # "007" are distinct strings for the same value. `str.isdigit()`
+        # alone accepts "007" (and non-ASCII digit characters), so this must
+        # be enforced explicitly rather than left to `isdigit()`.
+        for bad_seq in ("01783284617", "00", "007", "٢٣"):  # Arabic-Indic 23
+            with self.subTest(seq=bad_seq):
+                with self.assertRaises(BybitLiveSourceError) as caught:
+                    canonicalize_bybit_recent_public_trade(rest_row(seq=bad_seq))
+                self.assertEqual(caught.exception.field, "seq")
+        # "0" alone is a valid digit_string (the domain's zero case).
+        record = canonicalize_bybit_recent_public_trade(rest_row(seq="0"))
+        self.assertEqual(record.sequence, "0")
+
     def test_bounded_reconnect_restores_continuity_only_when_anchor_is_present(self):
         durable = TradeKeyV1("bybit", "BTCUSDT", Instant(1000), "anchor")
         anchor = TradeRecord("bybit", "BTCUSDT", Instant(1000), "100", "1", "buy", trade_id="anchor", sequence="10")
