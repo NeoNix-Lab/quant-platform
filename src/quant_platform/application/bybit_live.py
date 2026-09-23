@@ -465,19 +465,32 @@ def resume_live_ingest(
     deduplicated, ordering-safe records recovered across the restart
     boundary, ready to canonicalize/publish exactly as any other bounded
     acquisition would (proof-matrix items 1-4, 10-13).
+
+    ``durable_publication`` is required whenever a checkpoint exists to
+    resume from (ADR-0042 S5 step 1: validating the checkpoint against the
+    durable publication/catalog state it binds is a mandatory restart
+    step, not an optional one -- a caller must not be able to silently
+    skip it merely by omitting the argument). It is legitimately absent
+    only when ``checkpoint_store`` has no checkpoint at all, since there is
+    then nothing to validate.
     """
     checkpoint = checkpoint_store.load()
     if checkpoint is None:
         return RestartOutcome(status="NO_CHECKPOINT", checkpoint=None, reconcile_result=None, accepted_records=())
 
-    if durable_publication is not None:
-        validate_publication_binding(
-            checkpoint,
-            catalog_dataset_id=durable_publication.catalog_dataset_id,
-            partition_key=durable_publication.partition_key,
-            revision=durable_publication.revision,
-            partition_manifest_sha256=durable_publication.partition_manifest_sha256,
+    if durable_publication is None:
+        raise CheckpointError(
+            "durable_publication is required to resume an existing checkpoint "
+            "(ADR-0042 S5: the checkpoint must be validated against durable "
+            "publication/catalog state before reconnect)"
         )
+    validate_publication_binding(
+        checkpoint,
+        catalog_dataset_id=durable_publication.catalog_dataset_id,
+        partition_key=durable_publication.partition_key,
+        revision=durable_publication.revision,
+        partition_manifest_sha256=durable_publication.partition_manifest_sha256,
+    )
 
     last_durable_key = TradeKeyV1(
         checkpoint.dataset_identity.venue,

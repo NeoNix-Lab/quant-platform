@@ -75,6 +75,22 @@ class ResumeLiveIngestTests(unittest.TestCase):
         finally:
             tempdir.cleanup()
 
+    def test_omitting_durable_publication_with_an_existing_checkpoint_fails_closed(self):
+        # ADR-0042 S5 step 1: validating the checkpoint against durable
+        # publication state is a mandatory restart step. A caller must not
+        # be able to skip it merely by omitting the argument.
+        tempdir = tempfile.TemporaryDirectory()
+        try:
+            store = CheckpointStore(Path(tempdir.name) / "checkpoint.json")
+            cp = first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication)
+            store.save(cp)
+            with self.assertRaises(CheckpointError):
+                resume_live_ingest(
+                    checkpoint_store=store, recent_rest_records=(), buffered_ws_records=(),
+                )
+        finally:
+            tempdir.cleanup()
+
     def test_bounded_reconnect_resumes_when_durable_anchor_is_recoverable(self):
         # Proof matrix items 1-4, 12: crash at any point before/after
         # checkpoint advance, anchor still inside the bounded REST window ->
