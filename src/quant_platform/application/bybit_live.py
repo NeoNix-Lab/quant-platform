@@ -212,6 +212,31 @@ def _connect_catalog(dsn: str | None):
     return psycopg.connect(dsn) if dsn else psycopg.connect()
 
 
+def _next_revision(dsn: str | None, identity: Any, partition_key: str) -> int:
+    """Each bounded proof run acquires a fresh physical parquet artifact, so
+    it cannot reuse a prior run's already-sealed revision for the same
+    partition_key (seal_partition correctly refuses a closed target whose
+    physical evidence doesn't match). Query the real next revision instead
+    of assuming 1, which only holds for a partition_key never sealed before."""
+    connection = _connect_catalog(dsn)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COALESCE(MAX(p.revision), 0)
+                  FROM catalog.partitions p
+                  JOIN catalog.datasets d ON d.dataset_id = p.dataset_id
+                 WHERE d.layer=%s AND d.kind=%s AND d.venue=%s
+                   AND d.instrument=%s AND d.schema_id=%s
+                   AND p.partition_key=%s
+                """,
+                (identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id, partition_key),
+            )
+            return int(cursor.fetchone()[0]) + 1
+    finally:
+        connection.close()
+
+
 def run_real_server_publish_proof(
     *,
     max_messages: int,
@@ -243,6 +268,7 @@ def run_real_server_publish_proof(
     partition_key = f"dt={day}"
     intent_start = acquire_started_at.isoformat().replace("+00:00", "Z")
     intent_end = acquire_finished_at.isoformat().replace("+00:00", "Z")
+    revision = _next_revision(dsn, identity, partition_key)
 
     storage_root_path = Path(storage_root)
     dataset_root = storage_root_path.joinpath(
@@ -278,7 +304,7 @@ def run_real_server_publish_proof(
         )
     partition_emission = emit_partition_manifest(
         partition_manifest_path, materialization, dataset_identity=identity,
-        dataset_root=dataset_root, partition_key=partition_key, revision=1,
+        dataset_root=dataset_root, partition_key=partition_key, revision=revision,
         rel_path=rel_path, created_at=intent_start, closed_at=intent_end,
         producer=producer, code_ref=code_ref,
     )
@@ -290,7 +316,7 @@ def run_real_server_publish_proof(
         intent_start=intent_start, intent_end=intent_end,
         assertion_id=f"k02-real-server-assertion-{run_tag}",
         assertion_start=intent_start, assertion_end=intent_end,
-        partition_key=partition_key, revision=1, session_evidence=session_evidence,
+        partition_key=partition_key, revision=revision, session_evidence=session_evidence,
         created_at=intent_end, producer=producer, code_ref=code_ref,
     )
     emit_coverage_manifest(
