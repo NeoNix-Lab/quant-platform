@@ -5,17 +5,49 @@ from __future__ import annotations
 import argparse
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+from quant_platform.access.catalog import Catalog
+from quant_platform.access.gateway import DataGateway
+from quant_platform.access.models import DataRequest, LifecyclePolicy
+from quant_platform.data import DatasetIdentity, Instant
+from quant_platform.data.manifests import (
+    emit_coverage_manifest,
+    emit_dataset_manifest,
+    emit_partition_manifest,
+)
+from quant_platform.data.models import TradeRecord
+from quant_platform.data.publication import (
+    PublicationCertification,
+    SealedPartitionEvidence,
+)
+from quant_platform.data.publication_catalog import CatalogPublicationWriter
+from quant_platform.data.publication_eligibility import (
+    PublicationEligibilityBridge,
+    PublicationEligibilityEvidence,
+)
+from quant_platform.data.publication_eligibility_catalog import PublicationEligibilityCatalog
+from quant_platform.source_adapters.bybit import (
+    BYBIT_ORDERING_PROVIDER,
+    materialize_bybit_trade_v1,
+)
 from quant_platform.source_adapters.bybit_live import (
+    BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE,
+    BYBIT_LIVE_TRADE_V1_CHECK_SUITE,
     SUPPORTED_CATEGORY,
     SUPPORTED_SYMBOL,
     SUPPORTED_TOPIC,
+    BybitLiveSessionEvidence,
     BybitLiveSourceError,
+    BybitLiveTradeV1CertificationProfile,
     LiveSessionTracker,
+    build_bybit_live_coverage_document,
+    bybit_live_dataset_identity,
     canonicalize_bybit_live_message,
     canonicalize_bybit_recent_public_trade,
     deduplicate_live_records,
@@ -39,6 +71,13 @@ class LiveProviderProofReport:
     duplicates_removed: int
     final_state: str
     errors: tuple[str, ...]
+    # The deduplicated canonical records actually accepted, and the session
+    # evidence behind them -- absent from the original summary-only report,
+    # but needed by any caller (e.g. a real-server publication proof) that
+    # must compose #107's acquisition seam with #105/AC10's canonical
+    # publication path rather than re-running acquisition a second time.
+    accepted_records: tuple[TradeRecord, ...] = ()
+    session_evidence: BybitLiveSessionEvidence | None = None
 
 
 def fetch_recent_public_trades(*, limit: int = 100) -> tuple[Any, ...]:
@@ -123,6 +162,8 @@ async def run_bounded_live_provider_proof(
         duplicates_removed=len(accepted) - len(deduped),
         final_state=evidence.final_state.value,
         errors=tuple(errors),
+        accepted_records=deduped,
+        session_evidence=evidence,
     )
 
 
@@ -137,13 +178,171 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@dataclass(frozen=True, slots=True)
+class RealServerPublishProofReport:
+    """K02 (#108): result of composing #107's acquisition seam with the
+    existing canonical S13/S14 publication path and a DataGateway read-back,
+    on a real deployment. Writes nothing unless acquisition yields at least
+    one accepted record."""
+
+    status: str
+    acquisition: LiveProviderProofReport
+    identity: dict[str, Any] | None = None
+    partition_key: str | None = None
+    artifact_path: str | None = None
+    coverage_status: str | None = None
+    certification_status: str | None = None
+    certification_categories: tuple[tuple[str, str], ...] = ()
+    eligibility_published: bool | None = None
+    datagateway_read_record_count: int | None = None
+    datagateway_read_matches_published: bool | None = None
+
+
+def _connect_catalog(dsn: str | None):
+    import psycopg
+
+    return psycopg.connect(dsn) if dsn else psycopg.connect()
+
+
+def run_real_server_publish_proof(
+    *,
+    max_messages: int,
+    max_seconds: float,
+    storage_root: str | Path,
+    storage_root_id: str,
+    dsn: str | None,
+    producer: str,
+    code_ref: str,
+) -> RealServerPublishProofReport:
+    """K02 (#108) minimum real-server proof.
+
+    Reuses #107's bounded acquisition seam (never re-implements it), then
+    composes the same S13/S14/DataGateway production seams
+    application/conformity.py already uses for the historical vertical --
+    swapped to BybitLiveTradeV1CertificationProfile and live coverage.
+    """
+    acquire_started_at = datetime.now(timezone.utc)
+    report = run_bounded_live_provider_proof_sync(max_messages=max_messages, max_seconds=max_seconds)
+    acquire_finished_at = datetime.now(timezone.utc)
+
+    if report.status != "PASS" or not report.accepted_records or report.session_evidence is None:
+        return RealServerPublishProofReport(status="LIVE_PROVIDER_PROOF_PENDING", acquisition=report)
+
+    records = report.accepted_records
+    session_evidence = report.session_evidence
+    identity = bybit_live_dataset_identity()
+    day = acquire_started_at.strftime("%Y-%m-%d")
+    partition_key = f"dt={day}"
+    intent_start = acquire_started_at.isoformat().replace("+00:00", "Z")
+    intent_end = acquire_finished_at.isoformat().replace("+00:00", "Z")
+
+    storage_root_path = Path(storage_root)
+    dataset_root = storage_root_path.joinpath(
+        identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id,
+    )
+    suffix = acquire_started_at.strftime("%H%M%S")
+    rel_path = f"{partition_key}/part-{suffix}.parquet"
+    artifact_path = dataset_root / rel_path
+    dataset_manifest_path = dataset_root / "dataset-manifest.json"
+    partition_manifest_path = dataset_root / f"partition-manifest-{suffix}.json"
+    coverage_manifest_path = dataset_root / f"coverage-manifest-{suffix}.json"
+
+    materialization = materialize_bybit_trade_v1(artifact_path, records, dataset_identity=identity)
+    emit_dataset_manifest(
+        dataset_manifest_path, dataset_identity=identity, created_at=intent_end,
+        derived_from=[DatasetIdentity("raw", "trades", identity.venue, identity.instrument, identity.record_schema_id)],
+        transform="canonicalize-trades-v1",
+    )
+    partition_emission = emit_partition_manifest(
+        partition_manifest_path, materialization, dataset_identity=identity,
+        dataset_root=dataset_root, partition_key=partition_key, revision=1,
+        rel_path=rel_path, created_at=intent_start, closed_at=intent_end,
+        producer=producer, code_ref=code_ref,
+    )
+    coverage_input = build_bybit_live_coverage_document(
+        dataset_identity=identity, coverage_id=f"k02-real-server-{acquire_started_at.strftime('%Y%m%dT%H%M%SZ')}",
+        intent_start=intent_start, intent_end=intent_end,
+        assertion_id=f"k02-real-server-assertion-{acquire_started_at.strftime('%Y%m%dT%H%M%SZ')}",
+        assertion_start=intent_start, assertion_end=intent_end,
+        partition_key=partition_key, revision=1, session_evidence=session_evidence,
+        created_at=intent_end, producer=producer, code_ref=code_ref,
+    )
+    emit_coverage_manifest(
+        coverage_manifest_path, dataset_identity=identity,
+        partition_manifests=[partition_emission.document], **coverage_input,
+    )
+    coverage_status = coverage_input["assertions"][0]["status"]
+
+    connection = _connect_catalog(dsn)
+    try:
+        profile = BybitLiveTradeV1CertificationProfile(code_ref)
+        run = PublicationCertification(CatalogPublicationWriter(connection), profile).run(
+            SealedPartitionEvidence(
+                dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
+                artifact_path, storage_root_id,
+            )
+        )
+        categories = tuple((c.category, c.status) for c in run.certification.categories)
+        if run.certification.status != "pass":
+            return RealServerPublishProofReport(
+                status="CERTIFICATION_FAILED", acquisition=report,
+                partition_key=partition_key, artifact_path=str(artifact_path),
+                coverage_status=coverage_status,
+                certification_status=run.certification.status,
+                certification_categories=categories,
+            )
+
+        eligibility = PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
+            PublicationEligibilityEvidence(
+                dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
+                storage_root_id, BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE, BYBIT_LIVE_TRADE_V1_CHECK_SUITE,
+            )
+        )
+    finally:
+        connection.close()
+
+    connection = _connect_catalog(dsn)
+    try:
+        request = DataRequest(
+            identity, Instant.parse(intent_start), Instant.parse(intent_end),
+            schema_requirement=identity.record_schema_id,
+            lifecycle_policy=LifecyclePolicy.VALID_ONLY,
+            coverage_policy="strict",
+            ordering_policy=BYBIT_ORDERING_PROVIDER.identity,
+        )
+        gateway = DataGateway(Catalog(connection=connection), ordering_providers=(BYBIT_ORDERING_PROVIDER,))
+        scan = gateway.scan(request, batch_size=1000)
+        read_records: list[Any] = []
+        try:
+            for batch in scan:
+                read_records.extend(batch)
+        finally:
+            if getattr(scan, "completed_metadata", None) is None:
+                scan.close()
+    finally:
+        connection.close()
+
+    return RealServerPublishProofReport(
+        status="PASS", acquisition=report,
+        partition_key=partition_key, artifact_path=str(artifact_path),
+        coverage_status=coverage_status,
+        certification_status=run.certification.status,
+        certification_categories=categories,
+        eligibility_published=eligibility is not None,
+        datagateway_read_record_count=len(read_records),
+        datagateway_read_matches_published=len(read_records) == len(records),
+    )
+
+
 __all__ = [
     "BYBIT_PUBLIC_LINEAR_WS_URL",
     "BYBIT_RECENT_TRADES_URL",
     "LiveProviderProofPending",
     "LiveProviderProofReport",
+    "RealServerPublishProofReport",
     "build_arg_parser",
     "fetch_recent_public_trades",
     "run_bounded_live_provider_proof",
     "run_bounded_live_provider_proof_sync",
+    "run_real_server_publish_proof",
 ]
