@@ -115,7 +115,7 @@ class ResumeLiveIngestTests(unittest.TestCase):
         finally:
             tempdir.cleanup()
 
-    def test_durable_anchor_outside_bounded_window_records_explicit_gap(self):
+    def test_durable_anchor_outside_bounded_window_detects_explicit_gap(self):
         # Proof matrix item 13: durable anchor outside bounded window ->
         # explicit non-complete gap, never fabricated completeness. The
         # checkpoint itself must not advance past a gap like this.
@@ -130,11 +130,14 @@ class ResumeLiveIngestTests(unittest.TestCase):
                 checkpoint_store=store, recent_rest_records=(unrelated,), buffered_ws_records=(),
                 durable_publication=self.publication,
             )
-            self.assertEqual(outcome.status, "GAP_RECORDED")
+            self.assertEqual(outcome.status, "GAP_DETECTED")
             self.assertEqual(outcome.accepted_records, ())
             self.assertEqual(outcome.reconcile_result.evidence["coverage_status"], "non_complete")
             # The checkpoint on disk is unchanged -- a gap can never be
-            # silently crossed by advancing past it.
+            # silently crossed by advancing past it. GAP_DETECTED is only
+            # an in-memory signal; durably recording the gap (e.g. via
+            # build_bybit_live_coverage_document) is the caller's separate
+            # responsibility, not something this call performs.
             self.assertEqual(store.load().checkpoint_identity, cp.checkpoint_identity)
         finally:
             tempdir.cleanup()

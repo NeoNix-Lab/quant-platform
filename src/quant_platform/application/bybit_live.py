@@ -437,7 +437,7 @@ class DurablePublicationState:
 class RestartOutcome:
     """K10 restart-procedure result (ADR-0042 S5)."""
 
-    status: str  # "NO_CHECKPOINT" | "GAP_RECORDED" | "RESUMED"
+    status: str  # "NO_CHECKPOINT" | "GAP_DETECTED" | "RESUMED"
     checkpoint: LiveCheckpointV1 | None
     reconcile_result: ReconnectResult | None
     accepted_records: tuple[TradeRecord, ...]
@@ -457,13 +457,18 @@ def resume_live_ingest(
 
     Returns ``NO_CHECKPOINT`` when no checkpoint exists yet (a fresh
     domain: the caller should proceed as a first acquisition, not a
-    restart). Returns ``GAP_RECORDED`` when the durable anchor is outside
+    restart). Returns ``GAP_DETECTED`` when the durable anchor is outside
     the provider's bounded reconciliation window -- an explicit
     non-complete gap, never fabricated continuity (ADR-0042 S5/S6); the
-    checkpoint must not be advanced past a gap like this (leave it as-is
-    and record the gap through A11's existing coverage semantics). Returns
-    ``RESUMED`` when continuity is proven; ``accepted_records`` are the
-    deduplicated, ordering-safe records recovered across the restart
+    checkpoint is left unadvanced. This status is an in-memory signal
+    only -- it does *not* itself durably record the gap anywhere. The
+    caller must separately record it through A11's existing coverage
+    semantics (``build_bybit_live_coverage_document`` naturally produces a
+    ``"known_gap"`` assertion once a session observes one; see
+    ``reconcile_result.evidence`` here for the detail to attribute) before
+    resuming governed publication, exactly as ADR-0042 S5 requires.
+    Returns ``RESUMED`` when continuity is proven; ``accepted_records`` are
+    the deduplicated, ordering-safe records recovered across the restart
     boundary, ready to canonicalize/publish exactly as any other bounded
     acquisition would (proof-matrix items 1-4, 10-13).
 
@@ -506,7 +511,7 @@ def resume_live_ingest(
     )
     if result.status == ReconnectStatus.UNRESOLVED_GAP:
         return RestartOutcome(
-            status="GAP_RECORDED", checkpoint=checkpoint, reconcile_result=result, accepted_records=(),
+            status="GAP_DETECTED", checkpoint=checkpoint, reconcile_result=result, accepted_records=(),
         )
     return RestartOutcome(
         status="RESUMED", checkpoint=checkpoint, reconcile_result=result,
