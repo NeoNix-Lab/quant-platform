@@ -47,11 +47,23 @@ from quant_platform.source_adapters.bybit_live import (
     BybitLiveSourceError,
     BybitLiveTradeV1CertificationProfile,
     LiveSessionTracker,
+    ReconnectResult,
+    ReconnectStatus,
+    TradeKeyV1,
     build_bybit_live_coverage_document,
     bybit_live_dataset_identity,
     canonicalize_bybit_live_message,
     canonicalize_bybit_recent_public_trade,
     deduplicate_live_records,
+    reconcile_after_disconnect,
+)
+from quant_platform.operations.checkpoint import (
+    CheckpointDomainMismatch,
+    CheckpointError,
+    CheckpointStore,
+    LiveCheckpointV1,
+    advance_checkpoint,
+    validate_publication_binding,
 )
 
 
@@ -408,14 +420,181 @@ def run_real_server_publish_proof(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DurablePublicationState:
+    """Freshly queried durable catalog state a checkpoint's binding is
+    validated against (ADR-0042 S4/S6). The caller queries this -- e.g. via
+    the same catalog connection ``run_real_server_publish_proof`` already
+    uses -- this module never opens a connection to compute it itself."""
+
+    catalog_dataset_id: str
+    partition_key: str
+    revision: int
+    partition_manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class RestartOutcome:
+    """K10 restart-procedure result (ADR-0042 S5)."""
+
+    status: str  # "NO_CHECKPOINT" | "GAP_DETECTED" | "RESUMED"
+    checkpoint: LiveCheckpointV1 | None
+    reconcile_result: ReconnectResult | None
+    accepted_records: tuple[TradeRecord, ...]
+
+
+def resume_live_ingest(
+    *,
+    checkpoint_store: CheckpointStore,
+    recent_rest_records: tuple[TradeRecord, ...],
+    buffered_ws_records: tuple[TradeRecord, ...],
+    durable_publication: DurablePublicationState | None = None,
+) -> RestartOutcome:
+    """K10 restart procedure (ADR-0042 S5), composed entirely from existing
+    seams: load + validate the durable checkpoint, then reconnect/reconcile
+    through A11's existing bounded ``reconcile_after_disconnect`` -- never a
+    second recovery path.
+
+    Returns ``NO_CHECKPOINT`` when no checkpoint exists yet (a fresh
+    domain: the caller should proceed as a first acquisition, not a
+    restart). Returns ``GAP_DETECTED`` when the durable anchor is outside
+    the provider's bounded reconciliation window -- an explicit
+    non-complete gap, never fabricated continuity (ADR-0042 S5/S6); the
+    checkpoint is left unadvanced. This status is an in-memory signal
+    only -- it does *not* itself durably record the gap anywhere. The
+    caller must separately record it through A11's existing coverage
+    semantics (``build_bybit_live_coverage_document`` naturally produces a
+    ``"known_gap"`` assertion once a session observes one; see
+    ``reconcile_result.evidence`` here for the detail to attribute) before
+    resuming governed publication, exactly as ADR-0042 S5 requires.
+    Returns ``RESUMED`` when continuity is proven; ``accepted_records`` are
+    the deduplicated, ordering-safe records recovered across the restart
+    boundary, ready to canonicalize/publish exactly as any other bounded
+    acquisition would (proof-matrix items 1-4, 10-13).
+
+    ``durable_publication`` is required whenever a checkpoint exists to
+    resume from (ADR-0042 S5 step 1: validating the checkpoint against the
+    durable publication/catalog state it binds is a mandatory restart
+    step, not an optional one -- a caller must not be able to silently
+    skip it merely by omitting the argument). It is legitimately absent
+    only when ``checkpoint_store`` has no checkpoint at all, since there is
+    then nothing to validate.
+    """
+    checkpoint = checkpoint_store.load()
+    if checkpoint is None:
+        return RestartOutcome(status="NO_CHECKPOINT", checkpoint=None, reconcile_result=None, accepted_records=())
+
+    if durable_publication is None:
+        raise CheckpointError(
+            "durable_publication is required to resume an existing checkpoint "
+            "(ADR-0042 S5: the checkpoint must be validated against durable "
+            "publication/catalog state before reconnect)"
+        )
+    validate_publication_binding(
+        checkpoint,
+        catalog_dataset_id=durable_publication.catalog_dataset_id,
+        partition_key=durable_publication.partition_key,
+        revision=durable_publication.revision,
+        partition_manifest_sha256=durable_publication.partition_manifest_sha256,
+    )
+
+    last_durable_key = TradeKeyV1(
+        checkpoint.dataset_identity.venue,
+        checkpoint.dataset_identity.instrument,
+        checkpoint.last_canonical_exchange_ts,
+        checkpoint.last_canonical_trade_id,
+    )
+    result = reconcile_after_disconnect(
+        last_durable_key=last_durable_key,
+        recent_rest_records=recent_rest_records,
+        buffered_ws_records=buffered_ws_records,
+    )
+    if result.status == ReconnectStatus.UNRESOLVED_GAP:
+        return RestartOutcome(
+            status="GAP_DETECTED", checkpoint=checkpoint, reconcile_result=result, accepted_records=(),
+        )
+    return RestartOutcome(
+        status="RESUMED", checkpoint=checkpoint, reconcile_result=result,
+        accepted_records=result.accepted_records,
+    )
+
+
+def next_checkpoint(
+    previous: LiveCheckpointV1,
+    *,
+    last_record: TradeRecord,
+    last_observed_sequence: str | None,
+    durable_publication: DurablePublicationState,
+    coverage_segment_id: str,
+    coverage_status: str,
+    created_at: Instant,
+) -> LiveCheckpointV1:
+    """Build and validate the next checkpoint generation from one more
+    durably published canonical record (ADR-0042 S2: publication must
+    already be durable before this is called -- callers advance a
+    checkpoint only after a real S13/S14 publish, e.g. following
+    ``run_real_server_publish_proof``). All monotonic-advancement rules are
+    delegated to :func:`advance_checkpoint`; this only assembles the
+    candidate from caller-supplied, already-durable evidence.
+
+    ``coverage_status`` must be the exact status
+    ``build_bybit_live_coverage_document`` assigned this segment
+    (``"complete"`` or ``"known_gap"``). ADR-0042 S4 forbids bypassing an
+    unresolved coverage interruption: a checkpoint must never advance to
+    claim continuity across a segment durably recorded as ``known_gap``,
+    even though the underlying publication itself is real and durable.
+
+    ``last_record`` must belong to ``previous``'s own dataset domain.
+    ``candidate`` keeps ``dataset_identity=previous.dataset_identity``
+    regardless of what ``last_record`` actually is, so without this check
+    a record from an unrelated venue/instrument would silently advance a
+    checkpoint that still claims to represent the original domain --
+    exactly the cross-domain misuse ADR-0042 S1's bound evidence exists to
+    reject.
+    """
+    if (
+        last_record.venue != previous.dataset_identity.venue
+        or last_record.instrument != previous.dataset_identity.instrument
+    ):
+        raise CheckpointDomainMismatch(
+            f"last_record ({last_record.venue}/{last_record.instrument}) does not "
+            f"belong to the checkpoint's dataset domain "
+            f"({previous.dataset_identity.venue}/{previous.dataset_identity.instrument})"
+        )
+    if coverage_status != "complete":
+        raise CheckpointError(
+            f"cannot advance checkpoint across a non-complete coverage segment "
+            f"(coverage_status={coverage_status!r}); the gap must stay explicit"
+        )
+    candidate = LiveCheckpointV1(
+        dataset_identity=previous.dataset_identity,
+        source_semantics_id=previous.source_semantics_id,
+        last_canonical_exchange_ts=Instant.parse(last_record.exchange_ts),
+        last_canonical_trade_id=last_record.trade_id,
+        last_observed_sequence=last_observed_sequence,
+        catalog_dataset_id=durable_publication.catalog_dataset_id,
+        partition_key=durable_publication.partition_key,
+        revision=durable_publication.revision,
+        partition_manifest_sha256=durable_publication.partition_manifest_sha256,
+        coverage_segment_id=coverage_segment_id,
+        generation=previous.generation + 1,
+        created_at=created_at,
+    )
+    return advance_checkpoint(previous, candidate)
+
+
 __all__ = [
     "BYBIT_PUBLIC_LINEAR_WS_URL",
     "BYBIT_RECENT_TRADES_URL",
+    "DurablePublicationState",
     "LiveProviderProofPending",
     "LiveProviderProofReport",
     "RealServerPublishProofReport",
+    "RestartOutcome",
     "build_arg_parser",
     "fetch_recent_public_trades",
+    "next_checkpoint",
+    "resume_live_ingest",
     "run_bounded_live_provider_proof",
     "run_bounded_live_provider_proof_sync",
     "run_real_server_publish_proof",
