@@ -26,6 +26,7 @@ from quant_platform.application.bybit_live import (  # noqa: E402
 from quant_platform.data.models import DatasetIdentity, Instant, TradeRecord  # noqa: E402
 from quant_platform.operations.checkpoint import (  # noqa: E402
     CheckpointBindingError,
+    CheckpointDomainMismatch,
     CheckpointError,
     CheckpointStore,
     LiveCheckpointV1,
@@ -220,6 +221,32 @@ class NextCheckpointTests(unittest.TestCase):
         )
         self.assertEqual(second.generation, 2)
         self.assertEqual(second.last_canonical_trade_id, "after")
+
+    def test_cross_domain_record_cannot_advance_a_checkpoint(self):
+        # Finding 2 of Codex's adversarial review on PR #114: the candidate
+        # keeps dataset_identity=previous.dataset_identity regardless of
+        # what last_record actually is, so without an explicit check a
+        # record from a different venue/instrument would silently advance
+        # a checkpoint that still claims the original domain.
+        publication = DurablePublicationState(
+            catalog_dataset_id="dataset-uuid-1", partition_key="dt=2026-09-24",
+            revision=1, partition_manifest_sha256="a" * 64,
+        )
+        first = first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=publication)
+        wrong_instrument = replace(trade(1001, "after", "2"), instrument="ETHUSDT")
+        with self.assertRaises(CheckpointDomainMismatch):
+            next_checkpoint(
+                first, last_record=wrong_instrument, last_observed_sequence="2",
+                durable_publication=publication, coverage_segment_id="coverage-2",
+                coverage_status="complete", created_at=Instant(2000),
+            )
+        wrong_venue = replace(trade(1001, "after", "2"), venue="coinbase")
+        with self.assertRaises(CheckpointDomainMismatch):
+            next_checkpoint(
+                first, last_record=wrong_venue, last_observed_sequence="2",
+                durable_publication=publication, coverage_segment_id="coverage-2",
+                coverage_status="complete", created_at=Instant(2000),
+            )
 
     def test_regression_is_still_refused_through_next_checkpoint(self):
         publication = DurablePublicationState(

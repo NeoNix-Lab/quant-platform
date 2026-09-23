@@ -58,6 +58,7 @@ from quant_platform.source_adapters.bybit_live import (
     reconcile_after_disconnect,
 )
 from quant_platform.operations.checkpoint import (
+    CheckpointDomainMismatch,
     CheckpointError,
     CheckpointStore,
     LiveCheckpointV1,
@@ -537,7 +538,24 @@ def next_checkpoint(
     unresolved coverage interruption: a checkpoint must never advance to
     claim continuity across a segment durably recorded as ``known_gap``,
     even though the underlying publication itself is real and durable.
+
+    ``last_record`` must belong to ``previous``'s own dataset domain.
+    ``candidate`` keeps ``dataset_identity=previous.dataset_identity``
+    regardless of what ``last_record`` actually is, so without this check
+    a record from an unrelated venue/instrument would silently advance a
+    checkpoint that still claims to represent the original domain --
+    exactly the cross-domain misuse ADR-0042 S1's bound evidence exists to
+    reject.
     """
+    if (
+        last_record.venue != previous.dataset_identity.venue
+        or last_record.instrument != previous.dataset_identity.instrument
+    ):
+        raise CheckpointDomainMismatch(
+            f"last_record ({last_record.venue}/{last_record.instrument}) does not "
+            f"belong to the checkpoint's dataset domain "
+            f"({previous.dataset_identity.venue}/{previous.dataset_identity.instrument})"
+        )
     if coverage_status != "complete":
         raise CheckpointError(
             f"cannot advance checkpoint across a non-complete coverage segment "
