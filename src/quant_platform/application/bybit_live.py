@@ -102,7 +102,15 @@ async def run_bounded_live_provider_proof(
                 messages += 1
     except TimeoutError:
         errors.append("bounded proof timed out before enough trade messages arrived")
+    except websockets.ConnectionClosed as exc:
+        # websockets>=12 raises this on remote/protocol connection loss; it
+        # subclasses WebSocketException/Exception, not OSError, so it would
+        # otherwise propagate unhandled instead of mapping to a pending
+        # proof like every other connection-loss path here.
+        tracker.disconnected(str(exc))
+        raise LiveProviderProofPending(f"LIVE_PROVIDER_PROOF_PENDING: provider connection closed: {exc}") from exc
     except OSError as exc:
+        tracker.disconnected(str(exc))
         raise LiveProviderProofPending(f"LIVE_PROVIDER_PROOF_PENDING: provider network unavailable: {exc}") from exc
 
     evidence = tracker.evidence()
