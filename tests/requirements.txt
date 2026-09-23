@@ -2,3 +2,4 @@ jsonschema>=4.19
 rfc3339-validator>=0.1.4
 pyarrow>=15
 psycopg[binary]>=3.1
+websockets>=12
