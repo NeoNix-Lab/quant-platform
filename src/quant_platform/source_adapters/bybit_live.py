@@ -311,7 +311,20 @@ def converge_historical_live_records(
         key = bybit_trade_v1_ordering_key(record)
         if key <= cutover:
             if key in accepted:
-                _require_equivalent(accepted[key], record, context="historical/live overlap")
+                # `accepted[key]` here is always the historical record inserted
+                # above (historical is processed first, live records at/below
+                # cutover only ever hit an existing accepted entry). Bybit's
+                # historical archive never carries execution sequence
+                # (bybit_historical.py always emits sequence=None), while a
+                # live record for the same TradeKeyV1 always does -- so
+                # `sequence` is expected to differ in this specific
+                # comparison and must not be treated as a conflict. Every
+                # other canonical/economic field is still compared.
+                _require_equivalent(
+                    accepted[key], record,
+                    context="historical/live overlap",
+                    ignore_sequence=True,
+                )
             continue
         _insert_equivalent_or_fail(accepted, key, record, context="live")
     return tuple(record for _, record in sorted(accepted.items(), key=lambda item: item[0]))
@@ -452,16 +465,18 @@ def _insert_equivalent_or_fail(
     _require_equivalent(previous, record, context=context)
 
 
-def _require_equivalent(left: TradeRecord, right: TradeRecord, *, context: str) -> None:
-    if _payload(left) != _payload(right):
+def _require_equivalent(
+    left: TradeRecord, right: TradeRecord, *, context: str, ignore_sequence: bool = False,
+) -> None:
+    if _payload(left, ignore_sequence=ignore_sequence) != _payload(right, ignore_sequence=ignore_sequence):
         raise BybitLiveIntegrityError(f"conflicting duplicate TradeKeyV1 in {context}")
 
 
-def _payload(record: TradeRecord) -> tuple[Any, ...]:
+def _payload(record: TradeRecord, *, ignore_sequence: bool = False) -> tuple[Any, ...]:
     return (
         record.venue, record.instrument, Instant.parse(record.exchange_ts).epoch_ns,
         record.price, record.size, record.aggressor_side, record.trade_id,
-        record.sequence, record.receive_ts,
+        None if ignore_sequence else record.sequence, record.receive_ts,
     )
 
 

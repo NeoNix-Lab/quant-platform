@@ -143,7 +143,13 @@ class BybitLiveSourceV1Tests(unittest.TestCase):
             TradeRecord("bybit", "BTCUSDT", Instant(1), "100", "1", "buy", trade_id="a"),
             TradeRecord("bybit", "BTCUSDT", Instant(2), "101", "1", "sell", trade_id="b"),
         )
-        live_overlap = replace(historical[1], sequence=None)
+        # A real live overlap record always carries a populated `sequence`
+        # (canonicalize_bybit_live_trade/canonicalize_bybit_recent_public_trade
+        # both require it); the historical side is always `sequence=None`
+        # (bybit_historical.py never provides execution sequence). Asserting
+        # `sequence=None` on the live side here as well would silently mask
+        # the asymmetry this test exists to cover.
+        live_overlap = replace(historical[1], sequence="1783284617")
         live_after = TradeRecord("bybit", "BTCUSDT", Instant(3), "102", "1", "buy", trade_id="c", sequence="9")
         result = converge_historical_live_records(
             historical,
@@ -151,6 +157,10 @@ class BybitLiveSourceV1Tests(unittest.TestCase):
             cutover_key=trade_key_v1(historical[-1]),
         )
         self.assertEqual([record.trade_id for record in result], ["a", "b", "c"])
+        # The accepted overlap record is the historical one (sequence=None);
+        # the live record's sequence is evidence, not a conflict, and is not
+        # required to survive into the merged canonical history.
+        self.assertIsNone(result[1].sequence)
 
         conflicting_overlap = replace(live_overlap, size="2")
         with self.assertRaises(BybitLiveIntegrityError):
