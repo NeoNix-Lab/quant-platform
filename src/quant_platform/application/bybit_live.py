@@ -259,10 +259,13 @@ def run_real_server_publish_proof(
         rel_path=rel_path, created_at=intent_start, closed_at=intent_end,
         producer=producer, code_ref=code_ref,
     )
+    # data/manifests.py's frozen _IDENTIFIER is `^[a-z0-9]+(?:[._-][a-z0-9]+)*$`
+    # -- lowercase only, no ISO "T"/"Z" separators.
+    run_tag = f"{acquire_started_at.strftime('%Y%m%d')}-{suffix}"
     coverage_input = build_bybit_live_coverage_document(
-        dataset_identity=identity, coverage_id=f"k02-real-server-{acquire_started_at.strftime('%Y%m%dT%H%M%SZ')}",
+        dataset_identity=identity, coverage_id=f"k02-real-server-{run_tag}",
         intent_start=intent_start, intent_end=intent_end,
-        assertion_id=f"k02-real-server-assertion-{acquire_started_at.strftime('%Y%m%dT%H%M%SZ')}",
+        assertion_id=f"k02-real-server-assertion-{run_tag}",
         assertion_start=intent_start, assertion_end=intent_end,
         partition_key=partition_key, revision=1, session_evidence=session_evidence,
         created_at=intent_end, producer=producer, code_ref=code_ref,
