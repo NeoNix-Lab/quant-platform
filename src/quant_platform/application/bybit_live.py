@@ -26,7 +26,7 @@ from quant_platform.data.publication import (
     PublicationCertification,
     SealedPartitionEvidence,
 )
-from quant_platform.data.publication_catalog import CatalogPublicationWriter
+from quant_platform.data.publication_catalog import CatalogPublicationConflict, CatalogPublicationWriter
 from quant_platform.data.publication_eligibility import (
     PublicationEligibilityBridge,
     PublicationEligibilityEvidence,
@@ -196,6 +196,13 @@ class RealServerPublishProofReport:
     eligibility_published: bool | None = None
     datagateway_read_record_count: int | None = None
     datagateway_read_matches_published: bool | None = None
+    # Set only when this run actually (re-)emitted dataset-manifest.json
+    # (i.e. none existed yet at the shared path); a caller can use this to
+    # align an existing catalog.datasets row after an operator-authorized
+    # dataset-manifest reset, without needing separate file access.
+    dataset_manifest_freshly_emitted: bool = False
+    dataset_manifest_sha256: str | None = None
+    dataset_manifest_rel_root: str | None = None
 
 
 def _connect_catalog(dsn: str | None):
@@ -248,11 +255,20 @@ def run_real_server_publish_proof(
     coverage_manifest_path = dataset_root / f"coverage-manifest-{suffix}.json"
 
     materialization = materialize_bybit_trade_v1(artifact_path, records, dataset_identity=identity)
-    emit_dataset_manifest(
-        dataset_manifest_path, dataset_identity=identity, created_at=intent_end,
-        derived_from=[DatasetIdentity("raw", "trades", identity.venue, identity.instrument, identity.record_schema_id)],
-        transform="canonicalize-trades-v1",
-    )
+    # The dataset manifest describes the canonical DatasetIdentity as a
+    # whole (shared verbatim between the historical and live producers --
+    # AC4: same trade-v1/TradeKeyV1/canonical order), not this one bounded
+    # run. It is registered once; catalog_publication.py's dataset-conflict
+    # check correctly refuses a second, differently-timestamped emission
+    # for the same identity. Reuse whatever is already durably registered
+    # at this shared path instead of re-emitting it on every run.
+    dataset_emission = None
+    if not dataset_manifest_path.exists():
+        dataset_emission = emit_dataset_manifest(
+            dataset_manifest_path, dataset_identity=identity, created_at=intent_end,
+            derived_from=[DatasetIdentity("raw", "trades", identity.venue, identity.instrument, identity.record_schema_id)],
+            transform="canonicalize-trades-v1",
+        )
     partition_emission = emit_partition_manifest(
         partition_manifest_path, materialization, dataset_identity=identity,
         dataset_root=dataset_root, partition_key=partition_key, revision=1,
@@ -275,16 +291,36 @@ def run_real_server_publish_proof(
         partition_manifests=[partition_emission.document], **coverage_input,
     )
     coverage_status = coverage_input["assertions"][0]["status"]
+    dataset_manifest_fields: dict[str, Any] = {}
+    if dataset_emission is not None:
+        dataset_manifest_fields = {
+            "dataset_manifest_freshly_emitted": True,
+            "dataset_manifest_sha256": dataset_emission.manifest_sha256,
+            "dataset_manifest_rel_root": dataset_emission.document["rel_root"],
+        }
 
     connection = _connect_catalog(dsn)
     try:
         profile = BybitLiveTradeV1CertificationProfile(code_ref)
-        run = PublicationCertification(CatalogPublicationWriter(connection), profile).run(
-            SealedPartitionEvidence(
-                dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
-                artifact_path, storage_root_id,
+        try:
+            run = PublicationCertification(CatalogPublicationWriter(connection), profile).run(
+                SealedPartitionEvidence(
+                    dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
+                    artifact_path, storage_root_id,
+                )
             )
-        )
+        except CatalogPublicationConflict as exc:
+            # Surface the freshly emitted dataset manifest's own hash/rel_root
+            # so an operator can decide whether to align catalog.datasets to
+            # it (a lineage-pointer update, never touching existing sealed
+            # partitions) rather than crash with a bare traceback.
+            return RealServerPublishProofReport(
+                status="DATASET_MANIFEST_CONFLICT", acquisition=report,
+                partition_key=partition_key, artifact_path=str(artifact_path),
+                coverage_status=coverage_status,
+                certification_status=f"seal_refused: {exc}",
+                **dataset_manifest_fields,
+            )
         categories = tuple((c.category, c.status) for c in run.certification.categories)
         if run.certification.status != "pass":
             return RealServerPublishProofReport(
@@ -293,6 +329,7 @@ def run_real_server_publish_proof(
                 coverage_status=coverage_status,
                 certification_status=run.certification.status,
                 certification_categories=categories,
+                **dataset_manifest_fields,
             )
 
         eligibility = PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
@@ -334,6 +371,7 @@ def run_real_server_publish_proof(
         eligibility_published=eligibility is not None,
         datagateway_read_record_count=len(read_records),
         datagateway_read_matches_published=len(read_records) == len(records),
+        **dataset_manifest_fields,
     )
 
 

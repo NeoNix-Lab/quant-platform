@@ -72,6 +72,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"partition_key={result.partition_key}")
     print(f"artifact_path={result.artifact_path}")
     print(f"coverage_status={result.coverage_status}")
+    if result.dataset_manifest_freshly_emitted:
+        print(f"dataset_manifest_sha256={result.dataset_manifest_sha256}")
+        print(f"dataset_manifest_rel_root={result.dataset_manifest_rel_root}")
+
+    if result.status == "DATASET_MANIFEST_CONFLICT":
+        print(f"certification_status={result.certification_status}")
+        print("K02_REAL_SERVER_PROOF: DATASET_MANIFEST_CONFLICT")
+        return 4
+
     print(f"certification_status={result.certification_status}")
     for category, status in result.certification_categories:
         print(f"  category={category} status={status}")
