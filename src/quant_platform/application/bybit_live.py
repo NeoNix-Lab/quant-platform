@@ -462,7 +462,7 @@ class RealServerRestartProofReport:
     """K10 bounded real restart proof over the existing K02 publish seam."""
 
     status: str
-    publication: RealServerPublishProofReport
+    publication: RealServerPublishProofReport | None
     checkpoint_path: str | None = None
     checkpoint_identity: str | None = None
     restart_outcome: RestartOutcome | None = None
@@ -610,48 +610,26 @@ def next_checkpoint(
     return advance_checkpoint(previous, candidate)
 
 
-def run_real_server_restart_proof(
-    *,
-    max_messages: int,
-    max_seconds: float,
-    storage_root: str | Path,
-    storage_root_id: str,
-    dsn: str | None,
-    checkpoint_path: str | Path,
-    producer: str,
-    code_ref: str,
-    recent_limit: int = 1000,
-) -> RealServerRestartProofReport:
-    """K10 real-server restart proof entry point.
-
-    The function intentionally composes already-owned seams:
-    K02 publishes a bounded real live batch, K10 advances a checkpoint only
-    after that durable publication, then a fresh load validates the binding
-    and ADR-0040 bounded recent-trade reconciliation proves whether restart
-    continuity is recoverable. It does not run a daemon, widen server
-    permissions, or invent a second recovery path.
-    """
-
-    publication = run_real_server_publish_proof(
-        max_messages=max_messages,
-        max_seconds=max_seconds,
-        storage_root=storage_root,
-        storage_root_id=storage_root_id,
-        dsn=dsn,
-        producer=producer,
-        code_ref=code_ref,
+def _checkpoint_publication_state(checkpoint: LiveCheckpointV1) -> DurablePublicationState:
+    return DurablePublicationState(
+        catalog_dataset_id=checkpoint.catalog_dataset_id,
+        partition_key=checkpoint.partition_key,
+        revision=checkpoint.revision,
+        partition_manifest_sha256=checkpoint.partition_manifest_sha256,
     )
-    if publication.status != "PASS":
-        return RealServerRestartProofReport(status=publication.status, publication=publication)
+
+
+def _persist_checkpoint_from_publication(
+    *,
+    publication: RealServerPublishProofReport,
+    checkpoint_path: str | Path,
+) -> tuple[CheckpointStore, LiveCheckpointV1] | None:
     if (
         publication.durable_publication is None
         or publication.coverage_id is None
         or not publication.acquisition.accepted_records
     ):
-        return RealServerRestartProofReport(
-            status="REAL_RESTART_PROOF_PENDING",
-            publication=publication,
-        )
+        return None
 
     store = CheckpointStore(checkpoint_path)
     previous = store.load()
@@ -685,23 +663,155 @@ def run_real_server_restart_proof(
             created_at=Instant.parse(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")),
         )
     store.save(checkpoint)
+    return store, checkpoint
+
+
+def run_real_server_restart_publish_phase(
+    *,
+    max_messages: int,
+    max_seconds: float,
+    storage_root: str | Path,
+    storage_root_id: str,
+    dsn: str | None,
+    checkpoint_path: str | Path,
+    producer: str,
+    code_ref: str,
+) -> RealServerRestartProofReport:
+    """Publish one bounded real batch and durably persist the restart checkpoint.
+
+    This phase intentionally returns immediately after the checkpoint write:
+    it does not fetch the provider's recent-trade window and does not attempt
+    restart reconciliation. Operators can then run the restart phase from a
+    separate OS process against the same checkpoint path.
+    """
+    publication = run_real_server_publish_proof(
+        max_messages=max_messages,
+        max_seconds=max_seconds,
+        storage_root=storage_root,
+        storage_root_id=storage_root_id,
+        dsn=dsn,
+        producer=producer,
+        code_ref=code_ref,
+    )
+    if publication.status != "PASS":
+        return RealServerRestartProofReport(status=publication.status, publication=publication)
+
+    persisted = _persist_checkpoint_from_publication(
+        publication=publication,
+        checkpoint_path=checkpoint_path,
+    )
+    if persisted is None:
+        return RealServerRestartProofReport(
+            status="REAL_RESTART_PROOF_PENDING",
+            publication=publication,
+        )
+    store, checkpoint = persisted
+    return RealServerRestartProofReport(
+        status="CHECKPOINT_PERSISTED",
+        publication=publication,
+        checkpoint_path=str(store.path),
+        checkpoint_identity=checkpoint.checkpoint_identity,
+    )
+
+
+def run_real_server_restart_phase(
+    *,
+    checkpoint_path: str | Path,
+    recent_limit: int = 1000,
+) -> RealServerRestartProofReport:
+    """Load an existing checkpoint and run only restart reconciliation.
+
+    No publication path is invoked in this phase. The durable publication
+    binding used for validation is the state already persisted in the
+    checkpoint, so a separate process can prove restart behavior without
+    first publishing a fresh batch.
+    """
+    store = CheckpointStore(checkpoint_path)
+    checkpoint = store.load()
+    if checkpoint is None:
+        return RealServerRestartProofReport(
+            status="NO_CHECKPOINT_TO_RESTART_FROM",
+            publication=None,
+            checkpoint_path=str(store.path),
+        )
 
     recent_records = fetch_recent_public_trades(limit=recent_limit)
     outcome = resume_live_ingest(
         checkpoint_store=store,
         recent_rest_records=recent_records,
         buffered_ws_records=(),
-        durable_publication=publication.durable_publication,
+        durable_publication=_checkpoint_publication_state(checkpoint),
     )
     status = "PASS" if outcome.status == "RESUMED" else outcome.status
     return RealServerRestartProofReport(
         status=status,
-        publication=publication,
+        publication=None,
         checkpoint_path=str(store.path),
-        checkpoint_identity=checkpoint.checkpoint_identity,
+        checkpoint_identity=(
+            outcome.checkpoint.checkpoint_identity
+            if outcome.checkpoint is not None
+            else checkpoint.checkpoint_identity
+        ),
         restart_outcome=outcome,
         recent_records=len(recent_records),
         restart_accepted_records=len(outcome.accepted_records),
+    )
+
+
+def run_real_server_restart_proof(
+    *,
+    max_messages: int,
+    max_seconds: float,
+    storage_root: str | Path,
+    storage_root_id: str,
+    dsn: str | None,
+    checkpoint_path: str | Path,
+    producer: str,
+    code_ref: str,
+    recent_limit: int = 1000,
+    phase: str = "both",
+) -> RealServerRestartProofReport:
+    """K10 real-server restart proof entry point.
+
+    The function intentionally composes already-owned seams. ``phase=publish``
+    performs only K02 publication plus checkpoint persistence, ``phase=restart``
+    performs only checkpoint load plus bounded recent-trade reconciliation,
+    and ``phase=both`` preserves the local/hermetic combined flow.
+    """
+    if phase not in {"publish", "restart", "both"}:
+        raise ValueError("phase must be one of: publish, restart, both")
+
+    if phase == "restart":
+        return run_real_server_restart_phase(
+            checkpoint_path=checkpoint_path,
+            recent_limit=recent_limit,
+        )
+
+    published = run_real_server_restart_publish_phase(
+        max_messages=max_messages,
+        max_seconds=max_seconds,
+        storage_root=storage_root,
+        storage_root_id=storage_root_id,
+        dsn=dsn,
+        checkpoint_path=checkpoint_path,
+        producer=producer,
+        code_ref=code_ref,
+    )
+    if phase == "publish" or published.status != "CHECKPOINT_PERSISTED":
+        return published
+
+    restarted = run_real_server_restart_phase(
+        checkpoint_path=checkpoint_path,
+        recent_limit=recent_limit,
+    )
+    return RealServerRestartProofReport(
+        status=restarted.status,
+        publication=published.publication,
+        checkpoint_path=restarted.checkpoint_path,
+        checkpoint_identity=restarted.checkpoint_identity,
+        restart_outcome=restarted.restart_outcome,
+        recent_records=restarted.recent_records,
+        restart_accepted_records=restarted.restart_accepted_records,
     )
 
 
@@ -721,5 +831,7 @@ __all__ = [
     "run_bounded_live_provider_proof",
     "run_bounded_live_provider_proof_sync",
     "run_real_server_publish_proof",
+    "run_real_server_restart_phase",
+    "run_real_server_restart_publish_phase",
     "run_real_server_restart_proof",
 ]

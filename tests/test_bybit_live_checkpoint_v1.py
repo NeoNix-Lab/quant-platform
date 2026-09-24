@@ -297,10 +297,12 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         )
         self._original_publish = app_bybit_live.run_real_server_publish_proof
         self._original_recent = app_bybit_live.fetch_recent_public_trades
+        self._original_resume = app_bybit_live.resume_live_ingest
 
     def tearDown(self):
         app_bybit_live.run_real_server_publish_proof = self._original_publish
         app_bybit_live.fetch_recent_public_trades = self._original_recent
+        app_bybit_live.resume_live_ingest = self._original_resume
         self.tempdir.cleanup()
 
     def _publish_report(self, records):
@@ -379,6 +381,142 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
 
         self.assertEqual(result.status, "LIVE_PROVIDER_PROOF_PENDING")
         self.assertFalse(self.checkpoint_path.exists())
+
+    def test_publish_phase_persists_checkpoint_without_restart_work(self):
+        anchor = trade(1000, "anchor", "1")
+
+        def fake_publish(**_kwargs):
+            return self._publish_report((anchor,))
+
+        def fail_recent(*, limit):
+            raise AssertionError(f"publish phase must not fetch recent trades, got limit={limit}")
+
+        def fail_resume(**_kwargs):
+            raise AssertionError("publish phase must not run restart reconciliation")
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+        app_bybit_live.fetch_recent_public_trades = fail_recent
+        app_bybit_live.resume_live_ingest = fail_resume
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="publish",
+        )
+
+        self.assertEqual(result.status, "CHECKPOINT_PERSISTED")
+        self.assertTrue(self.checkpoint_path.exists())
+        self.assertIsNone(result.restart_outcome)
+        self.assertIsNotNone(result.checkpoint_identity)
+
+    def test_restart_phase_loads_checkpoint_without_publishing(self):
+        anchor = trade(1000, "anchor", "1")
+        after = trade(1001, "after", "2")
+        store = CheckpointStore(self.checkpoint_path)
+        store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
+
+        def fail_publish(**_kwargs):
+            raise AssertionError("restart phase must not publish a fresh batch")
+
+        def fake_recent(*, limit):
+            self.assertEqual(limit, 1000)
+            return (anchor, after)
+
+        app_bybit_live.run_real_server_publish_proof = fail_publish
+        app_bybit_live.fetch_recent_public_trades = fake_recent
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="restart",
+        )
+
+        self.assertEqual(result.status, "PASS")
+        self.assertIsNone(result.publication)
+        self.assertEqual(result.restart_outcome.status, "RESUMED")
+        self.assertEqual([record.trade_id for record in result.restart_outcome.accepted_records], ["after"])
+
+    def test_restart_phase_without_checkpoint_is_explicit_and_does_not_fetch(self):
+        def fail_recent(*, limit):
+            raise AssertionError(f"missing-checkpoint restart must not fetch recent trades, got limit={limit}")
+
+        app_bybit_live.fetch_recent_public_trades = fail_recent
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="restart",
+        )
+
+        self.assertEqual(result.status, "NO_CHECKPOINT_TO_RESTART_FROM")
+        self.assertEqual(result.checkpoint_path, str(self.checkpoint_path))
+        self.assertFalse(self.checkpoint_path.exists())
+
+    def test_publish_then_restart_phases_match_combined_resume_outcome(self):
+        anchor = trade(1000, "anchor", "1")
+        after = trade(1001, "after", "2")
+
+        def fake_publish(**_kwargs):
+            return self._publish_report((anchor,))
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+
+        published = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="publish",
+        )
+
+        def fail_publish(**_kwargs):
+            raise AssertionError("restart phase must not publish a fresh batch")
+
+        def fake_recent(*, limit):
+            self.assertEqual(limit, 1000)
+            return (anchor, after)
+
+        app_bybit_live.run_real_server_publish_proof = fail_publish
+        app_bybit_live.fetch_recent_public_trades = fake_recent
+
+        restarted = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="restart",
+        )
+
+        self.assertEqual(published.status, "CHECKPOINT_PERSISTED")
+        self.assertEqual(restarted.status, "PASS")
+        self.assertEqual(restarted.restart_outcome.status, "RESUMED")
+        self.assertEqual([record.trade_id for record in restarted.restart_outcome.accepted_records], ["after"])
 
 
 if __name__ == "__main__":
