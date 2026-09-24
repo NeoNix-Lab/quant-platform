@@ -201,7 +201,7 @@ Before such an interval may be declared filled/complete, resolve and prove:
 
 This open block does **not** prevent A11/K10 from running, recording an explicit gap and continuing with a new governed live segment. It **does** prevent the project from claiming that such a gap has been colmato/completed, and prevents Live Ingest Vertical closeout from claiming lossless continuity across that interval, until the missing-evidence proposition is actually satisfied.
 
-Issue #110 owns the evidence investigation. A negative or temporarily unprovable archive result must not be reinterpreted as proof that a gap is complete.
+Issue #110's disposition (above) is the current record. A negative or temporarily unprovable archive result must not be reinterpreted as proof that a gap is complete.
 
 Do not solve this by treating missing `seq` values, absence of trades, wall-clock time or a finite local buffer as proof of completeness.
 

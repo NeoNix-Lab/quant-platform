@@ -26,7 +26,7 @@ IMPLEMENTATION_COMPLETE         = 48 / 87 = 55.2%
 
 The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved atom proposition has a bounded activation rule. The 78.2% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, L1/L2/L3, RL, transport, deletion or unrelated operational semantics.
 
-The selected Live Ingest scope also carries one explicit **scope-level open DG-B proposition** that is not a new atom and therefore is not included in the 87-atom counts: remediation of live gaps that exceed the bounded provider reconciliation window. It is `OPEN_BLOCKING` for claiming those gaps filled / for lossless Live Ingest Vertical closeout, while A11/K10 are allowed to record the gap explicitly and continue with a new governed segment.
+The selected Live Ingest scope also carried one explicit **scope-level DG-B proposition** that is not a new atom and therefore is not included in the 87-atom counts: remediation of live gaps that exceed the bounded provider reconciliation window. It is now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110) -- see DG-B below -- and remains `OPEN_BLOCKING` as a standing rule for claiming any such gap filled/lossless, while A11/K10 are allowed to record the gap explicitly and continue with a new governed segment.
 
 Decision states:
 
@@ -213,7 +213,7 @@ K08/A11/K02 are now complete for the selected first live-ingest path. K10 semant
 
 ## Decision gates
 
-There are now **19 unresolved atom decisions** (11 `OPEN_BLOCKING`, 8 `OPEN_DEFERABLE`) grouped into gate families. In addition, the selected Live Ingest scope has one explicit scope-level `OPEN_BLOCKING` DG-B proposition for long-gap remediation; it is not represented as a new atom and is not counted above.
+There are now **19 unresolved atom decisions** (11 `OPEN_BLOCKING`, 8 `OPEN_DEFERABLE`) grouped into gate families. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
 
 A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path.
 
@@ -233,11 +233,11 @@ Repair branch (`A16` + `A10` + `B04`) is frozen and complete for the accepted fi
 
 A11 live-acquisition semantics are **RESOLVED / FROZEN** under ADR-0040 and the selected Bybit BTCUSDT runtime is now implementation `COMPLETE`. Historical/live cutover, canonical trade identity/order, duplicate conflict policy, bounded reconnect reconciliation and evidence-based coverage are no longer open A11 decisions.
 
-One explicit scope-level proposition remains open:
+One explicit scope-level proposition has been investigated and disposed:
 
-- **long-gap remediation beyond bounded reconciliation — OPEN_BLOCKING for Live Ingest Vertical closeout.** If the last durable `TradeKeyV1` is unavailable from the bounded provider reconciliation evidence, the interval remains explicit non-complete coverage. Before it may be declared filled, an attributable source/path must prove the missing support and integrate through the existing A10 repair semantics. Missing `seq`, absence of trades or elapsed time are not completeness proof.
+- **long-gap remediation beyond bounded reconciliation — DISPOSED, `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` (#110, 2026-09-24).** If the last durable `TradeKeyV1` is unavailable from the bounded provider reconciliation evidence, the interval remains explicit non-complete coverage. A real Bybit historical archive was identified but could not be proven to satisfy exact-interval completeness or archive/recent-live overlap with the evidence available; the standing rule -- an attributable source/path must prove the missing support and integrate through the existing A10 repair semantics; missing `seq`, absence of trades or elapsed time are not completeness proof -- remains the accepted authority for any future attempt.
 
-This open proposition does not block A11/K10 from recording the gap and continuing with a new governed live segment. It blocks claiming that interval filled/lossless until real evidence exists.
+This disposition does not block A11/K10 from recording the gap and continuing with a new governed live segment; it means that interval stays explicitly non-complete rather than filled/lossless until real evidence exists (none does yet).
 
 `B06` live-consumer cursor semantics remain `OPEN_BLOCKING` but are outside the selected Live Ingest v1 scope; ADR-0040 does not freeze them.
 

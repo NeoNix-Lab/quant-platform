@@ -76,11 +76,11 @@ Remaining closeout propositions at this scope state:
 
 ```text
 K10  bounded real-server restart + deployed checkpoint proof   PENDING
-DG-B long-gap remediation beyond bounded reconciliation        OPEN_BLOCKING
+DG-B long-gap remediation beyond bounded reconciliation        DISPOSED -- NO_AUTHORITATIVE_REPAIR_PATH_PROVEN (#110)
 B06  live access/cursor                                          MISSING but outside this scope
 ```
 
-The long-gap proposition remains `OPEN_BLOCKING` for claiming such a gap filled / for lossless Live Ingest Vertical closeout. It is not permission to invent a repair source.
+The long-gap proposition has been investigated and disposed (#110, 2026-09-24): a real Bybit historical archive exists but exact-interval completeness and archive/recent-live overlap could not be proven with the evidence available. The gap therefore stays explicit -- this is a closed, honestly-disposed proposition, not still-open investigation, and it is no longer permission to invent a repair source than it was before. See `OPEN_DECISIONS.md`'s DG-B section for the full disposition and evidence.
 
 ## Authority
 
@@ -115,12 +115,11 @@ Only one bounded implementation or decision-gate mutation slice is active at a t
 The current path is:
 
 ```text
-1. K10 bounded real-server restart/deployed-checkpoint proof
+1. K10 bounded real-server restart/deployed-checkpoint proof       REMAINING -- next cycle's first issue
         ↓
-2. resolve DG-B long-gap proposition from observed/provider evidence
-   (issue #110; no speculative repair implementation)
+2. resolve DG-B long-gap proposition from observed/provider evidence  DONE -- #110, NO_AUTHORITATIVE_REPAIR_PATH_PROVEN
         ↓
-3. Live Ingest Vertical v1 closeout
+3. Live Ingest Vertical v1 closeout                                  blocked only on step 1
 ```
 
 K08, A11 and K02 are credited complete and must not be reimplemented or re-proved absent invalidating evidence.
@@ -201,9 +200,9 @@ The proof must run under the K02 least-privileged identity and demonstrate the d
 REAL_RESTART_PROOF_PENDING
 ```
 
-## Long-gap remediation — explicit open block
+## Long-gap remediation — disposed, gap stays explicit
 
-ADR-0040 deliberately leaves one proposition open.
+ADR-0040 deliberately left one proposition open; it has now been investigated and disposed (#110, `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, 2026-09-24). The rule below is the accepted standing behavior going forward, not a still-open question.
 
 Trigger:
 
@@ -222,9 +221,9 @@ Before the gap may be filled, prove:
 - the existing A10 repair path can consume that evidence;
 - repaired support can be re-verified strongly enough to supersede prior interruption evidence.
 
-Issue #110 owns this investigation. Current evidence identifies Bybit historical archives as a candidate source but does not yet prove exact-interval completeness and overlapping archive-vs-live/recent convergence strongly enough to close the decision.
+Issue #110's investigation found a real, attributable Bybit historical archive as a candidate source, but could not prove exact-interval completeness or overlapping archive-vs-live/recent convergence with the evidence available at the time -- the decision is closed with the gap remaining explicit, not left open pending further work. A future issue may reopen this once that evidence exists.
 
-If no authoritative source exists, or the source cannot prove the interval, the gap remains explicit. Missing sequence numbers, elapsed time, absence of trades or local buffer exhaustion are never sufficient proof.
+The gap remains explicit for the same reason it always would have: missing sequence numbers, elapsed time, absence of trades or local buffer exhaustion are never sufficient proof.
 
 Do not speculatively implement archive/backfill machinery before source/evidence authority is proven.
 
