@@ -183,7 +183,9 @@ Accepted A11 v1 decisions include:
 
 A11 implementation is `COMPLETE`: PR #112 implements the source/application/certification path and real-provider smoke proof; PR #113 proves the same path on the target server through canonical materialization, S13/S14 publication/catalog and historical DataGateway read-back.
 
-### Live gap remediation beyond bounded reconciliation — **OPEN_BLOCKING for Live Ingest Vertical closeout**
+### Live gap remediation beyond bounded reconciliation — **DISPOSED, `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`**
+
+Investigated in issue #110 (2026-09-24; full evidence in the issue's closing comment). A real, attributable Bybit historical archive exists for BTCUSDT (`public.bybit.com/trading/BTCUSDT/...csv.gz`), but at investigation time the archive directory stopped one day short of the live recent-trade window, so no current archive/recent-trade overlap could be compared, and no provider completeness attestation was found for any requested interval. The disposition below remains the accepted rule going forward; this is not a new decision, it is confirmation that the trigger condition has not yet been proven satisfiable and the gap stays explicit. A future issue may reopen this once archive/live overlap exists and completeness evidence can actually be produced for a bounded interval.
 
 ADR-0040 deliberately does not invent a provider capability for interruptions that exceed the bounded recent-public-trades reconciliation window.
 
@@ -199,7 +201,7 @@ Before such an interval may be declared filled/complete, resolve and prove:
 
 This open block does **not** prevent A11/K10 from running, recording an explicit gap and continuing with a new governed live segment. It **does** prevent the project from claiming that such a gap has been colmato/completed, and prevents Live Ingest Vertical closeout from claiming lossless continuity across that interval, until the missing-evidence proposition is actually satisfied.
 
-Issue #110 owns the evidence investigation. A negative or temporarily unprovable archive result must not be reinterpreted as proof that a gap is complete.
+Issue #110's disposition (above) is the current record. A negative or temporarily unprovable archive result must not be reinterpreted as proof that a gap is complete.
 
 Do not solve this by treating missing `seq` values, absence of trades, wall-clock time or a finite local buffer as proof of completeness.
 
