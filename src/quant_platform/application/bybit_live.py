@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -41,6 +42,8 @@ from quant_platform.source_adapters.bybit_live import (
     BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE,
     BYBIT_LIVE_TRADE_V1_CHECK_SUITE,
     BYBIT_LIVE_SOURCE_SEMANTICS_V1,
+    BYBIT_RECENT_PUBLIC_TRADES_MAPPING_V1,
+    BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1,
     SUPPORTED_CATEGORY,
     SUPPORTED_SYMBOL,
     SUPPORTED_TOPIC,
@@ -72,6 +75,12 @@ from quant_platform.operations.checkpoint import (
 BYBIT_PUBLIC_LINEAR_WS_URL = "wss://stream.bybit.com/v5/public/linear"
 BYBIT_RECENT_TRADES_URL = "https://api.bybit.com/v5/market/recent-trade"
 K10_RESTART_DURABLE_STATES = LifecyclePolicy.VALID_CLOSED_AND_DEGRADED.states
+BYBIT_RESTART_RECONCILIATION_CHECK_SUITE = (
+    "producer-consumer-conformity-v1/bybit-trade-v1-restart-reconciliation"
+)
+BYBIT_RESTART_RECONCILIATION_CERTIFICATION_PROFILE = (
+    "producer-consumer-conformity-v1/bybit-trade-v1-restart-reconciliation-v1"
+)
 
 
 class LiveProviderProofPending(RuntimeError):
@@ -107,6 +116,63 @@ class DurablePublicationState:
     partition_key: str
     revision: int
     partition_manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class BybitRestartReconciliationCertificationProfile:
+    """K10-only source profile for post-restart bounded reconciliation publication.
+
+    This deliberately does not broaden the frozen A11 live-session profile:
+    Process B publishes records accepted by ADR-0040 bounded REST
+    reconciliation, and therefore requires explicit `reconciliation`
+    coverage evidence under the Bybit recent-public-trades source semantics.
+    Canonical record validation is delegated to the existing live profile so
+    the trade-v1/sequence requirements stay identical.
+    """
+
+    code_ref: str
+    profile_id: str = BYBIT_RESTART_RECONCILIATION_CERTIFICATION_PROFILE
+    check_suite: str = BYBIT_RESTART_RECONCILIATION_CHECK_SUITE
+
+    def _live_profile(self) -> BybitLiveTradeV1CertificationProfile:
+        return BybitLiveTradeV1CertificationProfile(self.code_ref)
+
+    def applies_to(self, identity) -> bool:
+        return self._live_profile().applies_to(identity)
+
+    def ordering_key(self, record: TradeRecord) -> tuple[Instant, str]:
+        return self._live_profile().ordering_key(record)
+
+    def validate_source(
+        self,
+        identity,
+        coverage_documents: Sequence[Mapping[str, Any]],
+    ) -> Mapping[str, Any]:
+        if not self.applies_to(identity):
+            raise BybitLiveSourceError("Bybit restart reconciliation profile does not apply")
+        if not coverage_documents:
+            raise BybitLiveSourceError("restart certification requires reconciliation coverage evidence")
+        for document in coverage_documents:
+            acquisition = document.get("acquisition") or {}
+            if acquisition.get("basis") != "reconciliation":
+                raise BybitLiveSourceError("restart coverage basis must be reconciliation")
+            if acquisition.get("source_semantics") != BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1:
+                raise BybitLiveSourceError("restart coverage source_semantics is not Bybit recent public trades")
+            if acquisition.get("mapping") != BYBIT_RECENT_PUBLIC_TRADES_MAPPING_V1:
+                raise BybitLiveSourceError("restart coverage mapping is not Bybit recent public trades to trade-v1")
+            for assertion in document.get("assertions") or ():
+                if assertion.get("status") != "complete":
+                    continue
+                if not any(item.get("kind") == "reconciliation" for item in assertion.get("evidence") or ()):
+                    raise BybitLiveSourceError("complete restart coverage lacks reconciliation evidence")
+        return {
+            "source_semantics": BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1,
+            "mapping": BYBIT_RECENT_PUBLIC_TRADES_MAPPING_V1,
+            "documents": len(coverage_documents),
+        }
+
+    def validate_records(self, identity, records: Sequence[TradeRecord]) -> Mapping[str, Any]:
+        return self._live_profile().validate_records(identity, records)
 
 
 def fetch_recent_public_trades(*, limit: int = 100) -> tuple[Any, ...]:
@@ -266,6 +332,67 @@ def _next_revision(dsn: str | None, identity: Any, partition_key: str) -> int:
             return int(cursor.fetchone()[0]) + 1
     finally:
         connection.close()
+
+
+def _record_intent_interval(records: tuple[TradeRecord, ...]) -> tuple[str, str]:
+    instants = tuple(Instant.parse(record.exchange_ts) for record in records)
+    min_ns = min(instant.epoch_ns for instant in instants)
+    max_ns = max(instant.epoch_ns for instant in instants)
+    start = Instant((min_ns // 1_000) * 1_000)
+    end = Instant(((max_ns // 1_000) + 1) * 1_000)
+    return start.isoformat(), end.isoformat()
+
+
+def _build_restart_reconciliation_coverage_document(
+    *,
+    dataset_identity: Any,
+    coverage_id: str,
+    intent_start: str,
+    intent_end: str,
+    assertion_id: str,
+    assertion_start: str,
+    assertion_end: str,
+    partition_key: str,
+    revision: int,
+    reconcile_result: ReconnectResult,
+    created_at: str,
+    producer: str,
+    code_ref: str,
+) -> dict[str, Any]:
+    if reconcile_result.status is not ReconnectStatus.CONTINUITY_RESTORED:
+        raise CheckpointError("restart reconciliation coverage requires restored continuity")
+    detail_parts = [
+        f"status={reconcile_result.status.value}",
+        f"accepted_records={len(reconcile_result.accepted_records)}",
+    ]
+    for key in ("reason", "recent_window_records", "buffered_ws_records"):
+        if key in reconcile_result.evidence:
+            detail_parts.append(f"{key}={reconcile_result.evidence[key]}")
+    return {
+        "source_dataset_identity": dataset_identity,
+        "coverage_id": coverage_id,
+        "supersedes": None,
+        "created_at": created_at,
+        "acquisition": {
+            "basis": "reconciliation",
+            "intent_start": intent_start,
+            "intent_end": intent_end,
+            "source_semantics": BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1,
+            "mapping": BYBIT_RECENT_PUBLIC_TRADES_MAPPING_V1,
+        },
+        "assertions": [
+            {
+                "assertion_id": assertion_id,
+                "start": assertion_start,
+                "end": assertion_end,
+                "status": "complete",
+                "partitions": [{"partition_key": partition_key, "revision": revision}],
+                "evidence": [{"kind": "reconciliation", "detail": "; ".join(detail_parts)}],
+            }
+        ],
+        "producer": producer,
+        "code_ref": code_ref,
+    }
 
 
 def run_real_server_publish_proof(
@@ -437,6 +564,194 @@ def run_real_server_publish_proof(
         eligibility_published=eligibility is not None,
         datagateway_read_record_count=len(read_records),
         datagateway_read_matches_published=len(read_records) == len(records),
+        durable_publication=DurablePublicationState(
+            catalog_dataset_id=run.sealed_partition.dataset_id,
+            partition_key=run.sealed_partition.natural_identity.partition_key,
+            revision=run.sealed_partition.natural_identity.revision,
+            partition_manifest_sha256=run.sealed_partition.manifest_sha256,
+        ),
+        coverage_id=coverage_id,
+        coverage_assertion_id=coverage_assertion_id,
+        **dataset_manifest_fields,
+    )
+
+
+def _publish_restart_reconciliation_records(
+    *,
+    accepted_records: tuple[TradeRecord, ...],
+    reconcile_result: ReconnectResult,
+    storage_root: str | Path,
+    storage_root_id: str,
+    dsn: str | None,
+    producer: str,
+    code_ref: str,
+) -> RealServerPublishProofReport:
+    if not accepted_records:
+        return RealServerPublishProofReport(
+            status="REAL_RESTART_PROOF_PENDING",
+            acquisition=LiveProviderProofReport(
+                status="REAL_RESTART_PROOF_PENDING",
+                topic=SUPPORTED_TOPIC,
+                messages=0,
+                records=0,
+                duplicates_removed=0,
+                final_state="RECONCILED",
+                errors=("restart reconciliation produced no post-checkpoint records",),
+            ),
+        )
+
+    identity = bybit_live_dataset_identity()
+    intent_start, intent_end = _record_intent_interval(accepted_records)
+    partition_key = f"dt={intent_start[:10]}"
+    revision = _next_revision(dsn, identity, partition_key)
+
+    storage_root_path = Path(storage_root)
+    dataset_root = storage_root_path.joinpath(
+        identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id,
+    )
+    suffix = datetime.now(timezone.utc).strftime("%H%M%S")
+    rel_path = f"{partition_key}/part-{suffix}.parquet"
+    artifact_path = dataset_root / rel_path
+    dataset_manifest_path = dataset_root / "dataset-manifest.json"
+    partition_manifest_path = dataset_root / f"partition-manifest-{suffix}.json"
+    coverage_manifest_path = dataset_root / f"coverage-manifest-{suffix}.json"
+
+    materialization = materialize_bybit_trade_v1(artifact_path, accepted_records, dataset_identity=identity)
+    dataset_emission = None
+    if not dataset_manifest_path.exists():
+        dataset_emission = emit_dataset_manifest(
+            dataset_manifest_path, dataset_identity=identity, created_at=intent_end,
+            schema_version=DATASET_MANIFEST_V2, origin="source_acquired",
+            transform="canonicalize-trades-v1",
+        )
+    partition_emission = emit_partition_manifest(
+        partition_manifest_path, materialization, dataset_identity=identity,
+        dataset_root=dataset_root, partition_key=partition_key, revision=revision,
+        rel_path=rel_path, created_at=intent_start, closed_at=intent_end,
+        producer=producer, code_ref=code_ref,
+    )
+    run_tag = f"{intent_start[:10].replace('-', '')}-{suffix}"
+    coverage_id = f"k10-restart-reconciliation-{run_tag}"
+    coverage_assertion_id = f"k10-restart-reconciliation-assertion-{run_tag}"
+    coverage_input = _build_restart_reconciliation_coverage_document(
+        dataset_identity=identity,
+        coverage_id=coverage_id,
+        intent_start=intent_start,
+        intent_end=intent_end,
+        assertion_id=coverage_assertion_id,
+        assertion_start=intent_start,
+        assertion_end=intent_end,
+        partition_key=partition_key,
+        revision=revision,
+        reconcile_result=reconcile_result,
+        created_at=intent_end,
+        producer=producer,
+        code_ref=code_ref,
+    )
+    emit_coverage_manifest(
+        coverage_manifest_path, dataset_identity=identity,
+        partition_manifests=[partition_emission.document], **coverage_input,
+    )
+    coverage_status = coverage_input["assertions"][0]["status"]
+    dataset_manifest_fields: dict[str, Any] = {}
+    if dataset_emission is not None:
+        dataset_manifest_fields = {
+            "dataset_manifest_freshly_emitted": True,
+            "dataset_manifest_sha256": dataset_emission.manifest_sha256,
+            "dataset_manifest_rel_root": dataset_emission.document["rel_root"],
+        }
+
+    report = LiveProviderProofReport(
+        status="PASS",
+        topic=SUPPORTED_TOPIC,
+        messages=0,
+        records=len(accepted_records),
+        duplicates_removed=0,
+        final_state="RECONCILED",
+        errors=(),
+        accepted_records=accepted_records,
+    )
+
+    connection = _connect_catalog(dsn)
+    try:
+        profile = BybitRestartReconciliationCertificationProfile(code_ref)
+        try:
+            run = PublicationCertification(CatalogPublicationWriter(connection), profile).run(
+                SealedPartitionEvidence(
+                    dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
+                    artifact_path, storage_root_id,
+                )
+            )
+        except CatalogPublicationConflict as exc:
+            return RealServerPublishProofReport(
+                status="DATASET_MANIFEST_CONFLICT", acquisition=report,
+                partition_key=partition_key, artifact_path=str(artifact_path),
+                coverage_status=coverage_status,
+                certification_status=f"seal_refused: {exc}",
+                **dataset_manifest_fields,
+            )
+        categories = tuple((c.category, c.status) for c in run.certification.categories)
+        if run.certification.status != "pass":
+            return RealServerPublishProofReport(
+                status="CERTIFICATION_FAILED", acquisition=report,
+                partition_key=partition_key, artifact_path=str(artifact_path),
+                coverage_status=coverage_status,
+                certification_status=run.certification.status,
+                certification_categories=categories,
+                **dataset_manifest_fields,
+            )
+
+        eligibility = PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
+            PublicationEligibilityEvidence(
+                dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
+                storage_root_id,
+                BYBIT_RESTART_RECONCILIATION_CERTIFICATION_PROFILE,
+                BYBIT_RESTART_RECONCILIATION_CHECK_SUITE,
+            )
+        )
+    finally:
+        connection.close()
+
+    connection = _connect_catalog(dsn)
+    try:
+        request = DataRequest(
+            identity, Instant.parse(intent_start), Instant.parse(intent_end),
+            schema_requirement=identity.record_schema_id,
+            lifecycle_policy=LifecyclePolicy.VALID_ONLY,
+            coverage_policy="strict",
+            ordering_policy=BYBIT_ORDERING_PROVIDER.identity,
+        )
+        gateway = DataGateway(Catalog(connection=connection), ordering_providers=(BYBIT_ORDERING_PROVIDER,))
+        scan = gateway.scan(request, batch_size=1000)
+        read_records: list[Any] = []
+        try:
+            for batch in scan:
+                read_records.extend(batch)
+        finally:
+            if getattr(scan, "completed_metadata", None) is None:
+                scan.close()
+    finally:
+        connection.close()
+
+    accepted_keys = {
+        (Instant.parse(record.exchange_ts).isoformat(), record.trade_id)
+        for record in accepted_records
+    }
+    read_keys = [
+        (Instant.parse(record.exchange_ts).isoformat(), record.trade_id)
+        for record in read_records
+    ]
+    read_matches_published = accepted_keys.issubset(set(read_keys)) and len(read_keys) == len(set(read_keys))
+
+    return RealServerPublishProofReport(
+        status="PASS", acquisition=report,
+        partition_key=partition_key, artifact_path=str(artifact_path),
+        coverage_status=coverage_status,
+        certification_status=run.certification.status,
+        certification_categories=categories,
+        eligibility_published=eligibility is not None,
+        datagateway_read_record_count=len(read_records),
+        datagateway_read_matches_published=read_matches_published,
         durable_publication=DurablePublicationState(
             catalog_dataset_id=run.sealed_partition.dataset_id,
             partition_key=run.sealed_partition.natural_identity.partition_key,
@@ -759,15 +1074,21 @@ def run_real_server_restart_phase(
     *,
     checkpoint_path: str | Path,
     dsn: str | None,
+    storage_root: str | Path,
+    storage_root_id: str,
+    producer: str,
+    code_ref: str,
     recent_limit: int = 1000,
     durable_publication: DurablePublicationState | None = None,
 ) -> RealServerRestartProofReport:
-    """Load an existing checkpoint and run only restart reconciliation.
+    """Load an existing checkpoint, reconcile, publish, then advance it.
 
-    No publication path is invoked in this phase. Standalone restart reads
-    the current durable catalog binding for the checkpoint's partition
-    family before fetching the provider's recent-trade window, so stale or
-    superseded checkpoints fail closed without doing recovery work.
+    Standalone restart reads the current durable catalog binding for the
+    checkpoint's partition family before fetching the provider's recent-trade
+    window, so stale or superseded checkpoints fail closed before recovery
+    work. When continuity is restored, the accepted reconciliation records
+    are durably published under explicit reconciliation coverage before the
+    checkpoint is advanced.
     """
     store = CheckpointStore(checkpoint_path)
     checkpoint = store.load()
@@ -798,15 +1119,47 @@ def run_real_server_restart_phase(
         durable_publication=current_publication,
     )
     status = "PASS" if outcome.status == "RESUMED" else outcome.status
+    publication = None
+    checkpoint_identity = (
+        outcome.checkpoint.checkpoint_identity
+        if outcome.checkpoint is not None
+        else checkpoint.checkpoint_identity
+    )
+    if outcome.status == "RESUMED":
+        if outcome.reconcile_result is None:
+            raise CheckpointError("RESUMED restart outcome requires reconciliation evidence")
+        publication = _publish_restart_reconciliation_records(
+            accepted_records=outcome.accepted_records,
+            reconcile_result=outcome.reconcile_result,
+            storage_root=storage_root,
+            storage_root_id=storage_root_id,
+            dsn=dsn,
+            producer=producer,
+            code_ref=code_ref,
+        )
+        if publication.status != "PASS":
+            status = publication.status
+        else:
+            persisted = _persist_checkpoint_from_publication(
+                publication=publication,
+                checkpoint_path=checkpoint_path,
+            )
+            if persisted is None:
+                status = "REAL_RESTART_PROOF_PENDING"
+            else:
+                _store, advanced_checkpoint = persisted
+                checkpoint_identity = advanced_checkpoint.checkpoint_identity
+                outcome = RestartOutcome(
+                    status=outcome.status,
+                    checkpoint=advanced_checkpoint,
+                    reconcile_result=outcome.reconcile_result,
+                    accepted_records=outcome.accepted_records,
+                )
     return RealServerRestartProofReport(
         status=status,
-        publication=None,
+        publication=publication,
         checkpoint_path=str(store.path),
-        checkpoint_identity=(
-            outcome.checkpoint.checkpoint_identity
-            if outcome.checkpoint is not None
-            else checkpoint.checkpoint_identity
-        ),
+        checkpoint_identity=checkpoint_identity,
         restart_outcome=outcome,
         recent_records=len(recent_records),
         restart_accepted_records=len(outcome.accepted_records),
@@ -840,6 +1193,10 @@ def run_real_server_restart_proof(
         return run_real_server_restart_phase(
             checkpoint_path=checkpoint_path,
             dsn=dsn,
+            storage_root=storage_root,
+            storage_root_id=storage_root_id,
+            producer=producer,
+            code_ref=code_ref,
             recent_limit=recent_limit,
         )
 
@@ -859,6 +1216,10 @@ def run_real_server_restart_proof(
     restarted = run_real_server_restart_phase(
         checkpoint_path=checkpoint_path,
         dsn=dsn,
+        storage_root=storage_root,
+        storage_root_id=storage_root_id,
+        producer=producer,
+        code_ref=code_ref,
         recent_limit=recent_limit,
         durable_publication=(
             published.publication.durable_publication

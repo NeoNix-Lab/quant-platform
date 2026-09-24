@@ -60,8 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--code-ref", default="k10-real-restart-proof-v1")
     parser.add_argument("--producer", default="k10-real-restart-proof-v1")
     args = parser.parse_args(argv)
-    if args.phase in {"publish", "both"} and args.storage_root is None:
-        parser.error("--storage-root is required for --phase publish and --phase both")
+    if args.storage_root is None:
+        parser.error("--storage-root is required for all phases")
 
     print("=== effective runtime identity ===")
     for key, value in _identity_evidence().items():
