@@ -18,7 +18,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Data | S13 certification | FROZEN | COMPLETE | Producer | A08 | Durable authoritative quality evidence. |
 | Data | S14 publication/eligibility | FROZEN | COMPLETE | Producer | A09 | First vertical catalog publication proven. |
 | Data | Backfill/repair | FROZEN | COMPLETE | Data Plane | A10 | ADR-0033; deterministic repair-intent/candidate/atomic-cutover foundation. |
-| Data | Live trades acquisition | FROZEN | MISSING | Data Plane | A11 | ADR-0040 freezes Bybit BTCUSDT live mapping/cutover/dedup/reconnect semantics; activation still requires K08 proof. Long-gap remediation remains separately open for vertical closeout. |
+| Data | Live trades acquisition | FROZEN | COMPLETE | Data Plane | A11 | ADR-0040; Bybit BTCUSDT live mapping/session/dedup/cutover/reconnect plus canonical publication path integrated by PR #112 and proven on the real provider/server by PR #113. Long-gap remediation remains separately open for vertical closeout. |
 | Data | Second-venue trades | OPEN_DEFERABLE | MISSING | Data Plane | A12 | Triggered by real second-provider evidence; do not design a generic resolver early. |
 | Data | L1 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A13 | DG-C L1 branch, triggered by a concrete feed; does not activate L2. |
 | Data | L2 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A14 | DG-C L2 branch, only when L2 is selected. |
@@ -84,16 +84,16 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Runtime | Paper/shadow mode | RESOLVED | MISSING | Runtime | J07 | Vertical gate before live operation. |
 | Runtime | Live product mode | RESOLVED | MISSING | Runtime/Operations | J08 | Requires explicit operational authorization; roadmap state is not authorization. |
 | Operations | Provisioning/fixtures/CI | RESOLVED | COMPLETE | Engineering | K01 | Repository validation foundation complete. |
-| Operations | Server/runtime identity | FROZEN | MISSING | Operations | K02 | ADR-0041; least-privileged public-ingest identity semantics frozen; implementation only if deployment changes authorization boundary. |
+| Operations | Server/runtime identity | FROZEN | COMPLETE | Operations | K02 | ADR-0041; real-server proof in PR #113 verified non-root least privilege, minimum catalog rights, physical storage topology, and backup-authority separation. |
 | Operations | Observability | RESOLVED | COMPLETE | Operations | K03 | Minimum externally observable health/provenance/failure transitions. |
 | Operations | Capacity observation | RESOLVED | COMPLETE | Operations | K04 | Observational only. |
 | Operations | Health/pressure policy | FROZEN | COMPLETE | Operations | K05 | ADR-0028. |
 | Operations | RAW/source protection | FROZEN | COMPLETE | Operations/Data Plane | K06 | ADR-0032; attributable-evidence protection-identity/assessment seam, no backup dependency. |
 | Operations | Tier relocation | OPEN_BLOCKING | MISSING | Operations/Data Plane | K07 | DG-H relocation branch; sibling of backup after source protection. |
-| Operations | Backup/restore proof | FROZEN | MISSING | Operations | K08 | ADR-0039 freezes recovery-set/isolated-restore semantics; implementation/proof still required before A11. |
+| Operations | Backup/restore proof | FROZEN | COMPLETE | Operations | K08 | ADR-0039; PR #111 implements identity-bound backup/isolated restore and PR #113 supplies the previously pending real deployment-independence evidence. |
 | Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
-| Operations | Checkpoint/recovery | FROZEN | MISSING | Operations/Data Plane | K10 | ADR-0042 freezes publication-before-checkpoint/restart invariants; implementation follows A11 and requires K03/K08 proof. |
-| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Roadmap vNext authority set remains coherent after Wave 3 closeout reconciliation. |
+| Operations | Checkpoint/recovery | FROZEN | PARTIAL | Operations/Data Plane | K10 | ADR-0042; PR #114 implements persisted checkpoint/recovery and the full hermetic proof matrix; bounded real-server restart and deployed checkpoint-path proof remain pending. |
+| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Canonical authority reconciled through the integrated Live Ingest implementation state by governance issue #117. |
 
 ## Gate / evidence state
 
@@ -108,7 +108,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | ASS-02 semantic selector resolution (C02) | COMPLETE | PR #30 integrated; reviewed exact-head CI passed. |
 | ASS-02 result/error translation (C03) | COMPLETE | PR #41 integrated reviewed head `f382a2e6...`; integrity #91 passed on exact head. |
 | ASS-02 in-process Application vertical | COMPLETE | C02 + C03 complete; does not imply C05/C04/API/jobs/clients. |
-| K11 Governance-state consistency | COMPLETE | Canonical authority set reconciled through Wave 3 closeout. |
+| K11 Governance-state consistency | COMPLETE | Canonical authority reconciled through the integrated Live Ingest implementation state by governance issue #117. |
 | E02 FeatureDefinition v1 semantic foundation | COMPLETE | ADR-0026 accepted; immutable runtime model and targeted tests implemented. |
 | D06 FootprintDefinition v1 representation foundation | COMPLETE | ADR-0027 accepted; immutable historical FINAL Footprint v1 runtime implemented. |
 | B04 Non-contiguous coverage reads v1 | COMPLETE | ADR-0029 accepted; explicit `ALLOW_PARTIAL` DataGateway policy implemented. |
@@ -121,21 +121,19 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | F04 Event studies/sweeps v1 | COMPLETE | Reproducible study population/aggregates and parameter sweep runtime implemented, issue #92/PR #94. |
 | F07 labels/censoring/lockbox v1 | COMPLETE | ADR-0036; implementation integrated via issue #96/PR #99. |
 | F08 DSR/PBO robust comparison v1 | COMPLETE | ADR-0037; implementation integrated via issue #98/PR #104. |
-| K08 backup/restore semantics v1 | FROZEN | ADR-0039 accepted; isolated restore proof still missing. |
-| A11 Bybit live acquisition semantics v1 | FROZEN | ADR-0040 accepted; implementation waits on K08 proof; unresolved long-gap remediation is tracked separately. |
-| K02 live-ingest runtime identity v1 | FROZEN | ADR-0041 accepted; implementation is conditional on an actual deployment authorization change. |
-| K10 live-ingest checkpoint/recovery v1 | FROZEN | ADR-0042 accepted; implementation follows A11 and K08 proof. |
+| K08 backup/restore semantics v1 | COMPLETE | ADR-0039; PR #111 implementation/isolated restore plus PR #113 real deployment-independence evidence. |
+| A11 Bybit live acquisition semantics v1 | COMPLETE | ADR-0040; PR #112 implementation and real-provider proof, with PR #113 proving canonical publication/catalog/DataGateway composition on the target server. |
+| K02 live-ingest runtime identity v1 | COMPLETE | ADR-0041; PR #113 real-server least-privilege, storage and database authority proof. |
+| K10 live-ingest checkpoint/recovery v1 | PARTIAL | ADR-0042; PR #114 hermetic implementation/proof matrix integrated; `REAL_RESTART_PROOF_PENDING` remains operationally open. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
 
 ## Current frontier
 
-Wave 3 is complete. The selected macro-scope is now `Live Ingest Vertical v1` as recorded in `SCOPE.md`.
+PR #116 integrated the Live Ingest implementation branch into `main`. K08, A11 and K02 are now `COMPLETE`; K10 is `PARTIAL` because its bounded real-server restart/deployed-checkpoint proof remains pending.
 
-K08 semantics are frozen, but its minimum backup/isolated-restore proof is the first remaining implementation gate. A11 semantics are also frozen and become implementation-ready only after that K08 proof. K10 semantics are frozen but its implementation intentionally follows the real A11 runtime state.
-
-The DG-B long-gap remediation proposition remains **OPEN_BLOCKING for Live Ingest Vertical closeout**: A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval is filled/lossless until an authoritative repair source/path proves the missing support.
+The next exact missing operational proposition is the K10 real-server restart proof. Separately, the DG-B long-gap remediation proposition remains **OPEN_BLOCKING for Live Ingest Vertical closeout**: A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval filled/lossless until an authoritative repair source/path proves the missing support.
 
 B06 live-consumer cursor remains outside the current scope and unresolved.
 

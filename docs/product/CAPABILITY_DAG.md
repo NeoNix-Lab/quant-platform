@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 3 complete, Live Ingest Vertical v1 selected**.
+Status: **CANONICAL; Wave 3 complete, Live Ingest Vertical v1 integrated; closeout pending**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,7 +10,7 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after Wave 3 implementation closeout and the first Live Ingest semantic freeze (ADR-0039 through ADR-0042):
+Current audited inventory after Wave 3 closeout and integration of the first Live Ingest implementation path:
 
 ```text
 TOTAL_ATOMS                     = 87
@@ -21,12 +21,12 @@ OPEN_BLOCKING                   = 11
 OPEN_DEFERABLE                  = 8
 ROADMAP_DEFINED                 = 68 + 11 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         = 45 / 87 = 51.7%
+IMPLEMENTATION_COMPLETE         = 48 / 87 = 55.2%
 ```
 
 The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved atom proposition has a bounded activation rule. The 78.2% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, L1/L2/L3, RL, transport, deletion or unrelated operational semantics.
 
-The selected Live Ingest scope also carries one explicit **scope-level open DG-B proposition** that is not a new atom and therefore is not included in the 87-atom counts: remediation of live gaps that exceed the bounded provider reconciliation window. It is `OPEN_BLOCKING` for claiming those gaps filled / for lossless Live Ingest Vertical closeout, while A11 is allowed to record the gap explicitly and continue with a new governed segment.
+The selected Live Ingest scope also carries one explicit **scope-level open DG-B proposition** that is not a new atom and therefore is not included in the 87-atom counts: remediation of live gaps that exceed the bounded provider reconciliation window. It is `OPEN_BLOCKING` for claiming those gaps filled / for lossless Live Ingest Vertical closeout, while A11/K10 are allowed to record the gap explicitly and continue with a new governed segment.
 
 Decision states:
 
@@ -71,7 +71,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | A08 | S13 certification | Producer | A03,A04,A06,A07 | A09,A16 | FROZEN | COMPLETE | Durable fail-closed evidence; ADR-0023 |
 | A09 | S14 publication | Producer | A05,A08 | B02,A10 | FROZEN | COMPLETE | Eligible partition becomes readable; ADR-0023 |
 | A10 | Backfill and repair | Data Plane | A09,A16 | A11 | FROZEN | COMPLETE | Deterministic repair-intent/candidate/cutover; ADR-0033 |
-| A11 | Live trades acquisition | Data Plane | A10,K05,K06,K08 | B06,K10,J07 | FROZEN | MISSING | ADR-0040; Bybit BTCUSDT mapping/cutover/dedup/bounded reconnect semantics; K08 proof still required before implementation |
+| A11 | Live trades acquisition | Data Plane | A10,K05,K06,K08 | B06,K10,J07 | FROZEN | COMPLETE | ADR-0040; PR #112 implements Bybit BTCUSDT mapping/session/dedup/cutover/reconnect and canonical publication seam; PR #113 proves the real-provider/server publication path |
 | A12 | Second-venue trades | Data Plane | A11,real provider evidence | C06 | OPEN_DEFERABLE | MISSING | Venue ordering/eligibility profile; evidence-triggered |
 | A13 | L1 contract/acquisition | Data Plane | A01,A04,real feed | A14 | OPEN_BLOCKING | MISSING | Versioned schema/ordering/provenance; DG-C L1 branch |
 | A14 | L2 contract/acquisition | Data Plane | A13,real feed | A15 | OPEN_BLOCKING | MISSING | Snapshot/increment/gap semantics; DG-C L2 branch |
@@ -188,16 +188,16 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
 | K01 | Provisioning/fixtures/CI | Engineering | — | all spines | RESOLVED | COMPLETE | Reproducible validation environment |
-| K02 | Server access/runtime identity | Operations | C05,K01 | J08 | FROZEN | MISSING | ADR-0041; least privilege, no provider secret for public A11 v1, backup-authority separation; implementation conditional on actual deployment mutation |
+| K02 | Server access/runtime identity | Operations | C05,K01 | J08 | FROZEN | COMPLETE | ADR-0041; PR #113 proves non-root least privilege, minimum catalog rights, physical storage topology and backup-authority separation on the target server |
 | K03 | Observability | Operations | K01 | J07,J08,K10 | RESOLVED | COMPLETE | Minimum externally observable health/provenance/failure transitions |
 | K04 | Capacity observation | Operations | A05,K01 | K05 | RESOLVED | COMPLETE | Report exact usage/free space without control action |
 | K05 | Health/pressure policy | Operations | K04 | A11,K06,K07 | FROZEN | COMPLETE | Explicit threshold/time-to-full action; ADR-0028 |
 | K06 | RAW/source protection | Operations/Data Plane | A07,K05 | A11,K07,K08 | FROZEN | COMPLETE | Protection-identity/assessment seam, attributable-evidence; ADR-0032 |
 | K07 | Tier relocation | Operations/Data Plane | K05,K06 | storage lifecycle | OPEN_BLOCKING | MISSING | Crash yields old or new valid placement; DG-H relocation branch |
-| K08 | Backup/restore proof | Operations | K06 | K09,J08,K10,A11 | FROZEN | MISSING | ADR-0039; identity-bound recovery set + isolated independent-storage restore proof; proof still required |
+| K08 | Backup/restore proof | Operations | K06 | K09,J08,K10,A11 | FROZEN | COMPLETE | ADR-0039; PR #111 implements identity-bound recovery/isolated restore and PR #113 closes the real deployment-independence evidence handoff |
 | K09 | Retention/deletion authority | Operations | K08 | sustainable live | OPEN_BLOCKING | MISSING | Never delete protected/sole recoverable evidence; DG-H deletion branch |
-| K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | FROZEN | MISSING | ADR-0042; durable publication precedes checkpoint; restart/replay/dedup invariants; implementation follows A11 |
-| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; Wave 3 closeout reconciliation maintains coherence |
+| K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | FROZEN | PARTIAL | ADR-0042; PR #114 implements persisted checkpoint/recovery + full hermetic proof matrix; bounded real-server restart/deployed checkpoint proof remains pending |
+| K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; Live Ingest integration state reconciled by governance issue #117 |
 
 ## Dependency integrity
 
@@ -209,7 +209,7 @@ K06 source protection -> K07 relocation
 K06 source protection -> K08 backup/restore proof -> K09 deletion authority
 ```
 
-A11 does not require implemented K10. K10 semantics are already frozen under ADR-0042, but its implementation depends on the actual A11 state it checkpoints. Backup/restore does not require tier-relocation implementation.
+K08/A11/K02 are now complete for the selected first live-ingest path. K10 semantics are frozen and its implementation is integrated, but operational closeout still requires the bounded real-server restart proof. Backup/restore does not require tier-relocation implementation.
 
 ## Decision gates
 
@@ -231,13 +231,13 @@ The canonical H01 branch is **RESOLVED** under ADR-0035. `D06` FootprintDefiniti
 
 Repair branch (`A16` + `A10` + `B04`) is frozen and complete for the accepted first vertical under ADR-0028/ADR-0029/ADR-0033.
 
-A11 live-acquisition semantics are now **RESOLVED / FROZEN** under ADR-0040. Historical/live cutover, canonical trade identity/order, duplicate conflict policy, bounded reconnect reconciliation and evidence-based coverage are no longer open A11 decisions.
+A11 live-acquisition semantics are **RESOLVED / FROZEN** under ADR-0040 and the selected Bybit BTCUSDT runtime is now implementation `COMPLETE`. Historical/live cutover, canonical trade identity/order, duplicate conflict policy, bounded reconnect reconciliation and evidence-based coverage are no longer open A11 decisions.
 
 One explicit scope-level proposition remains open:
 
 - **long-gap remediation beyond bounded reconciliation — OPEN_BLOCKING for Live Ingest Vertical closeout.** If the last durable `TradeKeyV1` is unavailable from the bounded provider reconciliation evidence, the interval remains explicit non-complete coverage. Before it may be declared filled, an attributable source/path must prove the missing support and integrate through the existing A10 repair semantics. Missing `seq`, absence of trades or elapsed time are not completeness proof.
 
-This open proposition does not block A11 from recording the gap and continuing with a new governed live segment. It blocks claiming that interval filled/lossless until real evidence exists.
+This open proposition does not block A11/K10 from recording the gap and continuing with a new governed live segment. It blocks claiming that interval filled/lossless until real evidence exists.
 
 `B06` live-consumer cursor semantics remain `OPEN_BLOCKING` but are outside the selected Live Ingest v1 scope; ADR-0040 does not freeze them.
 
@@ -268,11 +268,11 @@ I02 experiment persistence is resolved and complete. Remaining atom decisions: `
 
 ### DG-H — Operational safety
 
-K03 observability and K05/K06 pressure/source protection are complete. K02, K08 and K10 semantics required by the first Live Ingest scope are now frozen:
+K02, K03, K05, K06 and K08 are complete for the selected first Live Ingest path. K10 semantics are frozen and its implementation is integrated but operational proof is still partial:
 
-- K02 — ADR-0041, implementation only if real deployment changes authorization/identity boundary;
-- K08 — ADR-0039, implementation/isolated restore proof still required before A11;
-- K10 — ADR-0042, implementation after A11 plus K03/K08 proof.
+- K02 — ADR-0041, `COMPLETE` via PR #113 real-server identity/ACL/database/storage proof;
+- K08 — ADR-0039, `COMPLETE` via PR #111 plus PR #113 deployment-independence proof;
+- K10 — ADR-0042, `PARTIAL` via PR #114; `REAL_RESTART_PROOF_PENDING` remains.
 
 Still-open atom branches are `K07` tier relocation and `K09` deletion authority; neither is pulled into the current scope.
 
@@ -287,17 +287,15 @@ Still-open atom branches are `K07` tier relocation and `K09` deletion authority;
 | V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies and sweeps | COMPLETE (`F02`/`F03`/`F04`; F03 authority ADR-0038) |
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | COMPLETE (`F06` + `F07`) |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |
-| V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | PARTIAL AUTHORITY FROZEN; implementation blocked by K08 proof/A11/K10 and broader B06 outside current scope |
+| V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | PARTIAL; first live-ingest producer path integrated, K10 operational closeout pending, broader B06 outside current scope |
 | V9 | Application -> API -> Client | One application semantic implementation serves thin clients | APPLICATION SERVICE COMPLETE; transport deferred |
 | V10 | Paper -> Live | Full canonical stack crosses explicit operational authorization gate | BLOCKED |
 
 ## Execution frontier
 
-Wave 3 is **COMPLETE** through F08. The selected macro-scope is now **Live Ingest Vertical v1** (`SCOPE.md`).
+PR #116 integrated `implement/live-ingest` into `main`. The selected macro-scope remains **Live Ingest Vertical v1** (`SCOPE.md`) and is not yet closed.
 
-The first bounded implementation slice is K08 proof: ADR-0039 has frozen semantics, but backup creation + isolated restore evidence are still missing. After K08 proof, A11 is implementation-ready under ADR-0040. K10 semantics are already frozen under ADR-0042 but implementation intentionally follows the real A11 state.
-
-The long-gap remediation proposition remains open for macro closeout as described above. It does not authorize speculative provider/repair implementation before a concrete missing-support case and source evidence exist.
+The next exact missing operational proposition is the bounded K10 real-server restart/deployed-checkpoint proof. After that, the DG-B long-gap proposition must be resolved from observed/provider evidence before Live Ingest v1 governance closeout.
 
 B06 remains outside the current scope.
 
@@ -314,7 +312,7 @@ Wave 2  Representation / Feature vertical                 COMPLETE (E04,E06; ADR
 Wave 3  Research / Validation                             COMPLETE (F01-F08; ADR-0031/ADR-0036/ADR-0037/ADR-0038)
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
-Wave 6  Live Data Plane                                   K03,K04,K05,K06,A10,A16 COMPLETE; K02,K08,K10,A11 FROZEN/MISSING; K07,K09,B06 remain open/missing
+Wave 6  Live Data Plane                                   K02,K03,K04,K05,K06,K08,A10,A11,A16 COMPLETE; K10 PARTIAL (real restart pending); K07,K09,B06 remain open/missing
 Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 when real client need exists
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
