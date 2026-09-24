@@ -18,10 +18,14 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+import quant_platform.application.bybit_live as app_bybit_live  # noqa: E402
 from quant_platform.application.bybit_live import (  # noqa: E402
     DurablePublicationState,
+    LiveProviderProofReport,
+    RealServerPublishProofReport,
     next_checkpoint,
     resume_live_ingest,
+    run_real_server_restart_proof,
 )
 from quant_platform.data.models import DatasetIdentity, Instant, TradeRecord  # noqa: E402
 from quant_platform.operations.checkpoint import (  # noqa: E402
@@ -281,6 +285,357 @@ class NextCheckpointTests(unittest.TestCase):
                 durable_publication=publication, coverage_segment_id="coverage-2",
                 coverage_status="known_gap", created_at=Instant(2000),
             )
+
+
+class RealServerRestartProofEntryPointTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.checkpoint_path = Path(self.tempdir.name) / "k10-checkpoint.json"
+        self.publication = DurablePublicationState(
+            catalog_dataset_id="dataset-uuid-1", partition_key="dt=2026-09-24",
+            revision=1, partition_manifest_sha256="a" * 64,
+        )
+        self._original_publish = app_bybit_live.run_real_server_publish_proof
+        self._original_recent = app_bybit_live.fetch_recent_public_trades
+        self._original_resume = app_bybit_live.resume_live_ingest
+        self._original_load_publication = app_bybit_live.load_current_durable_publication_state
+        self._original_connect_catalog = app_bybit_live._connect_catalog
+
+    def tearDown(self):
+        app_bybit_live.run_real_server_publish_proof = self._original_publish
+        app_bybit_live.fetch_recent_public_trades = self._original_recent
+        app_bybit_live.resume_live_ingest = self._original_resume
+        app_bybit_live.load_current_durable_publication_state = self._original_load_publication
+        app_bybit_live._connect_catalog = self._original_connect_catalog
+        self.tempdir.cleanup()
+
+    def _publish_report(self, records):
+        return RealServerPublishProofReport(
+            status="PASS",
+            acquisition=LiveProviderProofReport(
+                status="PASS", topic="publicTrade.BTCUSDT", messages=1,
+                records=len(records), duplicates_removed=0, final_state="ACQUIRING",
+                errors=(), accepted_records=tuple(records), session_evidence=None,
+            ),
+            partition_key=self.publication.partition_key,
+            artifact_path="/srv/quant/canonical/trades/bybit/BTCUSDT/trade-v1/dt=2026-09-24/part.parquet",
+            coverage_status="complete",
+            certification_status="pass",
+            eligibility_published=True,
+            datagateway_read_record_count=len(records),
+            datagateway_read_matches_published=True,
+            durable_publication=self.publication,
+            coverage_id="coverage-1",
+            coverage_assertion_id="coverage-assertion-1",
+        )
+
+    def test_real_restart_proof_persists_checkpoint_and_resumes_from_recent_window(self):
+        anchor = trade(1000, "anchor", "1")
+        after = trade(1001, "after", "2")
+
+        def fake_publish(**_kwargs):
+            return self._publish_report((anchor,))
+
+        def fake_recent(*, limit):
+            self.assertEqual(limit, 1000)
+            return (anchor, after)
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+        app_bybit_live.fetch_recent_public_trades = fake_recent
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+        )
+
+        self.assertEqual(result.status, "PASS")
+        self.assertTrue(self.checkpoint_path.exists())
+        self.assertEqual(result.restart_outcome.status, "RESUMED")
+        self.assertEqual([record.trade_id for record in result.restart_outcome.accepted_records], ["after"])
+
+    def test_real_restart_proof_does_not_checkpoint_when_publish_is_pending(self):
+        def fake_publish(**_kwargs):
+            return RealServerPublishProofReport(
+                status="LIVE_PROVIDER_PROOF_PENDING",
+                acquisition=LiveProviderProofReport(
+                    status="LIVE_PROVIDER_PROOF_PENDING", topic="publicTrade.BTCUSDT",
+                    messages=0, records=0, duplicates_removed=0,
+                    final_state="DISCONNECTED", errors=("timeout",),
+                ),
+            )
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+        )
+
+        self.assertEqual(result.status, "LIVE_PROVIDER_PROOF_PENDING")
+        self.assertFalse(self.checkpoint_path.exists())
+
+    def test_publish_phase_persists_checkpoint_without_restart_work(self):
+        anchor = trade(1000, "anchor", "1")
+
+        def fake_publish(**_kwargs):
+            return self._publish_report((anchor,))
+
+        def fail_recent(*, limit):
+            raise AssertionError(f"publish phase must not fetch recent trades, got limit={limit}")
+
+        def fail_resume(**_kwargs):
+            raise AssertionError("publish phase must not run restart reconciliation")
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+        app_bybit_live.fetch_recent_public_trades = fail_recent
+        app_bybit_live.resume_live_ingest = fail_resume
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="publish",
+        )
+
+        self.assertEqual(result.status, "CHECKPOINT_PERSISTED")
+        self.assertTrue(self.checkpoint_path.exists())
+        self.assertIsNone(result.restart_outcome)
+        self.assertIsNotNone(result.checkpoint_identity)
+
+    def test_restart_phase_loads_checkpoint_without_publishing(self):
+        anchor = trade(1000, "anchor", "1")
+        after = trade(1001, "after", "2")
+        store = CheckpointStore(self.checkpoint_path)
+        store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
+
+        def fail_publish(**_kwargs):
+            raise AssertionError("restart phase must not publish a fresh batch")
+
+        def fake_recent(*, limit):
+            self.assertEqual(limit, 1000)
+            return (anchor, after)
+
+        def fake_current_publication(*, checkpoint, dsn):
+            self.assertEqual(checkpoint.catalog_dataset_id, self.publication.catalog_dataset_id)
+            self.assertIsNone(dsn)
+            return self.publication
+
+        app_bybit_live.run_real_server_publish_proof = fail_publish
+        app_bybit_live.fetch_recent_public_trades = fake_recent
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="restart",
+        )
+
+        self.assertEqual(result.status, "PASS")
+        self.assertIsNone(result.publication)
+        self.assertEqual(result.restart_outcome.status, "RESUMED")
+        self.assertEqual([record.trade_id for record in result.restart_outcome.accepted_records], ["after"])
+
+    def test_restart_phase_refuses_stale_catalog_binding_before_fetch(self):
+        store = CheckpointStore(self.checkpoint_path)
+        store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
+        stale = DurablePublicationState(
+            catalog_dataset_id=self.publication.catalog_dataset_id,
+            partition_key=self.publication.partition_key,
+            revision=2,
+            partition_manifest_sha256="b" * 64,
+        )
+
+        def fail_publish(**_kwargs):
+            raise AssertionError("restart phase must not publish a fresh batch")
+
+        def fake_current_publication(*, checkpoint, dsn):
+            self.assertEqual(checkpoint.revision, 1)
+            self.assertIsNone(dsn)
+            return stale
+
+        def fail_recent(*, limit):
+            raise AssertionError(f"stale catalog binding must fail before recent fetch, got limit={limit}")
+
+        app_bybit_live.run_real_server_publish_proof = fail_publish
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication
+        app_bybit_live.fetch_recent_public_trades = fail_recent
+
+        with self.assertRaises(CheckpointBindingError):
+            run_real_server_restart_proof(
+                max_messages=1,
+                max_seconds=1,
+                storage_root="/srv/quant",
+                storage_root_id="hot",
+                dsn=None,
+                checkpoint_path=self.checkpoint_path,
+                producer="test",
+                code_ref="test",
+                phase="restart",
+            )
+
+    def test_catalog_lookup_uses_eligible_states_and_newest_revision(self):
+        checkpoint = first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication)
+        executions = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, statement, params):
+                executions.append((statement, params))
+
+            def fetchall(self):
+                return [
+                    (self.publication.partition_key, 2, "b" * 64),
+                    (self.publication.partition_key, 1, "a" * 64),
+                ]
+
+        class Connection:
+            def __init__(self, outer):
+                self.outer = outer
+                self.closed = False
+
+            def cursor(self):
+                cursor = Cursor()
+                cursor.publication = self.outer.publication
+                return cursor
+
+            def close(self):
+                self.closed = True
+
+        connection = Connection(self)
+
+        def fake_connect(dsn):
+            self.assertEqual(dsn, "postgresql://example")
+            return connection
+
+        app_bybit_live._connect_catalog = fake_connect
+
+        durable = app_bybit_live.load_current_durable_publication_state(
+            checkpoint=checkpoint,
+            dsn="postgresql://example",
+        )
+
+        self.assertTrue(connection.closed)
+        self.assertEqual(durable.revision, 2)
+        self.assertEqual(durable.partition_manifest_sha256, "b" * 64)
+        statement, params = executions[0]
+        self.assertIn("p.state IN (%s, %s, %s)", statement)
+        self.assertIn("ORDER BY p.revision DESC", statement)
+        self.assertIn("LIMIT 1", statement)
+        self.assertNotIn("p.state <> 'superseded'", statement)
+        self.assertEqual(
+            params,
+            (
+                self.publication.catalog_dataset_id,
+                self.publication.partition_key,
+                "valid",
+                "closed",
+                "degraded",
+            ),
+        )
+
+    def test_restart_phase_without_checkpoint_is_explicit_and_does_not_fetch(self):
+        def fail_recent(*, limit):
+            raise AssertionError(f"missing-checkpoint restart must not fetch recent trades, got limit={limit}")
+
+        app_bybit_live.fetch_recent_public_trades = fail_recent
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="restart",
+        )
+
+        self.assertEqual(result.status, "NO_CHECKPOINT_TO_RESTART_FROM")
+        self.assertEqual(result.checkpoint_path, str(self.checkpoint_path))
+        self.assertFalse(self.checkpoint_path.exists())
+
+    def test_publish_then_restart_phases_match_combined_resume_outcome(self):
+        anchor = trade(1000, "anchor", "1")
+        after = trade(1001, "after", "2")
+
+        def fake_publish(**_kwargs):
+            return self._publish_report((anchor,))
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+
+        published = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="publish",
+        )
+
+        def fail_publish(**_kwargs):
+            raise AssertionError("restart phase must not publish a fresh batch")
+
+        def fake_recent(*, limit):
+            self.assertEqual(limit, 1000)
+            return (anchor, after)
+
+        def fake_current_publication(*, checkpoint, dsn):
+            self.assertEqual(checkpoint.catalog_dataset_id, self.publication.catalog_dataset_id)
+            self.assertIsNone(dsn)
+            return self.publication
+
+        app_bybit_live.run_real_server_publish_proof = fail_publish
+        app_bybit_live.fetch_recent_public_trades = fake_recent
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication
+
+        restarted = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+            phase="restart",
+        )
+
+        self.assertEqual(published.status, "CHECKPOINT_PERSISTED")
+        self.assertEqual(restarted.status, "PASS")
+        self.assertEqual(restarted.restart_outcome.status, "RESUMED")
+        self.assertEqual([record.trade_id for record in restarted.restart_outcome.accepted_records], ["after"])
 
 
 if __name__ == "__main__":

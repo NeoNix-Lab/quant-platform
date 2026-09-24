@@ -40,6 +40,7 @@ from quant_platform.source_adapters.bybit import (
 from quant_platform.source_adapters.bybit_live import (
     BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE,
     BYBIT_LIVE_TRADE_V1_CHECK_SUITE,
+    BYBIT_LIVE_SOURCE_SEMANTICS_V1,
     SUPPORTED_CATEGORY,
     SUPPORTED_SYMBOL,
     SUPPORTED_TOPIC,
@@ -58,6 +59,7 @@ from quant_platform.source_adapters.bybit_live import (
     reconcile_after_disconnect,
 )
 from quant_platform.operations.checkpoint import (
+    CheckpointBindingError,
     CheckpointDomainMismatch,
     CheckpointError,
     CheckpointStore,
@@ -69,6 +71,7 @@ from quant_platform.operations.checkpoint import (
 
 BYBIT_PUBLIC_LINEAR_WS_URL = "wss://stream.bybit.com/v5/public/linear"
 BYBIT_RECENT_TRADES_URL = "https://api.bybit.com/v5/market/recent-trade"
+K10_RESTART_DURABLE_STATES = LifecyclePolicy.VALID_CLOSED_AND_DEGRADED.states
 
 
 class LiveProviderProofPending(RuntimeError):
@@ -91,6 +94,19 @@ class LiveProviderProofReport:
     # publication path rather than re-running acquisition a second time.
     accepted_records: tuple[TradeRecord, ...] = ()
     session_evidence: BybitLiveSessionEvidence | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DurablePublicationState:
+    """Freshly queried durable catalog state a checkpoint's binding is
+    validated against (ADR-0042 S4/S6). The caller queries this -- e.g. via
+    the same catalog connection ``run_real_server_publish_proof`` already
+    uses -- this module never opens a connection to compute it itself."""
+
+    catalog_dataset_id: str
+    partition_key: str
+    revision: int
+    partition_manifest_sha256: str
 
 
 def fetch_recent_public_trades(*, limit: int = 100) -> tuple[Any, ...]:
@@ -216,6 +232,9 @@ class RealServerPublishProofReport:
     dataset_manifest_freshly_emitted: bool = False
     dataset_manifest_sha256: str | None = None
     dataset_manifest_rel_root: str | None = None
+    durable_publication: DurablePublicationState | None = None
+    coverage_id: str | None = None
+    coverage_assertion_id: str | None = None
 
 
 def _connect_catalog(dsn: str | None):
@@ -323,10 +342,12 @@ def run_real_server_publish_proof(
     # data/manifests.py's frozen _IDENTIFIER is `^[a-z0-9]+(?:[._-][a-z0-9]+)*$`
     # -- lowercase only, no ISO "T"/"Z" separators.
     run_tag = f"{acquire_started_at.strftime('%Y%m%d')}-{suffix}"
+    coverage_id = f"k02-real-server-{run_tag}"
+    coverage_assertion_id = f"k02-real-server-assertion-{run_tag}"
     coverage_input = build_bybit_live_coverage_document(
-        dataset_identity=identity, coverage_id=f"k02-real-server-{run_tag}",
+        dataset_identity=identity, coverage_id=coverage_id,
         intent_start=intent_start, intent_end=intent_end,
-        assertion_id=f"k02-real-server-assertion-{run_tag}",
+        assertion_id=coverage_assertion_id,
         assertion_start=intent_start, assertion_end=intent_end,
         partition_key=partition_key, revision=revision, session_evidence=session_evidence,
         created_at=intent_end, producer=producer, code_ref=code_ref,
@@ -416,21 +437,16 @@ def run_real_server_publish_proof(
         eligibility_published=eligibility is not None,
         datagateway_read_record_count=len(read_records),
         datagateway_read_matches_published=len(read_records) == len(records),
+        durable_publication=DurablePublicationState(
+            catalog_dataset_id=run.sealed_partition.dataset_id,
+            partition_key=run.sealed_partition.natural_identity.partition_key,
+            revision=run.sealed_partition.natural_identity.revision,
+            partition_manifest_sha256=run.sealed_partition.manifest_sha256,
+        ),
+        coverage_id=coverage_id,
+        coverage_assertion_id=coverage_assertion_id,
         **dataset_manifest_fields,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class DurablePublicationState:
-    """Freshly queried durable catalog state a checkpoint's binding is
-    validated against (ADR-0042 S4/S6). The caller queries this -- e.g. via
-    the same catalog connection ``run_real_server_publish_proof`` already
-    uses -- this module never opens a connection to compute it itself."""
-
-    catalog_dataset_id: str
-    partition_key: str
-    revision: int
-    partition_manifest_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -441,6 +457,19 @@ class RestartOutcome:
     checkpoint: LiveCheckpointV1 | None
     reconcile_result: ReconnectResult | None
     accepted_records: tuple[TradeRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RealServerRestartProofReport:
+    """K10 bounded real restart proof over the existing K02 publish seam."""
+
+    status: str
+    publication: RealServerPublishProofReport | None
+    checkpoint_path: str | None = None
+    checkpoint_identity: str | None = None
+    restart_outcome: RestartOutcome | None = None
+    recent_records: int | None = None
+    restart_accepted_records: int | None = None
 
 
 def resume_live_ingest(
@@ -583,19 +612,290 @@ def next_checkpoint(
     return advance_checkpoint(previous, candidate)
 
 
+def load_current_durable_publication_state(
+    *,
+    checkpoint: LiveCheckpointV1,
+    dsn: str | None,
+) -> DurablePublicationState:
+    """Read the current live catalog binding for a checkpoint's family.
+
+    ``validate_publication_binding`` deliberately takes caller-supplied,
+    freshly observed catalog values. A restart-only process must therefore
+    query the catalog instead of deriving the binding from the checkpoint it
+    is validating.
+    """
+    connection = _connect_catalog(dsn)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT p.partition_key, p.revision, p.manifest_sha256
+                  FROM catalog.partitions p
+                 WHERE p.dataset_id = %s
+                   AND p.partition_key = %s
+                   AND p.state IN (%s, %s, %s)
+                 ORDER BY p.revision DESC
+                 LIMIT 1
+                """,
+                (
+                    checkpoint.catalog_dataset_id,
+                    checkpoint.partition_key,
+                    *K10_RESTART_DURABLE_STATES,
+                ),
+            )
+            rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    if not rows:
+        raise CheckpointBindingError(
+            "checkpoint's bound publication is absent from durable catalog state"
+        )
+    row = rows[0]
+    return DurablePublicationState(
+        catalog_dataset_id=checkpoint.catalog_dataset_id,
+        partition_key=str(row[0]),
+        revision=int(row[1]),
+        partition_manifest_sha256=str(row[2]).strip(),
+    )
+
+
+def _persist_checkpoint_from_publication(
+    *,
+    publication: RealServerPublishProofReport,
+    checkpoint_path: str | Path,
+) -> tuple[CheckpointStore, LiveCheckpointV1] | None:
+    if (
+        publication.durable_publication is None
+        or publication.coverage_id is None
+        or not publication.acquisition.accepted_records
+    ):
+        return None
+
+    store = CheckpointStore(checkpoint_path)
+    previous = store.load()
+    last_record = publication.acquisition.accepted_records[-1]
+    if previous is None:
+        checkpoint = advance_checkpoint(
+            None,
+            LiveCheckpointV1(
+                dataset_identity=bybit_live_dataset_identity(),
+                source_semantics_id=BYBIT_LIVE_SOURCE_SEMANTICS_V1,
+                last_canonical_exchange_ts=Instant.parse(last_record.exchange_ts),
+                last_canonical_trade_id=last_record.trade_id,
+                last_observed_sequence=last_record.sequence,
+                catalog_dataset_id=publication.durable_publication.catalog_dataset_id,
+                partition_key=publication.durable_publication.partition_key,
+                revision=publication.durable_publication.revision,
+                partition_manifest_sha256=publication.durable_publication.partition_manifest_sha256,
+                coverage_segment_id=publication.coverage_id,
+                generation=1,
+                created_at=Instant.parse(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")),
+            ),
+        )
+    else:
+        checkpoint = next_checkpoint(
+            previous,
+            last_record=last_record,
+            last_observed_sequence=last_record.sequence,
+            durable_publication=publication.durable_publication,
+            coverage_segment_id=publication.coverage_id,
+            coverage_status=publication.coverage_status or "",
+            created_at=Instant.parse(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")),
+        )
+    store.save(checkpoint)
+    return store, checkpoint
+
+
+def run_real_server_restart_publish_phase(
+    *,
+    max_messages: int,
+    max_seconds: float,
+    storage_root: str | Path,
+    storage_root_id: str,
+    dsn: str | None,
+    checkpoint_path: str | Path,
+    producer: str,
+    code_ref: str,
+) -> RealServerRestartProofReport:
+    """Publish one bounded real batch and durably persist the restart checkpoint.
+
+    This phase intentionally returns immediately after the checkpoint write:
+    it does not fetch the provider's recent-trade window and does not attempt
+    restart reconciliation. Operators can then run the restart phase from a
+    separate OS process against the same checkpoint path.
+    """
+    publication = run_real_server_publish_proof(
+        max_messages=max_messages,
+        max_seconds=max_seconds,
+        storage_root=storage_root,
+        storage_root_id=storage_root_id,
+        dsn=dsn,
+        producer=producer,
+        code_ref=code_ref,
+    )
+    if publication.status != "PASS":
+        return RealServerRestartProofReport(status=publication.status, publication=publication)
+
+    persisted = _persist_checkpoint_from_publication(
+        publication=publication,
+        checkpoint_path=checkpoint_path,
+    )
+    if persisted is None:
+        return RealServerRestartProofReport(
+            status="REAL_RESTART_PROOF_PENDING",
+            publication=publication,
+        )
+    store, checkpoint = persisted
+    return RealServerRestartProofReport(
+        status="CHECKPOINT_PERSISTED",
+        publication=publication,
+        checkpoint_path=str(store.path),
+        checkpoint_identity=checkpoint.checkpoint_identity,
+    )
+
+
+def run_real_server_restart_phase(
+    *,
+    checkpoint_path: str | Path,
+    dsn: str | None,
+    recent_limit: int = 1000,
+    durable_publication: DurablePublicationState | None = None,
+) -> RealServerRestartProofReport:
+    """Load an existing checkpoint and run only restart reconciliation.
+
+    No publication path is invoked in this phase. Standalone restart reads
+    the current durable catalog binding for the checkpoint's partition
+    family before fetching the provider's recent-trade window, so stale or
+    superseded checkpoints fail closed without doing recovery work.
+    """
+    store = CheckpointStore(checkpoint_path)
+    checkpoint = store.load()
+    if checkpoint is None:
+        return RealServerRestartProofReport(
+            status="NO_CHECKPOINT_TO_RESTART_FROM",
+            publication=None,
+            checkpoint_path=str(store.path),
+        )
+
+    current_publication = durable_publication or load_current_durable_publication_state(
+        checkpoint=checkpoint,
+        dsn=dsn,
+    )
+    validate_publication_binding(
+        checkpoint,
+        catalog_dataset_id=current_publication.catalog_dataset_id,
+        partition_key=current_publication.partition_key,
+        revision=current_publication.revision,
+        partition_manifest_sha256=current_publication.partition_manifest_sha256,
+    )
+
+    recent_records = fetch_recent_public_trades(limit=recent_limit)
+    outcome = resume_live_ingest(
+        checkpoint_store=store,
+        recent_rest_records=recent_records,
+        buffered_ws_records=(),
+        durable_publication=current_publication,
+    )
+    status = "PASS" if outcome.status == "RESUMED" else outcome.status
+    return RealServerRestartProofReport(
+        status=status,
+        publication=None,
+        checkpoint_path=str(store.path),
+        checkpoint_identity=(
+            outcome.checkpoint.checkpoint_identity
+            if outcome.checkpoint is not None
+            else checkpoint.checkpoint_identity
+        ),
+        restart_outcome=outcome,
+        recent_records=len(recent_records),
+        restart_accepted_records=len(outcome.accepted_records),
+    )
+
+
+def run_real_server_restart_proof(
+    *,
+    max_messages: int,
+    max_seconds: float,
+    storage_root: str | Path,
+    storage_root_id: str,
+    dsn: str | None,
+    checkpoint_path: str | Path,
+    producer: str,
+    code_ref: str,
+    recent_limit: int = 1000,
+    phase: str = "both",
+) -> RealServerRestartProofReport:
+    """K10 real-server restart proof entry point.
+
+    The function intentionally composes already-owned seams. ``phase=publish``
+    performs only K02 publication plus checkpoint persistence, ``phase=restart``
+    performs only checkpoint load plus bounded recent-trade reconciliation,
+    and ``phase=both`` preserves the local/hermetic combined flow.
+    """
+    if phase not in {"publish", "restart", "both"}:
+        raise ValueError("phase must be one of: publish, restart, both")
+
+    if phase == "restart":
+        return run_real_server_restart_phase(
+            checkpoint_path=checkpoint_path,
+            dsn=dsn,
+            recent_limit=recent_limit,
+        )
+
+    published = run_real_server_restart_publish_phase(
+        max_messages=max_messages,
+        max_seconds=max_seconds,
+        storage_root=storage_root,
+        storage_root_id=storage_root_id,
+        dsn=dsn,
+        checkpoint_path=checkpoint_path,
+        producer=producer,
+        code_ref=code_ref,
+    )
+    if phase == "publish" or published.status != "CHECKPOINT_PERSISTED":
+        return published
+
+    restarted = run_real_server_restart_phase(
+        checkpoint_path=checkpoint_path,
+        dsn=dsn,
+        recent_limit=recent_limit,
+        durable_publication=(
+            published.publication.durable_publication
+            if published.publication is not None
+            else None
+        ),
+    )
+    return RealServerRestartProofReport(
+        status=restarted.status,
+        publication=published.publication,
+        checkpoint_path=restarted.checkpoint_path,
+        checkpoint_identity=restarted.checkpoint_identity,
+        restart_outcome=restarted.restart_outcome,
+        recent_records=restarted.recent_records,
+        restart_accepted_records=restarted.restart_accepted_records,
+    )
+
+
 __all__ = [
     "BYBIT_PUBLIC_LINEAR_WS_URL",
     "BYBIT_RECENT_TRADES_URL",
     "DurablePublicationState",
+    "K10_RESTART_DURABLE_STATES",
     "LiveProviderProofPending",
     "LiveProviderProofReport",
     "RealServerPublishProofReport",
+    "RealServerRestartProofReport",
     "RestartOutcome",
     "build_arg_parser",
     "fetch_recent_public_trades",
+    "load_current_durable_publication_state",
     "next_checkpoint",
     "resume_live_ingest",
     "run_bounded_live_provider_proof",
     "run_bounded_live_provider_proof_sync",
     "run_real_server_publish_proof",
+    "run_real_server_restart_phase",
+    "run_real_server_restart_publish_phase",
+    "run_real_server_restart_proof",
 ]
