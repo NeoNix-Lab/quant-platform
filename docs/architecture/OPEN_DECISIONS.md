@@ -21,14 +21,15 @@ DG-A FeatureArtifact v1 (E04)                        FROZEN / COMPLETE
 DG-A H01 canonical integration v1 (E06)              FROZEN / COMPLETE
 DG-B B04 non-contiguous coverage reads v1            FROZEN / COMPLETE
 DG-B A10 backfill / repair v1                        FROZEN / COMPLETE
-DG-B A11 Bybit live acquisition semantics v1         FROZEN / MISSING
+DG-B A11 Bybit live acquisition semantics v1         FROZEN / COMPLETE (PR #112)
 F03 Outcome v1 semantic authority                    FROZEN / COMPLETE
 DG-E F07 labels/censoring/lockbox v1                 FROZEN / COMPLETE
 DG-E F08 DSR/PBO robust comparison v1                FROZEN / COMPLETE
-DG-H K02 live-ingest runtime identity v1             FROZEN / MISSING
+DG-H K02 live-ingest runtime identity v1             FROZEN / COMPLETE (PR #113)
 DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
-DG-H K08 backup / restore v1                         FROZEN / MISSING
-DG-H K10 checkpoint / recovery v1                    FROZEN / MISSING
+DG-H K08 backup / restore v1                         FROZEN / COMPLETE (PR #111)
+DG-H K10 checkpoint / recovery v1                    FROZEN / COMPLETE hermetic (PR #114);
+                                                       real-server restart proof still pending
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -181,9 +182,11 @@ Accepted A11 v1 decisions include:
 - disconnect/reconnect uses only bounded provider evidence capable of proving continuity; inability to recover the last durable key produces explicit non-complete coverage, never fabricated completeness;
 - transport is at-least-once while the canonical economic effect is idempotent.
 
-A11 implementation remains `MISSING` and still requires K08 proof before activation.
+A11 implementation is `COMPLETE` (PR #112, merged into `main` via PR #116).
 
-### Live gap remediation beyond bounded reconciliation — **OPEN_BLOCKING for Live Ingest Vertical closeout**
+### Live gap remediation beyond bounded reconciliation — **DISPOSED, `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`**
+
+Investigated in issue #110 (2026-09-24; full evidence in the issue's closing comment). A real, attributable Bybit historical archive exists for BTCUSDT (`public.bybit.com/trading/BTCUSDT/...csv.gz`), but at investigation time the archive directory stopped one day short of the live recent-trade window, so no current archive/recent-trade overlap could be compared, and no provider completeness attestation was found for any requested interval. The disposition below remains the accepted rule going forward; this is not a new decision, it is confirmation that the trigger condition has not yet been proven satisfiable and the gap stays explicit. A future issue may reopen this once archive/live overlap exists and completeness evidence can actually be produced for a bounded interval.
 
 ADR-0040 deliberately does not invent a provider capability for interruptions that exceed the bounded recent-public-trades reconciliation window.
 
