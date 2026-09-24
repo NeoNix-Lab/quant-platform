@@ -336,8 +336,10 @@ def _next_revision(dsn: str | None, identity: Any, partition_key: str) -> int:
 
 def _record_intent_interval(records: tuple[TradeRecord, ...]) -> tuple[str, str]:
     instants = tuple(Instant.parse(record.exchange_ts) for record in records)
-    start = min(instants)
-    end = Instant(max(instant.epoch_ns for instant in instants) + 1)
+    min_ns = min(instant.epoch_ns for instant in instants)
+    max_ns = max(instant.epoch_ns for instant in instants)
+    start = Instant((min_ns // 1_000) * 1_000)
+    end = Instant(((max_ns // 1_000) + 1) * 1_000)
     return start.isoformat(), end.isoformat()
 
 

@@ -291,6 +291,12 @@ class NextCheckpointTests(unittest.TestCase):
 
 
 class RestartReconciliationCertificationProfileTests(unittest.TestCase):
+    def test_restart_reconciliation_interval_is_rounded_to_coverage_microseconds(self):
+        start, end = app_bybit_live._record_intent_interval((trade(1001, "after", "2"),))
+
+        self.assertEqual(start, "1970-01-01T00:00:00.000001Z")
+        self.assertEqual(end, "1970-01-01T00:00:00.000002Z")
+
     def test_restart_reconciliation_coverage_is_accepted_without_fake_session_evidence(self):
         record = trade(1001, "after", "2")
         result = ReconnectResult(
