@@ -299,12 +299,14 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         self._original_recent = app_bybit_live.fetch_recent_public_trades
         self._original_resume = app_bybit_live.resume_live_ingest
         self._original_load_publication = app_bybit_live.load_current_durable_publication_state
+        self._original_connect_catalog = app_bybit_live._connect_catalog
 
     def tearDown(self):
         app_bybit_live.run_real_server_publish_proof = self._original_publish
         app_bybit_live.fetch_recent_public_trades = self._original_recent
         app_bybit_live.resume_live_ingest = self._original_resume
         app_bybit_live.load_current_durable_publication_state = self._original_load_publication
+        app_bybit_live._connect_catalog = self._original_connect_catalog
         self.tempdir.cleanup()
 
     def _publish_report(self, records):
@@ -493,6 +495,71 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
                 code_ref="test",
                 phase="restart",
             )
+
+    def test_catalog_lookup_uses_eligible_states_and_newest_revision(self):
+        checkpoint = first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication)
+        executions = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, statement, params):
+                executions.append((statement, params))
+
+            def fetchall(self):
+                return [
+                    (self.publication.partition_key, 2, "b" * 64),
+                    (self.publication.partition_key, 1, "a" * 64),
+                ]
+
+        class Connection:
+            def __init__(self, outer):
+                self.outer = outer
+                self.closed = False
+
+            def cursor(self):
+                cursor = Cursor()
+                cursor.publication = self.outer.publication
+                return cursor
+
+            def close(self):
+                self.closed = True
+
+        connection = Connection(self)
+
+        def fake_connect(dsn):
+            self.assertEqual(dsn, "postgresql://example")
+            return connection
+
+        app_bybit_live._connect_catalog = fake_connect
+
+        durable = app_bybit_live.load_current_durable_publication_state(
+            checkpoint=checkpoint,
+            dsn="postgresql://example",
+        )
+
+        self.assertTrue(connection.closed)
+        self.assertEqual(durable.revision, 2)
+        self.assertEqual(durable.partition_manifest_sha256, "b" * 64)
+        statement, params = executions[0]
+        self.assertIn("p.state IN (%s, %s, %s)", statement)
+        self.assertIn("ORDER BY p.revision DESC", statement)
+        self.assertIn("LIMIT 1", statement)
+        self.assertNotIn("p.state <> 'superseded'", statement)
+        self.assertEqual(
+            params,
+            (
+                self.publication.catalog_dataset_id,
+                self.publication.partition_key,
+                "valid",
+                "closed",
+                "degraded",
+            ),
+        )
 
     def test_restart_phase_without_checkpoint_is_explicit_and_does_not_fetch(self):
         def fail_recent(*, limit):

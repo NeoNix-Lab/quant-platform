@@ -71,6 +71,7 @@ from quant_platform.operations.checkpoint import (
 
 BYBIT_PUBLIC_LINEAR_WS_URL = "wss://stream.bybit.com/v5/public/linear"
 BYBIT_RECENT_TRADES_URL = "https://api.bybit.com/v5/market/recent-trade"
+K10_RESTART_DURABLE_STATES = LifecyclePolicy.VALID_CLOSED_AND_DEGRADED.states
 
 
 class LiveProviderProofPending(RuntimeError):
@@ -632,10 +633,15 @@ def load_current_durable_publication_state(
                   FROM catalog.partitions p
                  WHERE p.dataset_id = %s
                    AND p.partition_key = %s
-                   AND p.state <> 'superseded'
-                 ORDER BY p.revision
+                   AND p.state IN (%s, %s, %s)
+                 ORDER BY p.revision DESC
+                 LIMIT 1
                 """,
-                (checkpoint.catalog_dataset_id, checkpoint.partition_key),
+                (
+                    checkpoint.catalog_dataset_id,
+                    checkpoint.partition_key,
+                    *K10_RESTART_DURABLE_STATES,
+                ),
             )
             rows = cursor.fetchall()
     finally:
@@ -644,10 +650,6 @@ def load_current_durable_publication_state(
     if not rows:
         raise CheckpointBindingError(
             "checkpoint's bound publication is absent from durable catalog state"
-        )
-    if len(rows) != 1:
-        raise CheckpointBindingError(
-            "checkpoint's partition family has ambiguous live durable catalog state"
         )
     row = rows[0]
     return DurablePublicationState(
@@ -879,6 +881,7 @@ __all__ = [
     "BYBIT_PUBLIC_LINEAR_WS_URL",
     "BYBIT_RECENT_TRADES_URL",
     "DurablePublicationState",
+    "K10_RESTART_DURABLE_STATES",
     "LiveProviderProofPending",
     "LiveProviderProofReport",
     "RealServerPublishProofReport",
