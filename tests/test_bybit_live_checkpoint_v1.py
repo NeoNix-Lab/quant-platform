@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import quant_platform.application.bybit_live as app_bybit_live  # noqa: E402
 from quant_platform.application.bybit_live import (  # noqa: E402
+    BybitRestartReconciliationCertificationProfile,
     DurablePublicationState,
     LiveProviderProofReport,
     RealServerPublishProofReport,
@@ -38,6 +39,8 @@ from quant_platform.operations.checkpoint import (  # noqa: E402
 )
 from quant_platform.source_adapters.bybit_live import (  # noqa: E402
     BybitLiveIntegrityError,
+    ReconnectResult,
+    ReconnectStatus,
 )
 
 
@@ -287,6 +290,40 @@ class NextCheckpointTests(unittest.TestCase):
             )
 
 
+class RestartReconciliationCertificationProfileTests(unittest.TestCase):
+    def test_restart_reconciliation_coverage_is_accepted_without_fake_session_evidence(self):
+        record = trade(1001, "after", "2")
+        result = ReconnectResult(
+            status=ReconnectStatus.CONTINUITY_RESTORED,
+            accepted_records=(record,),
+            evidence={"reason": "last durable TradeKeyV1 found", "recent_window_records": 2},
+        )
+        coverage = app_bybit_live._build_restart_reconciliation_coverage_document(
+            dataset_identity=IDENTITY,
+            coverage_id="k10-restart-reconciliation-1",
+            intent_start="1970-01-01T00:00:01Z",
+            intent_end="1970-01-01T00:00:01.000000001Z",
+            assertion_id="k10-restart-reconciliation-assertion-1",
+            assertion_start="1970-01-01T00:00:01Z",
+            assertion_end="1970-01-01T00:00:01.000000001Z",
+            partition_key="dt=1970-01-01",
+            revision=2,
+            reconcile_result=result,
+            created_at="1970-01-01T00:00:01.000000001Z",
+            producer="test",
+            code_ref="test",
+        )
+        profile = BybitRestartReconciliationCertificationProfile("test")
+
+        source = profile.validate_source(IDENTITY, (coverage,))
+        canonical = profile.validate_records(IDENTITY, (record,))
+
+        self.assertEqual(source["source_semantics"], "bybit-recent-public-trades-v5-v1")
+        self.assertEqual(source["mapping"], "bybit-recent-public-trades-v5-to-trade-v1")
+        self.assertEqual(canonical["records"], 1)
+        self.assertEqual(canonical["trade_id_policy"], "non-null-unique-(exchange_ts,trade_id)")
+
+
 class RealServerRestartProofEntryPointTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -298,6 +335,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         self._original_publish = app_bybit_live.run_real_server_publish_proof
         self._original_recent = app_bybit_live.fetch_recent_public_trades
         self._original_resume = app_bybit_live.resume_live_ingest
+        self._original_restart_publish = app_bybit_live._publish_restart_reconciliation_records
         self._original_load_publication = app_bybit_live.load_current_durable_publication_state
         self._original_connect_catalog = app_bybit_live._connect_catalog
 
@@ -305,6 +343,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         app_bybit_live.run_real_server_publish_proof = self._original_publish
         app_bybit_live.fetch_recent_public_trades = self._original_recent
         app_bybit_live.resume_live_ingest = self._original_resume
+        app_bybit_live._publish_restart_reconciliation_records = self._original_restart_publish
         app_bybit_live.load_current_durable_publication_state = self._original_load_publication
         app_bybit_live._connect_catalog = self._original_connect_catalog
         self.tempdir.cleanup()
@@ -329,6 +368,31 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
             coverage_assertion_id="coverage-assertion-1",
         )
 
+    def _restart_publish_report(self, records):
+        return RealServerPublishProofReport(
+            status="PASS",
+            acquisition=LiveProviderProofReport(
+                status="PASS", topic="publicTrade.BTCUSDT", messages=0,
+                records=len(records), duplicates_removed=0, final_state="RECONCILED",
+                errors=(), accepted_records=tuple(records), session_evidence=None,
+            ),
+            partition_key=self.publication.partition_key,
+            artifact_path="/srv/quant/canonical/trades/bybit/BTCUSDT/trade-v1/dt=2026-09-24/restart.parquet",
+            coverage_status="complete",
+            certification_status="pass",
+            eligibility_published=True,
+            datagateway_read_record_count=len(records),
+            datagateway_read_matches_published=True,
+            durable_publication=DurablePublicationState(
+                catalog_dataset_id=self.publication.catalog_dataset_id,
+                partition_key=self.publication.partition_key,
+                revision=self.publication.revision + 1,
+                partition_manifest_sha256="b" * 64,
+            ),
+            coverage_id="coverage-2",
+            coverage_assertion_id="coverage-assertion-2",
+        )
+
     def test_real_restart_proof_persists_checkpoint_and_resumes_from_recent_window(self):
         anchor = trade(1000, "anchor", "1")
         after = trade(1001, "after", "2")
@@ -340,8 +404,14 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
             self.assertEqual(limit, 1000)
             return (anchor, after)
 
+        def fake_restart_publish(*, accepted_records, reconcile_result, **_kwargs):
+            self.assertEqual([record.trade_id for record in accepted_records], ["after"])
+            self.assertEqual(reconcile_result.status.value, "CONTINUITY_RESTORED")
+            return self._restart_publish_report(accepted_records)
+
         app_bybit_live.run_real_server_publish_proof = fake_publish
         app_bybit_live.fetch_recent_public_trades = fake_recent
+        app_bybit_live._publish_restart_reconciliation_records = fake_restart_publish
 
         result = run_real_server_restart_proof(
             max_messages=1,
@@ -358,6 +428,10 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         self.assertTrue(self.checkpoint_path.exists())
         self.assertEqual(result.restart_outcome.status, "RESUMED")
         self.assertEqual([record.trade_id for record in result.restart_outcome.accepted_records], ["after"])
+        checkpoint = CheckpointStore(self.checkpoint_path).load()
+        self.assertEqual(checkpoint.generation, 2)
+        self.assertEqual(checkpoint.last_canonical_trade_id, "after")
+        self.assertEqual(result.checkpoint_identity, checkpoint.checkpoint_identity)
 
     def test_real_restart_proof_does_not_checkpoint_when_publish_is_pending(self):
         def fake_publish(**_kwargs):
@@ -419,7 +493,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         self.assertIsNone(result.restart_outcome)
         self.assertIsNotNone(result.checkpoint_identity)
 
-    def test_restart_phase_loads_checkpoint_without_publishing(self):
+    def test_restart_phase_publishes_reconciled_records_and_advances_checkpoint(self):
         anchor = trade(1000, "anchor", "1")
         after = trade(1001, "after", "2")
         store = CheckpointStore(self.checkpoint_path)
@@ -437,9 +511,15 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
             self.assertIsNone(dsn)
             return self.publication
 
+        def fake_restart_publish(*, accepted_records, reconcile_result, **_kwargs):
+            self.assertEqual([record.trade_id for record in accepted_records], ["after"])
+            self.assertEqual(reconcile_result.status.value, "CONTINUITY_RESTORED")
+            return self._restart_publish_report(accepted_records)
+
         app_bybit_live.run_real_server_publish_proof = fail_publish
         app_bybit_live.fetch_recent_public_trades = fake_recent
         app_bybit_live.load_current_durable_publication_state = fake_current_publication
+        app_bybit_live._publish_restart_reconciliation_records = fake_restart_publish
 
         result = run_real_server_restart_proof(
             max_messages=1,
@@ -454,9 +534,13 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "PASS")
-        self.assertIsNone(result.publication)
+        self.assertEqual(result.publication.status, "PASS")
         self.assertEqual(result.restart_outcome.status, "RESUMED")
         self.assertEqual([record.trade_id for record in result.restart_outcome.accepted_records], ["after"])
+        advanced = store.load()
+        self.assertEqual(advanced.generation, 2)
+        self.assertEqual(advanced.last_canonical_trade_id, "after")
+        self.assertEqual(result.checkpoint_identity, advanced.checkpoint_identity)
 
     def test_restart_phase_refuses_stale_catalog_binding_before_fetch(self):
         store = CheckpointStore(self.checkpoint_path)
@@ -616,9 +700,13 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
             self.assertIsNone(dsn)
             return self.publication
 
+        def fake_restart_publish(*, accepted_records, reconcile_result, **_kwargs):
+            return self._restart_publish_report(accepted_records)
+
         app_bybit_live.run_real_server_publish_proof = fail_publish
         app_bybit_live.fetch_recent_public_trades = fake_recent
         app_bybit_live.load_current_durable_publication_state = fake_current_publication
+        app_bybit_live._publish_restart_reconciliation_records = fake_restart_publish
 
         restarted = run_real_server_restart_proof(
             max_messages=1,
@@ -636,6 +724,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         self.assertEqual(restarted.status, "PASS")
         self.assertEqual(restarted.restart_outcome.status, "RESUMED")
         self.assertEqual([record.trade_id for record in restarted.restart_outcome.accepted_records], ["after"])
+        self.assertEqual(CheckpointStore(self.checkpoint_path).load().generation, 2)
 
 
 if __name__ == "__main__":
