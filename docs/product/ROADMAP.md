@@ -61,13 +61,17 @@ F03 OutcomeSpec/Outcome                              COMPLETE
 F04 Event studies and parameter sweep runtime v1     COMPLETE
 F07 labels/censoring/lockbox                         COMPLETE
 F08 DSR/PBO robust comparison                        COMPLETE
+K08 backup / restore v1                              COMPLETE
+A11 Bybit live trades acquisition v1                 COMPLETE
+K02 live-ingest runtime identity v1                  COMPLETE
+K10 checkpoint / recovery v1                        PARTIAL (real restart proof pending)
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
 Broad independent Producer/Consumer expansion        UNLOCKED
 ```
 
-Wave 3 is implementation-complete through F08. After that closeout, the project selected **Live Ingest Vertical v1** and froze its first semantic authority set:
+Wave 3 is implementation-complete through F08. The selected **Live Ingest Vertical v1** authority set remains:
 
 ```text
 ADR-0039  K08 backup / restore v1
@@ -76,7 +80,7 @@ ADR-0041  K02 live-ingest runtime identity v1
 ADR-0042  K10 checkpoint / recovery v1
 ```
 
-These ADRs freeze semantics only. K08/A11/K10 implementation remains missing, and K02 implementation is conditional on a real deployment authorization mutation.
+PR #116 has integrated the Live Ingest implementation branch into `main`. K08, A11 and K02 are now implementation `COMPLETE`. K10 has its persisted checkpoint/recovery implementation and hermetic proof matrix integrated, but remains `PARTIAL` until the bounded real-server restart/deployed-checkpoint proof is completed.
 
 Completed checkpoints are credited and must not be re-proved absent a concrete invalidating change.
 
@@ -91,7 +95,7 @@ OPEN_BLOCKING                   11
 OPEN_DEFERABLE                  8
 ROADMAP_DEFINED                 68 + 11 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         45 / 87 = 51.7%
+IMPLEMENTATION_COMPLETE         48 / 87 = 55.2%
 ```
 
 The 100% planning score means every roadmap atom is classified. It does **not** mean every future semantic choice is frozen.
@@ -114,11 +118,11 @@ DG-H  Operational safety
 Important current boundaries:
 
 - DG-A: `D05` remains independent from completed H01.
-- DG-B: A10/B04 historical repair is complete; A11 semantics are now frozen by ADR-0040; B06 consumer-live cursor remains open/outside the selected scope.
-- DG-B long-gap remediation remains `OPEN_BLOCKING` for claiming an unreconciled interruption filled/lossless. A11 may still record an explicit gap and continue with a new governed segment.
+- DG-B: A10/B04 historical repair is complete; A11 is frozen and implemented; B06 consumer-live cursor remains open/outside the selected scope.
+- DG-B long-gap remediation remains `OPEN_BLOCKING` for claiming an unreconciled interruption filled/lossless. A11/K10 may still record an explicit gap and continue with a new governed segment.
 - DG-C: L1 does not activate L2; L3 waits for real feed evidence.
 - DG-E: complete through F08.
-- DG-H: K03/K04/K05/K06 are complete; K02/K08/K10 semantics are frozen by ADR-0041/0039/0042; K07/K09 remain open and are outside current scope.
+- DG-H: K02/K03/K04/K05/K06/K08 are complete; K10 is frozen and `PARTIAL` pending real restart proof; K07/K09 remain open and are outside current scope.
 
 Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension, multi-asset execution and concrete API transport — remain open until their evidence trigger exists.
 
@@ -131,7 +135,7 @@ K06 source protection -> K07 relocation
 K08 backup/restore proof -> K09 deletion authority
 ```
 
-K10 semantics are already frozen, but implementation follows A11 because it must checkpoint actual A11 state. Backup/restore does not require tier relocation.
+K08/A11/K02 implementation and real-server publication evidence are now credited. K10 implementation is integrated, but operational closeout still requires the real restart proof. Backup/restore does not require tier relocation.
 
 ## Vertical milestones
 
@@ -143,30 +147,28 @@ V4  Representation -> Feature -> canonical H01           COMPLETE
 V5  Feature -> Research                                  COMPLETE
 V6  Research -> Validation                               COMPLETE
 V7  Strategy -> deterministic Replay                     BLOCKED by DG-F / upstream implementation
-V8  Historical -> Live                                   PARTIAL AUTHORITY FROZEN; runtime missing
+V8  Historical -> Live                                   PARTIAL; first live-ingest path integrated, closeout pending
 V9  Application -> API -> Client                         application service complete; transport deferred
 V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
 ```
 
-V8 now has the first acquisition/recovery authority frozen, but is not complete: K08 proof, A11 runtime and K10 runtime are still missing, B06 remains outside the selected first-ingest scope, and any long gap beyond bounded provider reconciliation must remain explicit until authoritative repair evidence exists.
+V8 is not complete. The first live-ingest producer path now converges with canonical publication/storage/access under K08/A11/K02 evidence, but K10 still lacks its real-server restart proof; B06 remains outside the selected first-ingest scope; and any long gap beyond bounded provider reconciliation must remain explicit until authoritative repair evidence exists.
 
 ## Current execution frontier
 
-Wave 3 is complete. The selected macro-scope is now **Live Ingest Vertical v1**, governed by `SCOPE.md`.
+PR #116 integrated `implement/live-ingest` into `main`. The selected macro-scope remains **Live Ingest Vertical v1**, governed by `SCOPE.md`, with closeout still pending.
 
-The current bounded implementation frontier is:
+The current bounded frontier is:
 
 ```text
-1. K08 implementation + isolated restore proof
+1. complete K10 bounded real-server restart/deployed-checkpoint proof
         ↓
-2. A11 Bybit BTCUSDT live acquisition
+2. resolve DG-B long-gap proposition from observed/provider evidence (#110)
         ↓
-3. real-server proof (+ K02 deployment conformance if activated)
-        ↓
-4. K10 checkpoint/recovery implementation
+3. Live Ingest Vertical v1 governance closeout
 ```
 
-Long-gap remediation is not a speculative pre-A11 implementation task. It activates when a real interruption leaves support that bounded provider reconciliation cannot prove. Until an attributable repair source/path exists, the interval remains explicit non-complete coverage.
+Long-gap remediation is not a speculative implementation task. It activates only when a qualifying unresolved gap/source proposition exists. Until an attributable repair source/path proves the missing interval, that interval remains explicit non-complete coverage.
 
 B06 live-consumer access remains outside the selected macro-scope.
 
@@ -183,7 +185,7 @@ Wave 2  Representation / Feature                          COMPLETE
 Wave 3  Research / Validation                             COMPLETE
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
-Wave 6  Live Data Plane                                   K03,K04,K05,K06,A10,A16 COMPLETE; K02,K08,K10,A11 FROZEN/MISSING; K07,K09,B06 remain open/missing
+Wave 6  Live Data Plane                                   K02,K03,K04,K05,K06,K08,A10,A11,A16 COMPLETE; K10 PARTIAL (real restart pending); K07,K09,B06 remain open/missing
 Wave 7  Runtime / Clients                                 J02 -> thin clients when real client need exists
 Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates
 ```
@@ -194,7 +196,7 @@ The selected Live Ingest scope is a bounded path through part of Wave 6, not aut
 
 Capacity observation, application work, historical representation work, backup design and other independent capabilities may advance in parallel when their declared dependencies are met, subject to the active scope's mutation policy.
 
-Backfill/repair does not require the entire storage-tiering program. Backup/restore must precede A11 under the selected first-live path and must precede deletion authority, but need not wait for tier relocation. API transport does not precede the completed in-process ASS-02 service.
+Backfill/repair does not require the entire storage-tiering program. K08 backup/restore and A11 live acquisition are complete for the selected first-live path; K09 deletion authority remains separate, and tier relocation remains independent. API transport does not precede the completed in-process ASS-02 service.
 
 ## Planning rule
 
