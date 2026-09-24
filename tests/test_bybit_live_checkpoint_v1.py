@@ -18,10 +18,14 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+import quant_platform.application.bybit_live as app_bybit_live  # noqa: E402
 from quant_platform.application.bybit_live import (  # noqa: E402
     DurablePublicationState,
+    LiveProviderProofReport,
+    RealServerPublishProofReport,
     next_checkpoint,
     resume_live_ingest,
+    run_real_server_restart_proof,
 )
 from quant_platform.data.models import DatasetIdentity, Instant, TradeRecord  # noqa: E402
 from quant_platform.operations.checkpoint import (  # noqa: E402
@@ -281,6 +285,100 @@ class NextCheckpointTests(unittest.TestCase):
                 durable_publication=publication, coverage_segment_id="coverage-2",
                 coverage_status="known_gap", created_at=Instant(2000),
             )
+
+
+class RealServerRestartProofEntryPointTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.checkpoint_path = Path(self.tempdir.name) / "k10-checkpoint.json"
+        self.publication = DurablePublicationState(
+            catalog_dataset_id="dataset-uuid-1", partition_key="dt=2026-09-24",
+            revision=1, partition_manifest_sha256="a" * 64,
+        )
+        self._original_publish = app_bybit_live.run_real_server_publish_proof
+        self._original_recent = app_bybit_live.fetch_recent_public_trades
+
+    def tearDown(self):
+        app_bybit_live.run_real_server_publish_proof = self._original_publish
+        app_bybit_live.fetch_recent_public_trades = self._original_recent
+        self.tempdir.cleanup()
+
+    def _publish_report(self, records):
+        return RealServerPublishProofReport(
+            status="PASS",
+            acquisition=LiveProviderProofReport(
+                status="PASS", topic="publicTrade.BTCUSDT", messages=1,
+                records=len(records), duplicates_removed=0, final_state="ACQUIRING",
+                errors=(), accepted_records=tuple(records), session_evidence=None,
+            ),
+            partition_key=self.publication.partition_key,
+            artifact_path="/srv/quant/canonical/trades/bybit/BTCUSDT/trade-v1/dt=2026-09-24/part.parquet",
+            coverage_status="complete",
+            certification_status="pass",
+            eligibility_published=True,
+            datagateway_read_record_count=len(records),
+            datagateway_read_matches_published=True,
+            durable_publication=self.publication,
+            coverage_id="coverage-1",
+            coverage_assertion_id="coverage-assertion-1",
+        )
+
+    def test_real_restart_proof_persists_checkpoint_and_resumes_from_recent_window(self):
+        anchor = trade(1000, "anchor", "1")
+        after = trade(1001, "after", "2")
+
+        def fake_publish(**_kwargs):
+            return self._publish_report((anchor,))
+
+        def fake_recent(*, limit):
+            self.assertEqual(limit, 1000)
+            return (anchor, after)
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+        app_bybit_live.fetch_recent_public_trades = fake_recent
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+        )
+
+        self.assertEqual(result.status, "PASS")
+        self.assertTrue(self.checkpoint_path.exists())
+        self.assertEqual(result.restart_outcome.status, "RESUMED")
+        self.assertEqual([record.trade_id for record in result.restart_outcome.accepted_records], ["after"])
+
+    def test_real_restart_proof_does_not_checkpoint_when_publish_is_pending(self):
+        def fake_publish(**_kwargs):
+            return RealServerPublishProofReport(
+                status="LIVE_PROVIDER_PROOF_PENDING",
+                acquisition=LiveProviderProofReport(
+                    status="LIVE_PROVIDER_PROOF_PENDING", topic="publicTrade.BTCUSDT",
+                    messages=0, records=0, duplicates_removed=0,
+                    final_state="DISCONNECTED", errors=("timeout",),
+                ),
+            )
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+
+        result = run_real_server_restart_proof(
+            max_messages=1,
+            max_seconds=1,
+            storage_root="/srv/quant",
+            storage_root_id="hot",
+            dsn=None,
+            checkpoint_path=self.checkpoint_path,
+            producer="test",
+            code_ref="test",
+        )
+
+        self.assertEqual(result.status, "LIVE_PROVIDER_PROOF_PENDING")
+        self.assertFalse(self.checkpoint_path.exists())
 
 
 if __name__ == "__main__":
