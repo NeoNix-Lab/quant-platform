@@ -298,11 +298,13 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         self._original_publish = app_bybit_live.run_real_server_publish_proof
         self._original_recent = app_bybit_live.fetch_recent_public_trades
         self._original_resume = app_bybit_live.resume_live_ingest
+        self._original_load_publication = app_bybit_live.load_current_durable_publication_state
 
     def tearDown(self):
         app_bybit_live.run_real_server_publish_proof = self._original_publish
         app_bybit_live.fetch_recent_public_trades = self._original_recent
         app_bybit_live.resume_live_ingest = self._original_resume
+        app_bybit_live.load_current_durable_publication_state = self._original_load_publication
         self.tempdir.cleanup()
 
     def _publish_report(self, records):
@@ -428,8 +430,14 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
             self.assertEqual(limit, 1000)
             return (anchor, after)
 
+        def fake_current_publication(*, checkpoint, dsn):
+            self.assertEqual(checkpoint.catalog_dataset_id, self.publication.catalog_dataset_id)
+            self.assertIsNone(dsn)
+            return self.publication
+
         app_bybit_live.run_real_server_publish_proof = fail_publish
         app_bybit_live.fetch_recent_public_trades = fake_recent
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication
 
         result = run_real_server_restart_proof(
             max_messages=1,
@@ -447,6 +455,44 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         self.assertIsNone(result.publication)
         self.assertEqual(result.restart_outcome.status, "RESUMED")
         self.assertEqual([record.trade_id for record in result.restart_outcome.accepted_records], ["after"])
+
+    def test_restart_phase_refuses_stale_catalog_binding_before_fetch(self):
+        store = CheckpointStore(self.checkpoint_path)
+        store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
+        stale = DurablePublicationState(
+            catalog_dataset_id=self.publication.catalog_dataset_id,
+            partition_key=self.publication.partition_key,
+            revision=2,
+            partition_manifest_sha256="b" * 64,
+        )
+
+        def fail_publish(**_kwargs):
+            raise AssertionError("restart phase must not publish a fresh batch")
+
+        def fake_current_publication(*, checkpoint, dsn):
+            self.assertEqual(checkpoint.revision, 1)
+            self.assertIsNone(dsn)
+            return stale
+
+        def fail_recent(*, limit):
+            raise AssertionError(f"stale catalog binding must fail before recent fetch, got limit={limit}")
+
+        app_bybit_live.run_real_server_publish_proof = fail_publish
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication
+        app_bybit_live.fetch_recent_public_trades = fail_recent
+
+        with self.assertRaises(CheckpointBindingError):
+            run_real_server_restart_proof(
+                max_messages=1,
+                max_seconds=1,
+                storage_root="/srv/quant",
+                storage_root_id="hot",
+                dsn=None,
+                checkpoint_path=self.checkpoint_path,
+                producer="test",
+                code_ref="test",
+                phase="restart",
+            )
 
     def test_restart_phase_without_checkpoint_is_explicit_and_does_not_fetch(self):
         def fail_recent(*, limit):
@@ -498,8 +544,14 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
             self.assertEqual(limit, 1000)
             return (anchor, after)
 
+        def fake_current_publication(*, checkpoint, dsn):
+            self.assertEqual(checkpoint.catalog_dataset_id, self.publication.catalog_dataset_id)
+            self.assertIsNone(dsn)
+            return self.publication
+
         app_bybit_live.run_real_server_publish_proof = fail_publish
         app_bybit_live.fetch_recent_public_trades = fake_recent
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication
 
         restarted = run_real_server_restart_proof(
             max_messages=1,

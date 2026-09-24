@@ -59,6 +59,7 @@ from quant_platform.source_adapters.bybit_live import (
     reconcile_after_disconnect,
 )
 from quant_platform.operations.checkpoint import (
+    CheckpointBindingError,
     CheckpointDomainMismatch,
     CheckpointError,
     CheckpointStore,
@@ -610,12 +611,50 @@ def next_checkpoint(
     return advance_checkpoint(previous, candidate)
 
 
-def _checkpoint_publication_state(checkpoint: LiveCheckpointV1) -> DurablePublicationState:
+def load_current_durable_publication_state(
+    *,
+    checkpoint: LiveCheckpointV1,
+    dsn: str | None,
+) -> DurablePublicationState:
+    """Read the current live catalog binding for a checkpoint's family.
+
+    ``validate_publication_binding`` deliberately takes caller-supplied,
+    freshly observed catalog values. A restart-only process must therefore
+    query the catalog instead of deriving the binding from the checkpoint it
+    is validating.
+    """
+    connection = _connect_catalog(dsn)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT p.partition_key, p.revision, p.manifest_sha256
+                  FROM catalog.partitions p
+                 WHERE p.dataset_id = %s
+                   AND p.partition_key = %s
+                   AND p.state <> 'superseded'
+                 ORDER BY p.revision
+                """,
+                (checkpoint.catalog_dataset_id, checkpoint.partition_key),
+            )
+            rows = cursor.fetchall()
+    finally:
+        connection.close()
+
+    if not rows:
+        raise CheckpointBindingError(
+            "checkpoint's bound publication is absent from durable catalog state"
+        )
+    if len(rows) != 1:
+        raise CheckpointBindingError(
+            "checkpoint's partition family has ambiguous live durable catalog state"
+        )
+    row = rows[0]
     return DurablePublicationState(
         catalog_dataset_id=checkpoint.catalog_dataset_id,
-        partition_key=checkpoint.partition_key,
-        revision=checkpoint.revision,
-        partition_manifest_sha256=checkpoint.partition_manifest_sha256,
+        partition_key=str(row[0]),
+        revision=int(row[1]),
+        partition_manifest_sha256=str(row[2]).strip(),
     )
 
 
@@ -717,14 +756,16 @@ def run_real_server_restart_publish_phase(
 def run_real_server_restart_phase(
     *,
     checkpoint_path: str | Path,
+    dsn: str | None,
     recent_limit: int = 1000,
+    durable_publication: DurablePublicationState | None = None,
 ) -> RealServerRestartProofReport:
     """Load an existing checkpoint and run only restart reconciliation.
 
-    No publication path is invoked in this phase. The durable publication
-    binding used for validation is the state already persisted in the
-    checkpoint, so a separate process can prove restart behavior without
-    first publishing a fresh batch.
+    No publication path is invoked in this phase. Standalone restart reads
+    the current durable catalog binding for the checkpoint's partition
+    family before fetching the provider's recent-trade window, so stale or
+    superseded checkpoints fail closed without doing recovery work.
     """
     store = CheckpointStore(checkpoint_path)
     checkpoint = store.load()
@@ -735,12 +776,24 @@ def run_real_server_restart_phase(
             checkpoint_path=str(store.path),
         )
 
+    current_publication = durable_publication or load_current_durable_publication_state(
+        checkpoint=checkpoint,
+        dsn=dsn,
+    )
+    validate_publication_binding(
+        checkpoint,
+        catalog_dataset_id=current_publication.catalog_dataset_id,
+        partition_key=current_publication.partition_key,
+        revision=current_publication.revision,
+        partition_manifest_sha256=current_publication.partition_manifest_sha256,
+    )
+
     recent_records = fetch_recent_public_trades(limit=recent_limit)
     outcome = resume_live_ingest(
         checkpoint_store=store,
         recent_rest_records=recent_records,
         buffered_ws_records=(),
-        durable_publication=_checkpoint_publication_state(checkpoint),
+        durable_publication=current_publication,
     )
     status = "PASS" if outcome.status == "RESUMED" else outcome.status
     return RealServerRestartProofReport(
@@ -784,6 +837,7 @@ def run_real_server_restart_proof(
     if phase == "restart":
         return run_real_server_restart_phase(
             checkpoint_path=checkpoint_path,
+            dsn=dsn,
             recent_limit=recent_limit,
         )
 
@@ -802,7 +856,13 @@ def run_real_server_restart_proof(
 
     restarted = run_real_server_restart_phase(
         checkpoint_path=checkpoint_path,
+        dsn=dsn,
         recent_limit=recent_limit,
+        durable_publication=(
+            published.publication.durable_publication
+            if published.publication is not None
+            else None
+        ),
     )
     return RealServerRestartProofReport(
         status=restarted.status,
@@ -826,6 +886,7 @@ __all__ = [
     "RestartOutcome",
     "build_arg_parser",
     "fetch_recent_public_trades",
+    "load_current_durable_publication_state",
     "next_checkpoint",
     "resume_live_ingest",
     "run_bounded_live_provider_proof",
