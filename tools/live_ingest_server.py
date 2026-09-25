@@ -16,6 +16,7 @@ of an in-flight publish -- so a stop always lands on ADR-0042 S3's ordinary
 from __future__ import annotations
 
 import argparse
+from datetime import timedelta
 import os
 from pathlib import Path
 import signal
@@ -33,6 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.application.live_ingest_server import (  # noqa: E402
     LiveIngestServerConfigV1,
+    PressurePolicyDefinition,
     SERVER_FAILED,
     SERVER_GAP_DETECTED_AWAITING_REMEDIATION,
     SERVER_STOPPED,
@@ -79,22 +81,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--producer", default="live-ingest-server-v1")
     parser.add_argument("--max-messages-per-cycle", type=int, default=1000)
     parser.add_argument("--max-seconds-per-cycle", type=float, default=20.0)
+    parser.add_argument("--cycle-interval-seconds", type=float, default=5.0,
+                         help="Pause between completed cycles so a fast/empty cycle cannot spin (ADR-0043 S4)")
+    parser.add_argument("--pressure-available-bytes", type=int, default=50 * 1024**3,
+                         help="K05 PRESSURE threshold on available bytes (deployment-local; default 50 GiB)")
+    parser.add_argument("--pressure-critical-available-bytes", type=int, default=20 * 1024**3,
+                         help="K05 CRITICAL threshold on available bytes (default 20 GiB)")
+    parser.add_argument("--pressure-exhausted-available-bytes", type=int, default=5 * 1024**3,
+                         help="K05 EXHAUSTED threshold on available bytes (default 5 GiB)")
+    parser.add_argument("--pressure-max-capacity-age-seconds", type=float, default=300.0,
+                         help="Maximum age of a capacity observation before K05 treats it as stale")
     args = parser.parse_args(argv)
 
     print("=== effective runtime identity ===")
     for key, value in _identity_evidence().items():
         print(f"{key}={value}")
 
+    pressure_policy = PressurePolicyDefinition(
+        max_capacity_observation_age=timedelta(seconds=args.pressure_max_capacity_age_seconds),
+        pressure_available_bytes=args.pressure_available_bytes,
+        critical_available_bytes=args.pressure_critical_available_bytes,
+        exhausted_available_bytes=args.pressure_exhausted_available_bytes,
+    )
     config = LiveIngestServerConfigV1(
         storage_root=args.storage_root,
         storage_root_id=args.storage_root_id,
         checkpoint_path=args.checkpoint_path,
+        pressure_policy=pressure_policy,
         dsn=args.dsn,
         producer=args.producer,
         code_ref=args.code_ref,
         max_messages_per_cycle=args.max_messages_per_cycle,
         max_seconds_per_cycle=args.max_seconds_per_cycle,
         recent_limit=args.recent_limit,
+        cycle_interval_seconds=args.cycle_interval_seconds,
     )
 
     stop_state = {"stop": False}
