@@ -28,7 +28,7 @@ DG-E F08 DSR/PBO robust comparison v1                FROZEN / COMPLETE
 DG-H K02 live-ingest runtime identity v1             FROZEN / COMPLETE
 DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
 DG-H K08 backup / restore v1                         FROZEN / COMPLETE
-DG-H K10 checkpoint / recovery v1                    FROZEN / PARTIAL
+DG-H K10 checkpoint / recovery v1                    FROZEN / COMPLETE
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -348,13 +348,13 @@ PR #111 implements the identity-bound recovery set, export/restore and isolated 
 
 Restore proof must precede deletion authority. No protected or sole recoverable evidence may be deleted.
 
-### Checkpoint/recovery (`K10`) — RESOLVED / IMPLEMENTATION PARTIAL
+### Checkpoint/recovery (`K10`) — RESOLVED / IMPLEMENTED
 
 K10 semantics are frozen under [ADR-0042](../decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md).
 
 A checkpoint means the last canonical progress point already durably published; publication must become durable before checkpoint advance. Replay after crash is allowed and relies on ADR-0040 idempotent deduplication. Invalid checkpoints fail closed. Restart uses bounded provider reconciliation and must record an explicit gap when continuity cannot be proven; it never guesses a cursor/completeness state.
 
-PR #114 implements persisted checkpoint state, binding/monotonicity/refusal semantics, A11 restart composition and the required hermetic proof matrix. Operational closeout remains `PARTIAL` because `REAL_RESTART_PROOF_PENDING`: the bounded real-server stop/restart/deployed-checkpoint proof under the K02 identity has not yet been executed and credited.
+PR #114 implements persisted checkpoint state, binding/monotonicity/refusal semantics, A11 restart composition and the required hermetic proof matrix. PR #122 (issues #109, #121) closes the previously pending `REAL_RESTART_PROOF_PENDING` handoff: under the K02 identity, Process A publishes and persists a checkpoint, Process B restarts, runs bounded reconciliation, durably publishes the accepted reconciliation records under explicit `reconciliation` coverage, and only then advances the checkpoint to a new monotonic generation (`K10_REAL_RESTART_PROOF: PASS`, run `k10-restart-fixed-fast-20260924T193502Z`). K10 is therefore implementation `COMPLETE` for v1.
 
 ## Explicitly deferable decisions
 
