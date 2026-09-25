@@ -116,12 +116,21 @@ GAP_DETECTED               transient: interruption observed, exact
                             [last_durable_key, new_segment_start_key) bound
                             being computed
 GAP_RECORDED_NON_COMPLETE  durable: explicit non-complete coverage persisted
-                            via the existing Declared Coverage mechanism;
-                            terminal unless repair is attempted
-REPAIR_SOURCE_UNPROVEN     a candidate source has been evaluated against
-                            the source-authority criteria (S3 below) and did
-                            not meet them; durable, terminal absent new
-                            evidence
+                            via the existing Declared Coverage mechanism; the
+                            entry state before any source evaluation has been
+                            attempted or completed for this interval
+REPAIR_SOURCE_EVALUATION_INCONCLUSIVE
+                            durable but retryable: an evaluation against S3
+                            was attempted for this exact interval but could
+                            not be completed (query failure, ambiguous
+                            evidence, evaluator crash); this is not a
+                            judgement about the source and must not be
+                            treated as a rejection
+REPAIR_SOURCE_UNPROVEN     durable, terminal absent new evidence: an
+                            evaluation against the source-authority criteria
+                            (S3 below) *completed* for this exact interval
+                            and the source failed one or more criteria --
+                            a genuine negative result, not a missing one
 REPAIR_CANDIDATE_PENDING   the source met S3's criteria for this exact
                             interval; an A10 repair candidate has been
                             produced and awaits cutover validation
@@ -136,24 +145,39 @@ Fail-closed transition rules:
 - the only transition into `REPAIR_CUTOVER_COMPLETE` is from
   `REPAIR_CANDIDATE_PENDING` after A10 cutover re-verification succeeds; no
   other state may be reclassified as complete;
-- an interval whose repair-source evaluation cannot be completed (query
+- an interval whose repair-source evaluation cannot be *completed* (query
   failure, ambiguous evidence, evaluator crash) classifies as
-  `REPAIR_SOURCE_UNPROVEN`, never as proven -- the same fail-closed direction
-  K03's `HealthState` already uses for unavailable observations (`UNKNOWN`,
-  never `HEALTHY`);
-- `GAP_RECORDED_NON_COMPLETE` and `REPAIR_SOURCE_UNPROVEN` are stable and may
-  persist indefinitely; the session-level state remains
-  `RESUMED_WITH_EXPLICIT_GAP` for as long as any interval is not
-  `REPAIR_CUTOVER_COMPLETE`, and normal live operation is unaffected;
-  today's re-audit result (§ above) means this is the expected steady state
-  for any interval discovered under current provider behavior, not an error.
+  `REPAIR_SOURCE_EVALUATION_INCONCLUSIVE`, never as proven and never
+  collapsed into `REPAIR_SOURCE_UNPROVEN`'s durable-negative meaning -- the
+  same fail-closed direction K03's `HealthState` already uses for
+  unavailable observations (`UNKNOWN`, never `HEALTHY`), but kept
+  observably distinct from an actual negative result so it remains
+  retryable rather than durably rejected;
+- only an evaluation that *completes* against S3 for the exact interval and
+  fails one or more criteria may move the interval to `REPAIR_SOURCE_UNPROVEN`;
+- `REPAIR_SOURCE_EVALUATION_INCONCLUSIVE` is retried on the next scheduled
+  or operator-triggered evaluation attempt without any new evidence
+  requirement, since nothing about the source was actually decided;
+  `REPAIR_SOURCE_UNPROVEN`, by contrast, requires new observed evidence
+  before re-evaluation is attempted again (the same discipline issue #110's
+  own closing comment already established: "a future issue could reopen
+  this once ... evidence exists");
+- `GAP_RECORDED_NON_COMPLETE`, `REPAIR_SOURCE_EVALUATION_INCONCLUSIVE` and
+  `REPAIR_SOURCE_UNPROVEN` are all stable and may persist indefinitely; the
+  session-level state remains `RESUMED_WITH_EXPLICIT_GAP` for as long as any
+  interval is not `REPAIR_CUTOVER_COMPLETE`, and normal live operation is
+  unaffected. Today's re-audit (§ above) is a *completed* evaluation with a
+  definitive negative result, so the archive candidate for any interval
+  discovered under current provider behavior lands in `REPAIR_SOURCE_UNPROVEN`,
+  not `REPAIR_SOURCE_EVALUATION_INCONCLUSIVE` -- this distinction is exactly
+  why the two states must not be collapsed.
 
 ### 3. Source-authority criteria (S3)
 
-Before any candidate source may move an interval past
-`REPAIR_SOURCE_UNPROVEN`, it must prove, as observed and attributable
-evidence -- never inferred from missing `seq`, elapsed wall time, absence of
-trades, local buffer contents or operator convenience:
+Before any candidate source may move an interval into `REPAIR_CANDIDATE_PENDING`,
+an evaluation must *complete* against all of the following, as observed and
+attributable evidence -- never inferred from missing `seq`, elapsed wall
+time, absence of trades, local buffer contents or operator convenience:
 
 - exact interval support for the missing interval (not merely file
   existence -- a completeness attestation, checksum, provider manifest, or
@@ -165,10 +189,16 @@ trades, local buffer contents or operator convenience:
   (today's re-audit shows this fails structurally for the archive +
   recent-trades pairing -- see Context);
 - a mapping to canonical semantics per S4 below without inventing sequence
-  continuity;
-- explicit failure behavior: if any of the above cannot be proven for the
-  exact requested interval, the source stays `REPAIR_SOURCE_UNPROVEN` for
-  that interval.
+  continuity.
+
+Two distinct failure outcomes follow from this, and must not be conflated:
+
+- the evaluation *completes* and one or more criteria are actually
+  unmet for the exact requested interval -> `REPAIR_SOURCE_UNPROVEN`
+  (durable negative result for that interval);
+- the evaluation *cannot complete* at all (the check itself failed, timed
+  out, or returned ambiguous evidence) -> `REPAIR_SOURCE_EVALUATION_INCONCLUSIVE`
+  (no judgement was made; must be retried, not treated as a rejection).
 
 ### 4. Canonical binding (S4) -- defined now for whenever a source is proven
 
@@ -244,8 +274,13 @@ This ADR does not define or authorize:
 
 - Active Path step 5 (issue #127) can implement gap detection/recording and
   the derived-state classification described here without further semantic
-  decisions; it starts from `REPAIR_SOURCE_UNPROVEN` as the only currently
-  reachable non-terminal-forever state, since no source is proven.
+  decisions. For the one candidate evaluated so far (the public archive),
+  the reachable durable state is `REPAIR_SOURCE_UNPROVEN` -- a completed
+  evaluation with a negative result, per today's re-audit. Issue #127 must
+  still implement `REPAIR_SOURCE_EVALUATION_INCONCLUSIVE` as a distinct,
+  retryable outcome for any future evaluation attempt that cannot complete
+  (its own or a different candidate's); it must not treat every non-proven
+  interval as if it had received a completed negative evaluation.
 - If a future re-audit finds a source that closes the structural overlap gap
   identified here (for example, a provider capability that narrows or
   removes the ~24h archive-publication lag, or a deeper bounded-history
