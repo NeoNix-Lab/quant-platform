@@ -79,6 +79,7 @@ OWNERS = {
     "quant_platform.application.conformity": "application",
     "quant_platform.application.golden_conformity": "application",
     "quant_platform.application.h01_composition": "application",
+    "quant_platform.application.live_ingest_server": "application",
     "quant_platform.application.market_data": "application",
 }
 ALLOWED = {
