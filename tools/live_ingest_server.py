@@ -83,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-seconds-per-cycle", type=float, default=20.0)
     parser.add_argument("--cycle-interval-seconds", type=float, default=5.0,
                          help="Pause between completed cycles so a fast/empty cycle cannot spin (ADR-0043 S4)")
+    parser.add_argument("--max-cycles", type=int, default=None,
+                         help="Stop cleanly after this many completed health-snapshot cycles; intended for bounded proofs")
     parser.add_argument("--pressure-available-bytes", type=int, default=50 * 1024**3,
                          help="K05 PRESSURE threshold on available bytes (deployment-local; default 50 GiB)")
     parser.add_argument("--pressure-critical-available-bytes", type=int, default=20 * 1024**3,
@@ -92,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pressure-max-capacity-age-seconds", type=float, default=300.0,
                          help="Maximum age of a capacity observation before K05 treats it as stale")
     args = parser.parse_args(argv)
+    if args.max_cycles is not None and args.max_cycles < 1:
+        parser.error("--max-cycles must be >= 1")
 
     print("=== effective runtime identity ===")
     for key, value in _identity_evidence().items():
@@ -127,11 +131,21 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, _request_stop)
 
+    completed_cycles = {"count": 0}
+
+    def _emit_and_maybe_stop(signal_evidence) -> None:
+        _print_signal(signal_evidence)
+        if signal_evidence.kind.value == "HEALTH_SNAPSHOT":
+            completed_cycles["count"] += 1
+            if args.max_cycles is not None and completed_cycles["count"] >= args.max_cycles:
+                print(f"max cycles reached ({args.max_cycles}); stopping after the current cycle")
+                stop_state["stop"] = True
+
     print("=== live-ingest server v1 ===")
     report = run_live_ingest_server(
         config,
         stop_requested=lambda: stop_state["stop"],
-        on_signal=_print_signal,
+        on_signal=_emit_and_maybe_stop,
     )
 
     print(f"cycles={report.cycles}")
