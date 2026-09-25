@@ -5,7 +5,7 @@ Composes the exact same restart/reconcile/publish functions PR #122 already
 proved on the real server, faking only the network/catalog boundaries
 exactly the way ``tests/test_bybit_live_checkpoint_v1.py`` does, so the
 loop's own control flow (bootstrap -> steady-state live-acquisition cycles
--> drop-triggered reconcile -> gap stop -> clean stop -> failure) is
+-> drop-triggered reconcile -> explicit gap record -> new segment -> clean stop -> failure) is
 exercised against real checkpoint persistence rather than a second, parallel
 fake of the restart/publish composition itself.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import timedelta
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -31,7 +32,6 @@ from quant_platform.application.bybit_live import (  # noqa: E402
 from quant_platform.application.live_ingest_server import (  # noqa: E402
     LiveIngestServerConfigV1,
     SERVER_FAILED,
-    SERVER_GAP_DETECTED_AWAITING_REMEDIATION,
     SERVER_STOPPED,
     SESSION_CONTINUOUS,
     SESSION_RESUMED_WITH_EXPLICIT_GAP,
@@ -269,10 +269,11 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         health = [s for s in report.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
         self.assertEqual([s.payload["phase"] for s in health], ["reconcile", "acquire"])
 
-    def test_gap_detected_on_startup_reconcile_stops_loop_with_checkpoint_unadvanced(self):
+    def test_gap_detected_on_startup_records_non_complete_gap_and_starts_new_segment(self):
         store = CheckpointStore(self.checkpoint_path)
         store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
         unrelated = trade(5000, "unrelated", "99")
+        new_segment = trade(6000, "new-segment", "100")
 
         def fake_current_publication(*, checkpoint, dsn):
             return self.publication
@@ -283,22 +284,35 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         def fail_restart_publish(**_kwargs):
             raise AssertionError("must not publish reconciliation records for an unresolved gap")
 
+        def fake_publish(**_kwargs):
+            return self._publish_report((new_segment,), revision=2)
+
         app_bybit_live.load_current_durable_publication_state = fake_current_publication
         app_bybit_live.fetch_recent_public_trades = fake_recent
         app_bybit_live._publish_restart_reconciliation_records = fail_restart_publish
+        app_bybit_live.run_real_server_publish_proof = fake_publish
 
         report = self._run(stop_after=2)
 
-        self.assertEqual(report.status, SERVER_GAP_DETECTED_AWAITING_REMEDIATION)
-        self.assertEqual(report.cycles, 1)
+        self.assertEqual(report.status, SERVER_STOPPED)
+        self.assertEqual(report.cycles, 2)
 
         checkpoint = CheckpointStore(self.checkpoint_path).load()
-        self.assertEqual(checkpoint.generation, 1)  # unadvanced, per ADR-0042 S5/S6
-        self.assertEqual(checkpoint.last_canonical_trade_id, "anchor")
+        self.assertEqual(checkpoint.generation, 2)
+        self.assertEqual(checkpoint.last_canonical_trade_id, "new-segment")
 
         health = [s for s in report.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
-        self.assertEqual(health[-1].payload["health"], "DEGRADED")
-        self.assertEqual(health[-1].payload["session_state"], SESSION_RESUMED_WITH_EXPLICIT_GAP)
+        self.assertEqual([s.payload["health"] for s in health], ["DEGRADED", "HEALTHY"])
+        self.assertEqual([s.payload["phase"] for s in health], ["reconcile", "acquire"])
+        self.assertTrue(all(s.payload["session_state"] == SESSION_RESUMED_WITH_EXPLICIT_GAP for s in health))
+        self.assertEqual([s.payload["open_gap_count"] for s in health], [1, 1])
+        self.assertEqual(health[0].payload["gap_state"], "REPAIR_SOURCE_UNPROVEN")
+        manifest_path = Path(health[0].payload["gap_manifest_path"])
+        self.assertTrue(manifest_path.exists())
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(document["assertions"][0]["status"], "known_gap")
+        self.assertEqual(document["assertions"][0]["partitions"], [])
+        self.assertIn("repair_state=REPAIR_SOURCE_UNPROVEN", document["assertions"][0]["evidence"][0]["detail"])
 
     def test_unhandled_cycle_exception_emits_failure_signal_and_stops(self):
         def raise_publish(**_kwargs):
