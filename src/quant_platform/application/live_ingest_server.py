@@ -231,10 +231,11 @@ def run_live_ingest_server(
     store = CheckpointStore(config.checkpoint_path)
     cycles = 0
     status = SERVER_STOPPED
-    # A checkpoint already on disk at startup means this process is
-    # resuming an existing recovery domain -- ADR-0043's "entered on
-    # start/reconnect" reconcile step, not the steady-state acquisition path.
-    needs_reconcile = store.load() is not None
+    # Decided lazily from cycle 1's own protected load, not a separate
+    # pre-loop CheckpointStore.load() call: a corrupt/unreadable checkpoint
+    # file must surface as a FAILURE signal through the same try/except
+    # every other cycle failure does, not raise before the loop even starts.
+    needs_reconcile: bool | None = None
 
     while True:
         if stop_requested():
@@ -243,6 +244,12 @@ def run_live_ingest_server(
 
         try:
             checkpoint_exists = store.load() is not None
+            if needs_reconcile is None:
+                # A checkpoint already on disk on this first cycle means the
+                # process is resuming an existing recovery domain --
+                # ADR-0043's "entered on start/reconnect" reconcile step,
+                # not the steady-state acquisition path.
+                needs_reconcile = checkpoint_exists
             pressure_payload, pressure_evidence = _pressure_evidence(config)
 
             if checkpoint_exists and needs_reconcile:

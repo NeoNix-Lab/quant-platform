@@ -315,6 +315,28 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         self.assertEqual(failures[0].payload["failure_code"], "RuntimeError")
         self.assertEqual(failures[0].payload["context"]["message"], "simulated catalog outage")
 
+    def test_corrupt_startup_checkpoint_emits_failure_signal_and_stops(self):
+        self.checkpoint_path.write_text("not valid json", encoding="utf-8")
+
+        def fail_publish(**_kwargs):
+            raise AssertionError("must not attempt acquisition once the checkpoint load fails")
+
+        app_bybit_live.run_real_server_publish_proof = fail_publish
+
+        report = self._run(stop_after=5)
+
+        self.assertEqual(report.status, SERVER_FAILED)
+        self.assertEqual(report.cycles, 1)
+        failures = [s for s in report.signals if s.kind is SignalKind.FAILURE]
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0].payload["failure_code"], "CheckpointCorruptError")
+
+        lifecycle = [s for s in report.signals if s.kind is SignalKind.LIFECYCLE_TRANSITION]
+        self.assertEqual(
+            [(s.payload["previous_state"], s.payload["resulting_state"]) for s in lifecycle],
+            [("STARTING", "RUNNING"), ("RUNNING", "FAILED")],
+        )
+
     def test_capacity_and_pressure_evidence_is_folded_into_health_signals(self):
         anchor = trade(1000, "anchor", "1")
 
