@@ -32,5 +32,6 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0040 | Bybit live trades acquisition v1 | Accepted |
 | 0041 | Live-ingest runtime identity v1 | Accepted |
 | 0042 | Live-ingest checkpoint / recovery v1 | Accepted |
+| 0043 | Live-ingest server v1 composition | Accepted |
 
 See the individual ADR files for context and consequences.
