@@ -71,10 +71,13 @@ K05  pressure policy                      COMPLETE
 K06  RAW/source protection                COMPLETE
 ```
 
-The repository governance files outside this scope may still contain stale
-phrasing from the pre-PR #122 state, especially references to K10 as
-`PARTIAL` or `REAL_RESTART_PROOF_PENDING`. That is a governance audit finding
-for this production-readiness path, not permission to re-open K10 semantics.
+`OPEN_DECISIONS.md`, `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md` and `ROADMAP.md`
+carried stale pre-PR #122 phrasing (K10 as `PARTIAL` / `REAL_RESTART_PROOF_PENDING`,
+and frontier sections still pointing at the closed `Live Ingest Vertical v1`
+blocker). That governance audit finding is now reconciled on this same branch:
+K10 reads `FROZEN` / `COMPLETE` with PR #122 evidence cited, and the
+frontier/execution-frontier sections point at this scope. This is a status
+correction, not permission to re-open K10 semantics.
 
 ## Production-Readiness Audit Findings
 
@@ -202,54 +205,82 @@ deployment-local unless a future ADR freezes them.
 
 ### P7 - Governance State Reconciliation
 
-The active planning documents must be reconciled after this scope is accepted
-or as the first implementation slice:
+Status of each production-readiness governance action:
 
-- update K10 state from pending proof to complete where PR #122 is sufficient;
-- keep DG-B long-gap remediation visible as a production-readiness blocker;
+- update K10 state from pending proof to complete where PR #122 is
+  sufficient -- **done**, this branch (`OPEN_DECISIONS.md`, `CAPABILITY_MAP.md`,
+  `CAPABILITY_DAG.md`, `ROADMAP.md`);
+- keep DG-B long-gap remediation visible as a production-readiness
+  blocker -- **holds**, no governance file weakens the #110 disposition;
 - classify the bounded ingest server loop so it is not hidden behind generic
-  `J03` job runtime or accidentally confused with `J08` live product mode;
+  `J03` job runtime or accidentally confused with `J08` live product mode --
+  **open**; this is a design-gate output (Active Path step 2), not a
+  standalone governance edit, because it requires deciding the loop's owning
+  atom/module before the DAG can name it without inventing scope;
 - keep B06, K07 and K09 outside this v1 ingest-server scope unless a concrete
-  blocker proves they are required.
+  blocker proves they are required -- **holds**, a standing constraint on
+  every step below, not a one-time action.
 
 ## Active Path
 
-One bounded mutation slice remains active at a time.
+One bounded mutation slice remains active at a time. Each step below states
+the finding(s) it resolves (`P1`-`P7`) and the exit criterion that authorizes
+moving to the next step; none of this is concurrent authorization to start a
+later step early.
 
 ```text
-1. Governance and scope formalization
+1. Governance and scope formalization                              DONE
+   resolves: P7 (K10 state correction)
    audit current authority
-   -> record production-readiness gaps
-   -> open the dedicated remote branch/PR
-
-2. Ingest server v1 design gate
-   define the bounded daemon/service composition
-   -> define operator/runbook evidence
+   -> record production-readiness gaps (P1-P7)
+   -> open the dedicated remote branch/PR (#123)
+   -> reconcile OPEN_DECISIONS/CAPABILITY_MAP/CAPABILITY_DAG/ROADMAP
+      to PR #122's evidence
+   exit: this branch merges to `main` with all four governance files
+   and SCOPE.md internally consistent (no remaining K10 PARTIAL/pending
+   phrasing); planning-only, no design questions decided here.
+        ↓
+2. Ingest server v1 design gate                                    NEXT
+   resolves: P1, remainder of P7 (loop classification)
+   define the bounded daemon/service composition (single owning module,
+   entrypoint, and how it composes existing A11/K10 functions)
+   -> define operator/runbook evidence (binds to P6)
    -> prove no generic scheduler/framework is required
-
-3. Long-gap remediation design gate
-   re-audit authoritative repair sources
+   -> name the loop's capability atom (if any) without implying J03/J08
+   exit: a written design (ADR or design note, per repo convention) that
+   an implementation slice can execute without further semantic decisions;
+   this step decides, it does not implement.
+        ↓
+3. Long-gap remediation design gate                                NEXT
+   resolves: P2, P3, P4
+   re-audit authoritative repair sources (P3 criteria)
    -> decide source authority or retain explicit-gap-only behavior
    -> bind the path to A10 repair semantics
-
-4. Implementation slice: bounded ingest server loop
+   -> define the gap state machine's accepted states/transitions (P4)
+   exit: a written design that either names a proven repair source/path or
+   explicitly retains explicit-gap-only behavior with no repair source;
+   either outcome is a valid close of this gate.
+        ↓
+4. Implementation slice: bounded ingest server loop                 BLOCKED on 2
+   resolves: P1, P5 (publication-before-checkpoint), P6
    run under K02
    -> use A11/K10/A10/K03/K05/K06 authorities
    -> preserve publication-before-checkpoint
-
-5. Implementation slice: long-gap state and repair orchestration
+        ↓
+5. Implementation slice: long-gap state and repair orchestration    BLOCKED on 3
+   resolves: P2, P3, P4, P5 (repair ordering)
    detect/record long gap
    -> enqueue or represent repair intent
    -> prove gap stays explicit until repair evidence passes
-
-6. Real-server production-readiness proof
+        ↓
+6. Real-server production-readiness proof                          BLOCKED on 4,5
    deploy/run bounded server
    -> stop/restart
    -> bounded reconcile
    -> forced long-gap scenario or deterministic simulation
    -> verify no silent loss, duplicate or false complete coverage
-
-7. Governance closeout
+        ↓
+7. Governance closeout                                              BLOCKED on 6
    reconcile Capability Map / DAG / Roadmap / Open Decisions
    -> archive this scope per the normal versioned-scope convention
 ```
@@ -332,6 +363,10 @@ failure matrices.
 
 ## Current Branch Intent
 
-This branch formalizes the scope change and audit result. It does not implement
-the ingest daemon or the long-gap repair system. The next implementation branch
-must select exactly one bounded slice from the active path above.
+This branch formalizes the scope change, the audit result (P1-P7) and the
+governance reconciliation across `OPEN_DECISIONS.md`, `CAPABILITY_MAP.md`,
+`CAPABILITY_DAG.md` and `ROADMAP.md` (Active Path step 1). It does not decide
+the P1/P4 design questions and does not implement the ingest daemon or the
+long-gap repair system. The next branch must select exactly one bounded step
+from the Active Path above -- ordinarily step 2 or step 3, since 4-7 are
+blocked until their design gate closes.
