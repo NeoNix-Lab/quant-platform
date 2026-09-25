@@ -212,6 +212,30 @@ or as the first implementation slice:
 - keep B06, K07 and K09 outside this v1 ingest-server scope unless a concrete
   blocker proves they are required.
 
+## Governance Map Generation Requirements
+
+This scope is not the full execution map. The execution map belongs to the
+governance layer derived from this scope. That derived map must be complete
+enough to generate the next issues without re-litigating the scope boundary.
+
+At minimum, the governance map must classify:
+
+- credited state that future issues must reuse rather than reimplement;
+- stale governance state that must be reconciled before implementation claims
+  rely on it;
+- production-readiness blockers created by this scope;
+- design gates that must be resolved before code changes;
+- implementation atoms that can be assigned as bounded issues;
+- real-server proof atoms and the exact evidence each one must produce;
+- closeout/reconciliation atoms for final governance updates;
+- explicit exclusions that must not become implicit issue work.
+
+Each generated issue must name the slice it comes from, the authority it starts
+from, the artifact it is expected to produce, and the acceptance evidence that
+would close it. The map may sequence or split the work more finely than this
+scope, but it may not weaken the stop conditions, convert exclusions into
+implicit work, or treat readiness language as completion evidence.
+
 ## Active Path
 
 One bounded mutation slice remains active at a time.
@@ -246,7 +270,7 @@ One bounded mutation slice remains active at a time.
    deploy/run bounded server
    -> stop/restart
    -> bounded reconcile
-   -> forced long-gap scenario or deterministic simulation
+   -> forced long-gap scenario or explicitly accepted equivalent simulation
    -> verify no silent loss, duplicate or false complete coverage
 
 7. Governance closeout
