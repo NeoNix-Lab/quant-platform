@@ -29,6 +29,12 @@ from quant_platform.application.bybit_live import (  # noqa: E402
     LiveProviderProofReport,
     RealServerPublishProofReport,
 )
+from quant_platform.application.live_gap_orchestration import (  # noqa: E402
+    GAP_RECORDED_NON_COMPLETE,
+    LongGapInterval,
+    TradeKeyBoundary,
+    record_explicit_long_gap,
+)
 from quant_platform.application.live_ingest_server import (  # noqa: E402
     LiveIngestServerConfigV1,
     SERVER_FAILED,
@@ -312,7 +318,8 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         document = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(document["assertions"][0]["status"], "known_gap")
         self.assertEqual(document["assertions"][0]["partitions"], [])
-        self.assertIn("repair_state=REPAIR_SOURCE_UNPROVEN", document["assertions"][0]["evidence"][0]["detail"])
+        detail_payload = json.loads(document["assertions"][0]["evidence"][0]["detail"])
+        self.assertEqual(detail_payload["repair_state"], "REPAIR_SOURCE_UNPROVEN")
 
     def test_open_gap_observability_survives_restart_after_checkpoint_advances(self):
         store = CheckpointStore(self.checkpoint_path)
@@ -421,6 +428,56 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         self.assertEqual(gap_signals[1].payload["gap_supersedes"], gap_signals[0].payload["gap_coverage_id"])
         self.assertEqual(gap_signals[2].payload["gap_supersedes"], gap_signals[1].payload["gap_coverage_id"])
         self.assertEqual(health[-1].payload["open_gap_coverage_ids"], (gap_signals[-1].payload["gap_coverage_id"],))
+
+    def test_unparseable_durable_gap_manifest_is_reported_not_silently_dropped(self):
+        interval = LongGapInterval(
+            start_key=TradeKeyBoundary(venue="bybit", instrument="BTCUSDT", exchange_ts=Instant(1000), trade_id="anchor"),
+            detected_at=Instant.parse("2026-09-25T10:00:02Z"),
+            reason="last durable TradeKeyV1 absent from bounded recent-public-trades window",
+            recent_window_records=1000, buffered_ws_records=0,
+        )
+        gap_record = record_explicit_long_gap(
+            storage_root=self.tempdir.name, interval=interval, producer="test", code_ref="test",
+            detected_at=interval.detected_at,
+        )
+        # Corrupt the durable manifest in a way that still identifies it as
+        # one of ours (still GAP_RECORDED_NON_COMPLETE, still known_gap) but
+        # drops a field the reconstruction needs -- simulating format drift
+        # rather than an unrelated file.
+        manifest_path = Path(gap_record.coverage_manifest_path)
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload = json.loads(document["assertions"][0]["evidence"][0]["detail"])
+        self.assertEqual(payload["state"], GAP_RECORDED_NON_COMPLETE)
+        del payload["last_durable_key"]
+        document["assertions"][0]["evidence"][0]["detail"] = json.dumps(payload)
+        manifest_path.write_text(json.dumps(document), encoding="utf-8")
+
+        anchor = trade(1000, "anchor", "1")
+
+        def fake_publish(**_kwargs):
+            return self._publish_report((anchor,))
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+
+        report = self._run(stop_after=1)
+
+        self.assertEqual(report.status, SERVER_STOPPED)
+        unavailable = [s for s in report.signals if s.kind is SignalKind.OBSERVATION_UNAVAILABLE]
+        self.assertEqual(len(unavailable), 1)
+        self.assertEqual(unavailable[0].payload["health"], "UNKNOWN")
+        self.assertEqual(unavailable[0].payload["unparseable_manifest_paths"], (str(manifest_path),))
+
+        # The server must still run normally -- an unparseable historical
+        # gap manifest is reduced observability, not a startup failure.
+        health = [s for s in report.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
+        self.assertEqual(len(health), 1)
+        self.assertEqual(health[0].payload["health"], "HEALTHY")
+        # And it must not be silently counted as "no open gap": since the
+        # corrupted record itself was dropped from open_gaps (it couldn't be
+        # reconstructed), open_gap_count correctly omits it -- the
+        # OBSERVATION_UNAVAILABLE signal above is what preserves visibility
+        # into the fact that a real gap's state is actually unknown.
+        self.assertNotIn("open_gap_count", health[0].payload)
 
     def test_unhandled_cycle_exception_emits_failure_signal_and_stops(self):
         def raise_publish(**_kwargs):

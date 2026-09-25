@@ -12,11 +12,22 @@ known source. ``REPAIR_SOURCE_EVALUATION_INCONCLUSIVE`` is kept as an explicit
 state for future bounded evaluators that perform real IO and can fail before
 proving or rejecting a source; callers can already pass that evaluation into
 ``record_explicit_long_gap`` without changing the coverage-recording contract.
+
+The frozen coverage-manifest v1 evidence schema
+(``quant_platform.data.manifests``) allows exactly two fields per evidence
+item -- ``kind`` and a free-text ``detail`` string -- so this module cannot
+add a dedicated machine-readable evidence field. Structured fields this
+module needs to read back (``last_durable_key``, ``repair_state``, ...) are
+therefore encoded as a JSON object inside ``detail`` rather than as an
+ad-hoc ``"key=value; key=value"`` string: JSON round-trips exactly (no
+substring-boundary ambiguity from embedded separators), and a document that
+was already classified as one of this module's own manifests but still
+fails to decode is a loud, reported anomaly (see ``OpenLongGapLoad``), never
+a silently dropped record.
 """
 
 from __future__ import annotations
 
-import ast
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -222,17 +233,18 @@ def record_explicit_long_gap(
     coverage_id = f"long-gap-{_start_key_fingerprint(interval.start_key)}-{tag}"
     assertion_id = f"long-gap-assertion-{tag}"
     coverage_manifest_path = dataset_root / f"coverage-manifest-{coverage_id}.json"
-    detail = "; ".join(
-        (
-            f"state={GAP_RECORDED_NON_COMPLETE}",
-            f"repair_state={evaluation.interval_state}",
-            f"repair_source={evaluation.source_id}",
-            f"reason={interval.reason}",
-            f"last_durable_key={interval.start_key.stable_dict()}",
-            f"recent_window_records={interval.recent_window_records}",
-            f"buffered_ws_records={interval.buffered_ws_records}",
-            f"evaluation_reasons={list(evaluation.reasons)}",
-        )
+    detail = json.dumps(
+        {
+            "state": GAP_RECORDED_NON_COMPLETE,
+            "repair_state": evaluation.interval_state,
+            "repair_source": evaluation.source_id,
+            "reason": interval.reason,
+            "last_durable_key": interval.start_key.stable_dict(),
+            "recent_window_records": interval.recent_window_records,
+            "buffered_ws_records": interval.buffered_ws_records,
+            "evaluation_reasons": list(evaluation.reasons),
+        },
+        sort_keys=True,
     )
     emission = emit_coverage_manifest(
         coverage_manifest_path,
@@ -282,15 +294,34 @@ def open_gap_payload(records: tuple[LongGapRecord, ...]) -> dict[str, Any]:
     }
 
 
-def load_open_long_gap_records(*, storage_root: str | Path) -> tuple[LongGapRecord, ...]:
+@dataclass(frozen=True, slots=True)
+class OpenLongGapLoad:
+    """Result of scanning durable coverage manifests for open long gaps.
+
+    ``unparseable_manifest_paths`` holds every file that was confidently
+    classified as one of this module's own long-gap manifests (per
+    ``_is_long_gap_document``) but whose structured evidence payload could
+    not be reconstructed. That is never silently dropped: a caller must
+    treat a non-empty ``unparseable_manifest_paths`` as reduced visibility
+    into real, durable, unrepaired gap state -- not as "no gap here."
+    """
+
+    records: tuple[LongGapRecord, ...]
+    unparseable_manifest_paths: tuple[str, ...]
+
+
+def load_open_long_gap_records(*, storage_root: str | Path) -> OpenLongGapLoad:
     """Load durable open long-gap heads for the Bybit live dataset.
 
     This is a read model over Declared Coverage files. A gap manifest remains
     open while its ``coverage_id`` is not superseded by another long-gap
     manifest in the same chain; A10 repair cutover closure is not implemented
     in this slice, so no repair-complete manifest is interpreted here.
-    Malformed or unrelated files are ignored rather than breaking server
-    startup observability.
+    Files that are not one of this module's long-gap manifests at all
+    (wrong prefix/shape) are silently skipped -- that is a normal, expected
+    outcome for a shared coverage-manifest directory. A file that *is* one of
+    this module's manifests but fails structured reconstruction is reported
+    via ``unparseable_manifest_paths`` instead.
     """
 
     identity = bybit_live_dataset_identity()
@@ -302,7 +333,7 @@ def load_open_long_gap_records(*, storage_root: str | Path) -> tuple[LongGapReco
         identity.record_schema_id,
     )
     if not dataset_root.exists():
-        return ()
+        return OpenLongGapLoad(records=(), unparseable_manifest_paths=())
     candidates: list[tuple[Path, Mapping[str, Any]]] = []
     superseded: set[str] = set()
     for path in dataset_root.glob("coverage-manifest-long-gap-*.json"):
@@ -314,13 +345,16 @@ def load_open_long_gap_records(*, storage_root: str | Path) -> tuple[LongGapReco
         if isinstance(supersedes, str) and supersedes:
             superseded.add(supersedes)
     records: list[LongGapRecord] = []
+    unparseable: list[str] = []
     for path, document in sorted(candidates, key=lambda item: _document_sort_key(item[1])):
         coverage_id = document.get("coverage_id")
-        if isinstance(coverage_id, str) and coverage_id not in superseded:
-            record = _record_from_long_gap_manifest(path, document)
-            if record is not None:
-                records.append(record)
-    return tuple(records)
+        if not isinstance(coverage_id, str) or coverage_id in superseded:
+            continue
+        try:
+            records.append(_record_from_long_gap_manifest(path, document))
+        except (OSError, ValueError):
+            unparseable.append(str(path))
+    return OpenLongGapLoad(records=tuple(records), unparseable_manifest_paths=tuple(unparseable))
 
 
 def _coverage_floor(instant: Instant) -> Instant:
@@ -370,6 +404,27 @@ def _load_long_gap_manifest(path: Path) -> dict[str, Any] | None:
     return document if isinstance(document, dict) else None
 
 
+def _transport_interruption_payload(assertion: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Decode the structured JSON payload from a ``transport_interruption``
+    evidence item's ``detail`` string, or ``None`` if absent/undecodable."""
+
+    evidence = assertion.get("evidence")
+    if not isinstance(evidence, list):
+        return None
+    for item in evidence:
+        if not (isinstance(item, Mapping) and item.get("kind") == "transport_interruption"):
+            continue
+        detail = item.get("detail")
+        if not isinstance(detail, str):
+            return None
+        try:
+            payload = json.loads(detail)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
 def _is_long_gap_document(document: Mapping[str, Any]) -> bool:
     coverage_id = document.get("coverage_id")
     assertions = document.get("assertions")
@@ -380,16 +435,8 @@ def _is_long_gap_document(document: Mapping[str, Any]) -> bool:
     assertion = assertions[0]
     if not isinstance(assertion, Mapping) or assertion.get("status") != "known_gap":
         return False
-    evidence = assertion.get("evidence")
-    if not isinstance(evidence, list):
-        return False
-    return any(
-        isinstance(item, Mapping)
-        and item.get("kind") == "transport_interruption"
-        and isinstance(item.get("detail"), str)
-        and f"state={GAP_RECORDED_NON_COMPLETE}" in item["detail"]
-        for item in evidence
-    )
+    payload = _transport_interruption_payload(assertion)
+    return payload is not None and payload.get("state") == GAP_RECORDED_NON_COMPLETE
 
 
 def _document_sort_key(document: Mapping[str, Any]) -> tuple[int, str]:
@@ -399,38 +446,57 @@ def _document_sort_key(document: Mapping[str, Any]) -> tuple[int, str]:
         return (0, str(document.get("coverage_id")))
 
 
-def _record_from_long_gap_manifest(path: Path, document: Mapping[str, Any]) -> LongGapRecord | None:
-    try:
-        assertion = _only_assertion(document)
-        detail = _first_evidence_detail(assertion)
-        start_key = _parse_detail_start_key(detail)
-        interval = LongGapInterval(
-            start_key=start_key,
-            detected_at=Instant.parse(_text(assertion.get("end"), "assertion.end")),
-            reason=_detail_field(detail, "reason") or "durable long-gap coverage manifest",
-            recent_window_records=_optional_detail_int(detail, "recent_window_records"),
-            buffered_ws_records=_optional_detail_int(detail, "buffered_ws_records"),
-        )
-        interval_state = _detail_field(detail, "repair_state") or REPAIR_SOURCE_UNPROVEN
-        evaluation = RepairSourceEvaluation(
-            source_id=_detail_field(detail, "repair_source") or BYBIT_PUBLIC_ARCHIVE_SOURCE_ID,
-            interval_state=interval_state,
-            completed=interval_state != REPAIR_SOURCE_EVALUATION_INCONCLUSIVE,
-            reasons=tuple(_parse_detail_reasons(detail)),
-        )
-        return LongGapRecord(
-            session_state=SESSION_RESUMED_WITH_EXPLICIT_GAP,
-            interval_state=interval_state,
-            interval=interval,
-            coverage_id=_text(document.get("coverage_id"), "coverage_id"),
-            assertion_id=_text(assertion.get("assertion_id"), "assertion_id"),
-            coverage_manifest_path=str(path),
-            coverage_manifest_sha256=_file_sha256(path),
-            repair_source_evaluation=evaluation,
-            supersedes_coverage_id=document.get("supersedes") if isinstance(document.get("supersedes"), str) else None,
-        )
-    except (OSError, ValueError, SyntaxError):
-        return None
+def _record_from_long_gap_manifest(path: Path, document: Mapping[str, Any]) -> LongGapRecord:
+    """Reconstruct a ``LongGapRecord`` from a durable manifest already
+    confirmed by ``_is_long_gap_document``. Raises ``ValueError``/``OSError``
+    on any structural anomaly -- the caller (``load_open_long_gap_records``)
+    is responsible for surfacing that as a reported failure, never a silent
+    drop, since the document is already known to be one of ours."""
+
+    assertion = _only_assertion(document)
+    payload = _transport_interruption_payload(assertion)
+    if payload is None:
+        raise ValueError("long-gap assertion evidence detail is not a decodable structured payload")
+    last_durable_key = payload.get("last_durable_key")
+    if not isinstance(last_durable_key, Mapping):
+        raise ValueError("long-gap detail payload must include a structured last_durable_key")
+    start_key = TradeKeyBoundary(
+        venue=_text(last_durable_key.get("venue"), "last_durable_key.venue"),
+        instrument=_text(last_durable_key.get("instrument"), "last_durable_key.instrument"),
+        exchange_ts=Instant.parse(_text(last_durable_key.get("exchange_ts"), "last_durable_key.exchange_ts")),
+        trade_id=_text(last_durable_key.get("trade_id"), "last_durable_key.trade_id"),
+    )
+    interval = LongGapInterval(
+        start_key=start_key,
+        detected_at=Instant.parse(_text(assertion.get("end"), "assertion.end")),
+        reason=_optional_text(payload.get("reason")) or "durable long-gap coverage manifest",
+        recent_window_records=_optional_int(payload.get("recent_window_records")),
+        buffered_ws_records=_optional_int(payload.get("buffered_ws_records")),
+    )
+    interval_state = _optional_text(payload.get("repair_state")) or REPAIR_SOURCE_UNPROVEN
+    reasons_raw = payload.get("evaluation_reasons")
+    reasons = (
+        tuple(item for item in reasons_raw if isinstance(item, str) and item)
+        if isinstance(reasons_raw, list)
+        else ()
+    )
+    evaluation = RepairSourceEvaluation(
+        source_id=_optional_text(payload.get("repair_source")) or BYBIT_PUBLIC_ARCHIVE_SOURCE_ID,
+        interval_state=interval_state,
+        completed=interval_state != REPAIR_SOURCE_EVALUATION_INCONCLUSIVE,
+        reasons=reasons,
+    )
+    return LongGapRecord(
+        session_state=SESSION_RESUMED_WITH_EXPLICIT_GAP,
+        interval_state=interval_state,
+        interval=interval,
+        coverage_id=_text(document.get("coverage_id"), "coverage_id"),
+        assertion_id=_text(assertion.get("assertion_id"), "assertion_id"),
+        coverage_manifest_path=str(path),
+        coverage_manifest_sha256=_file_sha256(path),
+        repair_source_evaluation=evaluation,
+        supersedes_coverage_id=document.get("supersedes") if isinstance(document.get("supersedes"), str) else None,
+    )
 
 
 def _only_assertion(document: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -438,75 +504,6 @@ def _only_assertion(document: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(assertions, list) or len(assertions) != 1 or not isinstance(assertions[0], Mapping):
         raise ValueError("long-gap manifest must contain exactly one assertion")
     return assertions[0]
-
-
-def _first_evidence_detail(assertion: Mapping[str, Any]) -> str:
-    evidence = assertion.get("evidence")
-    if not isinstance(evidence, list):
-        raise ValueError("long-gap assertion must contain evidence")
-    for item in evidence:
-        if isinstance(item, Mapping) and item.get("kind") == "transport_interruption":
-            return _text(item.get("detail"), "evidence.detail")
-    raise ValueError("long-gap assertion must contain transport interruption evidence")
-
-
-def _parse_detail_start_key(detail: str) -> TradeKeyBoundary:
-    raw = _detail_between(detail, "last_durable_key=", "; recent_window_records=")
-    if raw is None:
-        raise ValueError("long-gap detail must include last_durable_key")
-    value = ast.literal_eval(raw)
-    if not isinstance(value, Mapping):
-        raise ValueError("last_durable_key detail must be a mapping")
-    return TradeKeyBoundary(
-        venue=_text(value.get("venue"), "last_durable_key.venue"),
-        instrument=_text(value.get("instrument"), "last_durable_key.instrument"),
-        exchange_ts=Instant.parse(_text(value.get("exchange_ts"), "last_durable_key.exchange_ts")),
-        trade_id=_text(value.get("trade_id"), "last_durable_key.trade_id"),
-    )
-
-
-def _detail_field(detail: str, key: str) -> str | None:
-    value = _detail_between(detail, f"{key}=", "; ")
-    if value is None:
-        prefix = f"{key}="
-        if detail.endswith(prefix):
-            return ""
-        index = detail.find(prefix)
-        if index < 0:
-            return None
-        value = detail[index + len(prefix):]
-    return value.strip() or None
-
-
-def _detail_between(detail: str, start_marker: str, end_marker: str) -> str | None:
-    start = detail.find(start_marker)
-    if start < 0:
-        return None
-    start += len(start_marker)
-    end = detail.find(end_marker, start)
-    if end < 0:
-        return detail[start:]
-    return detail[start:end]
-
-
-def _optional_detail_int(detail: str, key: str) -> int | None:
-    value = _detail_field(detail, key)
-    if value in {None, "None"}:
-        return None
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(f"{key} detail must be an integer") from exc
-
-
-def _parse_detail_reasons(detail: str) -> tuple[str, ...]:
-    raw = _detail_field(detail, "evaluation_reasons")
-    if raw is None:
-        return ()
-    value = ast.literal_eval(raw)
-    if not isinstance(value, list):
-        return ()
-    return tuple(item for item in value if isinstance(item, str) and item)
 
 
 def _file_sha256(path: Path) -> str:
@@ -523,21 +520,13 @@ def _matches_long_gap_anchor(
     if not isinstance(assertions, list) or len(assertions) != 1:
         return False
     assertion = assertions[0]
-    if not isinstance(assertion, Mapping):
+    if not isinstance(assertion, Mapping) or assertion.get("status") != "known_gap":
         return False
-    if assertion.get("status") != "known_gap" or assertion.get("start") != interval.coverage_start:
+    payload = _transport_interruption_payload(assertion)
+    if payload is None:
         return False
-    evidence = assertion.get("evidence")
-    if not isinstance(evidence, list):
-        return False
-    return any(
-        isinstance(item, Mapping)
-        and isinstance(item.get("detail"), str)
-        and "last_durable_key=" in item["detail"]
-        and interval.start_key.trade_id in item["detail"]
-        and interval.start_key.exchange_ts.isoformat() in item["detail"]
-        for item in evidence
-    )
+    last_durable_key = payload.get("last_durable_key")
+    return isinstance(last_durable_key, Mapping) and dict(last_durable_key) == interval.start_key.stable_dict()
 
 
 def _text(value: Any, field: str) -> str:
@@ -554,6 +543,14 @@ def _optional_int(value: Any) -> int | None:
     return value
 
 
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("expected a non-empty string evidence value")
+    return value.strip()
+
+
 __all__ = [
     "BYBIT_PUBLIC_ARCHIVE_SOURCE_ID",
     "GAP_DETECTED",
@@ -568,6 +565,7 @@ __all__ = [
     "SESSION_RESUMED_WITH_EXPLICIT_GAP",
     "LongGapInterval",
     "LongGapRecord",
+    "OpenLongGapLoad",
     "RepairSourceEvaluation",
     "TradeKeyBoundary",
     "evaluate_current_bybit_archive_authority",

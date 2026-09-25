@@ -147,6 +147,16 @@ def _failure_signal(subject: SubjectReference, *, failure_code: str, **context: 
     )
 
 
+def _observation_unavailable_signal(subject: SubjectReference, *, reason: str, **payload: Any) -> OperationalSignalV1:
+    return OperationalSignalV1(
+        subject=subject,
+        capability_id=CAPABILITY_ID,
+        kind=SignalKind.OBSERVATION_UNAVAILABLE,
+        observed_at=_now(),
+        payload={"reason": reason, "health": HealthState.UNKNOWN.value, **payload},
+    )
+
+
 def _checkpoint_evidence(checkpoint_identity: str | None) -> tuple[EvidenceReference, ...]:
     if not checkpoint_identity:
         return ()
@@ -254,7 +264,22 @@ def run_live_ingest_server(
     store = CheckpointStore(config.checkpoint_path)
     cycles = 0
     status = SERVER_STOPPED
-    open_gaps: list[LongGapRecord] = list(load_open_long_gap_records(storage_root=config.storage_root))
+    gap_load = load_open_long_gap_records(storage_root=config.storage_root)
+    open_gaps: list[LongGapRecord] = list(gap_load.records)
+    if gap_load.unparseable_manifest_paths:
+        # A durable known_gap manifest exists and was confidently classified
+        # as ours, but its structured evidence could not be reconstructed.
+        # This must never silently read as "no open gap" -- surface it as
+        # explicit reduced-observability evidence (K03's own UNKNOWN-never-
+        # HEALTHY discipline) rather than dropping it from open_gaps.
+        emit(_observation_unavailable_signal(
+            subject,
+            reason=(
+                f"{len(gap_load.unparseable_manifest_paths)} durable long-gap coverage "
+                "manifest(s) could not be reconstructed at startup"
+            ),
+            unparseable_manifest_paths=list(gap_load.unparseable_manifest_paths),
+        ))
     # Decided lazily from cycle 1's own protected load, not a separate
     # pre-loop CheckpointStore.load() call: a corrupt/unreadable checkpoint
     # file must surface as a FAILURE signal through the same try/except

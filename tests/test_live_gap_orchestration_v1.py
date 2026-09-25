@@ -15,9 +15,12 @@ sys.path.insert(0, str(ROOT / "src"))
 from quant_platform.application.bybit_live import RealServerRestartProofReport, RestartOutcome  # noqa: E402
 from quant_platform.application.live_gap_orchestration import (  # noqa: E402
     BYBIT_PUBLIC_ARCHIVE_SOURCE_ID,
+    GAP_RECORDED_NON_COMPLETE,
     REPAIR_SOURCE_EVALUATION_INCONCLUSIVE,
     REPAIR_SOURCE_UNPROVEN,
     SESSION_RESUMED_WITH_EXPLICIT_GAP,
+    LongGapInterval,
+    TradeKeyBoundary,
     inconclusive_repair_source_evaluation,
     load_open_long_gap_records,
     long_gap_interval_from_restart_report,
@@ -81,7 +84,8 @@ class LiveGapOrchestrationTests(unittest.TestCase):
             self.assertEqual(document["assertions"][0]["partitions"], [])
             self.assertEqual(document["acquisition"]["intent_start"], "2026-09-25T10:00:00.123456Z")
             self.assertEqual(document["acquisition"]["intent_end"], "2026-09-25T10:00:02.987655Z")
-            self.assertIn("repair_state=REPAIR_SOURCE_UNPROVEN", document["assertions"][0]["evidence"][0]["detail"])
+            detail_payload = json.loads(document["assertions"][0]["evidence"][0]["detail"])
+            self.assertEqual(detail_payload["repair_state"], REPAIR_SOURCE_UNPROVEN)
             self.assertEqual(open_gap_payload((record,))["open_gap_count"], 1)
 
     def test_repeated_detection_supersedes_prior_gap_manifest_for_same_anchor(self):
@@ -113,10 +117,45 @@ class LiveGapOrchestrationTests(unittest.TestCase):
             self.assertEqual(document["assertions"][0]["start"], first_interval.coverage_start)
             self.assertEqual(document["assertions"][0]["end"], second_interval.coverage_end)
             loaded = load_open_long_gap_records(storage_root=tempdir)
-            self.assertEqual(len(loaded), 1)
-            self.assertEqual(loaded[0].coverage_id, second.coverage_id)
-            self.assertEqual(loaded[0].supersedes_coverage_id, first.coverage_id)
-            self.assertEqual(loaded[0].interval.start_key.stable_dict(), second.interval.start_key.stable_dict())
+            self.assertEqual(loaded.unparseable_manifest_paths, ())
+            self.assertEqual(len(loaded.records), 1)
+            self.assertEqual(loaded.records[0].coverage_id, second.coverage_id)
+            self.assertEqual(loaded.records[0].supersedes_coverage_id, first.coverage_id)
+            self.assertEqual(
+                loaded.records[0].interval.start_key.stable_dict(), second.interval.start_key.stable_dict()
+            )
+
+    def test_reconstruction_failure_on_a_recognized_manifest_is_reported_not_dropped(self):
+        interval = LongGapInterval(
+            start_key=TradeKeyBoundary(venue="bybit", instrument="BTCUSDT", exchange_ts=Instant(1000), trade_id="anchor"),
+            detected_at=Instant.parse("2026-09-25T10:00:02Z"),
+            reason="last durable TradeKeyV1 absent from bounded recent-public-trades window",
+            recent_window_records=1000,
+            buffered_ws_records=0,
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            record = record_explicit_long_gap(
+                storage_root=tempdir, interval=interval, producer="test", code_ref="test",
+                detected_at=interval.detected_at,
+            )
+
+            # Simulate format drift: the manifest still declares itself a
+            # long-gap / GAP_RECORDED_NON_COMPLETE document (so it must still
+            # be classified as ours), but a required structured field is
+            # missing from the JSON payload -- e.g. a future writer change
+            # that dropped a field without a matching reader update.
+            path = Path(record.coverage_manifest_path)
+            document = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(document["assertions"][0]["evidence"][0]["detail"])
+            self.assertEqual(payload["state"], GAP_RECORDED_NON_COMPLETE)
+            del payload["last_durable_key"]
+            document["assertions"][0]["evidence"][0]["detail"] = json.dumps(payload)
+            path.write_text(json.dumps(document), encoding="utf-8")
+
+            loaded = load_open_long_gap_records(storage_root=tempdir)
+
+            self.assertEqual(loaded.records, ())
+            self.assertEqual(loaded.unparseable_manifest_paths, (str(path),))
 
     def test_inconclusive_source_evaluation_is_retryable_and_not_unproven(self):
         evaluation = inconclusive_repair_source_evaluation(
