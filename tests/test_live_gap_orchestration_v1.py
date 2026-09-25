@@ -19,6 +19,7 @@ from quant_platform.application.live_gap_orchestration import (  # noqa: E402
     REPAIR_SOURCE_UNPROVEN,
     SESSION_RESUMED_WITH_EXPLICIT_GAP,
     inconclusive_repair_source_evaluation,
+    load_open_long_gap_records,
     long_gap_interval_from_restart_report,
     open_gap_payload,
     record_explicit_long_gap,
@@ -111,6 +112,11 @@ class LiveGapOrchestrationTests(unittest.TestCase):
             self.assertEqual(document["supersedes"], first.coverage_id)
             self.assertEqual(document["assertions"][0]["start"], first_interval.coverage_start)
             self.assertEqual(document["assertions"][0]["end"], second_interval.coverage_end)
+            loaded = load_open_long_gap_records(storage_root=tempdir)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].coverage_id, second.coverage_id)
+            self.assertEqual(loaded[0].supersedes_coverage_id, first.coverage_id)
+            self.assertEqual(loaded[0].interval.start_key.stable_dict(), second.interval.start_key.stable_dict())
 
     def test_inconclusive_source_evaluation_is_retryable_and_not_unproven(self):
         evaluation = inconclusive_repair_source_evaluation(

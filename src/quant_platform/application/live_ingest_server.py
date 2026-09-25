@@ -38,6 +38,7 @@ from quant_platform.application.live_gap_orchestration import (
     LongGapRecord,
     SESSION_CONTINUOUS,
     SESSION_RESUMED_WITH_EXPLICIT_GAP,
+    load_open_long_gap_records,
     long_gap_interval_from_restart_report,
     open_gap_payload,
     record_explicit_long_gap,
@@ -253,7 +254,7 @@ def run_live_ingest_server(
     store = CheckpointStore(config.checkpoint_path)
     cycles = 0
     status = SERVER_STOPPED
-    open_gaps: list[LongGapRecord] = []
+    open_gaps: list[LongGapRecord] = list(load_open_long_gap_records(storage_root=config.storage_root))
     # Decided lazily from cycle 1's own protected load, not a separate
     # pre-loop CheckpointStore.load() call: a corrupt/unreadable checkpoint
     # file must surface as a FAILURE signal through the same try/except

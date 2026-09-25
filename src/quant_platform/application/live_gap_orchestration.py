@@ -16,6 +16,7 @@ proving or rejecting a source; callers can already pass that evaluation into
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -281,6 +282,47 @@ def open_gap_payload(records: tuple[LongGapRecord, ...]) -> dict[str, Any]:
     }
 
 
+def load_open_long_gap_records(*, storage_root: str | Path) -> tuple[LongGapRecord, ...]:
+    """Load durable open long-gap heads for the Bybit live dataset.
+
+    This is a read model over Declared Coverage files. A gap manifest remains
+    open while its ``coverage_id`` is not superseded by another long-gap
+    manifest in the same chain; A10 repair cutover closure is not implemented
+    in this slice, so no repair-complete manifest is interpreted here.
+    Malformed or unrelated files are ignored rather than breaking server
+    startup observability.
+    """
+
+    identity = bybit_live_dataset_identity()
+    dataset_root = Path(storage_root).joinpath(
+        identity.layer,
+        identity.dataset_kind,
+        identity.venue,
+        identity.instrument,
+        identity.record_schema_id,
+    )
+    if not dataset_root.exists():
+        return ()
+    candidates: list[tuple[Path, Mapping[str, Any]]] = []
+    superseded: set[str] = set()
+    for path in dataset_root.glob("coverage-manifest-long-gap-*.json"):
+        document = _load_long_gap_manifest(path)
+        if document is None or not _is_long_gap_document(document):
+            continue
+        candidates.append((path, document))
+        supersedes = document.get("supersedes")
+        if isinstance(supersedes, str) and supersedes:
+            superseded.add(supersedes)
+    records: list[LongGapRecord] = []
+    for path, document in sorted(candidates, key=lambda item: _document_sort_key(item[1])):
+        coverage_id = document.get("coverage_id")
+        if isinstance(coverage_id, str) and coverage_id not in superseded:
+            record = _record_from_long_gap_manifest(path, document)
+            if record is not None:
+                records.append(record)
+    return tuple(records)
+
+
 def _coverage_floor(instant: Instant) -> Instant:
     return Instant((instant.epoch_ns // 1_000) * 1_000)
 
@@ -326,6 +368,149 @@ def _load_long_gap_manifest(path: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return document if isinstance(document, dict) else None
+
+
+def _is_long_gap_document(document: Mapping[str, Any]) -> bool:
+    coverage_id = document.get("coverage_id")
+    assertions = document.get("assertions")
+    if not isinstance(coverage_id, str) or not coverage_id.startswith("long-gap-"):
+        return False
+    if not isinstance(assertions, list) or len(assertions) != 1:
+        return False
+    assertion = assertions[0]
+    if not isinstance(assertion, Mapping) or assertion.get("status") != "known_gap":
+        return False
+    evidence = assertion.get("evidence")
+    if not isinstance(evidence, list):
+        return False
+    return any(
+        isinstance(item, Mapping)
+        and item.get("kind") == "transport_interruption"
+        and isinstance(item.get("detail"), str)
+        and f"state={GAP_RECORDED_NON_COMPLETE}" in item["detail"]
+        for item in evidence
+    )
+
+
+def _document_sort_key(document: Mapping[str, Any]) -> tuple[int, str]:
+    try:
+        return (Instant.parse(_text(document.get("created_at"), "created_at")).epoch_ns, str(document.get("coverage_id")))
+    except ValueError:
+        return (0, str(document.get("coverage_id")))
+
+
+def _record_from_long_gap_manifest(path: Path, document: Mapping[str, Any]) -> LongGapRecord | None:
+    try:
+        assertion = _only_assertion(document)
+        detail = _first_evidence_detail(assertion)
+        start_key = _parse_detail_start_key(detail)
+        interval = LongGapInterval(
+            start_key=start_key,
+            detected_at=Instant.parse(_text(assertion.get("end"), "assertion.end")),
+            reason=_detail_field(detail, "reason") or "durable long-gap coverage manifest",
+            recent_window_records=_optional_detail_int(detail, "recent_window_records"),
+            buffered_ws_records=_optional_detail_int(detail, "buffered_ws_records"),
+        )
+        interval_state = _detail_field(detail, "repair_state") or REPAIR_SOURCE_UNPROVEN
+        evaluation = RepairSourceEvaluation(
+            source_id=_detail_field(detail, "repair_source") or BYBIT_PUBLIC_ARCHIVE_SOURCE_ID,
+            interval_state=interval_state,
+            completed=interval_state != REPAIR_SOURCE_EVALUATION_INCONCLUSIVE,
+            reasons=tuple(_parse_detail_reasons(detail)),
+        )
+        return LongGapRecord(
+            session_state=SESSION_RESUMED_WITH_EXPLICIT_GAP,
+            interval_state=interval_state,
+            interval=interval,
+            coverage_id=_text(document.get("coverage_id"), "coverage_id"),
+            assertion_id=_text(assertion.get("assertion_id"), "assertion_id"),
+            coverage_manifest_path=str(path),
+            coverage_manifest_sha256=_file_sha256(path),
+            repair_source_evaluation=evaluation,
+            supersedes_coverage_id=document.get("supersedes") if isinstance(document.get("supersedes"), str) else None,
+        )
+    except (OSError, ValueError, SyntaxError):
+        return None
+
+
+def _only_assertion(document: Mapping[str, Any]) -> Mapping[str, Any]:
+    assertions = document.get("assertions")
+    if not isinstance(assertions, list) or len(assertions) != 1 or not isinstance(assertions[0], Mapping):
+        raise ValueError("long-gap manifest must contain exactly one assertion")
+    return assertions[0]
+
+
+def _first_evidence_detail(assertion: Mapping[str, Any]) -> str:
+    evidence = assertion.get("evidence")
+    if not isinstance(evidence, list):
+        raise ValueError("long-gap assertion must contain evidence")
+    for item in evidence:
+        if isinstance(item, Mapping) and item.get("kind") == "transport_interruption":
+            return _text(item.get("detail"), "evidence.detail")
+    raise ValueError("long-gap assertion must contain transport interruption evidence")
+
+
+def _parse_detail_start_key(detail: str) -> TradeKeyBoundary:
+    raw = _detail_between(detail, "last_durable_key=", "; recent_window_records=")
+    if raw is None:
+        raise ValueError("long-gap detail must include last_durable_key")
+    value = ast.literal_eval(raw)
+    if not isinstance(value, Mapping):
+        raise ValueError("last_durable_key detail must be a mapping")
+    return TradeKeyBoundary(
+        venue=_text(value.get("venue"), "last_durable_key.venue"),
+        instrument=_text(value.get("instrument"), "last_durable_key.instrument"),
+        exchange_ts=Instant.parse(_text(value.get("exchange_ts"), "last_durable_key.exchange_ts")),
+        trade_id=_text(value.get("trade_id"), "last_durable_key.trade_id"),
+    )
+
+
+def _detail_field(detail: str, key: str) -> str | None:
+    value = _detail_between(detail, f"{key}=", "; ")
+    if value is None:
+        prefix = f"{key}="
+        if detail.endswith(prefix):
+            return ""
+        index = detail.find(prefix)
+        if index < 0:
+            return None
+        value = detail[index + len(prefix):]
+    return value.strip() or None
+
+
+def _detail_between(detail: str, start_marker: str, end_marker: str) -> str | None:
+    start = detail.find(start_marker)
+    if start < 0:
+        return None
+    start += len(start_marker)
+    end = detail.find(end_marker, start)
+    if end < 0:
+        return detail[start:]
+    return detail[start:end]
+
+
+def _optional_detail_int(detail: str, key: str) -> int | None:
+    value = _detail_field(detail, key)
+    if value in {None, "None"}:
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{key} detail must be an integer") from exc
+
+
+def _parse_detail_reasons(detail: str) -> tuple[str, ...]:
+    raw = _detail_field(detail, "evaluation_reasons")
+    if raw is None:
+        return ()
+    value = ast.literal_eval(raw)
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str) and item)
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _matches_long_gap_anchor(
@@ -387,6 +572,7 @@ __all__ = [
     "TradeKeyBoundary",
     "evaluate_current_bybit_archive_authority",
     "inconclusive_repair_source_evaluation",
+    "load_open_long_gap_records",
     "long_gap_interval_from_restart_report",
     "open_gap_payload",
     "record_explicit_long_gap",

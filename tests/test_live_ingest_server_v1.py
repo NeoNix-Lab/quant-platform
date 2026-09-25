@@ -314,6 +314,70 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         self.assertEqual(document["assertions"][0]["partitions"], [])
         self.assertIn("repair_state=REPAIR_SOURCE_UNPROVEN", document["assertions"][0]["evidence"][0]["detail"])
 
+    def test_open_gap_observability_survives_restart_after_checkpoint_advances(self):
+        store = CheckpointStore(self.checkpoint_path)
+        store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
+        unrelated = trade(5000, "unrelated", "99")
+        new_segment = trade(6000, "new-segment", "100")
+        after_restart = trade(7000, "after-restart", "101")
+
+        def fake_current_publication_v1(*, checkpoint, dsn):
+            return self.publication
+
+        def fake_recent_gap(*, limit):
+            return (unrelated,)
+
+        def fail_restart_publish(**_kwargs):
+            raise AssertionError("must not publish reconciliation records for an unresolved gap")
+
+        def fake_publish_v2(**_kwargs):
+            return self._publish_report((new_segment,), revision=2)
+
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication_v1
+        app_bybit_live.fetch_recent_public_trades = fake_recent_gap
+        app_bybit_live._publish_restart_reconciliation_records = fail_restart_publish
+        app_bybit_live.run_real_server_publish_proof = fake_publish_v2
+
+        process_a = self._run(stop_after=2)
+        process_a_health = [s for s in process_a.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
+        self.assertEqual(process_a_health[-1].payload["open_gap_count"], 1)
+
+        publication_v2 = DurablePublicationState(
+            catalog_dataset_id=self.publication.catalog_dataset_id,
+            partition_key=self.publication.partition_key,
+            revision=2,
+            partition_manifest_sha256=self.publication.partition_manifest_sha256,
+        )
+
+        def fake_current_publication_v2(*, checkpoint, dsn):
+            return publication_v2
+
+        def fake_recent_resumed(*, limit):
+            return (new_segment, after_restart)
+
+        def fake_restart_publish(*, accepted_records, reconcile_result, **_kwargs):
+            self.assertEqual([record.trade_id for record in accepted_records], ["after-restart"])
+            return self._restart_publish_report(accepted_records, revision=3)
+
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication_v2
+        app_bybit_live.fetch_recent_public_trades = fake_recent_resumed
+        app_bybit_live._publish_restart_reconciliation_records = fake_restart_publish
+
+        process_b = self._run(stop_after=1)
+
+        self.assertEqual(process_b.status, SERVER_STOPPED)
+        self.assertEqual(process_b.cycles, 1)
+        process_b_health = [s for s in process_b.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
+        self.assertEqual(len(process_b_health), 1)
+        self.assertEqual(process_b_health[0].payload["health"], "HEALTHY")
+        self.assertEqual(process_b_health[0].payload["phase"], "reconcile")
+        self.assertEqual(process_b_health[0].payload["session_state"], SESSION_RESUMED_WITH_EXPLICIT_GAP)
+        self.assertEqual(process_b_health[0].payload["open_gap_count"], 1)
+        self.assertEqual(
+            process_b_health[0].payload["open_gap_coverage_ids"],
+            process_a_health[-1].payload["open_gap_coverage_ids"],
+        )
+
     def test_sustained_gap_updates_one_open_gap_chain_instead_of_appending_events(self):
         store = CheckpointStore(self.checkpoint_path)
         store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
