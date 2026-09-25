@@ -301,6 +301,63 @@ B06 remains outside the current scope.
 
 This is a **frontier, not concurrent authorization**. `SCOPE.md` permits one bounded mutation slice at a time.
 
+## Live Ingest Server Production Readiness v1 — derived governance map
+
+`SCOPE.md`'s "Governance Map Generation Requirements" section requires a
+derived execution map complete enough to generate the next issues without
+re-litigating the scope boundary. This section is that map. It is scoped to
+the active `SCOPE.md` and is retired with it at closeout; it does not add
+permanent DAG atoms.
+
+**Credited state (reuse, do not reimplement):** K08, A11, K02, K10, A10, B04,
+K03, K04, K05, K06 — all `COMPLETE` above and in `SCOPE.md`'s Credited State.
+
+**Reconciled stale governance state:** the K10 `PARTIAL`/
+`REAL_RESTART_PROOF_PENDING` phrasing across this file, `CAPABILITY_MAP.md`,
+`ROADMAP.md` and `OPEN_DECISIONS.md` is reconciled to `COMPLETE` with PR #122
+evidence (see Execution frontier above). No open action remains here.
+
+**Production-readiness blockers** (`SCOPE.md` P1-P6): P1 no bounded
+daemon/service owner exists; P2 no governed repair path beyond bounded
+reconciliation; P3 no source has met the stated proof bar; P4 no accepted
+operational gap/repair state model; P5 publication-before-checkpoint is
+proven for restart (PR #122) but not yet extended to repair; P6 operator
+evidence beyond the K03 foundation does not yet exist.
+
+**Design gates** (must resolve before any code change):
+
+| Gate | Resolves | Authority | Artifact | Acceptance evidence |
+|---|---|---|---|---|
+| Active Path step 2 — ingest server v1 design | P1, loop classification (P7) | `SCOPE.md` step 2; ADR-0041; existing `application.bybit_live` entrypoints | Design note/ADR naming the bounded daemon/service composition, its owning module, and required operator evidence | Concrete enough that step 4 needs no further semantic decision; does not require a generic scheduler/framework |
+| Active Path step 3 — long-gap remediation design | P2, P3, P4 | `SCOPE.md` step 3; ADR-0033; ADR-0040/ADR-0042; issue #110 disposition | Design note naming either a proven repair source/path bound to A10, or an explicit decision to retain explicit-gap-only behavior, plus the accepted gap state machine | Either outcome validly closes the gate; states/transitions are fail-closed and cannot silently mark a gap complete |
+
+**Implementation atoms** (bounded issues, blocked on their design gate):
+
+| Slice | Resolves | Blocked on | Authority | Artifact | Acceptance evidence |
+|---|---|---|---|---|---|
+| Active Path step 4 — bounded ingest server loop | P1, P5, P6 | step 2 | step 2's design note; K02/A11/K10/A10/K03/K05/K06 | Running bounded server composition | Publication-before-checkpoint preserved; P6 operator evidence observable |
+| Active Path step 5 — long-gap state and repair orchestration | P2, P3, P4, P5 | step 3 | step 3's design note; A10/A16 repair seams | Gap detection/recording plus repair-intent representation | Gap stays explicit until repair evidence passes; no state silently claims completeness |
+
+**Real-server proof atom:** Active Path step 6 requires deploy/run on the
+target server (or an explicitly accepted equivalent), stop/restart, bounded
+reconcile, a forced long-gap scenario or explicitly accepted equivalent
+simulation, and verification of no silent loss, duplicate or false-complete
+coverage — the same evidence shape PR #122 already produced for the restart
+proof.
+
+**Closeout atom:** Active Path step 7 reconciles `CAPABILITY_MAP.md`, this
+file, `ROADMAP.md` and `OPEN_DECISIONS.md` to the strongest actually-proven
+propositions and archives `SCOPE.md` per the normal versioned-scope
+convention.
+
+**Explicit exclusions** (must not become implicit issue work): B06, K07, K09,
+J08, paper/shadow mode, Strategy/Replay/Execution/Portfolio/ML/RL, J02
+API/client work, L1/L2/L3/MBO, second venue/generic provider resolution,
+generic job scheduler/broker/workflow engine, HA/distributed consensus/
+off-site DR, and speculative long-gap filling without attributable source
+evidence. `SCOPE.md`'s Out Of Scope list is authoritative; no issue derived
+from this map may pull these in without a concrete acceptance blocker.
+
 ## Execution waves
 
 Waves are dependency/value groupings and differ from temporary `implement/wave-*` git integration branches.

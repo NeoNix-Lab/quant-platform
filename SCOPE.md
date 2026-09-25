@@ -245,6 +245,11 @@ would close it. The map may sequence or split the work more finely than this
 scope, but it may not weaken the stop conditions, convert exclusions into
 implicit work, or treat readiness language as completion evidence.
 
+This map is materialized in `docs/product/CAPABILITY_DAG.md`'s "Live Ingest
+Server Production Readiness v1 — derived governance map" section, immediately
+after that file's Execution frontier. It is scoped to this `SCOPE.md` and is
+retired with it at closeout, not a permanent addition to the atom DAG.
+
 ## Active Path
 
 One bounded mutation slice remains active at a time. Each step below states
