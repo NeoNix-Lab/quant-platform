@@ -34,6 +34,15 @@ import time
 from typing import Any
 
 from quant_platform.application import bybit_live
+from quant_platform.application.live_gap_orchestration import (
+    LongGapRecord,
+    SESSION_CONTINUOUS,
+    SESSION_RESUMED_WITH_EXPLICIT_GAP,
+    load_open_long_gap_records,
+    long_gap_interval_from_restart_report,
+    open_gap_payload,
+    record_explicit_long_gap,
+)
 from quant_platform.data.models import Instant
 from quant_platform.operations.capacity import CapacityObservation, StorageRoot, observe_capacity
 from quant_platform.operations.checkpoint import CheckpointStore
@@ -49,21 +58,12 @@ from quant_platform.operations.pressure import PressureDecision, PressurePolicyD
 
 CAPABILITY_ID = "live-ingest-server-v1"
 
-# ADR-0044 S2 session-level classification, mirrored here as plain strings
-# (this module is application-owned; the state machine itself belongs to
-# the long-gap orchestration ADR-0044 introduces for issue #127).
-SESSION_CONTINUOUS = "CONTINUOUS"
-SESSION_RESUMED_WITH_EXPLICIT_GAP = "RESUMED_WITH_EXPLICIT_GAP"
-
 # Final loop outcomes.
 SERVER_STOPPED = "STOPPED"
 SERVER_FAILED = "FAILED"
-# GAP_DETECTED is a valid ADR-0040 §7 outcome, not an error: the checkpoint
-# is intentionally left unadvanced and the gap must be recorded through
-# ADR-0044's long-gap orchestration (issue #127) before governed publication
-# can safely resume with a new segment. That orchestration does not exist
-# yet, so this bounded loop stops rather than inventing a new-segment
-# bootstrap procedure ADR-0044 did not specify.
+# Retained for API compatibility with the ADR-0043 first slice. Issue #127
+# now records the gap explicitly and continues with a new governed live
+# segment, so this is no longer a terminal loop status.
 SERVER_GAP_DETECTED_AWAITING_REMEDIATION = "GAP_DETECTED_AWAITING_REMEDIATION"
 
 
@@ -87,7 +87,7 @@ class LiveIngestServerConfigV1:
 
 @dataclass(frozen=True, slots=True)
 class LiveIngestServerReport:
-    status: str  # STOPPED | FAILED | GAP_DETECTED_AWAITING_REMEDIATION
+    status: str  # STOPPED | FAILED
     cycles: int
     signals: tuple[OperationalSignalV1, ...]
 
@@ -147,10 +147,43 @@ def _failure_signal(subject: SubjectReference, *, failure_code: str, **context: 
     )
 
 
+def _observation_unavailable_signal(subject: SubjectReference, *, reason: str, **payload: Any) -> OperationalSignalV1:
+    return OperationalSignalV1(
+        subject=subject,
+        capability_id=CAPABILITY_ID,
+        kind=SignalKind.OBSERVATION_UNAVAILABLE,
+        observed_at=_now(),
+        payload={"reason": reason, "health": HealthState.UNKNOWN.value, **payload},
+    )
+
+
 def _checkpoint_evidence(checkpoint_identity: str | None) -> tuple[EvidenceReference, ...]:
     if not checkpoint_identity:
         return ()
     return (EvidenceReference(evidence_kind="checkpoint_identity", evidence_identity=checkpoint_identity),)
+
+
+def _open_gap_evidence(records: tuple[LongGapRecord, ...]) -> tuple[EvidenceReference, ...]:
+    return tuple(
+        EvidenceReference(evidence_kind="coverage_manifest", evidence_identity=record.coverage_id)
+        for record in records
+    )
+
+
+def _session_state(records: tuple[LongGapRecord, ...]) -> str:
+    return SESSION_RESUMED_WITH_EXPLICIT_GAP if records else SESSION_CONTINUOUS
+
+
+def _open_gap_signal_payload(records: tuple[LongGapRecord, ...]) -> dict[str, Any]:
+    return open_gap_payload(records) if records else {}
+
+
+def _merge_open_gap_record(records: list[LongGapRecord], record: LongGapRecord) -> None:
+    for index, existing in enumerate(records):
+        if existing.interval.start_key.stable_dict() == record.interval.start_key.stable_dict():
+            records[index] = record
+            return
+    records.append(record)
 
 
 def _pressure_evidence(
@@ -231,6 +264,22 @@ def run_live_ingest_server(
     store = CheckpointStore(config.checkpoint_path)
     cycles = 0
     status = SERVER_STOPPED
+    gap_load = load_open_long_gap_records(storage_root=config.storage_root)
+    open_gaps: list[LongGapRecord] = list(gap_load.records)
+    if gap_load.unparseable_manifest_paths:
+        # A durable known_gap manifest exists and was confidently classified
+        # as ours, but its structured evidence could not be reconstructed.
+        # This must never silently read as "no open gap" -- surface it as
+        # explicit reduced-observability evidence (K03's own UNKNOWN-never-
+        # HEALTHY discipline) rather than dropping it from open_gaps.
+        emit(_observation_unavailable_signal(
+            subject,
+            reason=(
+                f"{len(gap_load.unparseable_manifest_paths)} durable long-gap coverage "
+                "manifest(s) could not be reconstructed at startup"
+            ),
+            unparseable_manifest_paths=list(gap_load.unparseable_manifest_paths),
+        ))
     # Decided lazily from cycle 1's own protected load, not a separate
     # pre-loop CheckpointStore.load() call: a corrupt/unreadable checkpoint
     # file must surface as a FAILURE signal through the same try/except
@@ -264,40 +313,67 @@ def run_live_ingest_server(
                 )
                 if report.status == "PASS":
                     needs_reconcile = False
+                    open_gap_records = tuple(open_gaps)
                     emit(_health_signal(
-                        subject, health=HealthState.HEALTHY, session_state=SESSION_CONTINUOUS,
+                        subject, health=HealthState.HEALTHY, session_state=_session_state(open_gap_records),
                         cycle=cycles, phase="reconcile", checkpoint_identity=report.checkpoint_identity,
                         records=report.restart_accepted_records or 0,
-                        evidence=_checkpoint_evidence(report.checkpoint_identity) + pressure_evidence,
+                        evidence=(
+                            _checkpoint_evidence(report.checkpoint_identity)
+                            + pressure_evidence
+                            + _open_gap_evidence(open_gap_records)
+                        ),
+                        **_open_gap_signal_payload(open_gap_records),
                         **pressure_payload,
                     ))
                 elif report.status == "REAL_RESTART_PROOF_PENDING":
                     needs_reconcile = False
+                    open_gap_records = tuple(open_gaps)
                     emit(_health_signal(
-                        subject, health=HealthState.HEALTHY, session_state=SESSION_CONTINUOUS,
+                        subject, health=HealthState.HEALTHY, session_state=_session_state(open_gap_records),
                         cycle=cycles, phase="reconcile",
                         reason="continuity proven; no new records to reconcile",
-                        evidence=pressure_evidence, **pressure_payload,
+                        evidence=pressure_evidence + _open_gap_evidence(open_gap_records),
+                        **_open_gap_signal_payload(open_gap_records), **pressure_payload,
                     ))
                 elif report.status == "GAP_DETECTED":
-                    # ADR-0042 S5/S6 + ADR-0044: checkpoint intentionally left
-                    # unadvanced. Recording this durably and resuming with a
-                    # new governed segment is issue #127's job; this bounded
-                    # slice stops rather than inventing that procedure.
-                    outcome = report.restart_outcome
-                    reason = (
-                        outcome.reconcile_result.evidence.get("reason")
-                        if outcome is not None and outcome.reconcile_result is not None
-                        else None
+                    # ADR-0042 S5/S6 + ADR-0044: checkpoint intentionally
+                    # stays unadvanced for the interrupted segment. Issue
+                    # #127 records the interval as explicit non-complete
+                    # coverage and lets the server continue with a new live
+                    # segment; only an A10 repair cutover may later close it.
+                    detected_at = _now()
+                    interval = long_gap_interval_from_restart_report(report, detected_at=detected_at)
+                    gap_record = record_explicit_long_gap(
+                        storage_root=config.storage_root,
+                        interval=interval,
+                        producer=config.producer,
+                        code_ref=config.code_ref,
+                        detected_at=detected_at,
                     )
+                    _merge_open_gap_record(open_gaps, gap_record)
+                    open_gap_records = tuple(open_gaps)
+                    needs_reconcile = False
                     emit(_health_signal(
                         subject, health=HealthState.DEGRADED, session_state=SESSION_RESUMED_WITH_EXPLICIT_GAP,
                         cycle=cycles, phase="reconcile", checkpoint_identity=report.checkpoint_identity,
-                        reason=reason or "durable anchor outside bounded reconciliation window",
-                        evidence=pressure_evidence, **pressure_payload,
+                        reason=interval.reason,
+                        gap_coverage_id=gap_record.coverage_id,
+                        gap_assertion_id=gap_record.assertion_id,
+                        gap_manifest_path=gap_record.coverage_manifest_path,
+                        gap_manifest_sha256=gap_record.coverage_manifest_sha256,
+                        gap_supersedes=gap_record.supersedes_coverage_id,
+                        gap_state=gap_record.interval_state,
+                        repair_source_id=gap_record.repair_source_evaluation.source_id,
+                        repair_source_completed=gap_record.repair_source_evaluation.completed,
+                        evidence=(
+                            _checkpoint_evidence(report.checkpoint_identity)
+                            + pressure_evidence
+                            + _open_gap_evidence((gap_record,))
+                        ),
+                        **_open_gap_signal_payload(open_gap_records),
+                        **pressure_payload,
                     ))
-                    status = SERVER_GAP_DETECTED_AWAITING_REMEDIATION
-                    break
                 else:
                     emit(_failure_signal(
                         subject, failure_code=report.status, cycle=cycles, phase="reconcile",
@@ -316,10 +392,16 @@ def run_live_ingest_server(
                     code_ref=config.code_ref,
                 )
                 if report.status == "CHECKPOINT_PERSISTED":
+                    open_gap_records = tuple(open_gaps)
                     emit(_health_signal(
-                        subject, health=HealthState.HEALTHY, session_state=SESSION_CONTINUOUS,
+                        subject, health=HealthState.HEALTHY, session_state=_session_state(open_gap_records),
                         cycle=cycles, phase="acquire", checkpoint_identity=report.checkpoint_identity,
-                        evidence=_checkpoint_evidence(report.checkpoint_identity) + pressure_evidence,
+                        evidence=(
+                            _checkpoint_evidence(report.checkpoint_identity)
+                            + pressure_evidence
+                            + _open_gap_evidence(open_gap_records)
+                        ),
+                        **_open_gap_signal_payload(open_gap_records),
                         **pressure_payload,
                     ))
                 elif report.status == "LIVE_PROVIDER_PROOF_PENDING":
@@ -333,11 +415,13 @@ def run_live_ingest_server(
                     # checkpoint exists to reconcile against.
                     if store.load() is not None:
                         needs_reconcile = True
+                    open_gap_records = tuple(open_gaps)
                     emit(_health_signal(
-                        subject, health=HealthState.DEGRADED, session_state=SESSION_CONTINUOUS,
+                        subject, health=HealthState.DEGRADED, session_state=_session_state(open_gap_records),
                         cycle=cycles, phase="acquire",
                         reason="no acquisition evidence within this cycle's bounded window",
-                        evidence=pressure_evidence, **pressure_payload,
+                        evidence=pressure_evidence + _open_gap_evidence(open_gap_records),
+                        **_open_gap_signal_payload(open_gap_records), **pressure_payload,
                     ))
                 else:
                     emit(_failure_signal(

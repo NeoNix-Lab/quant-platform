@@ -5,7 +5,7 @@ Composes the exact same restart/reconcile/publish functions PR #122 already
 proved on the real server, faking only the network/catalog boundaries
 exactly the way ``tests/test_bybit_live_checkpoint_v1.py`` does, so the
 loop's own control flow (bootstrap -> steady-state live-acquisition cycles
--> drop-triggered reconcile -> gap stop -> clean stop -> failure) is
+-> drop-triggered reconcile -> explicit gap record -> new segment -> clean stop -> failure) is
 exercised against real checkpoint persistence rather than a second, parallel
 fake of the restart/publish composition itself.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import timedelta
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -28,10 +29,15 @@ from quant_platform.application.bybit_live import (  # noqa: E402
     LiveProviderProofReport,
     RealServerPublishProofReport,
 )
+from quant_platform.application.live_gap_orchestration import (  # noqa: E402
+    GAP_RECORDED_NON_COMPLETE,
+    LongGapInterval,
+    TradeKeyBoundary,
+    record_explicit_long_gap,
+)
 from quant_platform.application.live_ingest_server import (  # noqa: E402
     LiveIngestServerConfigV1,
     SERVER_FAILED,
-    SERVER_GAP_DETECTED_AWAITING_REMEDIATION,
     SERVER_STOPPED,
     SESSION_CONTINUOUS,
     SESSION_RESUMED_WITH_EXPLICIT_GAP,
@@ -269,10 +275,11 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         health = [s for s in report.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
         self.assertEqual([s.payload["phase"] for s in health], ["reconcile", "acquire"])
 
-    def test_gap_detected_on_startup_reconcile_stops_loop_with_checkpoint_unadvanced(self):
+    def test_gap_detected_on_startup_records_non_complete_gap_and_starts_new_segment(self):
         store = CheckpointStore(self.checkpoint_path)
         store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
         unrelated = trade(5000, "unrelated", "99")
+        new_segment = trade(6000, "new-segment", "100")
 
         def fake_current_publication(*, checkpoint, dsn):
             return self.publication
@@ -283,22 +290,194 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         def fail_restart_publish(**_kwargs):
             raise AssertionError("must not publish reconciliation records for an unresolved gap")
 
+        def fake_publish(**_kwargs):
+            return self._publish_report((new_segment,), revision=2)
+
         app_bybit_live.load_current_durable_publication_state = fake_current_publication
         app_bybit_live.fetch_recent_public_trades = fake_recent
         app_bybit_live._publish_restart_reconciliation_records = fail_restart_publish
+        app_bybit_live.run_real_server_publish_proof = fake_publish
 
         report = self._run(stop_after=2)
 
-        self.assertEqual(report.status, SERVER_GAP_DETECTED_AWAITING_REMEDIATION)
-        self.assertEqual(report.cycles, 1)
+        self.assertEqual(report.status, SERVER_STOPPED)
+        self.assertEqual(report.cycles, 2)
 
         checkpoint = CheckpointStore(self.checkpoint_path).load()
-        self.assertEqual(checkpoint.generation, 1)  # unadvanced, per ADR-0042 S5/S6
-        self.assertEqual(checkpoint.last_canonical_trade_id, "anchor")
+        self.assertEqual(checkpoint.generation, 2)
+        self.assertEqual(checkpoint.last_canonical_trade_id, "new-segment")
 
         health = [s for s in report.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
-        self.assertEqual(health[-1].payload["health"], "DEGRADED")
-        self.assertEqual(health[-1].payload["session_state"], SESSION_RESUMED_WITH_EXPLICIT_GAP)
+        self.assertEqual([s.payload["health"] for s in health], ["DEGRADED", "HEALTHY"])
+        self.assertEqual([s.payload["phase"] for s in health], ["reconcile", "acquire"])
+        self.assertTrue(all(s.payload["session_state"] == SESSION_RESUMED_WITH_EXPLICIT_GAP for s in health))
+        self.assertEqual([s.payload["open_gap_count"] for s in health], [1, 1])
+        self.assertEqual(health[0].payload["gap_state"], "REPAIR_SOURCE_UNPROVEN")
+        manifest_path = Path(health[0].payload["gap_manifest_path"])
+        self.assertTrue(manifest_path.exists())
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(document["assertions"][0]["status"], "known_gap")
+        self.assertEqual(document["assertions"][0]["partitions"], [])
+        detail_payload = json.loads(document["assertions"][0]["evidence"][0]["detail"])
+        self.assertEqual(detail_payload["repair_state"], "REPAIR_SOURCE_UNPROVEN")
+
+    def test_open_gap_observability_survives_restart_after_checkpoint_advances(self):
+        store = CheckpointStore(self.checkpoint_path)
+        store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
+        unrelated = trade(5000, "unrelated", "99")
+        new_segment = trade(6000, "new-segment", "100")
+        after_restart = trade(7000, "after-restart", "101")
+
+        def fake_current_publication_v1(*, checkpoint, dsn):
+            return self.publication
+
+        def fake_recent_gap(*, limit):
+            return (unrelated,)
+
+        def fail_restart_publish(**_kwargs):
+            raise AssertionError("must not publish reconciliation records for an unresolved gap")
+
+        def fake_publish_v2(**_kwargs):
+            return self._publish_report((new_segment,), revision=2)
+
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication_v1
+        app_bybit_live.fetch_recent_public_trades = fake_recent_gap
+        app_bybit_live._publish_restart_reconciliation_records = fail_restart_publish
+        app_bybit_live.run_real_server_publish_proof = fake_publish_v2
+
+        process_a = self._run(stop_after=2)
+        process_a_health = [s for s in process_a.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
+        self.assertEqual(process_a_health[-1].payload["open_gap_count"], 1)
+
+        publication_v2 = DurablePublicationState(
+            catalog_dataset_id=self.publication.catalog_dataset_id,
+            partition_key=self.publication.partition_key,
+            revision=2,
+            partition_manifest_sha256=self.publication.partition_manifest_sha256,
+        )
+
+        def fake_current_publication_v2(*, checkpoint, dsn):
+            return publication_v2
+
+        def fake_recent_resumed(*, limit):
+            return (new_segment, after_restart)
+
+        def fake_restart_publish(*, accepted_records, reconcile_result, **_kwargs):
+            self.assertEqual([record.trade_id for record in accepted_records], ["after-restart"])
+            return self._restart_publish_report(accepted_records, revision=3)
+
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication_v2
+        app_bybit_live.fetch_recent_public_trades = fake_recent_resumed
+        app_bybit_live._publish_restart_reconciliation_records = fake_restart_publish
+
+        process_b = self._run(stop_after=1)
+
+        self.assertEqual(process_b.status, SERVER_STOPPED)
+        self.assertEqual(process_b.cycles, 1)
+        process_b_health = [s for s in process_b.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
+        self.assertEqual(len(process_b_health), 1)
+        self.assertEqual(process_b_health[0].payload["health"], "HEALTHY")
+        self.assertEqual(process_b_health[0].payload["phase"], "reconcile")
+        self.assertEqual(process_b_health[0].payload["session_state"], SESSION_RESUMED_WITH_EXPLICIT_GAP)
+        self.assertEqual(process_b_health[0].payload["open_gap_count"], 1)
+        self.assertEqual(
+            process_b_health[0].payload["open_gap_coverage_ids"],
+            process_a_health[-1].payload["open_gap_coverage_ids"],
+        )
+
+    def test_sustained_gap_updates_one_open_gap_chain_instead_of_appending_events(self):
+        store = CheckpointStore(self.checkpoint_path)
+        store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
+        unrelated = trade(5000, "unrelated", "99")
+        pending = RealServerPublishProofReport(
+            status="LIVE_PROVIDER_PROOF_PENDING",
+            acquisition=LiveProviderProofReport(
+                status="LIVE_PROVIDER_PROOF_PENDING", topic="publicTrade.BTCUSDT",
+                messages=0, records=0, duplicates_removed=0, final_state="DISCONNECTED", errors=("timeout",),
+            ),
+        )
+
+        def fake_current_publication(*, checkpoint, dsn):
+            return self.publication
+
+        def fake_recent(*, limit):
+            return (unrelated,)
+
+        def fake_publish(**_kwargs):
+            return pending
+
+        def fail_restart_publish(**_kwargs):
+            raise AssertionError("must not publish reconciliation records for an unresolved gap")
+
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication
+        app_bybit_live.fetch_recent_public_trades = fake_recent
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+        app_bybit_live._publish_restart_reconciliation_records = fail_restart_publish
+
+        report = self._run(stop_after=6)
+
+        self.assertEqual(report.status, SERVER_STOPPED)
+        self.assertEqual(report.cycles, 6)
+        health = [s for s in report.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
+        self.assertEqual([s.payload["phase"] for s in health], [
+            "reconcile", "acquire", "reconcile", "acquire", "reconcile", "acquire",
+        ])
+        self.assertEqual([s.payload["open_gap_count"] for s in health], [1, 1, 1, 1, 1, 1])
+        gap_signals = [s for s in health if s.payload["phase"] == "reconcile"]
+        self.assertIsNone(gap_signals[0].payload["gap_supersedes"])
+        self.assertEqual(gap_signals[1].payload["gap_supersedes"], gap_signals[0].payload["gap_coverage_id"])
+        self.assertEqual(gap_signals[2].payload["gap_supersedes"], gap_signals[1].payload["gap_coverage_id"])
+        self.assertEqual(health[-1].payload["open_gap_coverage_ids"], (gap_signals[-1].payload["gap_coverage_id"],))
+
+    def test_unparseable_durable_gap_manifest_is_reported_not_silently_dropped(self):
+        interval = LongGapInterval(
+            start_key=TradeKeyBoundary(venue="bybit", instrument="BTCUSDT", exchange_ts=Instant(1000), trade_id="anchor"),
+            detected_at=Instant.parse("2026-09-25T10:00:02Z"),
+            reason="last durable TradeKeyV1 absent from bounded recent-public-trades window",
+            recent_window_records=1000, buffered_ws_records=0,
+        )
+        gap_record = record_explicit_long_gap(
+            storage_root=self.tempdir.name, interval=interval, producer="test", code_ref="test",
+            detected_at=interval.detected_at,
+        )
+        # Corrupt the durable manifest in a way that still identifies it as
+        # one of ours (still GAP_RECORDED_NON_COMPLETE, still known_gap) but
+        # drops a field the reconstruction needs -- simulating format drift
+        # rather than an unrelated file.
+        manifest_path = Path(gap_record.coverage_manifest_path)
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload = json.loads(document["assertions"][0]["evidence"][0]["detail"])
+        self.assertEqual(payload["state"], GAP_RECORDED_NON_COMPLETE)
+        del payload["last_durable_key"]
+        document["assertions"][0]["evidence"][0]["detail"] = json.dumps(payload)
+        manifest_path.write_text(json.dumps(document), encoding="utf-8")
+
+        anchor = trade(1000, "anchor", "1")
+
+        def fake_publish(**_kwargs):
+            return self._publish_report((anchor,))
+
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+
+        report = self._run(stop_after=1)
+
+        self.assertEqual(report.status, SERVER_STOPPED)
+        unavailable = [s for s in report.signals if s.kind is SignalKind.OBSERVATION_UNAVAILABLE]
+        self.assertEqual(len(unavailable), 1)
+        self.assertEqual(unavailable[0].payload["health"], "UNKNOWN")
+        self.assertEqual(unavailable[0].payload["unparseable_manifest_paths"], (str(manifest_path),))
+
+        # The server must still run normally -- an unparseable historical
+        # gap manifest is reduced observability, not a startup failure.
+        health = [s for s in report.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
+        self.assertEqual(len(health), 1)
+        self.assertEqual(health[0].payload["health"], "HEALTHY")
+        # And it must not be silently counted as "no open gap": since the
+        # corrupted record itself was dropped from open_gaps (it couldn't be
+        # reconstructed), open_gap_count correctly omits it -- the
+        # OBSERVATION_UNAVAILABLE signal above is what preserves visibility
+        # into the fact that a real gap's state is actually unknown.
+        self.assertNotIn("open_gap_count", health[0].payload)
 
     def test_unhandled_cycle_exception_emits_failure_signal_and_stops(self):
         def raise_publish(**_kwargs):
