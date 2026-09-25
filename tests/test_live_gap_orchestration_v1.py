@@ -157,6 +157,72 @@ class LiveGapOrchestrationTests(unittest.TestCase):
             self.assertEqual(loaded.records, ())
             self.assertEqual(loaded.unparseable_manifest_paths, (str(path),))
 
+    def test_non_json_detail_is_reported_not_treated_as_unrelated_file(self):
+        interval = LongGapInterval(
+            start_key=TradeKeyBoundary(venue="bybit", instrument="BTCUSDT", exchange_ts=Instant(1000), trade_id="anchor"),
+            detected_at=Instant.parse("2026-09-25T10:00:02Z"),
+            reason="last durable TradeKeyV1 absent from bounded recent-public-trades window",
+            recent_window_records=1000,
+            buffered_ws_records=0,
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            record = record_explicit_long_gap(
+                storage_root=tempdir, interval=interval, producer="test", code_ref="test",
+                detected_at=interval.detected_at,
+            )
+
+            # Classification (is this one of ours?) must not depend on the
+            # detail string being decodable at all -- a legacy pre-JSON
+            # manifest or genuine corruption still has coverage_id/status/
+            # evidence-kind shape identifying it as ours, and must be
+            # reported as unparseable, not silently treated as an unrelated
+            # file sharing this directory.
+            path = Path(record.coverage_manifest_path)
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["assertions"][0]["evidence"][0]["detail"] = "state=GAP_RECORDED_NON_COMPLETE; not valid json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+
+            loaded = load_open_long_gap_records(storage_root=tempdir)
+
+            self.assertEqual(loaded.records, ())
+            self.assertEqual(loaded.unparseable_manifest_paths, (str(path),))
+
+    def test_corrupt_chain_head_does_not_resurrect_the_stale_prior_as_open(self):
+        interval = LongGapInterval(
+            start_key=TradeKeyBoundary(venue="bybit", instrument="BTCUSDT", exchange_ts=Instant(1000), trade_id="anchor"),
+            detected_at=Instant.parse("2026-09-25T10:00:02Z"),
+            reason="r1", recent_window_records=1000, buffered_ws_records=0,
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            record_explicit_long_gap(
+                storage_root=tempdir, interval=interval, producer="test", code_ref="test",
+                detected_at=interval.detected_at,
+            )
+            later_interval = LongGapInterval(
+                start_key=interval.start_key, detected_at=Instant.parse("2026-09-25T10:00:05Z"),
+                reason="r1", recent_window_records=1001, buffered_ws_records=0,
+            )
+            second = record_explicit_long_gap(
+                storage_root=tempdir, interval=later_interval, producer="test", code_ref="test",
+                detected_at=later_interval.detected_at,
+            )
+            self.assertIsNotNone(second.supersedes_coverage_id)
+
+            # Corrupt only the chain HEAD (the superseding manifest). If
+            # classification depended on decoding, the head would vanish
+            # from the candidate set *before* its `supersedes` pointer could
+            # mark the stale prior manifest as superseded -- resurrecting a
+            # manifest that was correctly replaced as if it were still open.
+            head_path = Path(second.coverage_manifest_path)
+            head_document = json.loads(head_path.read_text(encoding="utf-8"))
+            head_document["assertions"][0]["evidence"][0]["detail"] = "not valid json at all"
+            head_path.write_text(json.dumps(head_document), encoding="utf-8")
+
+            loaded = load_open_long_gap_records(storage_root=tempdir)
+
+            self.assertEqual(loaded.records, ())
+            self.assertEqual(loaded.unparseable_manifest_paths, (str(head_path),))
+
     def test_inconclusive_source_evaluation_is_retryable_and_not_unproven(self):
         evaluation = inconclusive_repair_source_evaluation(
             source_id="candidate-source-v1", reason="source endpoint timed out before completeness proof"

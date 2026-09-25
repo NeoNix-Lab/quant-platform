@@ -381,7 +381,12 @@ def _latest_matching_long_gap_manifest(
     latest_created_at: Instant | None = None
     if not dataset_root.exists():
         return None
-    prefix = f"coverage-manifest-long-gap-{_start_key_fingerprint(interval.start_key)}-"
+    # Must match the `coverage_id` *field value* record_explicit_long_gap
+    # assigns ("long-gap-<fingerprint>-<tag>"), not the filename it derives
+    # from that id -- these are different strings, and comparing against the
+    # filename-shaped prefix here always failed silently, falling through to
+    # the slower content-based fallback below on every call.
+    prefix = f"long-gap-{_start_key_fingerprint(interval.start_key)}-"
     for path in dataset_root.glob("coverage-manifest-long-gap-*.json"):
         document = _load_long_gap_manifest(path)
         if document is None or not _matches_long_gap_anchor(document, interval, prefix=prefix):
@@ -425,7 +430,31 @@ def _transport_interruption_payload(assertion: Mapping[str, Any]) -> dict[str, A
     return None
 
 
+def _has_transport_interruption_evidence(assertion: Mapping[str, Any]) -> bool:
+    """Purely structural check: does this assertion carry *any*
+    ``transport_interruption`` evidence item, regardless of whether its
+    ``detail`` happens to be decodable? Classification must not depend on
+    successful JSON decoding, or a malformed/legacy-format ``detail`` on an
+    otherwise clearly-ours manifest would cause it to be treated as "not one
+    of ours" and skipped before ``_record_from_long_gap_manifest`` ever gets
+    a chance to report it as unparseable."""
+
+    evidence = assertion.get("evidence")
+    if not isinstance(evidence, list):
+        return False
+    return any(isinstance(item, Mapping) and item.get("kind") == "transport_interruption" for item in evidence)
+
+
 def _is_long_gap_document(document: Mapping[str, Any]) -> bool:
+    """Classify a manifest as one of this module's long-gap manifests using
+    only structural/shape signals (``coverage_id`` prefix, single
+    ``known_gap`` assertion, presence of transport-interruption evidence) --
+    never by decoding the ``detail`` payload. The ``long-gap-`` coverage_id
+    prefix is exclusive to ``record_explicit_long_gap``; A11's own
+    known_gap/transport_interruption coverage documents
+    (``build_bybit_live_coverage_document``) use a different id scheme, so
+    this prefix alone is sufficient to avoid conflating the two."""
+
     coverage_id = document.get("coverage_id")
     assertions = document.get("assertions")
     if not isinstance(coverage_id, str) or not coverage_id.startswith("long-gap-"):
@@ -435,8 +464,7 @@ def _is_long_gap_document(document: Mapping[str, Any]) -> bool:
     assertion = assertions[0]
     if not isinstance(assertion, Mapping) or assertion.get("status") != "known_gap":
         return False
-    payload = _transport_interruption_payload(assertion)
-    return payload is not None and payload.get("state") == GAP_RECORDED_NON_COMPLETE
+    return _has_transport_interruption_evidence(assertion)
 
 
 def _document_sort_key(document: Mapping[str, Any]) -> tuple[int, str]:
@@ -457,6 +485,8 @@ def _record_from_long_gap_manifest(path: Path, document: Mapping[str, Any]) -> L
     payload = _transport_interruption_payload(assertion)
     if payload is None:
         raise ValueError("long-gap assertion evidence detail is not a decodable structured payload")
+    if payload.get("state") != GAP_RECORDED_NON_COMPLETE:
+        raise ValueError(f"long-gap detail payload has unexpected state: {payload.get('state')!r}")
     last_durable_key = payload.get("last_durable_key")
     if not isinstance(last_durable_key, Mapping):
         raise ValueError("long-gap detail payload must include a structured last_durable_key")
