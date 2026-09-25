@@ -314,6 +314,50 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         self.assertEqual(document["assertions"][0]["partitions"], [])
         self.assertIn("repair_state=REPAIR_SOURCE_UNPROVEN", document["assertions"][0]["evidence"][0]["detail"])
 
+    def test_sustained_gap_updates_one_open_gap_chain_instead_of_appending_events(self):
+        store = CheckpointStore(self.checkpoint_path)
+        store.save(first_checkpoint(exchange_ts=1000, trade_id="anchor", publication=self.publication))
+        unrelated = trade(5000, "unrelated", "99")
+        pending = RealServerPublishProofReport(
+            status="LIVE_PROVIDER_PROOF_PENDING",
+            acquisition=LiveProviderProofReport(
+                status="LIVE_PROVIDER_PROOF_PENDING", topic="publicTrade.BTCUSDT",
+                messages=0, records=0, duplicates_removed=0, final_state="DISCONNECTED", errors=("timeout",),
+            ),
+        )
+
+        def fake_current_publication(*, checkpoint, dsn):
+            return self.publication
+
+        def fake_recent(*, limit):
+            return (unrelated,)
+
+        def fake_publish(**_kwargs):
+            return pending
+
+        def fail_restart_publish(**_kwargs):
+            raise AssertionError("must not publish reconciliation records for an unresolved gap")
+
+        app_bybit_live.load_current_durable_publication_state = fake_current_publication
+        app_bybit_live.fetch_recent_public_trades = fake_recent
+        app_bybit_live.run_real_server_publish_proof = fake_publish
+        app_bybit_live._publish_restart_reconciliation_records = fail_restart_publish
+
+        report = self._run(stop_after=6)
+
+        self.assertEqual(report.status, SERVER_STOPPED)
+        self.assertEqual(report.cycles, 6)
+        health = [s for s in report.signals if s.kind is SignalKind.HEALTH_SNAPSHOT]
+        self.assertEqual([s.payload["phase"] for s in health], [
+            "reconcile", "acquire", "reconcile", "acquire", "reconcile", "acquire",
+        ])
+        self.assertEqual([s.payload["open_gap_count"] for s in health], [1, 1, 1, 1, 1, 1])
+        gap_signals = [s for s in health if s.payload["phase"] == "reconcile"]
+        self.assertIsNone(gap_signals[0].payload["gap_supersedes"])
+        self.assertEqual(gap_signals[1].payload["gap_supersedes"], gap_signals[0].payload["gap_coverage_id"])
+        self.assertEqual(gap_signals[2].payload["gap_supersedes"], gap_signals[1].payload["gap_coverage_id"])
+        self.assertEqual(health[-1].payload["open_gap_coverage_ids"], (gap_signals[-1].payload["gap_coverage_id"],))
+
     def test_unhandled_cycle_exception_emits_failure_signal_and_stops(self):
         def raise_publish(**_kwargs):
             raise RuntimeError("simulated catalog outage")

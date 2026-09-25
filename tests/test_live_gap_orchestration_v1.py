@@ -29,8 +29,9 @@ from quant_platform.source_adapters.bybit_live import ReconnectResult, Reconnect
 
 
 class LiveGapOrchestrationTests(unittest.TestCase):
-    def test_records_known_gap_without_partition_and_unproven_source_evaluation(self):
-        report = RealServerRestartProofReport(
+    @staticmethod
+    def _gap_report() -> RealServerRestartProofReport:
+        return RealServerRestartProofReport(
             status="GAP_DETECTED",
             publication=None,
             checkpoint_path="/tmp/checkpoint.json",
@@ -56,9 +57,11 @@ class LiveGapOrchestrationTests(unittest.TestCase):
                 ),
             ),
         )
+
+    def test_records_known_gap_without_partition_and_unproven_source_evaluation(self):
         with tempfile.TemporaryDirectory() as tempdir:
             interval = long_gap_interval_from_restart_report(
-                report, detected_at=Instant.parse("2026-09-25T10:00:02.987654321Z")
+                self._gap_report(), detected_at=Instant.parse("2026-09-25T10:00:02.987654321Z")
             )
             record = record_explicit_long_gap(
                 storage_root=tempdir,
@@ -79,6 +82,35 @@ class LiveGapOrchestrationTests(unittest.TestCase):
             self.assertEqual(document["acquisition"]["intent_end"], "2026-09-25T10:00:02.987655Z")
             self.assertIn("repair_state=REPAIR_SOURCE_UNPROVEN", document["assertions"][0]["evidence"][0]["detail"])
             self.assertEqual(open_gap_payload((record,))["open_gap_count"], 1)
+
+    def test_repeated_detection_supersedes_prior_gap_manifest_for_same_anchor(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            first_interval = long_gap_interval_from_restart_report(
+                self._gap_report(), detected_at=Instant.parse("2026-09-25T10:00:02Z")
+            )
+            first = record_explicit_long_gap(
+                storage_root=tempdir,
+                interval=first_interval,
+                producer="test",
+                code_ref="test",
+                detected_at=Instant.parse("2026-09-25T10:00:02Z"),
+            )
+            second_interval = long_gap_interval_from_restart_report(
+                self._gap_report(), detected_at=Instant.parse("2026-09-25T10:00:04Z")
+            )
+            second = record_explicit_long_gap(
+                storage_root=tempdir,
+                interval=second_interval,
+                producer="test",
+                code_ref="test",
+                detected_at=Instant.parse("2026-09-25T10:00:04Z"),
+            )
+
+            self.assertEqual(second.supersedes_coverage_id, first.coverage_id)
+            document = json.loads(Path(second.coverage_manifest_path).read_text(encoding="utf-8"))
+            self.assertEqual(document["supersedes"], first.coverage_id)
+            self.assertEqual(document["assertions"][0]["start"], first_interval.coverage_start)
+            self.assertEqual(document["assertions"][0]["end"], second_interval.coverage_end)
 
     def test_inconclusive_source_evaluation_is_retryable_and_not_unproven(self):
         evaluation = inconclusive_repair_source_evaluation(

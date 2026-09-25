@@ -167,6 +167,14 @@ def _open_gap_signal_payload(records: tuple[LongGapRecord, ...]) -> dict[str, An
     return open_gap_payload(records) if records else {}
 
 
+def _merge_open_gap_record(records: list[LongGapRecord], record: LongGapRecord) -> None:
+    for index, existing in enumerate(records):
+        if existing.interval.start_key.stable_dict() == record.interval.start_key.stable_dict():
+            records[index] = record
+            return
+    records.append(record)
+
+
 def _pressure_evidence(
     config: LiveIngestServerConfigV1,
 ) -> tuple[dict[str, Any], tuple[EvidenceReference, ...]]:
@@ -317,7 +325,7 @@ def run_live_ingest_server(
                         code_ref=config.code_ref,
                         detected_at=detected_at,
                     )
-                    open_gaps.append(gap_record)
+                    _merge_open_gap_record(open_gaps, gap_record)
                     open_gap_records = tuple(open_gaps)
                     needs_reconcile = False
                     emit(_health_signal(
@@ -328,6 +336,7 @@ def run_live_ingest_server(
                         gap_assertion_id=gap_record.assertion_id,
                         gap_manifest_path=gap_record.coverage_manifest_path,
                         gap_manifest_sha256=gap_record.coverage_manifest_sha256,
+                        gap_supersedes=gap_record.supersedes_coverage_id,
                         gap_state=gap_record.interval_state,
                         repair_source_id=gap_record.repair_source_evaluation.source_id,
                         repair_source_completed=gap_record.repair_source_evaluation.completed,

@@ -5,12 +5,21 @@ long-gap state from existing A11/K10 restart evidence, writes explicit
 Declared Coverage evidence for the non-complete interval, and classifies repair
 source evaluation without creating a second coverage store or a speculative
 repair path.
+
+The current v1 server path uses ADR-0044's completed negative Bybit public
+archive evaluation and therefore reaches ``REPAIR_SOURCE_UNPROVEN`` for the
+known source. ``REPAIR_SOURCE_EVALUATION_INCONCLUSIVE`` is kept as an explicit
+state for future bounded evaluators that perform real IO and can fail before
+proving or rejecting a source; callers can already pass that evaluation into
+``record_explicit_long_gap`` without changing the coverage-recording contract.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -99,6 +108,7 @@ class LongGapRecord:
     coverage_manifest_path: str
     coverage_manifest_sha256: str
     repair_source_evaluation: RepairSourceEvaluation
+    supersedes_coverage_id: str | None
 
 
 def long_gap_interval_from_restart_report(
@@ -188,7 +198,13 @@ def record_explicit_long_gap(
     detected_at: Instant | str,
     evaluation: RepairSourceEvaluation | None = None,
 ) -> LongGapRecord:
-    """Persist one explicit non-complete coverage manifest for a long gap."""
+    """Persist explicit non-complete coverage for a long gap.
+
+    Repeated detections of the same still-open interruption are not independent
+    gap events. The latest manifest supersedes the prior durable manifest for
+    the same anchor key, so a process restart can continue the same evidence
+    chain instead of emitting disconnected overlapping records.
+    """
 
     identity = bybit_live_dataset_identity()
     created_at = Instant.parse(detected_at)
@@ -200,8 +216,9 @@ def record_explicit_long_gap(
         identity.instrument,
         identity.record_schema_id,
     )
+    prior = _latest_matching_long_gap_manifest(dataset_root, interval)
     tag = _coverage_tag(created_at)
-    coverage_id = f"long-gap-{tag}"
+    coverage_id = f"long-gap-{_start_key_fingerprint(interval.start_key)}-{tag}"
     assertion_id = f"long-gap-assertion-{tag}"
     coverage_manifest_path = dataset_root / f"coverage-manifest-{coverage_id}.json"
     detail = "; ".join(
@@ -221,7 +238,7 @@ def record_explicit_long_gap(
         dataset_identity=identity,
         source_dataset_identity=identity,
         coverage_id=coverage_id,
-        supersedes=None,
+        supersedes=prior["coverage_id"] if prior is not None else None,
         created_at=created_at,
         acquisition={
             "basis": "reconciliation",
@@ -252,6 +269,7 @@ def record_explicit_long_gap(
         coverage_manifest_path=str(coverage_manifest_path),
         coverage_manifest_sha256=emission.manifest_sha256,
         repair_source_evaluation=evaluation,
+        supersedes_coverage_id=prior["coverage_id"] if prior is not None else None,
     )
 
 
@@ -273,6 +291,68 @@ def _coverage_ceil(instant: Instant) -> Instant:
 
 def _coverage_tag(instant: Instant) -> str:
     return instant.to_datetime().strftime("%Y%m%d-%H%M%S-%f")
+
+
+def _start_key_fingerprint(key: TradeKeyBoundary) -> str:
+    payload = json.dumps(key.stable_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def _latest_matching_long_gap_manifest(
+    dataset_root: Path, interval: LongGapInterval
+) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    latest_created_at: Instant | None = None
+    if not dataset_root.exists():
+        return None
+    prefix = f"coverage-manifest-long-gap-{_start_key_fingerprint(interval.start_key)}-"
+    for path in dataset_root.glob("coverage-manifest-long-gap-*.json"):
+        document = _load_long_gap_manifest(path)
+        if document is None or not _matches_long_gap_anchor(document, interval, prefix=prefix):
+            continue
+        try:
+            created_at = Instant.parse(_text(document.get("created_at"), "created_at"))
+        except ValueError:
+            continue
+        if latest_created_at is None or created_at > latest_created_at:
+            latest = document
+            latest_created_at = created_at
+    return latest
+
+
+def _load_long_gap_manifest(path: Path) -> dict[str, Any] | None:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def _matches_long_gap_anchor(
+    document: Mapping[str, Any], interval: LongGapInterval, *, prefix: str
+) -> bool:
+    coverage_id = document.get("coverage_id")
+    if isinstance(coverage_id, str) and coverage_id.startswith(prefix):
+        return True
+    assertions = document.get("assertions")
+    if not isinstance(assertions, list) or len(assertions) != 1:
+        return False
+    assertion = assertions[0]
+    if not isinstance(assertion, Mapping):
+        return False
+    if assertion.get("status") != "known_gap" or assertion.get("start") != interval.coverage_start:
+        return False
+    evidence = assertion.get("evidence")
+    if not isinstance(evidence, list):
+        return False
+    return any(
+        isinstance(item, Mapping)
+        and isinstance(item.get("detail"), str)
+        and "last_durable_key=" in item["detail"]
+        and interval.start_key.trade_id in item["detail"]
+        and interval.start_key.exchange_ts.isoformat() in item["detail"]
+        for item in evidence
+    )
 
 
 def _text(value: Any, field: str) -> str:
