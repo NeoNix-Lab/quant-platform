@@ -18,6 +18,15 @@ Do not start until #<N> is closed or explicitly accepted as sufficient
 authority. If this issue is not actually blocked by anything, say so
 explicitly ("Blocked by: none") rather than leaving it implicit.
 
+## Setup checklist
+
+- [ ] Add this issue to the **<scope> Milestone** — the same one as the epic
+      and its siblings. That is how this repo tracks "belongs to this scope,"
+      not a label.
+- [ ] Link this issue as a native GitHub **sub-issue** of epic #<epic issue>
+      (Development panel → Sub-issues), in addition to the `Blocked by`
+      field above — the two are complementary, neither replaces the other.
+
 ## Objective
 
 <One paragraph: what this slice implements and the exact bounded output it

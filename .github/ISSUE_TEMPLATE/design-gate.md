@@ -20,6 +20,15 @@ Blocked by: <#issue, or "None — no prerequisite step">.
 concurrently with another open design gate, or whether the repository's
 one-bounded-mutation-slice-at-a-time rule requires picking one first.>
 
+## Setup checklist
+
+- [ ] Add this issue to the **<scope> Milestone** — the same one as the epic
+      and its siblings. That is how this repo tracks "belongs to this scope,"
+      not a label.
+- [ ] Link this issue as a native GitHub **sub-issue** of epic #<epic issue>
+      (Development panel → Sub-issues), in addition to the `Blocked by`
+      field above — the two are complementary, neither replaces the other.
+
 ## Objective
 
 <One paragraph: what decision must be resolved, in what direction it is

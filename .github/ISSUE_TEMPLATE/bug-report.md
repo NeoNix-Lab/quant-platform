@@ -31,3 +31,9 @@ decide, but say so explicitly rather than leaving it blank.>
 <Which ADR/contract/SCOPE.md governs the correct behavior here, if any. If
 none does — this is purely an implementation bug, not a semantic question —
 say so, since that changes who needs to review the fix.>
+
+## Linking (optional)
+
+If this bug was found while working a specific scope/epic, add it to that
+scope's **Milestone** and link it as a native GitHub **sub-issue** of the
+epic — otherwise leave both unset; not every bug belongs to a Wave.

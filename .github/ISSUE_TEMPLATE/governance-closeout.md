@@ -18,6 +18,16 @@ staleness findings here instead of editing them directly.
 
 Blocked by: #<final proof/implementation issue that this closeout credits>.
 
+## Setup checklist
+
+- [ ] Add this issue to the **<scope> Milestone** — the same one as the epic
+      and its siblings.
+- [ ] Link this issue as a native GitHub **sub-issue** of epic #<epic issue>
+      (Development panel → Sub-issues), in addition to the `Blocked by`
+      field above.
+- [ ] Closing this issue is also when the **Milestone itself gets closed** —
+      this is the last issue in the scope, not just another sibling.
+
 ## Objective
 
 Reconcile governance to the strongest propositions actually proven by

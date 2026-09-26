@@ -17,6 +17,15 @@ Blocked by: #<implementation issue(s)>.
 Do not start until the blocking implementation slice(s) are merged or
 explicitly accepted as sufficient for proof.
 
+## Setup checklist
+
+- [ ] Add this issue to the **<scope> Milestone** — the same one as the epic
+      and its siblings. That is how this repo tracks "belongs to this scope,"
+      not a label.
+- [ ] Link this issue as a native GitHub **sub-issue** of epic #<epic issue>
+      (Development panel → Sub-issues), in addition to the `Blocked by`
+      field above — the two are complementary, neither replaces the other.
+
 ## Objective
 
 Execute and record <the proof> on <target environment — real server, homelab
