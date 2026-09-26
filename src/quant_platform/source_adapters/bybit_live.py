@@ -181,17 +181,39 @@ class LiveSessionTracker:
         self._transition(SessionState.CONNECTED, "connected", {"conn_id": conn_id})
 
     def subscribed(self, *, topic: str = SUPPORTED_TOPIC, conn_id: str | None = None) -> None:
-        if self._state != SessionState.CONNECTED:
-            raise BybitLiveSourceError("subscription acknowledgement requires CONNECTED state")
         if topic != SUPPORTED_TOPIC:
             raise BybitLiveSourceError("subscription acknowledgement is for an unsupported topic", field="topic")
+        if self._state in {SessionState.SUBSCRIBED, SessionState.ACQUIRING}:
+            # Bybit does not guarantee the subscribe ack is delivered before
+            # the first topic message on the wire; observed_message() may
+            # already have inferred SUBSCRIBED from a matching trade message
+            # (see below). A same-topic ack arriving after that is
+            # confirmation of the same subscription, not a new transition or
+            # a protocol violation -- record it as evidence without moving
+            # the state machine backward or raising.
+            self._events.append(SessionEvent(self._state, "subscribed_ack_confirmed_late", {"topic": topic, "conn_id": conn_id}))
+            return
+        if self._state != SessionState.CONNECTED:
+            raise BybitLiveSourceError("subscription acknowledgement requires CONNECTED state")
         self._transition(SessionState.SUBSCRIBED, "subscribed", {"topic": topic, "conn_id": conn_id})
 
     def heartbeat(self, *, conn_id: str | None = None) -> None:
         self._events.append(SessionEvent(self._state, "heartbeat_pong", {"conn_id": conn_id}))
 
     def observed_message(self, batch: LiveTradeBatch) -> None:
-        if self._state not in {SessionState.SUBSCRIBED, SessionState.ACQUIRING}:
+        if self._state == SessionState.CONNECTED:
+            # A real, matching topic message is itself sufficient evidence
+            # the subscription succeeded (Bybit may deliver the first topic
+            # push before -- or without a client having yet processed -- the
+            # subscribe ack; this is an ordinary wire-ordering race, not a
+            # protocol violation). Treat it as an implicit ack rather than a
+            # fatal error: a late/duplicate real ack is still accepted by
+            # subscribed() above once this has already happened.
+            self._transition(
+                SessionState.SUBSCRIBED, "subscribed_implicitly_by_message",
+                {"topic": batch.message_evidence.topic},
+            )
+        elif self._state not in {SessionState.SUBSCRIBED, SessionState.ACQUIRING}:
             raise BybitLiveSourceError("trade message observed before subscription was established")
         if self._state == SessionState.SUBSCRIBED:
             self._transition(SessionState.ACQUIRING, "acquiring", {"topic": batch.message_evidence.topic})

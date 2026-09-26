@@ -18,7 +18,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Data | S13 certification | FROZEN | COMPLETE | Producer | A08 | Durable authoritative quality evidence. |
 | Data | S14 publication/eligibility | FROZEN | COMPLETE | Producer | A09 | First vertical catalog publication proven. |
 | Data | Backfill/repair | FROZEN | COMPLETE | Data Plane | A10 | ADR-0033; deterministic repair-intent/candidate/atomic-cutover foundation. |
-| Data | Live trades acquisition | FROZEN | COMPLETE | Data Plane | A11 | ADR-0040; Bybit BTCUSDT live mapping/session/dedup/cutover/reconnect plus canonical publication path integrated by PR #112 and proven on the real provider/server by PR #113. Long-gap remediation remains separately open for vertical closeout. |
+| Data | Live trades acquisition | FROZEN | COMPLETE | Data Plane | A11 | ADR-0040; Bybit BTCUSDT live mapping/session/dedup/cutover/reconnect plus canonical publication path integrated by PR #112 and proven on the real provider/server by PR #113. ADR-0044 governs unresolved long gaps as explicit non-complete coverage unless future authoritative repair evidence exists. |
 | Data | Second-venue trades | OPEN_DEFERABLE | MISSING | Data Plane | A12 | Triggered by real second-provider evidence; do not design a generic resolver early. |
 | Data | L1 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A13 | DG-C L1 branch, triggered by a concrete feed; does not activate L2. |
 | Data | L2 contract/acquisition | OPEN_BLOCKING | MISSING | Data Plane | A14 | DG-C L2 branch, only when L2 is selected. |
@@ -92,7 +92,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Tier relocation | OPEN_BLOCKING | MISSING | Operations/Data Plane | K07 | DG-H relocation branch; sibling of backup after source protection. |
 | Operations | Backup/restore proof | FROZEN | COMPLETE | Operations | K08 | ADR-0039; PR #111 implements identity-bound backup/isolated restore and PR #113 supplies the previously pending real deployment-independence evidence. |
 | Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
-| Operations | Checkpoint/recovery | FROZEN | PARTIAL | Operations/Data Plane | K10 | ADR-0042; PR #114 implements persisted checkpoint/recovery and the full hermetic proof matrix; bounded real-server restart and deployed checkpoint-path proof remain pending. |
+| Operations | Checkpoint/recovery | FROZEN | COMPLETE | Operations/Data Plane | K10 | ADR-0042; PR #114 implements persisted checkpoint/recovery and the full hermetic proof matrix; PR #122 supplies the bounded real-server restart/deployed checkpoint-path proof (`K10_REAL_RESTART_PROOF: PASS`). |
 | Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Canonical authority reconciled through the integrated Live Ingest implementation state by governance issue #117. |
 
 ## Gate / evidence state
@@ -124,19 +124,22 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | K08 backup/restore semantics v1 | COMPLETE | ADR-0039; PR #111 implementation/isolated restore plus PR #113 real deployment-independence evidence. |
 | A11 Bybit live acquisition semantics v1 | COMPLETE | ADR-0040; PR #112 implementation and real-provider proof, with PR #113 proving canonical publication/catalog/DataGateway composition on the target server. |
 | K02 live-ingest runtime identity v1 | COMPLETE | ADR-0041; PR #113 real-server least-privilege, storage and database authority proof. |
-| K10 live-ingest checkpoint/recovery v1 | PARTIAL | ADR-0042; PR #114 hermetic implementation/proof matrix integrated; `REAL_RESTART_PROOF_PENDING` remains operationally open. |
+| K10 live-ingest checkpoint/recovery v1 | COMPLETE | ADR-0042; PR #114 hermetic implementation/proof matrix integrated; PR #122 closes the real-server restart/deployed checkpoint-path proof (issues #109, #121). |
+| Live Ingest Server Production Readiness v1 | COMPLETE | Closed for the first Bybit BTCUSDT producer operating path by ADR-0043/ADR-0044, the supervised systemd path, target-host proof and DataGateway readback PASS; does not complete B06, K07, K09, J08 or live product mode. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
 
 ## Current frontier
 
-PR #116 integrated the Live Ingest implementation branch into `main`. K08, A11 and K02 are now `COMPLETE`; K10 is `PARTIAL` because its bounded real-server restart/deployed-checkpoint proof remains pending.
+PR #116 integrated the Live Ingest implementation branch into `main`. K08, A11, K02 and K10 are now `COMPLETE`: PR #122 (issues #109, #121) supplies the previously pending K10 real-server restart/deployed-checkpoint proof.
 
-The next exact missing operational proposition is the K10 real-server restart proof. Separately, the DG-B long-gap remediation proposition remains **OPEN_BLOCKING for Live Ingest Vertical closeout**: A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval filled/lossless until an authoritative repair source/path proves the missing support.
+**Live Ingest Server Production Readiness v1** is now closed in `SCOPE.md` for the first Bybit BTCUSDT producer operating path: ADR-0043 defines the bounded persistent server loop, ADR-0044 defines the governed long-gap explicit-gap path, and the supervised target proof records start, stop, restart, reconciliation and DataGateway readback PASS.
 
-B06 live-consumer cursor remains outside the current scope and unresolved.
+The DG-B long-gap remediation proposition remains disposed `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` (#110): A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval filled/lossless until an authoritative repair source/path proves the missing support. ADR-0044 carries this forward as accepted fail-closed behavior rather than reopening DG-B.
 
-Frontier/readiness state is **not concurrent implementation authorization**. `SCOPE.md` still permits only one bounded mutation slice at a time.
+B06 live-consumer cursor remains outside the closed scope and unresolved.
+
+No new runtime/product frontier is selected by this closeout. Frontier/readiness state is **not concurrent implementation authorization**.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.

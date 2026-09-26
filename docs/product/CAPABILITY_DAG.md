@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 3 complete, Live Ingest Vertical v1 integrated; closeout pending**.
+Status: **CANONICAL; Wave 3 complete, Live Ingest Vertical v1 integrated, and Live Ingest Server Production Readiness v1 closed for the first Bybit BTCUSDT producer operating path**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -21,7 +21,7 @@ OPEN_BLOCKING                   = 11
 OPEN_DEFERABLE                  = 8
 ROADMAP_DEFINED                 = 68 + 11 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         = 48 / 87 = 55.2%
+IMPLEMENTATION_COMPLETE         = 49 / 87 = 56.3%
 ```
 
 The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved atom proposition has a bounded activation rule. The 78.2% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, L1/L2/L3, RL, transport, deletion or unrelated operational semantics.
@@ -87,7 +87,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | B03 | Result identity/provenance | Data Access | B02 | B05,F04,B06 | FROZEN | COMPLETE | Semantic/source change changes identity; DATA_GATEWAY |
 | B04 | Non-contiguous coverage read | Data Access | A04,A09 | A10,A11 | FROZEN | COMPLETE | Explicit `ALLOW_PARTIAL` coverage reads; ADR-0029 |
 | B05 | Durable DatasetSnapshot | Data Access | B03 | experiment replay | OPEN_DEFERABLE | MISSING | Immutable reproducible reference; trigger on durable replay need |
-| B06 | Live access/cursor | Data Access | A11,B03 | D04,J07 | OPEN_BLOCKING | MISSING | Deterministic consumer resume/replay; remains outside ADR-0040/current scope |
+| B06 | Live access/cursor | Data Access | A11,B03 | D04,J07 | OPEN_BLOCKING | MISSING | Deterministic consumer resume/replay; remains outside ADR-0040 and the closed Live Ingest Server Production Readiness v1 scope |
 | B07 | In-process batch surface | Data Access | B02 | C02,D03 | RESOLVED | COMPLETE | Existing bounded `DataScan`; concrete naming local |
 | B08 | Schema evolution policy | Data Access | new schema evidence | A13-A15 | OPEN_DEFERABLE | MISSING | Resolve when a new real schema/version appears |
 
@@ -196,7 +196,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | K07 | Tier relocation | Operations/Data Plane | K05,K06 | storage lifecycle | OPEN_BLOCKING | MISSING | Crash yields old or new valid placement; DG-H relocation branch |
 | K08 | Backup/restore proof | Operations | K06 | K09,J08,K10,A11 | FROZEN | COMPLETE | ADR-0039; PR #111 implements identity-bound recovery/isolated restore and PR #113 closes the real deployment-independence evidence handoff |
 | K09 | Retention/deletion authority | Operations | K08 | sustainable live | OPEN_BLOCKING | MISSING | Never delete protected/sole recoverable evidence; DG-H deletion branch |
-| K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | FROZEN | PARTIAL | ADR-0042; PR #114 implements persisted checkpoint/recovery + full hermetic proof matrix; bounded real-server restart/deployed checkpoint proof remains pending |
+| K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | FROZEN | COMPLETE | ADR-0042; PR #114 implements persisted checkpoint/recovery + full hermetic proof matrix; PR #122 closes the bounded real-server restart/deployed checkpoint proof (issues #109, #121) |
 | K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; Live Ingest integration state reconciled by governance issue #117 |
 
 ## Dependency integrity
@@ -209,7 +209,7 @@ K06 source protection -> K07 relocation
 K06 source protection -> K08 backup/restore proof -> K09 deletion authority
 ```
 
-K08/A11/K02 are now complete for the selected first live-ingest path. K10 semantics are frozen and its implementation is integrated, but operational closeout still requires the bounded real-server restart proof. Backup/restore does not require tier-relocation implementation.
+K08/A11/K02/K10 are now complete for the selected first live-ingest path, including K10's bounded real-server restart proof (PR #122). Backup/restore does not require tier-relocation implementation.
 
 ## Decision gates
 
@@ -268,13 +268,13 @@ I02 experiment persistence is resolved and complete. Remaining atom decisions: `
 
 ### DG-H — Operational safety
 
-K02, K03, K05, K06 and K08 are complete for the selected first Live Ingest path. K10 semantics are frozen and its implementation is integrated but operational proof is still partial:
+K02, K03, K05, K06, K08 and K10 are complete for the selected first Live Ingest path:
 
 - K02 — ADR-0041, `COMPLETE` via PR #113 real-server identity/ACL/database/storage proof;
 - K08 — ADR-0039, `COMPLETE` via PR #111 plus PR #113 deployment-independence proof;
-- K10 — ADR-0042, `PARTIAL` via PR #114; `REAL_RESTART_PROOF_PENDING` remains.
+- K10 — ADR-0042, `COMPLETE` via PR #114 (hermetic implementation/proof matrix) plus PR #122 (bounded real-server restart/deployed checkpoint proof, issues #109/#121).
 
-Still-open atom branches are `K07` tier relocation and `K09` deletion authority; neither is pulled into the current scope.
+Still-open atom branches are `K07` tier relocation and `K09` deletion authority; neither is pulled into the closed Live Ingest Server Production Readiness v1 scope.
 
 ## Vertical milestones
 
@@ -287,19 +287,83 @@ Still-open atom branches are `K07` tier relocation and `K09` deletion authority;
 | V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies and sweeps | COMPLETE (`F02`/`F03`/`F04`; F03 authority ADR-0038) |
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | COMPLETE (`F06` + `F07`) |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |
-| V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | PARTIAL; first live-ingest producer path integrated, K10 operational closeout pending, broader B06 outside current scope |
+| V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | PARTIAL; first live-ingest producer operating path is production-ready under ADR-0043/ADR-0044 and supervised target proof, while broader B06 live consumer cursor remains outside this closed scope |
 | V9 | Application -> API -> Client | One application semantic implementation serves thin clients | APPLICATION SERVICE COMPLETE; transport deferred |
 | V10 | Paper -> Live | Full canonical stack crosses explicit operational authorization gate | BLOCKED |
 
 ## Execution frontier
 
-PR #116 integrated `implement/live-ingest` into `main`. The selected macro-scope remains **Live Ingest Vertical v1** (`SCOPE.md`) and is not yet closed.
+PR #116 integrated `implement/live-ingest` into `main`, PR #122 closed the
+previously pending K10 real-server restart/deployed-checkpoint proof, and the
+**Live Ingest Server Production Readiness v1** scope has now completed its
+bounded path. ADR-0043 defines the persistent ingest-server loop under K02,
+ADR-0044 defines fail-closed long-gap orchestration built on the disposed DG-B
+finding (#110), and the supervised target proof is recorded in
+`docs/integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md`.
 
-The next exact missing operational proposition is the bounded K10 real-server restart/deployed-checkpoint proof. After that, the DG-B long-gap proposition must be resolved from observed/provider evidence before Live Ingest v1 governance closeout.
+The current promotion frontier is the PR carrying that closed scope to `main`.
+No new runtime/product frontier is selected by this document.
 
-B06 remains outside the current scope.
+B06 remains outside the closed scope.
 
-This is a **frontier, not concurrent authorization**. `SCOPE.md` permits one bounded mutation slice at a time.
+This is a **frontier, not concurrent authorization**. `SCOPE.md` records the
+closed scope and its exclusions.
+
+## Live Ingest Server Production Readiness v1 — derived governance map
+
+`SCOPE.md`'s "Governance Map Generation Requirements" section required a
+derived execution map complete enough to generate the next issues without
+re-litigating the scope boundary. This section is the completed temporary map:
+it generated issues #126, #127, #128, #135 and #129 and is retired by this
+closeout. It does not add permanent DAG atoms.
+
+**Credited state (reuse, do not reimplement):** K08, A11, K02, K10, A10, B04,
+K03, K04, K05, K06 — all `COMPLETE` above and in `SCOPE.md`'s Credited State.
+
+**Reconciled stale governance state:** the K10 `PARTIAL`/
+`REAL_RESTART_PROOF_PENDING` phrasing across this file, `CAPABILITY_MAP.md`,
+`ROADMAP.md` and `OPEN_DECISIONS.md` is reconciled to `COMPLETE` with PR #122
+evidence (see Execution frontier above). No open action remains here.
+
+**Production-readiness blockers** (`SCOPE.md` P1-P6): resolved or disposed for
+the selected first producer operating path. P1/P6 are closed by ADR-0043,
+`quant_platform.application.live_ingest_server`, `tools/live_ingest_server.py`
+and the supervised deployment runbook. P2/P3/P4 are closed by ADR-0044's
+explicit-gap-only, fail-closed state path: no authoritative long-gap repair
+source is claimed, and unresolved gaps remain non-complete. P5 is preserved by
+the server loop, long-gap orchestration tests and target proof.
+
+**Design gates** (must resolve before any code change):
+
+| Gate | Resolves | Authority | Artifact | Acceptance evidence |
+|---|---|---|---|---|
+| Active Path step 2 — ingest server v1 design | P1, loop classification (P7) | `SCOPE.md` step 2; ADR-0041; existing `application.bybit_live` entrypoints | ADR-0043 | DONE; bounded server owner/entrypoint selected without generic scheduler/J03/J08 |
+| Active Path step 3 — long-gap remediation design | P2, P3, P4 | `SCOPE.md` step 3; ADR-0033; ADR-0040/ADR-0042; issue #110 disposition | ADR-0044 | DONE; explicit-gap-only behavior retained unless future attributable repair evidence exists |
+
+**Implementation atoms** (bounded issues, blocked on their design gate):
+
+| Slice | Resolves | Blocked on | Authority | Artifact | Acceptance evidence |
+|---|---|---|---|---|---|
+| Active Path step 4 — bounded ingest server loop | P1, P5, P6 | step 2 | ADR-0043; K02/A11/K10/A10/K03/K05/K06 | `quant_platform.application.live_ingest_server`; `tools/live_ingest_server.py` | DONE; publication-before-checkpoint preserved; operator evidence observable |
+| Active Path step 5 — long-gap state and repair orchestration | P2, P3, P4, P5 | step 3 | ADR-0044; A10/A16 repair seams | `quant_platform.application.live_gap_orchestration` | DONE; gap stays explicit until repair evidence passes; no state silently claims completeness |
+
+**Real-server proof atom:** DONE. Active Path step 6 evidence is recorded in
+`docs/integration/LIPR05_LIVE_INGEST_SERVER_PRODUCTION_READINESS_PROOF.md` and
+`docs/integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md`, including
+target supervised start, clean stop, restart, bounded reconciliation,
+checkpoint advancement and DataGateway readback PASS.
+
+**Closeout atom:** DONE. Active Path step 7 reconciles `CAPABILITY_MAP.md`,
+this file, `ROADMAP.md`, `OPEN_DECISIONS.md` and `SCOPE.md` to the strongest
+actually-proven propositions while preserving explicit exclusions.
+
+**Explicit exclusions** (must not become implicit issue work): B06, K07, K09,
+J08, paper/shadow mode, Strategy/Replay/Execution/Portfolio/ML/RL, J02
+API/client work, L1/L2/L3/MBO, second venue/generic provider resolution,
+generic job scheduler/broker/workflow engine, HA/distributed consensus/
+off-site DR, and speculative long-gap filling without attributable source
+evidence. `SCOPE.md`'s Out Of Scope list is authoritative; no issue derived
+from this map may pull these in without a concrete acceptance blocker.
 
 ## Execution waves
 
@@ -312,9 +376,9 @@ Wave 2  Representation / Feature vertical                 COMPLETE (E04,E06; ADR
 Wave 3  Research / Validation                             COMPLETE (F01-F08; ADR-0031/ADR-0036/ADR-0037/ADR-0038)
 Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
 Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
-Wave 6  Live Data Plane                                   K02,K03,K04,K05,K06,K08,A10,A11,A16 COMPLETE; K10 PARTIAL (real restart pending); K07,K09,B06 remain open/missing
+Wave 6  Live Data Plane                                   K02,K03,K04,K05,K06,K08,K10,A10,A11,A16 COMPLETE; K07,K09,B06 remain open/missing
 Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 when real client need exists
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. The selected Live Ingest scope nevertheless preserves the repository rule of one bounded mutation slice at a time.
+Parallelism is allowed whenever DAG dependencies are satisfied. The closed Live Ingest scope nevertheless preserves the repository rule that governed it: one bounded mutation slice at a time.

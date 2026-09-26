@@ -28,7 +28,9 @@ DG-E F08 DSR/PBO robust comparison v1                FROZEN / COMPLETE
 DG-H K02 live-ingest runtime identity v1             FROZEN / COMPLETE
 DG-H K06 RAW / source protection v1                  FROZEN / COMPLETE
 DG-H K08 backup / restore v1                         FROZEN / COMPLETE
-DG-H K10 checkpoint / recovery v1                    FROZEN / PARTIAL
+DG-H K10 checkpoint / recovery v1                    FROZEN / COMPLETE
+Live ingest server composition v1                    FROZEN / COMPLETE
+Live ingest long-gap orchestration v1                FROZEN / COMPLETE
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -49,7 +51,9 @@ Resolved architecture includes:
 - K08 backup/restore semantics under [ADR-0039](../decisions/ADR-0039-backup-restore-v1.md);
 - Bybit BTCUSDT live-trade acquisition/cutover/dedup/reconnect semantics under [ADR-0040](../decisions/ADR-0040-bybit-live-trades-v1.md);
 - live-ingest runtime identity/least-privilege semantics under [ADR-0041](../decisions/ADR-0041-live-ingest-runtime-identity-v1.md);
-- live-ingest checkpoint/recovery invariants under [ADR-0042](../decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md).
+- live-ingest checkpoint/recovery invariants under [ADR-0042](../decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md);
+- live-ingest server composition under [ADR-0043](../decisions/ADR-0043-live-ingest-server-composition-v1.md);
+- live-ingest long-gap orchestration under [ADR-0044](../decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md).
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
@@ -199,9 +203,9 @@ Before such an interval may be declared filled/complete, resolve and prove:
 - how the repaired interval is re-verified strongly enough to replace the prior `transport_interruption` / non-complete coverage evidence;
 - what happens when no authoritative source can prove the missing interval (the gap must remain explicit; no guessed completion).
 
-This open block does **not** prevent A11/K10 from running, recording an explicit gap and continuing with a new governed live segment. It **does** prevent the project from claiming that such a gap has been colmato/completed, and prevents Live Ingest Vertical closeout from claiming lossless continuity across that interval, until the missing-evidence proposition is actually satisfied.
+This disposed proposition does **not** prevent A11/K10 or the ADR-0043 server from running, recording an explicit gap and continuing with a new governed live segment. It **does** prevent the project from claiming that such a gap has been colmato/completed, and prevents any live-ingest closeout from claiming lossless continuity across that interval, until the missing-evidence proposition is actually satisfied.
 
-Issue #110's disposition (above) is the current record. A negative or temporarily unprovable archive result must not be reinterpreted as proof that a gap is complete.
+Issue #110's disposition (above) and ADR-0044 are the current record. A negative or temporarily unprovable archive result must not be reinterpreted as proof that a gap is complete.
 
 Do not solve this by treating missing `seq` values, absence of trades, wall-clock time or a finite local buffer as proof of completeness.
 
@@ -317,11 +321,11 @@ For public Bybit trades v1 there is no provider secret. Filesystem/database auth
 
 ### Observability (`K03`)
 
-Before paper/live claims or checkpoint/recovery runtime, define the minimum externally observable health/provenance/failure transitions required by the selected runtime. Exact technology/SLOs remain local until needed.
+The selected ADR-0043 live-ingest server uses the K03 operational signal seam for minimum lifecycle/health/provenance/failure evidence. Broader observability technology, SLOs and alerting remain local until a future runtime/product scope selects them.
 
 ### Pressure (`K05`)
 
-After observational capacity `K04`, resolve thresholds/time-to-full and explicit safe actions. No silent deletion.
+ADR-0043 uses the accepted K05 pressure policy for the selected live-ingest server's write/admission decisions. Future pressure thresholds or safe actions beyond this path remain scoped to the selecting runtime. No silent deletion.
 
 ### Source protection (`K06`) — RESOLVED
 
@@ -348,13 +352,38 @@ PR #111 implements the identity-bound recovery set, export/restore and isolated 
 
 Restore proof must precede deletion authority. No protected or sole recoverable evidence may be deleted.
 
-### Checkpoint/recovery (`K10`) — RESOLVED / IMPLEMENTATION PARTIAL
+### Checkpoint/recovery (`K10`) — RESOLVED / IMPLEMENTED
 
 K10 semantics are frozen under [ADR-0042](../decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md).
 
 A checkpoint means the last canonical progress point already durably published; publication must become durable before checkpoint advance. Replay after crash is allowed and relies on ADR-0040 idempotent deduplication. Invalid checkpoints fail closed. Restart uses bounded provider reconciliation and must record an explicit gap when continuity cannot be proven; it never guesses a cursor/completeness state.
 
-PR #114 implements persisted checkpoint state, binding/monotonicity/refusal semantics, A11 restart composition and the required hermetic proof matrix. Operational closeout remains `PARTIAL` because `REAL_RESTART_PROOF_PENDING`: the bounded real-server stop/restart/deployed-checkpoint proof under the K02 identity has not yet been executed and credited.
+PR #114 implements persisted checkpoint state, binding/monotonicity/refusal semantics, A11 restart composition and the required hermetic proof matrix. PR #122 (issues #109, #121) closes the previously pending `REAL_RESTART_PROOF_PENDING` handoff: under the K02 identity, Process A publishes and persists a checkpoint, Process B restarts, runs bounded reconciliation, durably publishes the accepted reconciliation records under explicit `reconciliation` coverage, and only then advances the checkpoint to a new monotonic generation (`K10_REAL_RESTART_PROOF: PASS`, run `k10-restart-fixed-fast-20260924T193502Z`). K10 is therefore implementation `COMPLETE` for v1.
+
+### Live ingest server composition — RESOLVED / IMPLEMENTED
+
+[ADR-0043](../decisions/ADR-0043-live-ingest-server-composition-v1.md)
+freezes the first production live-ingest server composition as a bounded
+Application-owned loop over the accepted A11/K10/K03/K05 authorities, exposed
+through `tools/live_ingest_server.py`. It is not a generic scheduler, job
+runtime, live product mode or B06 consumer cursor.
+
+The supervised operating path is documented in
+`../engineering/LIVE_INGEST_SERVER_DEPLOYMENT.md` and proven on the target host
+in `../integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md`: systemd
+starts the server under `mkt-transform:marketdata`, the server publishes and
+advances checkpoints, stops cleanly, restarts, reconciles from the durable
+checkpoint and passes DataGateway readback.
+
+### Live ingest long-gap orchestration — RESOLVED / IMPLEMENTED
+
+[ADR-0044](../decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md)
+freezes the v1 path for gaps beyond bounded provider reconciliation: record an
+explicit non-complete gap, retain source/restart evidence, continue only through
+a governed segment when allowed, and refuse to mark the missing interval
+complete without future attributable repair evidence. This closes the selected
+production-readiness path while preserving issue #110's
+`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition.
 
 ## Explicitly deferable decisions
 
