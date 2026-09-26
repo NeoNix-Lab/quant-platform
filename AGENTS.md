@@ -21,6 +21,14 @@ The `quant-platform` repository is the authoritative product codebase. Before ar
 - Do not use `git add .` or `git add -A`; stage explicit paths only.
 - If code conflicts with an accepted ADR or contract, stop and report the conflict.
 
+## Branching & Staged Integration Strategy
+
+- **Macro Waves**: Implementation cycles use a dedicated integration branch `implement/<wave>` (e.g. `implement/wave-4`) branched from `main`.
+- **Atomic Slices**: Individual issues use branch name `agent/issue-<num>-<slug>` (or `codex/issue-<num>-<slug>`) branched from the active `implement/<wave>`.
+- **PR Targeting**: Pull requests for atomic slices MUST target `implement/<wave>`, NOT `main`.
+- **Workflow Automation**: Use `python tools/workflow.py start <issue>` to begin work and `python tools/workflow.py pr` to run preflight and open the PR targeting the active integration base.
+- **Wave Promotion**: Only the final wave closeout PR promotes `implement/<wave>` into `main` after golden acceptance and governance reconciliation.
+
 ## Governance boundary
 
 Implementation and semantic-materialization agents are **not responsible for repository governance reconciliation**.
