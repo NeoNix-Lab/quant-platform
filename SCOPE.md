@@ -66,7 +66,7 @@ Accepted ADRs and frozen contracts remain normative semantic authority. This sco
 Authoritative baseline for this branch:
 
 ```text
-implement/wave-4 @ 67fafb070ba086702e7be5903b6d51bb4ad19fc1 (Merge PR #150 into main)
+implement/wave-4 @ 67fafb005c0b79df5efa042c81bf52077c4f0d53 (Merge PR #150 into main)
 ```
 
 Credit, do not reimplement or re-prove absent invalidating evidence:
