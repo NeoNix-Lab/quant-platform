@@ -388,6 +388,7 @@ class RiskSnapshot:
     peak_equity: Decimal | str | int
     current_exposure_notional: Decimal | str | int
     evidence_identity: str
+    current_target_instrument_exposure_notional: Decimal | str | int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "observed_at", Instant.parse(self.observed_at))
@@ -397,10 +398,24 @@ class RiskSnapshot:
             raise StrategyError("peak_equity must be >= equity")
         object.__setattr__(self, "equity", equity)
         object.__setattr__(self, "peak_equity", peak)
+        current_exposure = _signed_decimal(self.current_exposure_notional, "current_exposure_notional")
+        object.__setattr__(self, "current_exposure_notional", current_exposure)
+        current_target_exposure = (
+            current_exposure
+            if self.current_target_instrument_exposure_notional is None
+            else _signed_decimal(
+                self.current_target_instrument_exposure_notional,
+                "current_target_instrument_exposure_notional",
+            )
+        )
+        if abs(current_target_exposure) > abs(current_exposure):
+            raise StrategyError(
+                "current_target_instrument_exposure_notional must not exceed current_exposure_notional"
+            )
         object.__setattr__(
             self,
-            "current_exposure_notional",
-            _signed_decimal(self.current_exposure_notional, "current_exposure_notional"),
+            "current_target_instrument_exposure_notional",
+            current_target_exposure,
         )
         object.__setattr__(
             self,
@@ -414,6 +429,9 @@ class RiskSnapshot:
             "equity": _decimal_string(self.equity),
             "peak_equity": _decimal_string(self.peak_equity),
             "current_exposure_notional": _decimal_string(self.current_exposure_notional),
+            "current_target_instrument_exposure_notional": _decimal_string(
+                self.current_target_instrument_exposure_notional
+            ),
             "evidence_identity": self.evidence_identity,
         }
 
@@ -463,6 +481,8 @@ class CapitalRiskPolicy:
                 max_position_notional=Decimal("0"),
                 max_total_exposure_notional=Decimal("0"),
                 requested_notional=Decimal("0"),
+                other_exposure_notional=Decimal("0"),
+                post_decision_total_exposure_notional=Decimal("0"),
                 evidence=None,
             )
         if not isinstance(snapshot, RiskSnapshot):
@@ -474,25 +494,37 @@ class CapitalRiskPolicy:
         price = _decimal(reference_price, "reference_price", allow_zero=False)
         position = _signed_decimal(target_position, "target_position")
         requested_notional = abs(position) * price
+        current_total_exposure = abs(snapshot.current_exposure_notional)
+        current_target_exposure = abs(snapshot.current_target_instrument_exposure_notional)
+        other_exposure_notional = current_total_exposure - current_target_exposure
         drawdown = (snapshot.peak_equity - snapshot.equity) / snapshot.peak_equity
         max_position_notional = snapshot.equity * self.max_position_notional_fraction
         max_total_exposure_notional = snapshot.equity * self.max_total_exposure_fraction
+        post_decision_total_exposure_notional = other_exposure_notional + requested_notional
+        remaining_total_budget = max_total_exposure_notional - other_exposure_notional
+        if remaining_total_budget < 0:
+            remaining_total_budget = Decimal("0")
         risk_budget_notional = min(
             snapshot.equity * self.risk_per_trade_fraction,
             max_position_notional,
-            max_total_exposure_notional,
+            remaining_total_budget,
         )
+        reduces_target_exposure = requested_notional <= current_target_exposure
         reason = "accepted"
         state = RiskDecisionState.ACCEPTED
         if drawdown >= self.max_drawdown_fraction:
-            reason = "max_drawdown_breached"
-            state = RiskDecisionState.REFUSED
-            risk_budget_notional = Decimal("0")
-        elif requested_notional > max_position_notional:
+            if reduces_target_exposure:
+                reason = "max_drawdown_breached_derisking_allowed"
+                risk_budget_notional = requested_notional
+            else:
+                reason = "max_drawdown_breached"
+                state = RiskDecisionState.REFUSED
+                risk_budget_notional = Decimal("0")
+        elif not reduces_target_exposure and requested_notional > max_position_notional:
             reason = "position_notional_limit_breached"
             state = RiskDecisionState.REFUSED
             risk_budget_notional = Decimal("0")
-        elif requested_notional > max_total_exposure_notional:
+        elif not reduces_target_exposure and post_decision_total_exposure_notional > max_total_exposure_notional:
             reason = "total_exposure_limit_breached"
             state = RiskDecisionState.REFUSED
             risk_budget_notional = Decimal("0")
@@ -505,6 +537,8 @@ class CapitalRiskPolicy:
             max_position_notional=max_position_notional,
             max_total_exposure_notional=max_total_exposure_notional,
             requested_notional=requested_notional,
+            other_exposure_notional=other_exposure_notional,
+            post_decision_total_exposure_notional=post_decision_total_exposure_notional,
             evidence=snapshot,
         )
 
@@ -518,6 +552,8 @@ class CapitalRiskPolicy:
             max_position_notional=Decimal("0"),
             max_total_exposure_notional=Decimal("0"),
             requested_notional=Decimal("0"),
+            other_exposure_notional=Decimal("0"),
+            post_decision_total_exposure_notional=Decimal("0"),
             evidence=snapshot,
         )
 
@@ -548,6 +584,8 @@ class RiskDecision:
     max_position_notional: Decimal
     max_total_exposure_notional: Decimal
     requested_notional: Decimal
+    other_exposure_notional: Decimal
+    post_decision_total_exposure_notional: Decimal
     evidence: RiskSnapshot | None
 
     @property
@@ -569,6 +607,10 @@ class RiskDecision:
             "max_position_notional": _decimal_string(self.max_position_notional),
             "max_total_exposure_notional": _decimal_string(self.max_total_exposure_notional),
             "requested_notional": _decimal_string(self.requested_notional),
+            "other_exposure_notional": _decimal_string(self.other_exposure_notional),
+            "post_decision_total_exposure_notional": _decimal_string(
+                self.post_decision_total_exposure_notional
+            ),
             "evidence": None if self.evidence is None else self.evidence.stable_dict(),
         }
         if include_identity:
@@ -606,6 +648,14 @@ class FixedFractionSizingPolicy:
             raise StrategyError("risk_decision must be RiskDecision")
         price = _decimal(reference_price, "reference_price", allow_zero=False)
         target = abs(_signed_decimal(target_position, "target_position"))
+        if target == 0:
+            return SizingDecision(
+                policy_identity=self.identity,
+                risk_decision_identity=risk_decision.identity,
+                size=Decimal("0"),
+                reference_price=price,
+                reason="flat_target",
+            )
         budget_size = risk_decision.risk_budget_notional / price
         raw_size = min(target, budget_size)
         if self.max_size is not None:
@@ -773,6 +823,8 @@ class TradeHistoryEvidence:
         for outcome in self.outcomes:
             if not isinstance(outcome, RealizedPositionOutcome):
                 raise StrategyError("trade history outcomes must be RealizedPositionOutcome values")
+            if outcome.opened_at > self.observed_at or outcome.settled_at > self.observed_at:
+                raise StrategyError("trade history outcomes must not be newer than observed_at")
 
     def stable_dict(self) -> dict[str, Any]:
         return {

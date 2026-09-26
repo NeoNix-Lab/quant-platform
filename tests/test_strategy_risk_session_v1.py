@@ -26,6 +26,7 @@ from quant_platform.strategy import (
     SessionPolicyDefinition,
     SessionReferenceMarket,
     SessionState,
+    StrategyError,
     TradeHistoryEvidence,
 )
 import quant_platform.strategy as strategy_module
@@ -131,6 +132,28 @@ class StrategyRiskSessionV1Tests(unittest.TestCase):
             target_position="10",
         ).identity)
 
+    def test_sizing_policy_classifies_flat_target_before_min_size(self):
+        risk = risk_policy().evaluate(
+            snapshot=snapshot(),
+            as_of=AS_OF,
+            reference_price="250",
+            target_position="0",
+        )
+        sizing = FixedFractionSizingPolicy(
+            policy_key="btc.sizing",
+            lot_size="0.1",
+            min_size="0.1",
+        )
+
+        decision = sizing.evaluate(
+            risk_decision=risk,
+            reference_price="250",
+            target_position="0",
+        )
+
+        self.assertEqual("0", decision.stable_dict()["size"])
+        self.assertEqual("flat_target", decision.reason)
+
     def test_risk_policy_treats_target_position_as_post_decision_state(self):
         policy = CapitalRiskPolicy(
             policy_key="btc.risk",
@@ -150,6 +173,66 @@ class StrategyRiskSessionV1Tests(unittest.TestCase):
 
         self.assertEqual(RiskDecisionState.ACCEPTED, decision.state)
         self.assertEqual("9000", decision.stable_dict()["requested_notional"])
+
+    def test_risk_policy_allows_derisking_during_drawdown_breach(self):
+        policy = risk_policy()
+        breached = snapshot(
+            equity="7900",
+            peak_equity="10000",
+            current_exposure_notional="5000",
+            current_target_instrument_exposure_notional="5000",
+        )
+
+        exit_decision = policy.evaluate(
+            snapshot=breached,
+            as_of=AS_OF,
+            reference_price="10000",
+            target_position="0",
+        )
+        reduced_decision = policy.evaluate(
+            snapshot=breached,
+            as_of=AS_OF,
+            reference_price="10000",
+            target_position="0.2",
+        )
+        increase_decision = policy.evaluate(
+            snapshot=breached,
+            as_of=AS_OF,
+            reference_price="10000",
+            target_position="0.6",
+        )
+
+        self.assertEqual(RiskDecisionState.ACCEPTED, exit_decision.state)
+        self.assertEqual("max_drawdown_breached_derisking_allowed", exit_decision.reason)
+        self.assertEqual(RiskDecisionState.ACCEPTED, reduced_decision.state)
+        self.assertEqual("max_drawdown_breached_derisking_allowed", reduced_decision.reason)
+        self.assertEqual(RiskDecisionState.REFUSED, increase_decision.state)
+        self.assertEqual("max_drawdown_breached", increase_decision.reason)
+
+    def test_risk_policy_accounts_for_other_portfolio_exposure(self):
+        policy = CapitalRiskPolicy(
+            policy_key="btc.risk",
+            max_drawdown_fraction="0.2",
+            max_position_notional_fraction="1",
+            max_total_exposure_fraction="0.8",
+            risk_per_trade_fraction="0.5",
+            max_evidence_age_seconds=60,
+        )
+
+        decision = policy.evaluate(
+            snapshot=snapshot(
+                current_exposure_notional="4000",
+                current_target_instrument_exposure_notional="0",
+            ),
+            as_of=AS_OF,
+            reference_price="10000",
+            target_position="0.5",
+        )
+
+        self.assertEqual(RiskDecisionState.REFUSED, decision.state)
+        self.assertEqual("total_exposure_limit_breached", decision.reason)
+        self.assertEqual("4000", decision.stable_dict()["other_exposure_notional"])
+        self.assertEqual("9000", decision.stable_dict()["post_decision_total_exposure_notional"])
 
     def test_risk_and_sizing_validate_evidence_types(self):
         policy = risk_policy()
@@ -299,24 +382,15 @@ class StrategyRiskSessionV1Tests(unittest.TestCase):
         self.assertIsInstance(missing, CooldownDecisionUnavailable)
         self.assertEqual(CooldownUnavailableReason.MISSING_TRADE_HISTORY, missing.reason)
 
-    def test_cooldown_future_dated_outcomes_are_not_malformed(self):
-        policy = cooldown_policy()
-        history = TradeHistoryEvidence(
-            observed_at=AS_OF,
-            evidence_identity="trade-history:future",
-            outcomes=(
-                outcome("2026-09-26T12:00:00Z", "2026-09-26T12:00:00.000000001Z", "-1", "future"),
-            ),
-        )
-
-        decision = policy.evaluate(
-            trade_history=history,
-            as_of=AS_OF,
-            requires_new_entry=True,
-        )
-
-        self.assertIsInstance(decision, CooldownDecisionUnavailable)
-        self.assertEqual(CooldownUnavailableReason.TRADE_HISTORY_FUTURE_DATED, decision.reason)
+    def test_trade_history_evidence_rejects_outcomes_newer_than_observed_at(self):
+        with self.assertRaisesRegex(StrategyError, "outcomes must not be newer than observed_at"):
+            TradeHistoryEvidence(
+                observed_at=AS_OF,
+                evidence_identity="trade-history:future",
+                outcomes=(
+                    outcome("2026-09-26T12:00:00Z", "2026-09-26T12:00:00.000000001Z", "-1", "future"),
+                ),
+            )
 
     def test_cooldown_consecutive_loss_anchor_ignores_later_breakeven_timestamp(self):
         policy = CooldownPolicyDefinition(
