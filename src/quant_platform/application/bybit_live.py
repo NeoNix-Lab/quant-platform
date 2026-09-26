@@ -235,7 +235,8 @@ async def run_bounded_live_provider_proof(
                 accepted.extend(batch.records)
                 messages += 1
     except TimeoutError:
-        errors.append("bounded proof timed out before enough trade messages arrived")
+        if not accepted:
+            errors.append("bounded proof timed out before any trade messages arrived")
     except websockets.ConnectionClosed as exc:
         # websockets>=12 raises this on remote/protocol connection loss; it
         # subclasses WebSocketException/Exception, not OSError, so it would

@@ -10,6 +10,7 @@ whatever is currently in sys.modules at call time).
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import sys
 import types
@@ -47,6 +48,29 @@ class _FakeSocket:
         return False
 
 
+class _ScriptedSocket:
+    def __init__(self, responses: tuple[str | Exception, ...]) -> None:
+        self._responses = list(responses)
+        self.sent: list[str] = []
+
+    async def send(self, payload: str) -> None:
+        self.sent.append(payload)
+
+    async def recv(self) -> str:
+        if not self._responses:
+            raise TimeoutError("script exhausted")
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    async def __aenter__(self) -> "_ScriptedSocket":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
 class _FakeConnect:
     """Stands in for `websockets.connect(url, **kwargs)`, itself an async CM."""
 
@@ -68,6 +92,34 @@ def _install_fake_websockets(*, raise_on_recv: Exception) -> None:
     module.ConnectionClosed = _FakeConnectionClosed  # type: ignore[attr-defined]
     module.connect = _FakeConnect(_FakeSocket(raise_on_recv))  # type: ignore[attr-defined]
     sys.modules["websockets"] = module
+
+
+def _install_scripted_websockets(*responses: str | Exception) -> None:
+    module = types.ModuleType("websockets")
+    module.ConnectionClosed = _FakeConnectionClosed  # type: ignore[attr-defined]
+    module.connect = _FakeConnect(_ScriptedSocket(tuple(responses)))  # type: ignore[attr-defined]
+    sys.modules["websockets"] = module
+
+
+def _subscribe_ack() -> str:
+    return json.dumps({"op": "subscribe", "success": True, "conn_id": "c1"})
+
+
+def _live_trade_message(*, trade_id: str = "tid-1") -> str:
+    return json.dumps({
+        "topic": "publicTrade.BTCUSDT",
+        "type": "snapshot",
+        "ts": 1705276800495,
+        "data": [{
+            "T": 1705276800490,
+            "s": "BTCUSDT",
+            "S": "Buy",
+            "v": "0.00400",
+            "p": "41731.10",
+            "i": trade_id,
+            "seq": 1783284617,
+        }],
+    })
 
 
 class _SpyTracker(app_bybit_live.LiveSessionTracker):
@@ -110,6 +162,33 @@ class BybitLiveApplicationProofTests(unittest.TestCase):
         self.assertIn("provider network unavailable", str(caught.exception))
         self.assertEqual(len(_SpyTracker.created), 1)
         self.assertEqual(len(_SpyTracker.created[0].disconnect_reasons), 1)
+
+    def test_timeout_after_valid_trade_message_publishes_partial_bounded_window(self) -> None:
+        _install_scripted_websockets(
+            _subscribe_ack(),
+            _live_trade_message(),
+            TimeoutError("bounded window elapsed"),
+        )
+
+        report = asyncio.run(run_bounded_live_provider_proof(max_messages=2, max_seconds=1))
+
+        self.assertEqual(report.status, "PASS")
+        self.assertEqual(report.messages, 1)
+        self.assertEqual(report.records, 1)
+        self.assertEqual(report.errors, ())
+
+    def test_timeout_with_no_trade_messages_remains_pending(self) -> None:
+        _install_scripted_websockets(
+            _subscribe_ack(),
+            TimeoutError("bounded window elapsed"),
+        )
+
+        report = asyncio.run(run_bounded_live_provider_proof(max_messages=1, max_seconds=1))
+
+        self.assertEqual(report.status, "LIVE_PROVIDER_PROOF_PENDING")
+        self.assertEqual(report.messages, 0)
+        self.assertEqual(report.records, 0)
+        self.assertEqual(report.errors, ("bounded proof timed out before any trade messages arrived",))
 
 
 if __name__ == "__main__":
