@@ -509,22 +509,29 @@ class CapitalRiskPolicy:
             max_position_notional,
             remaining_total_budget,
         )
-        reduces_target_exposure = requested_notional <= current_target_exposure
+        is_flat = position == 0
+        is_same_direction = (
+            (position > 0 and snapshot.current_target_instrument_exposure_notional > 0)
+            or (position < 0 and snapshot.current_target_instrument_exposure_notional < 0)
+        )
+        reduces_target_exposure = is_flat or (
+            is_same_direction and requested_notional <= current_target_exposure
+        )
         reason = "accepted"
         state = RiskDecisionState.ACCEPTED
-        if drawdown >= self.max_drawdown_fraction:
-            if reduces_target_exposure:
+        if reduces_target_exposure:
+            risk_budget_notional = requested_notional
+            if drawdown >= self.max_drawdown_fraction:
                 reason = "max_drawdown_breached_derisking_allowed"
-                risk_budget_notional = requested_notional
-            else:
-                reason = "max_drawdown_breached"
-                state = RiskDecisionState.REFUSED
-                risk_budget_notional = Decimal("0")
-        elif not reduces_target_exposure and requested_notional > max_position_notional:
+        elif drawdown >= self.max_drawdown_fraction:
+            reason = "max_drawdown_breached"
+            state = RiskDecisionState.REFUSED
+            risk_budget_notional = Decimal("0")
+        elif requested_notional > max_position_notional:
             reason = "position_notional_limit_breached"
             state = RiskDecisionState.REFUSED
             risk_budget_notional = Decimal("0")
-        elif not reduces_target_exposure and post_decision_total_exposure_notional > max_total_exposure_notional:
+        elif post_decision_total_exposure_notional > max_total_exposure_notional:
             reason = "total_exposure_limit_breached"
             state = RiskDecisionState.REFUSED
             risk_budget_notional = Decimal("0")

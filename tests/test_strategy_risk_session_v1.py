@@ -202,12 +202,59 @@ class StrategyRiskSessionV1Tests(unittest.TestCase):
             target_position="0.6",
         )
 
+        reversal_decision = policy.evaluate(
+            snapshot=breached,
+            as_of=AS_OF,
+            reference_price="10000",
+            target_position="-0.2",
+        )
+
         self.assertEqual(RiskDecisionState.ACCEPTED, exit_decision.state)
         self.assertEqual("max_drawdown_breached_derisking_allowed", exit_decision.reason)
         self.assertEqual(RiskDecisionState.ACCEPTED, reduced_decision.state)
         self.assertEqual("max_drawdown_breached_derisking_allowed", reduced_decision.reason)
         self.assertEqual(RiskDecisionState.REFUSED, increase_decision.state)
         self.assertEqual("max_drawdown_breached", increase_decision.reason)
+        self.assertEqual(RiskDecisionState.REFUSED, reversal_decision.state)
+        self.assertEqual("max_drawdown_breached", reversal_decision.reason)
+
+    def test_risk_and_sizing_policy_allows_partial_derisking_in_healthy_account(self):
+        risk_pol = CapitalRiskPolicy(
+            policy_key="btc.risk",
+            max_drawdown_fraction="0.2",
+            max_position_notional_fraction="0.5",
+            max_total_exposure_fraction="1.0",
+            risk_per_trade_fraction="0.02",
+            max_evidence_age_seconds=60,
+        )
+        sizing_pol = FixedFractionSizingPolicy(
+            policy_key="btc.sizing",
+            lot_size="0.1",
+            min_size="0.1",
+        )
+        healthy = snapshot(
+            equity="10000",
+            peak_equity="10000",
+            current_exposure_notional="9000",
+            current_target_instrument_exposure_notional="9000",
+        )
+
+        risk_dec = risk_pol.evaluate(
+            snapshot=healthy,
+            as_of=AS_OF,
+            reference_price="10000",
+            target_position="0.6",
+        )
+        sizing_dec = sizing_pol.evaluate(
+            risk_decision=risk_dec,
+            reference_price="10000",
+            target_position="0.6",
+        )
+
+        self.assertEqual(RiskDecisionState.ACCEPTED, risk_dec.state)
+        self.assertEqual("6000", risk_dec.stable_dict()["risk_budget_notional"])
+        self.assertEqual("0.6", sizing_dec.stable_dict()["size"])
+        self.assertEqual("sized", sizing_dec.reason)
 
     def test_risk_policy_accounts_for_other_portfolio_exposure(self):
         policy = CapitalRiskPolicy(
