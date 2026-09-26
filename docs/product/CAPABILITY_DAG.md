@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 3 complete, Live Ingest Vertical v1 integrated and its acceptance criteria satisfied (PR #122 closes K10); superseded by the active Live Ingest Server Production Readiness v1 scope**.
+Status: **CANONICAL; Wave 3 complete, Live Ingest Vertical v1 integrated, and Live Ingest Server Production Readiness v1 closed for the first Bybit BTCUSDT producer operating path**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -87,7 +87,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | B03 | Result identity/provenance | Data Access | B02 | B05,F04,B06 | FROZEN | COMPLETE | Semantic/source change changes identity; DATA_GATEWAY |
 | B04 | Non-contiguous coverage read | Data Access | A04,A09 | A10,A11 | FROZEN | COMPLETE | Explicit `ALLOW_PARTIAL` coverage reads; ADR-0029 |
 | B05 | Durable DatasetSnapshot | Data Access | B03 | experiment replay | OPEN_DEFERABLE | MISSING | Immutable reproducible reference; trigger on durable replay need |
-| B06 | Live access/cursor | Data Access | A11,B03 | D04,J07 | OPEN_BLOCKING | MISSING | Deterministic consumer resume/replay; remains outside ADR-0040/current scope |
+| B06 | Live access/cursor | Data Access | A11,B03 | D04,J07 | OPEN_BLOCKING | MISSING | Deterministic consumer resume/replay; remains outside ADR-0040 and the closed Live Ingest Server Production Readiness v1 scope |
 | B07 | In-process batch surface | Data Access | B02 | C02,D03 | RESOLVED | COMPLETE | Existing bounded `DataScan`; concrete naming local |
 | B08 | Schema evolution policy | Data Access | new schema evidence | A13-A15 | OPEN_DEFERABLE | MISSING | Resolve when a new real schema/version appears |
 
@@ -274,7 +274,7 @@ K02, K03, K05, K06, K08 and K10 are complete for the selected first Live Ingest 
 - K08 — ADR-0039, `COMPLETE` via PR #111 plus PR #113 deployment-independence proof;
 - K10 — ADR-0042, `COMPLETE` via PR #114 (hermetic implementation/proof matrix) plus PR #122 (bounded real-server restart/deployed checkpoint proof, issues #109/#121).
 
-Still-open atom branches are `K07` tier relocation and `K09` deletion authority; neither is pulled into the current scope.
+Still-open atom branches are `K07` tier relocation and `K09` deletion authority; neither is pulled into the closed Live Ingest Server Production Readiness v1 scope.
 
 ## Vertical milestones
 
@@ -287,27 +287,35 @@ Still-open atom branches are `K07` tier relocation and `K09` deletion authority;
 | V5 | Feature -> Research | Feature artifacts produce reproducible Event/Outcome studies and sweeps | COMPLETE (`F02`/`F03`/`F04`; F03 authority ADR-0038) |
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | COMPLETE (`F06` + `F07`) |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | BLOCKED by DG-F |
-| V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | PARTIAL; first live-ingest producer path integrated including K10's real-restart proof (PR #122), production-readiness (persistent server loop, governed long-gap remediation) now the active scope, broader B06 outside current scope |
+| V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | PARTIAL; first live-ingest producer operating path is production-ready under ADR-0043/ADR-0044 and supervised target proof, while broader B06 live consumer cursor remains outside this closed scope |
 | V9 | Application -> API -> Client | One application semantic implementation serves thin clients | APPLICATION SERVICE COMPLETE; transport deferred |
 | V10 | Paper -> Live | Full canonical stack crosses explicit operational authorization gate | BLOCKED |
 
 ## Execution frontier
 
-PR #116 integrated `implement/live-ingest` into `main`, and PR #122 closed the previously pending K10 real-server restart/deployed-checkpoint proof. The `Live Ingest Vertical v1` macro-scope's sole acceptance blocker is therefore resolved, and that scope is superseded by **Live Ingest Server Production Readiness v1** (`SCOPE.md`).
+PR #116 integrated `implement/live-ingest` into `main`, PR #122 closed the
+previously pending K10 real-server restart/deployed-checkpoint proof, and the
+**Live Ingest Server Production Readiness v1** scope has now completed its
+bounded path. ADR-0043 defines the persistent ingest-server loop under K02,
+ADR-0044 defines fail-closed long-gap orchestration built on the disposed DG-B
+finding (#110), and the supervised target proof is recorded in
+`docs/integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md`.
 
-The frontier is now the bounded production-readiness path: a persistent ingest-server loop under K02, a governed long-gap remediation/repair-orchestration path built on the disposed DG-B finding (#110), and operator/runbook evidence — not a new K10 proof or a reopening of DG-B.
+The current promotion frontier is the PR carrying that closed scope to `main`.
+No new runtime/product frontier is selected by this document.
 
-B06 remains outside the current scope.
+B06 remains outside the closed scope.
 
-This is a **frontier, not concurrent authorization**. `SCOPE.md` permits one bounded mutation slice at a time.
+This is a **frontier, not concurrent authorization**. `SCOPE.md` records the
+closed scope and its exclusions.
 
 ## Live Ingest Server Production Readiness v1 — derived governance map
 
-`SCOPE.md`'s "Governance Map Generation Requirements" section requires a
+`SCOPE.md`'s "Governance Map Generation Requirements" section required a
 derived execution map complete enough to generate the next issues without
-re-litigating the scope boundary. This section is that map. It is scoped to
-the active `SCOPE.md` and is retired with it at closeout; it does not add
-permanent DAG atoms.
+re-litigating the scope boundary. This section is the completed temporary map:
+it generated issues #126, #127, #128, #135 and #129 and is retired by this
+closeout. It does not add permanent DAG atoms.
 
 **Credited state (reuse, do not reimplement):** K08, A11, K02, K10, A10, B04,
 K03, K04, K05, K06 — all `COMPLETE` above and in `SCOPE.md`'s Credited State.
@@ -317,38 +325,37 @@ K03, K04, K05, K06 — all `COMPLETE` above and in `SCOPE.md`'s Credited State.
 `ROADMAP.md` and `OPEN_DECISIONS.md` is reconciled to `COMPLETE` with PR #122
 evidence (see Execution frontier above). No open action remains here.
 
-**Production-readiness blockers** (`SCOPE.md` P1-P6): P1 no bounded
-daemon/service owner exists; P2 no governed repair path beyond bounded
-reconciliation; P3 no source has met the stated proof bar; P4 no accepted
-operational gap/repair state model; P5 publication-before-checkpoint is
-proven for restart (PR #122) but not yet extended to repair; P6 operator
-evidence beyond the K03 foundation does not yet exist.
+**Production-readiness blockers** (`SCOPE.md` P1-P6): resolved or disposed for
+the selected first producer operating path. P1/P6 are closed by ADR-0043,
+`quant_platform.application.live_ingest_server`, `tools/live_ingest_server.py`
+and the supervised deployment runbook. P2/P3/P4 are closed by ADR-0044's
+explicit-gap-only, fail-closed state path: no authoritative long-gap repair
+source is claimed, and unresolved gaps remain non-complete. P5 is preserved by
+the server loop, long-gap orchestration tests and target proof.
 
 **Design gates** (must resolve before any code change):
 
 | Gate | Resolves | Authority | Artifact | Acceptance evidence |
 |---|---|---|---|---|
-| Active Path step 2 — ingest server v1 design | P1, loop classification (P7) | `SCOPE.md` step 2; ADR-0041; existing `application.bybit_live` entrypoints | Design note/ADR naming the bounded daemon/service composition, its owning module, and required operator evidence | Concrete enough that step 4 needs no further semantic decision; does not require a generic scheduler/framework |
-| Active Path step 3 — long-gap remediation design | P2, P3, P4 | `SCOPE.md` step 3; ADR-0033; ADR-0040/ADR-0042; issue #110 disposition | Design note naming either a proven repair source/path bound to A10, or an explicit decision to retain explicit-gap-only behavior, plus the accepted gap state machine | Either outcome validly closes the gate; states/transitions are fail-closed and cannot silently mark a gap complete |
+| Active Path step 2 — ingest server v1 design | P1, loop classification (P7) | `SCOPE.md` step 2; ADR-0041; existing `application.bybit_live` entrypoints | ADR-0043 | DONE; bounded server owner/entrypoint selected without generic scheduler/J03/J08 |
+| Active Path step 3 — long-gap remediation design | P2, P3, P4 | `SCOPE.md` step 3; ADR-0033; ADR-0040/ADR-0042; issue #110 disposition | ADR-0044 | DONE; explicit-gap-only behavior retained unless future attributable repair evidence exists |
 
 **Implementation atoms** (bounded issues, blocked on their design gate):
 
 | Slice | Resolves | Blocked on | Authority | Artifact | Acceptance evidence |
 |---|---|---|---|---|---|
-| Active Path step 4 — bounded ingest server loop | P1, P5, P6 | step 2 | step 2's design note; K02/A11/K10/A10/K03/K05/K06 | Running bounded server composition | Publication-before-checkpoint preserved; P6 operator evidence observable |
-| Active Path step 5 — long-gap state and repair orchestration | P2, P3, P4, P5 | step 3 | step 3's design note; A10/A16 repair seams | Gap detection/recording plus repair-intent representation | Gap stays explicit until repair evidence passes; no state silently claims completeness |
+| Active Path step 4 — bounded ingest server loop | P1, P5, P6 | step 2 | ADR-0043; K02/A11/K10/A10/K03/K05/K06 | `quant_platform.application.live_ingest_server`; `tools/live_ingest_server.py` | DONE; publication-before-checkpoint preserved; operator evidence observable |
+| Active Path step 5 — long-gap state and repair orchestration | P2, P3, P4, P5 | step 3 | ADR-0044; A10/A16 repair seams | `quant_platform.application.live_gap_orchestration` | DONE; gap stays explicit until repair evidence passes; no state silently claims completeness |
 
-**Real-server proof atom:** Active Path step 6 requires deploy/run on the
-target server (or an explicitly accepted equivalent), stop/restart, bounded
-reconcile, a forced long-gap scenario or explicitly accepted equivalent
-simulation, and verification of no silent loss, duplicate or false-complete
-coverage — the same evidence shape PR #122 already produced for the restart
-proof.
+**Real-server proof atom:** DONE. Active Path step 6 evidence is recorded in
+`docs/integration/LIPR05_LIVE_INGEST_SERVER_PRODUCTION_READINESS_PROOF.md` and
+`docs/integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md`, including
+target supervised start, clean stop, restart, bounded reconciliation,
+checkpoint advancement and DataGateway readback PASS.
 
-**Closeout atom:** Active Path step 7 reconciles `CAPABILITY_MAP.md`, this
-file, `ROADMAP.md` and `OPEN_DECISIONS.md` to the strongest actually-proven
-propositions and archives `SCOPE.md` per the normal versioned-scope
-convention.
+**Closeout atom:** DONE. Active Path step 7 reconciles `CAPABILITY_MAP.md`,
+this file, `ROADMAP.md`, `OPEN_DECISIONS.md` and `SCOPE.md` to the strongest
+actually-proven propositions while preserving explicit exclusions.
 
 **Explicit exclusions** (must not become implicit issue work): B06, K07, K09,
 J08, paper/shadow mode, Strategy/Replay/Execution/Portfolio/ML/RL, J02
@@ -374,4 +381,4 @@ Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 whe
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 
-Parallelism is allowed whenever DAG dependencies are satisfied. The selected Live Ingest scope nevertheless preserves the repository rule of one bounded mutation slice at a time.
+Parallelism is allowed whenever DAG dependencies are satisfied. The closed Live Ingest scope nevertheless preserves the repository rule that governed it: one bounded mutation slice at a time.

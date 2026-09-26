@@ -1,9 +1,9 @@
 # Scope: Live Ingest Server Production Readiness v1
 
-Status: **ACTIVE**
+Status: **CLOSED**
 
-Scope kind: **governance and planning scope for the next production-readiness
-implementation path**.
+Scope kind: **closed governance and implementation scope for Live Ingest Server
+Production Readiness v1**.
 
 This scope replaces the prior `Live Ingest Vertical v1` closeout scope. That
 scope was centered on proving the K10 restart/checkpoint path. PR #122 closed
@@ -27,6 +27,16 @@ missing interval may be claimed complete.
 It does **not** mean paper trading, live trading, J08 live product mode, B06
 live consumer cursor, API/client work, ML/RL, Strategy, Execution, L1/L2/L3, a
 generic job scheduler, or a generic provider framework.
+
+Closeout result: this scope has now produced the bounded server composition
+([ADR-0043](docs/decisions/ADR-0043-live-ingest-server-composition-v1.md)),
+the fail-closed long-gap state/orchestration path
+([ADR-0044](docs/decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md)),
+the supervised operating-path artifacts, and target-host evidence that the
+server can be started, observed, stopped, restarted and reconciled under the
+K02 runtime identity. The target proof is recorded in
+`docs/integration/LIPR05_LIVE_INGEST_SERVER_PRODUCTION_READINESS_PROOF.md` and
+`docs/integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md`.
 
 ## Authority
 
@@ -70,6 +80,13 @@ K04  capacity observation                 COMPLETE
 K05  pressure policy                      COMPLETE
 K06  RAW/source protection                COMPLETE
 ```
+
+This closed scope additionally credits the Live Ingest Server Production
+Readiness v1 path as complete for the first Bybit BTCUSDT producer operating
+path: ADR-0043/ADR-0044 are accepted, the server loop is implemented, the
+systemd supervised path is documented, and the homelab proof passed. This does
+not mark B06, K07, K09, J08, paper/live trading, clients, execution or a generic
+job runtime complete.
 
 `OPEN_DECISIONS.md`, `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md` and `ROADMAP.md`
 carried stale pre-PR #122 phrasing (K10 as `PARTIAL` / `REAL_RESTART_PROOF_PENDING`,
@@ -214,9 +231,8 @@ Status of each production-readiness governance action:
   blocker -- **holds**, no governance file weakens the #110 disposition;
 - classify the bounded ingest server loop so it is not hidden behind generic
   `J03` job runtime or accidentally confused with `J08` live product mode --
-  **open**; this is a design-gate output (Active Path step 2), not a
-  standalone governance edit, because it requires deciding the loop's owning
-  atom/module before the DAG can name it without inventing scope;
+  **done** by ADR-0043 and the `quant_platform.application.live_ingest_server`
+  owner/CLI boundary;
 - keep B06, K07 and K09 outside this v1 ingest-server scope unless a concrete
   blocker proves they are required -- **holds**, a standing constraint on
   every step below, not a one-time action.
@@ -245,10 +261,10 @@ would close it. The map may sequence or split the work more finely than this
 scope, but it may not weaken the stop conditions, convert exclusions into
 implicit work, or treat readiness language as completion evidence.
 
-This map is materialized in `docs/product/CAPABILITY_DAG.md`'s "Live Ingest
-Server Production Readiness v1 — derived governance map" section, immediately
-after that file's Execution frontier. It is scoped to this `SCOPE.md` and is
-retired with it at closeout, not a permanent addition to the atom DAG.
+This map was materialized in `docs/product/CAPABILITY_DAG.md`'s "Live Ingest
+Server Production Readiness v1 — derived governance map" section and generated
+issues #126, #127, #128, #135 and #129. At this closeout it is retired as a
+completed temporary scope map, not a permanent addition to the atom DAG.
 
 ## Active Path
 
@@ -258,7 +274,7 @@ moving to the next step; none of this is concurrent authorization to start a
 later step early.
 
 ```text
-1. Governance and scope formalization                              DONE
+1. Governance and scope formalization                              DONE (#123)
    resolves: P7 (K10 state correction)
    audit current authority
    -> record production-readiness gaps (P1-P7)
@@ -269,7 +285,7 @@ later step early.
    and SCOPE.md internally consistent (no remaining K10 PARTIAL/pending
    phrasing); planning-only, no design questions decided here.
         ↓
-2. Ingest server v1 design gate                                    NEXT
+2. Ingest server v1 design gate                                    DONE (#126)
    resolves: P1, remainder of P7 (loop classification)
    define the bounded daemon/service composition (single owning module,
    entrypoint, and how it composes existing A11/K10 functions)
@@ -280,7 +296,7 @@ later step early.
    an implementation slice can execute without further semantic decisions;
    this step decides, it does not implement.
         ↓
-3. Long-gap remediation design gate                                NEXT
+3. Long-gap remediation design gate                                DONE (#127)
    resolves: P2, P3, P4
    re-audit authoritative repair sources (P3 criteria)
    -> decide source authority or retain explicit-gap-only behavior
@@ -290,34 +306,50 @@ later step early.
    explicitly retains explicit-gap-only behavior with no repair source;
    either outcome is a valid close of this gate.
         ↓
-4. Implementation slice: bounded ingest server loop                 BLOCKED on 2
+4. Implementation slice: bounded ingest server loop                 DONE (#126)
    resolves: P1, P5 (publication-before-checkpoint), P6
    run under K02
    -> use A11/K10/A10/K03/K05/K06 authorities
    -> preserve publication-before-checkpoint
         ↓
-5. Implementation slice: long-gap state and repair orchestration    BLOCKED on 3
+5. Implementation slice: long-gap state and repair orchestration    DONE (#127)
    resolves: P2, P3, P4, P5 (repair ordering)
    detect/record long gap
    -> enqueue or represent repair intent
    -> prove gap stays explicit until repair evidence passes
         ↓
-6. Real-server production-readiness proof                          BLOCKED on 4,5
+6. Real-server production-readiness proof                          DONE (#128, #135)
    deploy/run bounded server
    -> stop/restart
    -> bounded reconcile
    -> forced long-gap scenario or explicitly accepted equivalent simulation
    -> verify no silent loss, duplicate or false complete coverage
         ↓
-7. Governance closeout                                              BLOCKED on 6
+7. Governance closeout                                              DONE (#129)
    reconcile Capability Map / DAG / Roadmap / Open Decisions
    -> archive this scope per the normal versioned-scope convention
 ```
 
+Closed-scope evidence:
+
+- Step 2 and step 4: ADR-0043 plus `quant_platform.application.live_ingest_server`
+  and `tools/live_ingest_server.py` provide the bounded server owner and normal
+  operating loop.
+- Step 3 and step 5: ADR-0044 plus
+  `quant_platform.application.live_gap_orchestration` record unresolved long
+  gaps explicitly and fail closed instead of claiming completeness without
+  repair evidence.
+- Step 6: `docs/integration/LIPR05_LIVE_INGEST_SERVER_PRODUCTION_READINESS_PROOF.md`
+  and `docs/integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md` record
+  the target-host proof, including supervised start, healthy acquire,
+  clean stop, restart reconciliation, checkpoint advancement and DataGateway
+  readback PASS.
+
 ## Acceptance
 
-`Live Ingest Server Production Readiness v1` is DONE only when all of the
-following are observably true:
+`Live Ingest Server Production Readiness v1` is DONE because all of the
+following are observably true for the selected first Bybit BTCUSDT producer
+operating path:
 
 1. The live-ingest server has one bounded production owner and does not rely on
    manual proof scripts as the normal operating path.
@@ -392,10 +424,10 @@ failure matrices.
 
 ## Current Branch Intent
 
-This branch formalizes the scope change, the audit result (P1-P7) and the
-governance reconciliation across `OPEN_DECISIONS.md`, `CAPABILITY_MAP.md`,
-`CAPABILITY_DAG.md` and `ROADMAP.md` (Active Path step 1). It does not decide
-the P1/P4 design questions and does not implement the ingest daemon or the
-long-gap repair system. The next branch must select exactly one bounded step
-from the Active Path above -- ordinarily step 2 or step 3, since 4-7 are
-blocked until their design gate closes.
+This branch now carries the full Live Ingest Server Production Readiness v1
+scope result into the PR targeting `main`: the initial governance scope, the
+ADR-0043/ADR-0044 decisions, the bounded server loop, long-gap orchestration,
+supervised deployment artifacts, target-host proof evidence and this closeout
+reconciliation. Merging this branch to `main` promotes the first Bybit BTCUSDT
+live-ingest producer operating path, while preserving the explicit exclusions
+above.
