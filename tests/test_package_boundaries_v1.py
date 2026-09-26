@@ -67,6 +67,7 @@ OWNERS = {
     "quant_platform.research.hypothesis": "research",
     "quant_platform.research.outcomes": "research",
     "quant_platform.research.studies": "research",
+    "quant_platform.strategy": "strategy",
     "quant_platform.source_adapters": "source",
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
@@ -94,6 +95,7 @@ ALLOWED = {
     "validation": {"validation", "shared"},
     "experiment": {"experiment", "shared"},
     "research": {"research", "feature", "shared"},
+    "strategy": {"strategy", "shared"},
     "source": {"source", "producer", "shared"},
     # The application seam composes capabilities and owns no domain semantics.
     # Nothing may depend on it: it is the top of the owner graph.
