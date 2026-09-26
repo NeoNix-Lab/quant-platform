@@ -28,6 +28,19 @@ J08 live product mode or multi-provider production.
 - Storage root: hot canonical root, `/srv/marketdata`.
 - Credential handling: deployment-local only; no secrets are committed.
 
+## Implemented Operating-Path Artifacts
+
+- `infra/systemd/quant-platform-live-ingest.service` installs the existing
+  live-ingest CLI as a target-local supervised service.
+- `infra/systemd/quant-platform-live-ingest.env.example` documents the
+  non-secret deployment-local environment. It uses `PGPASSFILE` rather than
+  committing or embedding a PostgreSQL password.
+- `docs/engineering/LIVE_INGEST_SERVER_DEPLOYMENT.md` records the operator
+  install/update, start, stop, restart, status and readback procedure.
+
+The service file intentionally does not pass `--max-cycles`; bounded cycle
+limits remain proof controls, not the normal operating path.
+
 ## Required Evidence
 
 The completed proof must record:
@@ -47,5 +60,29 @@ The completed proof must record:
 
 ## Proof Log
 
-Pending. The PR remains draft until the target proof is executed or the blocker
-is reported exactly.
+Target proof pending. The PR remains draft until the target proof is executed
+or the blocker is reported exactly.
+
+## Local Verification
+
+Command:
+
+```text
+python -m unittest tests.test_live_ingest_deployment_artifacts_v1 tests.test_live_ingest_server_cli_v1 tests.test_live_ingest_server_v1 tests.test_live_gap_orchestration_v1 tests.test_package_boundaries_v1
+```
+
+Observed output:
+
+```text
+Ran 38 tests in 9.149s
+OK
+```
+
+Command:
+
+```text
+git diff --check
+```
+
+Observed result: no whitespace errors. Git emitted only the existing Windows
+LF-to-CRLF working-copy warning for this document.

@@ -1,0 +1,27 @@
+[Unit]
+Description=Quant Platform live-ingest server v1
+Documentation=https://github.com/NeoNix-Lab/quant-platform/blob/governance/ingest-server-production-v1-scope/docs/decisions/ADR-0043-live-ingest-server-composition-v1.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mkt-transform
+Group=marketdata
+WorkingDirectory=/opt/market-platform
+EnvironmentFile=/etc/quant-platform/live-ingest-server.env
+UMask=0027
+ExecStart=/opt/market-platform/.venv/bin/python /opt/market-platform/tools/live_ingest_server.py --storage-root ${QP_LIVE_INGEST_STORAGE_ROOT} --storage-root-id ${QP_LIVE_INGEST_STORAGE_ROOT_ID} --checkpoint-path ${QP_LIVE_INGEST_CHECKPOINT_PATH} --recent-limit ${QP_LIVE_INGEST_RECENT_LIMIT} --code-ref ${QP_LIVE_INGEST_CODE_REF} --producer ${QP_LIVE_INGEST_PRODUCER} --max-messages-per-cycle ${QP_LIVE_INGEST_MAX_MESSAGES_PER_CYCLE} --max-seconds-per-cycle ${QP_LIVE_INGEST_MAX_SECONDS_PER_CYCLE} --cycle-interval-seconds ${QP_LIVE_INGEST_CYCLE_INTERVAL_SECONDS} --pressure-available-bytes ${QP_LIVE_INGEST_PRESSURE_AVAILABLE_BYTES} --pressure-critical-available-bytes ${QP_LIVE_INGEST_PRESSURE_CRITICAL_AVAILABLE_BYTES} --pressure-exhausted-available-bytes ${QP_LIVE_INGEST_PRESSURE_EXHAUSTED_AVAILABLE_BYTES} --pressure-max-capacity-age-seconds ${QP_LIVE_INGEST_PRESSURE_MAX_CAPACITY_AGE_SECONDS}
+Restart=on-failure
+RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=90s
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=full
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
