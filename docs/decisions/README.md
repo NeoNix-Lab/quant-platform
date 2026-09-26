@@ -34,5 +34,6 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0042 | Live-ingest checkpoint / recovery v1 | Accepted |
 | 0043 | Live-ingest server v1 composition | Accepted |
 | 0044 | Live-ingest long-gap remediation and explicit-gap state v1 | Accepted |
+| 0045 | Session calendar and cooldown semantics v1 | Accepted |
 
 See the individual ADR files for context and consequences.
