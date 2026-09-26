@@ -4,7 +4,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import sys
 import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.data.models import Instant
 from quant_platform.strategy import (
