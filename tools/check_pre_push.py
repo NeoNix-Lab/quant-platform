@@ -10,8 +10,20 @@ Enforces:
 """
 
 import os
+import re
 import sys
 import subprocess
+from pathlib import Path
+
+# Reuse the same integration-base detection the staged-integration workflow
+# helper already uses, so the two never drift again (see the incident this
+# fix addresses: this hook always compared against origin/main, so any
+# atomic-slice branch built on an active implement/<wave> branch was flagged
+# as violating the governance boundary purely because that wave's own
+# SCOPE.md legitimately differs from main's -- content the branch never
+# touched itself).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from workflow import detect_active_integration_branch  # noqa: E402
 
 PROTECTED_GOVERNANCE_FILES = {
     "SCOPE.md",
@@ -73,10 +85,25 @@ def check_governance_boundary():
     if branch.startswith("governance/") or branch.startswith("admin/"):
         return True
 
-    # Check changed files against origin/main or HEAD~1
-    code, out, _ = run_command("git diff --name-only origin/main...HEAD")
+    # Atomic-slice branches (agent/issue-N-... or codex/issue-N-...) are
+    # branched from an active implement/<wave> integration branch, not from
+    # main (AGENTS.md's Branching & Staged Integration Strategy) -- comparing
+    # them against main would always show that wave's own SCOPE.md/etc. as
+    # "changed", even though this branch never touched it. Compare against
+    # the active integration base instead; only a plain chore/feature branch
+    # off main should still be compared against main.
+    if re.search(r"issue-\d+", branch):
+        base = detect_active_integration_branch()
+    else:
+        base = "main"
+
+    merge_base_code, merge_base_out, _ = run_command(f"git merge-base {base} HEAD")
+    diff_base = merge_base_out.strip() if merge_base_code == 0 and merge_base_out.strip() else base
+
+    # Check changed files against the resolved base, falling back to HEAD~1
+    # only if that ref can't be resolved at all (e.g. base not fetched).
+    code, out, _ = run_command(f"git diff --name-only {diff_base}...HEAD")
     if code != 0:
-        # Fallback to diff against HEAD~1 if origin/main is not fetched
         code, out, _ = run_command("git diff --name-only HEAD~1")
 
     changed_files = {line.strip().replace("\\", "/") for line in out.splitlines() if line.strip()}
@@ -91,7 +118,7 @@ def check_governance_boundary():
         print("\nPer AGENTS.md, ordinary implementation branches must NOT mutate governance files.", file=sys.stderr)
         print("Only an explicitly designated governance branch may update them.", file=sys.stderr)
         print("Please revert these files before pushing:", file=sys.stderr)
-        print(f"  git checkout origin/main -- {' '.join(sorted(mutated_protected))}", file=sys.stderr)
+        print(f"  git checkout origin/{base} -- {' '.join(sorted(mutated_protected))}", file=sys.stderr)
         print("=" * 72, file=sys.stderr)
         return False
 
