@@ -2,7 +2,7 @@
 name: "[governance] Closeout / reconciliation"
 about: Governance-only reconciliation or scope closeout. Touches only governance/planning files — no code.
 title: "[governance] <Scope name> closeout and governance reconciliation"
-labels: []
+labels: ["hold-until-main"]
 assignees: ''
 ---
 

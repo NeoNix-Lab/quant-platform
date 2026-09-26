@@ -2,7 +2,7 @@
 name: "[Epic] Macro-scope tracking"
 about: Parent tracking issue for a macro-scope (Wave/vertical). Links its child issues; does not itself carry an Active Path.
 title: "[Epic] <Wave/scope name>"
-labels: []
+labels: ["hold-until-main"]
 assignees: ''
 ---
 
