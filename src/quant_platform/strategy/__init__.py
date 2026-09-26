@@ -108,11 +108,7 @@ class IdentityBackedPolicy(Protocol):
         """Canonical policy payload or identity reference."""
 
 
-RiskPolicy = IdentityBackedPolicy
-SizingPolicy = IdentityBackedPolicy
 ExecutionPolicy = IdentityBackedPolicy
-SessionPolicy = IdentityBackedPolicy
-CooldownPolicy = IdentityBackedPolicy
 
 
 def _non_empty_text(value: Any, field: str) -> str:
@@ -469,6 +465,8 @@ class CapitalRiskPolicy:
                 requested_notional=Decimal("0"),
                 evidence=None,
             )
+        if not isinstance(snapshot, RiskSnapshot):
+            raise StrategyError("snapshot must be RiskSnapshot")
         if snapshot.observed_at > evaluation_time:
             return self._risk_refusal("risk_snapshot_future_dated", snapshot, evaluation_time)
         if evaluation_time.epoch_ns - snapshot.observed_at.epoch_ns > self.max_evidence_age_seconds * _NS_PER_SECOND:
@@ -479,13 +477,10 @@ class CapitalRiskPolicy:
         drawdown = (snapshot.peak_equity - snapshot.equity) / snapshot.peak_equity
         max_position_notional = snapshot.equity * self.max_position_notional_fraction
         max_total_exposure_notional = snapshot.equity * self.max_total_exposure_fraction
-        remaining_total_exposure = max_total_exposure_notional - abs(snapshot.current_exposure_notional)
-        if remaining_total_exposure < 0:
-            remaining_total_exposure = Decimal("0")
         risk_budget_notional = min(
             snapshot.equity * self.risk_per_trade_fraction,
             max_position_notional,
-            remaining_total_exposure,
+            max_total_exposure_notional,
         )
         reason = "accepted"
         state = RiskDecisionState.ACCEPTED
@@ -497,7 +492,7 @@ class CapitalRiskPolicy:
             reason = "position_notional_limit_breached"
             state = RiskDecisionState.REFUSED
             risk_budget_notional = Decimal("0")
-        elif requested_notional > remaining_total_exposure:
+        elif requested_notional > max_total_exposure_notional:
             reason = "total_exposure_limit_breached"
             state = RiskDecisionState.REFUSED
             risk_budget_notional = Decimal("0")
@@ -607,6 +602,8 @@ class FixedFractionSizingPolicy:
         reference_price: Decimal | str | int,
         target_position: Decimal | str | int,
     ) -> "SizingDecision":
+        if not isinstance(risk_decision, RiskDecision):
+            raise StrategyError("risk_decision must be RiskDecision")
         price = _decimal(reference_price, "reference_price", allow_zero=False)
         target = abs(_signed_decimal(target_position, "target_position"))
         budget_size = risk_decision.risk_budget_notional / price
@@ -892,14 +889,21 @@ class CooldownPolicyDefinition:
             else None
         )
         consecutive_losses = 0
+        last_loss_in_streak: RealizedPositionOutcome | None = None
         for outcome in reversed(outcomes):
             if outcome.realized_pnl < 0:
                 consecutive_losses += 1
+                if last_loss_in_streak is None:
+                    last_loss_in_streak = outcome
             elif outcome.realized_pnl > 0:
                 break
         consecutive_until = (
-            Instant(outcomes[-1].settled_at.epoch_ns + self.consecutive_loss_cooldown_seconds * _NS_PER_SECOND)
-            if consecutive_losses >= self.consecutive_loss_count and self.consecutive_loss_cooldown_seconds
+            Instant(last_loss_in_streak.settled_at.epoch_ns + self.consecutive_loss_cooldown_seconds * _NS_PER_SECOND)
+            if (
+                last_loss_in_streak is not None
+                and consecutive_losses >= self.consecutive_loss_count
+                and self.consecutive_loss_cooldown_seconds
+            )
             else None
         )
         active_untils = tuple(
@@ -1057,6 +1061,12 @@ class CooldownDecisionUnavailable:
         return payload
 
 
+RiskPolicy = CapitalRiskPolicy
+SizingPolicy = FixedFractionSizingPolicy
+SessionPolicy = SessionPolicyDefinition
+CooldownPolicy = CooldownPolicyDefinition
+
+
 def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -1080,10 +1090,10 @@ class StrategySpec:
     entry_policy: EntryPolicy
     exit_policy: ExitPolicy
     position_policy: PositionPolicy
-    sizing_policy: SizingPolicy
-    risk_policy: RiskPolicy
-    session_policy: SessionPolicy
-    cooldown_policy: CooldownPolicy
+    sizing_policy: FixedFractionSizingPolicy
+    risk_policy: CapitalRiskPolicy
+    session_policy: SessionPolicyDefinition
+    cooldown_policy: CooldownPolicyDefinition
     signal_combination_policy: SignalCombinationPolicy
     execution_policy: ExecutionPolicy
     notes: str | None = field(default=None, compare=False)
@@ -1095,18 +1105,15 @@ class StrategySpec:
             ("entry_policy", EntryPolicy),
             ("exit_policy", ExitPolicy),
             ("position_policy", PositionPolicy),
+            ("sizing_policy", FixedFractionSizingPolicy),
+            ("risk_policy", CapitalRiskPolicy),
+            ("session_policy", SessionPolicyDefinition),
+            ("cooldown_policy", CooldownPolicyDefinition),
             ("signal_combination_policy", SignalCombinationPolicy),
         ):
             if not isinstance(getattr(self, field_name), expected_type):
                 raise StrategyError(f"{field_name} must be {expected_type.__name__}")
-        for field_name in (
-            "sizing_policy",
-            "risk_policy",
-            "session_policy",
-            "cooldown_policy",
-            "execution_policy",
-        ):
-            _policy_payload(getattr(self, field_name), field_name)
+        _policy_payload(self.execution_policy, "execution_policy")
         if self.notes is not None:
             object.__setattr__(self, "notes", _non_empty_text(self.notes, "notes"))
 
@@ -1375,6 +1382,155 @@ def compose_decision(
     )
 
 
+_NY_CLOSED_DATE_TEXT = """
+2020-01-01 2020-01-20 2020-02-17 2020-04-10 2020-05-25 2020-07-03 2020-09-07 2020-11-26 2020-12-25
+2021-01-01 2021-01-18 2021-02-15 2021-04-02 2021-05-31 2021-07-05 2021-09-06 2021-11-25 2021-12-24
+2022-01-17 2022-02-21 2022-04-15 2022-05-30 2022-06-20 2022-07-04 2022-09-05 2022-11-24 2022-12-26
+2023-01-02 2023-01-16 2023-02-20 2023-04-07 2023-05-29 2023-06-19 2023-07-04 2023-09-04 2023-11-23 2023-12-25
+2024-01-01 2024-01-15 2024-02-19 2024-03-29 2024-05-27 2024-06-19 2024-07-04 2024-09-02 2024-11-28 2024-12-25
+2025-01-01 2025-01-09 2025-01-20 2025-02-17 2025-04-18 2025-05-26 2025-06-19 2025-07-04 2025-09-01 2025-11-27 2025-12-25
+2026-01-01 2026-01-19 2026-02-16 2026-04-03 2026-05-25 2026-06-19 2026-07-03 2026-09-07 2026-11-26 2026-12-25
+2027-01-01 2027-01-18 2027-02-15 2027-03-26 2027-05-31 2027-06-18 2027-07-05 2027-09-06 2027-11-25 2027-12-24
+2028-01-17 2028-02-21 2028-04-14 2028-05-29 2028-06-19 2028-07-04 2028-09-04 2028-11-23 2028-12-25
+2029-01-01 2029-01-15 2029-02-19 2029-03-30 2029-05-28 2029-06-19 2029-07-04 2029-09-03 2029-11-22 2029-12-25
+2030-01-01 2030-01-21 2030-02-18 2030-04-19 2030-05-27 2030-06-19 2030-07-04 2030-09-02 2030-11-28 2030-12-25
+2031-01-01 2031-01-20 2031-02-17 2031-04-11 2031-05-26 2031-06-19 2031-07-04 2031-09-01 2031-11-27 2031-12-25
+2032-01-01 2032-01-19 2032-02-16 2032-03-26 2032-05-31 2032-06-18 2032-07-05 2032-09-06 2032-11-25 2032-12-24
+2033-01-17 2033-02-21 2033-04-15 2033-05-30 2033-06-20 2033-07-04 2033-09-05 2033-11-24 2033-12-26
+2034-01-02 2034-01-16 2034-02-20 2034-04-07 2034-05-29 2034-06-19 2034-07-04 2034-09-04 2034-11-23 2034-12-25
+2035-01-01 2035-01-15 2035-02-19 2035-03-23 2035-05-28 2035-06-19 2035-07-04 2035-09-03 2035-11-22 2035-12-25
+"""
+
+_LONDON_CLOSED_DATE_TEXT = """
+2020-01-01 2020-04-10 2020-04-13 2020-05-04 2020-05-25 2020-08-31 2020-12-25 2020-12-28
+2021-01-01 2021-04-02 2021-04-05 2021-05-03 2021-05-31 2021-08-30 2021-12-27 2021-12-28
+2022-04-15 2022-04-18 2022-05-02 2022-05-30 2022-06-02 2022-06-03 2022-08-29 2022-09-19 2022-12-26 2022-12-27
+2023-01-02 2023-04-07 2023-04-10 2023-05-01 2023-05-08 2023-05-29 2023-08-28 2023-12-25 2023-12-26
+2024-01-01 2024-03-29 2024-04-01 2024-05-06 2024-05-27 2024-08-26 2024-12-25 2024-12-26
+2025-01-01 2025-04-18 2025-04-21 2025-05-05 2025-05-26 2025-08-25 2025-12-25 2025-12-26
+2026-01-01 2026-04-03 2026-04-06 2026-05-04 2026-05-25 2026-08-31 2026-12-25 2026-12-28
+2027-01-01 2027-03-26 2027-03-29 2027-05-03 2027-05-31 2027-08-30 2027-12-27 2027-12-28
+2028-04-14 2028-04-17 2028-05-01 2028-05-29 2028-08-28 2028-12-25 2028-12-26
+2029-01-01 2029-03-30 2029-04-02 2029-05-07 2029-05-28 2029-08-27 2029-12-25 2029-12-26
+2030-01-01 2030-04-19 2030-04-22 2030-05-06 2030-05-27 2030-08-26 2030-12-25 2030-12-26
+2031-01-01 2031-04-11 2031-04-14 2031-05-05 2031-05-26 2031-08-25 2031-12-25 2031-12-26
+2032-01-01 2032-03-26 2032-03-29 2032-05-03 2032-05-31 2032-08-30 2032-12-27 2032-12-28
+2033-04-15 2033-04-18 2033-05-02 2033-05-30 2033-08-29 2033-12-26 2033-12-27
+2034-01-02 2034-04-07 2034-04-10 2034-05-01 2034-05-29 2034-08-28 2034-12-25 2034-12-26
+2035-01-01 2035-03-23 2035-03-26 2035-05-07 2035-05-28 2035-08-27 2035-12-25 2035-12-26
+"""
+
+_TOKYO_CLOSED_DATE_TEXT = """
+2020-01-01 2020-01-02 2020-01-03 2020-01-13 2020-02-11 2020-02-23 2020-02-24 2020-03-20 2020-04-29 2020-05-03 2020-05-04 2020-05-05 2020-05-06 2020-07-23 2020-07-24 2020-08-10 2020-09-21 2020-09-22 2020-11-03 2020-11-23 2020-12-31
+2021-01-01 2021-01-02 2021-01-03 2021-01-04 2021-01-11 2021-02-11 2021-02-23 2021-03-20 2021-04-29 2021-05-03 2021-05-04 2021-05-05 2021-07-22 2021-07-23 2021-08-08 2021-08-09 2021-09-20 2021-09-23 2021-11-03 2021-11-23 2021-12-31
+2022-01-01 2022-01-02 2022-01-03 2022-01-04 2022-01-10 2022-02-11 2022-02-23 2022-03-21 2022-04-29 2022-05-03 2022-05-04 2022-05-05 2022-07-18 2022-08-11 2022-09-19 2022-09-23 2022-10-10 2022-11-03 2022-11-23 2022-12-31
+2023-01-01 2023-01-02 2023-01-03 2023-01-04 2023-01-09 2023-02-11 2023-02-23 2023-03-21 2023-04-29 2023-05-03 2023-05-04 2023-05-05 2023-07-17 2023-08-11 2023-09-18 2023-09-23 2023-10-09 2023-11-03 2023-11-23 2023-12-31
+2024-01-01 2024-01-02 2024-01-03 2024-01-08 2024-02-11 2024-02-12 2024-02-23 2024-03-20 2024-04-29 2024-05-03 2024-05-04 2024-05-05 2024-05-06 2024-07-15 2024-08-11 2024-08-12 2024-09-16 2024-09-22 2024-09-23 2024-10-14 2024-11-03 2024-11-04 2024-11-23 2024-12-31
+2025-01-01 2025-01-02 2025-01-03 2025-01-13 2025-02-11 2025-02-23 2025-02-24 2025-03-20 2025-04-29 2025-05-03 2025-05-04 2025-05-05 2025-05-06 2025-07-21 2025-08-11 2025-09-15 2025-09-23 2025-10-13 2025-11-03 2025-11-23 2025-11-24 2025-12-31
+2026-01-01 2026-01-02 2026-01-03 2026-01-12 2026-02-11 2026-02-23 2026-03-20 2026-04-29 2026-05-03 2026-05-04 2026-05-05 2026-05-06 2026-07-20 2026-08-11 2026-09-21 2026-09-22 2026-09-23 2026-10-12 2026-11-03 2026-11-23 2026-12-31
+2027-01-01 2027-01-02 2027-01-03 2027-01-04 2027-01-11 2027-02-11 2027-02-23 2027-03-21 2027-03-22 2027-04-29 2027-05-03 2027-05-04 2027-05-05 2027-07-19 2027-08-11 2027-09-20 2027-09-23 2027-10-11 2027-11-03 2027-11-23 2027-12-31
+2028-01-01 2028-01-02 2028-01-03 2028-01-04 2028-01-10 2028-02-11 2028-02-23 2028-03-20 2028-04-29 2028-05-03 2028-05-04 2028-05-05 2028-07-17 2028-08-11 2028-09-18 2028-09-22 2028-10-09 2028-11-03 2028-11-23 2028-12-31
+2029-01-01 2029-01-02 2029-01-03 2029-01-08 2029-02-11 2029-02-12 2029-02-23 2029-03-20 2029-04-29 2029-04-30 2029-05-03 2029-05-04 2029-05-05 2029-07-16 2029-08-11 2029-09-17 2029-09-23 2029-09-24 2029-10-08 2029-11-03 2029-11-23 2029-12-31
+2030-01-01 2030-01-02 2030-01-03 2030-01-14 2030-02-11 2030-02-23 2030-03-20 2030-04-29 2030-05-03 2030-05-04 2030-05-05 2030-05-06 2030-07-15 2030-08-11 2030-08-12 2030-09-16 2030-09-23 2030-10-14 2030-11-03 2030-11-04 2030-11-23 2030-12-31
+2031-01-01 2031-01-02 2031-01-03 2031-01-13 2031-02-11 2031-02-23 2031-02-24 2031-03-21 2031-04-29 2031-05-03 2031-05-04 2031-05-05 2031-05-06 2031-07-21 2031-08-11 2031-09-15 2031-09-23 2031-10-13 2031-11-03 2031-11-23 2031-11-24 2031-12-31
+2032-01-01 2032-01-02 2032-01-03 2032-01-12 2032-02-11 2032-02-23 2032-03-20 2032-04-29 2032-05-03 2032-05-04 2032-05-05 2032-07-19 2032-08-11 2032-09-20 2032-09-21 2032-09-22 2032-10-11 2032-11-03 2032-11-23 2032-12-31
+2033-01-01 2033-01-02 2033-01-03 2033-01-04 2033-01-10 2033-02-11 2033-02-23 2033-03-20 2033-03-21 2033-04-29 2033-05-03 2033-05-04 2033-05-05 2033-07-18 2033-08-11 2033-09-19 2033-09-23 2033-10-10 2033-11-03 2033-11-23 2033-12-31
+2034-01-01 2034-01-02 2034-01-03 2034-01-04 2034-01-09 2034-02-11 2034-02-23 2034-03-20 2034-04-29 2034-05-03 2034-05-04 2034-05-05 2034-07-17 2034-08-11 2034-09-18 2034-09-23 2034-10-09 2034-11-03 2034-11-23 2034-12-31
+2035-01-01 2035-01-02 2035-01-03 2035-01-08 2035-02-11 2035-02-12 2035-02-23 2035-03-21 2035-04-29 2035-04-30 2035-05-03 2035-05-04 2035-05-05 2035-07-16 2035-08-11 2035-09-17 2035-09-23 2035-09-24 2035-10-08 2035-11-03 2035-11-23 2035-12-31
+"""
+
+_NY_EARLY_CLOSE_TEXT = """
+2020-07-03=13:00 2020-11-27=13:00 2020-12-24=13:00
+2021-11-26=13:00 2021-12-24=13:00
+2022-11-25=13:00
+2023-07-03=13:00 2023-11-24=13:00
+2024-07-03=13:00 2024-11-29=13:00 2024-12-24=13:00
+2025-07-03=13:00 2025-11-28=13:00 2025-12-24=13:00
+2026-07-03=13:00 2026-11-27=13:00 2026-12-24=13:00
+2027-11-26=13:00 2027-12-24=13:00
+2028-07-03=13:00 2028-11-24=13:00
+2029-07-03=13:00 2029-11-23=13:00 2029-12-24=13:00
+2030-07-03=13:00 2030-11-29=13:00 2030-12-24=13:00
+2031-07-03=13:00 2031-11-28=13:00 2031-12-24=13:00
+2032-11-26=13:00 2032-12-24=13:00
+2033-11-25=13:00
+2034-07-03=13:00 2034-11-24=13:00
+2035-07-03=13:00 2035-11-23=13:00 2035-12-24=13:00
+"""
+
+_LONDON_EARLY_CLOSE_TEXT = """
+2020-12-24=12:30 2020-12-31=12:30
+2021-12-24=12:30 2021-12-31=12:30
+2024-12-24=12:30 2024-12-31=12:30
+2025-12-24=12:30 2025-12-31=12:30
+2026-12-24=12:30 2026-12-31=12:30
+2027-12-24=12:30 2027-12-31=12:30
+2029-12-24=12:30 2029-12-31=12:30
+2030-12-24=12:30 2030-12-31=12:30
+2031-12-24=12:30 2031-12-31=12:30
+2032-12-24=12:30 2032-12-31=12:30
+2035-12-24=12:30 2035-12-31=12:30
+"""
+
+_NY_DST_RANGE_TEXT = """
+2020:2020-03-08/2020-11-01 2021:2021-03-14/2021-11-07
+2022:2022-03-13/2022-11-06 2023:2023-03-12/2023-11-05
+2024:2024-03-10/2024-11-03 2025:2025-03-09/2025-11-02
+2026:2026-03-08/2026-11-01 2027:2027-03-14/2027-11-07
+2028:2028-03-12/2028-11-05 2029:2029-03-11/2029-11-04
+2030:2030-03-10/2030-11-03 2031:2031-03-09/2031-11-02
+2032:2032-03-14/2032-11-07 2033:2033-03-13/2033-11-06
+2034:2034-03-12/2034-11-05 2035:2035-03-11/2035-11-04
+"""
+
+_LONDON_DST_RANGE_TEXT = """
+2020:2020-03-29/2020-10-25 2021:2021-03-28/2021-10-31
+2022:2022-03-27/2022-10-30 2023:2023-03-26/2023-10-29
+2024:2024-03-31/2024-10-27 2025:2025-03-30/2025-10-26
+2026:2026-03-29/2026-10-25 2027:2027-03-28/2027-10-31
+2028:2028-03-26/2028-10-29 2029:2029-03-25/2029-10-28
+2030:2030-03-31/2030-10-27 2031:2031-03-30/2031-10-26
+2032:2032-03-28/2032-10-31 2033:2033-03-27/2033-10-30
+2034:2034-03-26/2034-10-29 2035:2035-03-25/2035-10-28
+"""
+
+
+def _static_date_set(text: str) -> frozenset[date]:
+    return frozenset(date.fromisoformat(item) for item in text.split())
+
+
+def _static_time_map(text: str) -> dict[date, str]:
+    result: dict[date, str] = {}
+    for item in text.split():
+        day_text, time_text = item.split("=", 1)
+        result[date.fromisoformat(day_text)] = time_text
+    return result
+
+
+def _static_range_map(text: str) -> dict[int, tuple[date, date]]:
+    result: dict[int, tuple[date, date]] = {}
+    for item in text.split():
+        year_text, range_text = item.split(":", 1)
+        start_text, end_text = range_text.split("/", 1)
+        result[int(year_text)] = (date.fromisoformat(start_text), date.fromisoformat(end_text))
+    return result
+
+
+_STATIC_CLOSED_DATES = {
+    SessionReferenceMarket.NEW_YORK: _static_date_set(_NY_CLOSED_DATE_TEXT),
+    SessionReferenceMarket.LONDON: _static_date_set(_LONDON_CLOSED_DATE_TEXT),
+    SessionReferenceMarket.TOKYO: _static_date_set(_TOKYO_CLOSED_DATE_TEXT),
+}
+_STATIC_EARLY_CLOSES = {
+    SessionReferenceMarket.NEW_YORK: _static_time_map(_NY_EARLY_CLOSE_TEXT),
+    SessionReferenceMarket.LONDON: _static_time_map(_LONDON_EARLY_CLOSE_TEXT),
+    SessionReferenceMarket.TOKYO: {},
+}
+_STATIC_DST_RANGES = {
+    SessionReferenceMarket.NEW_YORK: _static_range_map(_NY_DST_RANGE_TEXT),
+    SessionReferenceMarket.LONDON: _static_range_map(_LONDON_DST_RANGE_TEXT),
+}
+
 def _evaluate_reference_market(
     policy: SessionPolicyDefinition,
     market: SessionReferenceMarket,
@@ -1414,14 +1570,16 @@ def _session_candidates(
     result: list[tuple[date, str, int, int]] = []
     for day in days:
         offset_hours = _session_utc_offset_hours(market, day)
+        early_close_ns = _early_close_epoch_ns(market, day, offset_hours)
         for phase_name, local_start, local_end in _local_session_phases(market):
             start_ns = _local_day_time_epoch_ns(day, local_start, offset_hours)
             end_ns = _local_day_time_epoch_ns(day, local_end, offset_hours)
             if local_end <= local_start:
                 end_ns += _NS_PER_DAY
-            override_end = _early_close_epoch_ns(market, day, phase_name, offset_hours)
-            if override_end is not None:
-                end_ns = min(end_ns, override_end)
+            if early_close_ns is not None:
+                if start_ns >= early_close_ns:
+                    continue
+                end_ns = min(end_ns, early_close_ns)
             if end_ns > start_ns:
                 result.append((day, phase_name, start_ns, end_ns))
     return tuple(result)
@@ -1449,9 +1607,9 @@ def _local_session_phases(market: SessionReferenceMarket) -> tuple[tuple[str, st
 
 def _session_utc_offset_hours(market: SessionReferenceMarket, day: date) -> int:
     if market is SessionReferenceMarket.NEW_YORK:
-        return -4 if _ny_dst(day) else -5
+        return -4 if _date_in_static_dst(market, day) else -5
     if market is SessionReferenceMarket.LONDON:
-        return 1 if _london_dst(day) else 0
+        return 1 if _date_in_static_dst(market, day) else 0
     if market is SessionReferenceMarket.TOKYO:
         return 9
     raise AssertionError("unreachable reference market")
@@ -1462,18 +1620,15 @@ def _is_market_open_day(market: SessionReferenceMarket, day: date) -> bool:
         return False
     if day.weekday() >= 5:
         return False
-    return day not in _market_closed_dates(market, day.year)
+    return day not in _STATIC_CLOSED_DATES[market]
 
 
 def _early_close_epoch_ns(
     market: SessionReferenceMarket,
     day: date,
-    phase_name: str,
     offset_hours: int,
 ) -> int | None:
-    if phase_name != "regular":
-        return None
-    close_time = _market_early_closes(market, day.year).get(day)
+    close_time = _STATIC_EARLY_CLOSES[market].get(day)
     if close_time is None:
         return None
     return _local_day_time_epoch_ns(day, close_time, offset_hours)
@@ -1490,176 +1645,15 @@ def _utc_date(value: Instant) -> date:
     return datetime.fromtimestamp(value.epoch_ns // _NS_PER_SECOND, tz=timezone.utc).date()
 
 
-def _ny_dst(day: date) -> bool:
-    start = _nth_weekday(day.year, 3, 6, 2)
-    end = _nth_weekday(day.year, 11, 6, 1)
+def _date_in_static_dst(market: SessionReferenceMarket, day: date) -> bool:
+    ranges = _STATIC_DST_RANGES.get(market)
+    if ranges is None:
+        return False
+    bounds = ranges.get(day.year)
+    if bounds is None:
+        return False
+    start, end = bounds
     return start <= day < end
-
-
-def _london_dst(day: date) -> bool:
-    start = _last_weekday(day.year, 3, 6)
-    end = _last_weekday(day.year, 10, 6)
-    return start <= day < end
-
-
-def _market_closed_dates(market: SessionReferenceMarket, year: int) -> frozenset[date]:
-    if market is SessionReferenceMarket.NEW_YORK:
-        dates = {
-            _observed(date(year, 1, 1)),
-            _nth_weekday(year, 1, 0, 3),
-            _nth_weekday(year, 2, 0, 3),
-            _good_friday(year),
-            _last_weekday(year, 5, 0),
-            _observed(date(year, 7, 4)),
-            _nth_weekday(year, 9, 0, 1),
-            _nth_weekday(year, 11, 3, 4),
-            _observed(date(year, 12, 25)),
-        }
-        if year >= 2022:
-            dates.add(_observed(date(year, 6, 19)))
-        if year == 2025:
-            dates.add(date(2025, 1, 9))
-        return frozenset(dates)
-    if market is SessionReferenceMarket.LONDON:
-        dates = {
-            _observed(date(year, 1, 1)),
-            _good_friday(year),
-            _easter_sunday(year) + timedelta(days=1),
-            _nth_weekday(year, 5, 0, 1),
-            _last_weekday(year, 5, 0),
-            _last_weekday(year, 8, 0),
-            *_uk_christmas_observed(year),
-        }
-        if year == 2022:
-            dates.update({date(2022, 6, 2), date(2022, 6, 3), date(2022, 9, 19)})
-        if year == 2023:
-            dates.add(date(2023, 5, 8))
-        return frozenset(dates)
-    if market is SessionReferenceMarket.TOKYO:
-        return frozenset(_tokyo_closed_dates(year))
-    raise AssertionError("unreachable reference market")
-
-
-def _market_early_closes(market: SessionReferenceMarket, year: int) -> dict[date, str]:
-    if market is SessionReferenceMarket.NEW_YORK:
-        closes = {
-            _nth_weekday(year, 11, 3, 4) + timedelta(days=1): "13:00",
-        }
-        july3 = date(year, 7, 3)
-        christmas_eve = date(year, 12, 24)
-        if july3.weekday() < 5:
-            closes[july3] = "13:00"
-        if christmas_eve.weekday() < 5:
-            closes[christmas_eve] = "13:00"
-        return closes
-    if market is SessionReferenceMarket.LONDON:
-        return {
-            day: "12:30"
-            for day in (date(year, 12, 24), date(year, 12, 31))
-            if day.weekday() < 5
-        }
-    return {}
-
-
-def _observed(day: date) -> date:
-    if day.weekday() == 5:
-        return day - timedelta(days=1)
-    if day.weekday() == 6:
-        return day + timedelta(days=1)
-    return day
-
-
-def _nth_weekday(year: int, month: int, weekday: int, occurrence: int) -> date:
-    cursor = date(year, month, 1)
-    while cursor.weekday() != weekday:
-        cursor += timedelta(days=1)
-    return cursor + timedelta(days=7 * (occurrence - 1))
-
-
-def _last_weekday(year: int, month: int, weekday: int) -> date:
-    cursor = date(year, month + 1, 1) - timedelta(days=1) if month < 12 else date(year, 12, 31)
-    while cursor.weekday() != weekday:
-        cursor -= timedelta(days=1)
-    return cursor
-
-
-def _easter_sunday(year: int) -> date:
-    a = year % 19
-    b = year // 100
-    c = year % 100
-    d = b // 4
-    e = b % 4
-    f = (b + 8) // 25
-    g = (b - f + 1) // 3
-    h = (19 * a + b - d - g + 15) % 30
-    i = c // 4
-    k = c % 4
-    l = (32 + 2 * e + 2 * i - h - k) % 7
-    m = (a + 11 * h + 22 * l) // 451
-    month = (h + l - 7 * m + 114) // 31
-    day = ((h + l - 7 * m + 114) % 31) + 1
-    return date(year, month, day)
-
-
-def _good_friday(year: int) -> date:
-    return _easter_sunday(year) - timedelta(days=2)
-
-
-def _uk_christmas_observed(year: int) -> tuple[date, date]:
-    christmas = date(year, 12, 25)
-    boxing = date(year, 12, 26)
-    if christmas.weekday() == 5:
-        return date(year, 12, 27), date(year, 12, 28)
-    if christmas.weekday() == 6:
-        return date(year, 12, 26), date(year, 12, 27)
-    if boxing.weekday() == 5:
-        return christmas, date(year, 12, 28)
-    if boxing.weekday() == 6:
-        return christmas, date(year, 12, 27)
-    return christmas, boxing
-
-
-def _tokyo_closed_dates(year: int) -> set[date]:
-    dates = {
-        date(year, 1, 1),
-        date(year, 1, 2),
-        date(year, 1, 3),
-        _nth_weekday(year, 1, 0, 2),
-        _observed(date(year, 2, 11)),
-        _observed(date(year, 2, 23)),
-        _japan_vernal_equinox(year),
-        _observed(date(year, 4, 29)),
-        _observed(date(year, 5, 3)),
-        _observed(date(year, 5, 4)),
-        _observed(date(year, 5, 5)),
-        _nth_weekday(year, 7, 0, 3),
-        _observed(date(year, 8, 11)),
-        _nth_weekday(year, 9, 0, 3),
-        _japan_autumn_equinox(year),
-        _nth_weekday(year, 10, 0, 2),
-        _observed(date(year, 11, 3)),
-        _observed(date(year, 11, 23)),
-        date(year, 12, 31),
-    }
-    if year == 2020:
-        dates.discard(_nth_weekday(year, 7, 0, 3))
-        dates.discard(_nth_weekday(year, 10, 0, 2))
-        dates.discard(_observed(date(year, 8, 11)))
-        dates.update({date(2020, 7, 23), date(2020, 7, 24), date(2020, 8, 10)})
-    if year == 2021:
-        dates.discard(_nth_weekday(year, 7, 0, 3))
-        dates.discard(_nth_weekday(year, 10, 0, 2))
-        dates.discard(_observed(date(year, 8, 11)))
-        dates.update({date(2021, 7, 22), date(2021, 7, 23), date(2021, 8, 9)})
-    return dates
-
-
-def _japan_vernal_equinox(year: int) -> date:
-    return date(year, 3, int(20.8431 + 0.242194 * (year - 1980) - ((year - 1980) // 4)))
-
-
-def _japan_autumn_equinox(year: int) -> date:
-    return date(year, 9, int(23.2488 + 0.242194 * (year - 1980) - ((year - 1980) // 4)))
 
 
 def _canonical_inputs(inputs: Iterable[StrategyInput]) -> dict[str, StrategyInput]:

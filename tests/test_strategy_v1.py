@@ -13,12 +13,17 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.data.models import Instant
 from quant_platform.strategy import (
+    CapitalRiskPolicy,
+    CooldownPolicyDefinition,
     DecisionIntent,
     Direction,
     EntryPolicy,
     ExitPolicy,
+    FixedFractionSizingPolicy,
     NoDecision,
     PositionPolicy,
+    SessionPolicyDefinition,
+    SessionReferenceMarket,
     SignalCombinationMode,
     SignalCombinationPolicy,
     StrategyError,
@@ -59,10 +64,31 @@ def _spec() -> StrategySpec:
             long_target_position="1.5",
             short_target_position="1",
         ),
-        sizing_policy=_PolicyStub("sizing-policy-test"),
-        risk_policy=_PolicyStub("risk-policy-test"),
-        session_policy=_PolicyStub("session-policy-test"),
-        cooldown_policy=_PolicyStub("cooldown-policy-test"),
+        sizing_policy=FixedFractionSizingPolicy(
+            policy_key="breakout.sizing",
+            lot_size="0.1",
+            min_size="0.1",
+        ),
+        risk_policy=CapitalRiskPolicy(
+            policy_key="breakout.risk",
+            max_drawdown_fraction="0.2",
+            max_position_notional_fraction="0.5",
+            max_total_exposure_fraction="1",
+            risk_per_trade_fraction="0.02",
+            max_evidence_age_seconds=60,
+        ),
+        session_policy=SessionPolicyDefinition(
+            policy_key="breakout.sessions",
+            reference_markets=(SessionReferenceMarket.NEW_YORK,),
+        ),
+        cooldown_policy=CooldownPolicyDefinition(
+            policy_key="breakout.cooldown",
+            post_loss_cooldown_seconds=300,
+            consecutive_loss_count=2,
+            consecutive_loss_cooldown_seconds=900,
+            max_entries_per_utc_day=3,
+            max_trade_history_age_seconds=60,
+        ),
         signal_combination_policy=SignalCombinationPolicy(
             policy_key="breakout.signals",
             mode=SignalCombinationMode.ALL,
@@ -130,8 +156,10 @@ class StrategyV1Tests(unittest.TestCase):
     def test_session_and_cooldown_policy_slots_preserve_supplied_objects(self):
         spec = _spec()
 
-        self.assertIsInstance(spec.session_policy, _PolicyStub)
-        self.assertIsInstance(spec.cooldown_policy, _PolicyStub)
+        self.assertIsInstance(spec.sizing_policy, FixedFractionSizingPolicy)
+        self.assertIsInstance(spec.risk_policy, CapitalRiskPolicy)
+        self.assertIsInstance(spec.session_policy, SessionPolicyDefinition)
+        self.assertIsInstance(spec.cooldown_policy, CooldownPolicyDefinition)
         self.assertEqual(
             spec.canonical_payload()["session_policy"]["identity"],
             spec.session_policy.identity,
@@ -140,6 +168,39 @@ class StrategyV1Tests(unittest.TestCase):
             spec.canonical_payload()["cooldown_policy"]["identity"],
             spec.cooldown_policy.identity,
         )
+
+    def test_strategy_spec_refuses_unrelated_policy_objects_for_g03_g04_slots(self):
+        spec = _spec()
+
+        with self.assertRaisesRegex(StrategyError, "risk_policy must be CapitalRiskPolicy"):
+            StrategySpec(
+                strategy_key="btc.breakout",
+                semantic_version="1",
+                entry_policy=spec.entry_policy,
+                exit_policy=spec.exit_policy,
+                position_policy=spec.position_policy,
+                sizing_policy=spec.sizing_policy,
+                risk_policy=_PolicyStub("risk-policy-test"),  # type: ignore[arg-type]
+                session_policy=spec.session_policy,
+                cooldown_policy=spec.cooldown_policy,
+                signal_combination_policy=spec.signal_combination_policy,
+                execution_policy=spec.execution_policy,
+            )
+
+        with self.assertRaisesRegex(StrategyError, "session_policy must be SessionPolicyDefinition"):
+            StrategySpec(
+                strategy_key="btc.breakout",
+                semantic_version="1",
+                entry_policy=spec.entry_policy,
+                exit_policy=spec.exit_policy,
+                position_policy=spec.position_policy,
+                sizing_policy=spec.sizing_policy,
+                risk_policy=spec.risk_policy,
+                session_policy=_PolicyStub("session-policy-test"),  # type: ignore[arg-type]
+                cooldown_policy=spec.cooldown_policy,
+                signal_combination_policy=spec.signal_combination_policy,
+                execution_policy=spec.execution_policy,
+            )
 
     def test_decision_intent_refuses_late_input(self):
         spec = _spec()
