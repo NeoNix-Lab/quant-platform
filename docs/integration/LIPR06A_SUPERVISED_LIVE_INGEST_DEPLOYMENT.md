@@ -63,6 +63,29 @@ The completed proof must record:
 Target proof pending. The PR remains draft until the target proof is executed
 or the blocker is reported exactly.
 
+## Target Preflight
+
+Command:
+
+```text
+ssh -o BatchMode=yes -o ConnectTimeout=8 neonix@homelab.local "cd /opt/market-platform && hostname && git status --short --branch && git rev-parse --short HEAD && command -v systemctl && systemctl --version | head -1"
+```
+
+Observed output:
+
+```text
+homelab
+## agent/issue-121-k10-real-server-execution...origin/agent/issue-121-k10-real-server-execution
+?? src/quant_platform.egg-info/
+c2504b8
+/usr/bin/systemctl
+systemd 257 (257.13-1~deb13u1)
+```
+
+Result: BLOCKED for supervised deployment. The target has systemd available,
+but `/opt/market-platform` is not on the LIPR-06a branch and is not clean.
+No repository promotion, service installation or service start was attempted.
+
 ## Local Verification
 
 Command:
