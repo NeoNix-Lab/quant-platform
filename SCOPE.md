@@ -1,42 +1,38 @@
-# Scope: Live Ingest Server Production Readiness v1
+# Scope: Wave 4 — Strategy & Deterministic Replay v1
 
-Status: **CLOSED**
+Status: **ACTIVE**
 
-Scope kind: **closed governance and implementation scope for Live Ingest Server
-Production Readiness v1**.
+Scope kind: **implementation, decision-gate resolution and validation scope for Wave 4**.
 
-This scope replaces the prior `Live Ingest Vertical v1` closeout scope. That
-scope was centered on proving the K10 restart/checkpoint path. PR #122 closed
-that missing proof by advancing the checkpoint after restart reconciliation and
-was merged into `main` on 2026-09-24 as merge commit
-`36e86e3dbb812734eeb8728e61be9ac49f793aff`.
+## Objective
 
-The active objective is now narrower than full live trading and broader than a
-single restart proof:
+Build and validate the canonical **Strategy & Deterministic Replay** vertical (Vertical Milestone **V7**) on the `implement/wave-4` integration branch, establishing the bridge between validated quantitative research and stateful economic execution:
 
 ```text
-make the first Bybit BTCUSDT live-ingest server production-ready for v1
+Canonical Market Data (DataGateway B02 / D03)
+                     ↓
+Derived Features & Validated Labels (E04 / E06 / F07)
+                     ↓
+StrategySpec & Policies (G01 / G02 / G03 / G04)
+                     ↓
+DecisionIntent (ADR-0009)
+                     ↓
+Execution Engine & Cost/Conflict Model (H01 / H02 / H03)
+                     ↓
+Orders / Realized Fills (ADR-0012)
+                     ↓
+Portfolio & Accounting Ledger (H04)
+                     ↓
+Deterministic Historical Replay Runtime (H05)
 ```
 
-Production-ready here means a governed, continuously operable ingest server
-that can run under the accepted K02 identity, publish through the existing
-canonical lifecycle, recover from ordinary restart, represent every unresolved
-gap explicitly, and follow a governed path for long-gap remediation before any
-missing interval may be claimed complete.
+The objective is to enable stateful trading strategies to evaluate canonical inputs, generate learner-agnostic `DecisionIntent`, execute against a unified `ExecutionEngine` under explicit fee and slippage models, record every economic transaction in a double-entry `Portfolio/Ledger`, and produce provably reproducible, bitwise-identical results across repeated historical replays.
 
-It does **not** mean paper trading, live trading, J08 live product mode, B06
-live consumer cursor, API/client work, ML/RL, Strategy, Execution, L1/L2/L3, a
-generic job scheduler, or a generic provider framework.
+This scope resolves Decision Gate **`DG-F`** (Strategy & Execution Semantics) and delivers the implementation of atoms `G01`–`G04` and `H01`–`H05`.
 
-Closeout result: this scope has now produced the bounded server composition
-([ADR-0043](docs/decisions/ADR-0043-live-ingest-server-composition-v1.md)),
-the fail-closed long-gap state/orchestration path
-([ADR-0044](docs/decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md)),
-the supervised operating-path artifacts, and target-host evidence that the
-server can be started, observed, stopped, restarted and reconciled under the
-K02 runtime identity. The target proof is recorded in
-`docs/integration/LIPR05_LIVE_INGEST_SERVER_PRODUCTION_READINESS_PROOF.md` and
-`docs/integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md`.
+It does **not** include live exchange order execution, broker adapters, live consumer cursor `B06`, multi-asset execution `H06`, supervised ML model training (`Wave 5`), API transport (`J02`), thin clients (`J04`–`J06`), or paper/live trading mode (`J07` / `J08`).
+
+---
 
 ## Authority
 
@@ -49,385 +45,159 @@ Start from:
 - `docs/product/CAPABILITY_DAG.md`
 - `docs/product/ROADMAP.md`
 - `docs/architecture/TARGET_ARCHITECTURE.md`
-- `docs/architecture/MARKET_DATA_INGEST.md`
-- `docs/architecture/OPEN_DECISIONS.md`
-- `docs/contracts/CORE_CONTRACTS.md`
-- `docs/contracts/MARKET_DATA_INGEST_CONTRACTS.md`
-- `docs/decisions/ADR-0033-backfill-repair-v1.md`
-- `docs/decisions/ADR-0039-backup-restore-v1.md`
-- `docs/decisions/ADR-0040-bybit-live-trades-v1.md`
-- `docs/decisions/ADR-0041-live-ingest-runtime-identity-v1.md`
-- `docs/decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md`
-- merged evidence in PR #111, #112, #113, #114, #119 and #122
+- `docs/contracts/CORE_CONTRACTS.md` (Sections 21–27)
+- `docs/architecture/OPEN_DECISIONS.md` (`DG-F` family)
+- `docs/decisions/ADR-0007-research-strategy-separation.md`
+- `docs/decisions/ADR-0009-policy-decision-intent.md`
+- `docs/decisions/ADR-0012-unified-execution.md`
+- `docs/decisions/ADR-0013-historical-live-semantics.md`
+- `docs/decisions/ADR-0024-package-boundary-modular-monolith-v1.md`
+- `docs/decisions/ADR-0036-labels-censoring-lockbox-v1.md`
+- `docs/decisions/ADR-0038-outcome-v1-semantic-authority.md`
+- `docs/decisions/ADR-0043-live-ingest-server-composition-v1.md`
+- `docs/decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md`
 
-Accepted ADRs and frozen contracts remain semantic authority. This scope may
-organize the next work, but it must not silently reinterpret any accepted
-contract version.
+Accepted ADRs and frozen contracts remain normative semantic authority. This scope organizes the implementation work for Wave 4 without weakening or reinterpreting existing contracts.
 
-## Credited State
+---
+
+## Baseline and Credited State
+
+Authoritative baseline for this branch:
+
+```text
+implement/wave-4 @ 67fafb070ba086702e7be5903b6d51bb4ad19fc1 (Merge PR #150 into main)
+```
 
 Credit, do not reimplement or re-prove absent invalidating evidence:
 
 ```text
-K08  backup / restore v1                 COMPLETE
-A11  Bybit BTCUSDT live trades v1        COMPLETE
-K02  live-ingest runtime identity v1      COMPLETE
-K10  checkpoint / recovery v1             COMPLETE for restart/reconcile proof
-A10  backfill / repair v1                COMPLETE as bounded repair foundation
-B04  non-contiguous coverage reads v1     COMPLETE
-K03  observability foundation             COMPLETE
-K04  capacity observation                 COMPLETE
-K05  pressure policy                      COMPLETE
-K06  RAW/source protection                COMPLETE
+Wave 0  Architecture foundation, schemas, catalog bootstrap, modular monolith (ADR-0024)   COMPLETE
+Wave 1  DataGateway bounded scan (B02), CandleDefinition v1 (D02), historical candles (D03),
+        walk-forward (F05), capacity (K04), config convergence (C05), ASS-01/02/03         COMPLETE
+Wave 2  FootprintDefinition v1 (D06), FeatureDefinition v1 (E02), FeatureArtifact v1 (E04),
+        canonical H01 integration (E06)                                                    COMPLETE
+Wave 3  Research & Validation complete (F01–F08): HypothesisSpec (F01), EventSpec (F02),
+        OutcomeSpec/Outcome v1 (F03/ADR-0038), sweeps (F04), walk-forward (F05),
+        availability/purge/embargo (F06/ADR-0031), labels/censoring/lockbox (F07/ADR-0036),
+        DSR/PBO robust comparison (F08/ADR-0037)                                           COMPLETE
+Wave 6  Live Ingest Server Production Readiness v1 (PR #123, ADR-0043, ADR-0044)           COMPLETE
+Tools   Branching strategy, pre-push guardrail, workflow CLI (PR #148, #149, #150)         COMPLETE
+Data    trade-v1, manifests, catalog DDL, Parquet materialization, certification, publication   COMPLETE
+Ops     K02 identity, K03 observability, K05 pressure, K06 source protection, K08 backup,
+        K10 checkpoint/recovery v1                                                         COMPLETE
 ```
 
-This closed scope additionally credits the Live Ingest Server Production
-Readiness v1 path as complete for the first Bybit BTCUSDT producer operating
-path: ADR-0043/ADR-0044 are accepted, the server loop is implemented, the
-systemd supervised path is documented, and the homelab proof passed. This does
-not mark B06, K07, K09, J08, paper/live trading, clients, execution or a generic
-job runtime complete.
+---
 
-`OPEN_DECISIONS.md`, `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md` and `ROADMAP.md`
-carried stale pre-PR #122 phrasing (K10 as `PARTIAL` / `REAL_RESTART_PROOF_PENDING`,
-and frontier sections still pointing at the closed `Live Ingest Vertical v1`
-blocker). That governance audit finding is now reconciled on this same branch:
-K10 reads `FROZEN` / `COMPLETE` with PR #122 evidence cited, and the
-frontier/execution-frontier sections point at this scope. This is a status
-correction, not permission to re-open K10 semantics.
+## In-Scope Capability Inventory
 
-## Production-Readiness Audit Findings
+| ID | Capability | Owner | Requires | Unlocks | Decision State | Target Impl State | Acceptance / Authority |
+| :--- | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
+| **G01** | `StrategySpec / DecisionIntent v1` | Strategy | `F07` | `G02`, `H01` | RESOLVED | COMPLETE | Immutable specification; inputs strictly respect availability floor; ADR-0009 |
+| **G02** | `Policy composition v1` | Strategy | `G01` | `G03`, `G04` | RESOLVED | COMPLETE | Deterministic evaluation of entry, exit and position policies |
+| **G03** | `Risk / sizing v1` | Strategy | `G01`, `G02` | `H01` | RESOLVED | COMPLETE | Reproducible capital allocation, max drawdown protection, position sizing |
+| **G04** | `Session / cooldown semantics v1` | Strategy | `G02`, `F06` | `H01`, `H03` | **OPEN_BLOCKING (DG-F)** | COMPLETE | Trading calendar, session schedules, cooldown states, timezone/DST handling |
+| **H01** | `Order / Fill lifecycle v1` | Execution | `G03`, `G04` | `H02`, `H04` | RESOLVED | COMPLETE | Explicit state machine; illegal transitions rejected; reproducible order IDs |
+| **H02** | `Cost / synthetic-fill model v1` | Execution | `H01` | `H04`, `H05` | RESOLVED | COMPLETE | Parameterized fee schedule, deterministic slippage model, provenance |
+| **H03** | `Execution conflict model v1` | Execution | `H01`, `G04` | `H04`, `H05` | **OPEN_BLOCKING (DG-F)** | COMPLETE | Deterministic resolution of same-bar conflicts, intra-bar ambiguity, OCO |
+| **H04** | `Portfolio / ledger v1` | Portfolio | `H01`, `H02`, `H03` | `H05`, `I03` | RESOLVED | COMPLETE | Double-entry accounting ledger; equity = cash + positions; exact PnL conservation |
+| **H05** | `Deterministic replay v1` | Execution | `H02`, `H04` | `J07`, `I03` | RESOLVED | COMPLETE | Historical replay runtime binding dataset, strategy, and execution deterministically |
 
-The following gaps block a responsible v1 production claim for the live-ingest
-server.
+---
 
-### P1 - Persistent Ingest Server Ownership
+## Decision Gate: DG-F (Strategy & Execution Semantics)
 
-The prior scope noted the daemon/service gap but did not make it an active
-owned slice. A11/K10 functions and proof entrypoints exist, but the production
-claim requires a bounded long-running server composition:
+Wave 4 activates and must resolve Decision Gate **`DG-F`** before dependent execution implementation is authorized:
+
+### DG-F.1: Session & Cooldown Semantics (`G04`)
+* **Session calendars**: explicit trading sessions, exchange maintenance windows, weekend boundaries, and trading day rollover.
+* **Cooldown policy**: deterministic state machine for cool-down periods (post-loss cooldown, maximum consecutive losses cooldown, intra-day frequency limit).
+* **Timezone / DST integrity**: pure temporal evaluation in UTC microseconds without host system clock dependency.
+
+### DG-F.2: Execution Conflict Model (`H03`)
+* **Same-bar conflict resolution**: deterministic precedence rules when multiple orders trigger within the same bar or event bucket (e.g. stop-loss priority over take-profit, or conservative worst-case fill).
+* **Intra-bar ambiguity**: explicit policy for price path uncertainty (conservative assumption vs explicit lower-timeframe/trade-tick resolution).
+* **Order cancellation & OCO**: deterministic One-Cancels-Other linking and cancellation cascading.
+* **Partial fills**: deterministic fill ratio rules under liquidity and synthetic fill constraints.
+
+---
+
+## Active Path (Execution Sequencing)
+
+The repository rule of **one bounded mutation slice at a time** strictly governs execution:
 
 ```text
-configure
--> acquire live Bybit BTCUSDT trades
--> canonicalize
--> publish/catalog/certify
--> advance checkpoint only after durable publication
--> observe health/failure/progress
--> stop/restart cleanly
+1. Decision Gate DG-F.1 (ADR-0045) — Session & Cooldown Semantics Design (G04)
+   Formalize session calendar, cooldown state machine, and timezone invariants.
+        ↓
+2. Decision Gate DG-F.2 (ADR-0046) — Execution Conflict Model Design (H03)
+   Formalize same-bar conflict resolution, intra-bar precedence, and fill determinism.
+        ↓
+3. Strategy Core Implementation Slice (G01 & G02)
+   Implement StrategySpec, Policy composition, and DecisionIntent contract/schema.
+   Prove temporal availability floor (no lookahead bias).
+        ↓
+4. Risk, Sizing & Session Implementation Slice (G03 & G04)
+   Implement risk budgets, position sizing, session filtering, and cooldown runtime.
+        ↓
+5. Order & Fill Lifecycle Implementation Slice (H01 & H02)
+   Implement Order/Fill state machines, fee schedules, and synthetic slippage models.
+        ↓
+6. Execution Conflict & Portfolio Ledger Implementation Slice (H03 & H04)
+   Implement same-bar conflict resolver, double-entry accounting ledger, and equity tracking.
+        ↓
+7. Deterministic Replay Engine Implementation Slice (H05)
+   Implement historical replay runtime composing DataGateway, Features, Strategy, and Ledger.
+        ↓
+8. Wave 4 Human / Golden End-to-End Replay Proof (Milestone V7)
+   Execute and record deterministic replay proof on canonical Bybit BTCUSDT dataset.
+   Prove identical ledger and trade traces across independent runs.
+        ↓
+9. Wave 4 Governance Closeout
+   Reconcile CAPABILITY_DAG.md, CAPABILITY_MAP.md, ROADMAP.md, and OPEN_DECISIONS.md.
 ```
 
-This is not authorization to build a generic scheduler or generic job runtime.
-It is the minimum bounded live-ingest server loop for the first provider,
-instrument and schema.
+---
 
-### P2 - Long-Gap Remediation Path
+## Acceptance Criteria
 
-ADR-0040 and ADR-0042 intentionally permit only bounded provider
-reconciliation. If the last durable `TradeKeyV1` is outside the bounded recent
-provider evidence, the system must record explicit non-complete coverage and
-must not claim lossless continuity.
+`Wave 4 — Strategy & Deterministic Replay v1` is complete only when all of the following are observably true:
 
-Issue #110 disposed the earlier evidence search as
-`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`. Production readiness does not erase
-that result. It promotes the missing path into an explicit blocker:
+1. **Temporal Correctness**: `DecisionIntent` generation rejects any feature, label, or market input whose availability timestamp is later than `decision_time`.
+2. **Learner Agnosticism**: `DecisionIntent` conforms strictly to ADR-0009 and is identical in contract regardless of whether produced by rules, heuristics, or future models.
+3. **Execution Invariants**: `Order` and `Fill` state transitions follow an explicit, fail-closed state machine; illegal state transitions (e.g. fill after cancel, duplicate fill) raise explicit domain errors.
+4. **Economic Accounting Conservation**: `Portfolio/Ledger` maintains strict double-entry accounting invariants:
+   $$\text{Equity}_t = \text{Cash}_t + \sum \text{PositionValue}_{i,t}$$
+   $$\Delta \text{Equity} = \text{RealizedPnL} + \Delta \text{UnrealizedPnL} - \text{Fees}$$
+5. **Deterministic Replay Reproducibility**: Given an identical tuple $(\text{Dataset}, \text{StrategySpec}, \text{ExecutionSpec})$, the replay runtime produces identical order IDs, fill timestamps, prices, and final ledger state across repeated executions and platforms.
+6. **DataGateway Seam Preservation**: The strategy and replay engines consume canonical market data exclusively via `DataGateway.scan()` and do not bypass the access layer to inspect Parquet files directly.
+7. **Architectural Separation**: Quantitative business logic remains in domain and application modules; no strategy or execution logic resides in API or client packages.
+8. **Verification Gate**: The repository verification gate (`tools/run_tests.py` and `tools/check_markdown_links.py`) passes with 100% green status.
+9. **Governance Reconciliation**: Governance documents are reconciled to record Wave 4 as `COMPLETE` and Milestone `V7` as `COMPLETE`.
 
-```text
-long gap detected
--> interruption evidence recorded
--> non-complete coverage remains visible
--> authoritative repair source/path is selected only with evidence
--> A10 repair candidate/cutover is used when the interval can be proven
--> repaired interval is re-verified before any complete claim
-```
+---
 
-If no authoritative source/path can prove the missing interval, the production
-server may continue with a new governed live segment, but the gap remains
-explicit and non-complete.
+## Out of Scope
 
-### P3 - Source Authority For Missing Data
+Do not pull into Wave 4 unless an authorized contract evolution explicitly requires it:
 
-A candidate repair source is not enough. Before implementation can fill a long
-gap, the selected source must prove:
+- Live broker connection or exchange order execution (belongs to live execution phase).
+- Live consumer cursor `B06` (remains independent Data Access atom).
+- Multi-asset portfolio rebalancing / execution `H06` (deferred until concrete multi-asset scope).
+- Supervised ML training pipelines `I04`/`I05` (Wave 5).
+- Strategic RL (`I06`) or Execution RL (`I07`) (Wave 11 / Wave 12).
+- API transport `J02` and UI/CLI clients `J04`–`J06` (Wave 7).
+- Paper / shadow trading runtime `J07` and live product mode `J08` (Wave 8).
+- Deletion / retention authority `K09` or tier relocation `K07`.
 
-- exact interval support for the missing live interval;
-- source identity and provenance;
-- mapping to Bybit `trade-v1`, `TradeKeyV1` and canonical ordering without
-  invented sequence continuity;
-- overlap or other strong evidence that archive/recent/live semantics converge;
-- failure behavior when the source cannot prove completeness.
+---
 
-Bybit historical archives may be re-investigated, but only observed,
-attributable evidence may change the prior #110 disposition.
-
-### P4 - Gap State Machine And Repair Queue
-
-The product needs a governed operational state path, not scattered comments.
-At minimum, future implementation must model:
-
-```text
-CONTINUOUS
-RESTART_RECONCILING
-GAP_DETECTED
-GAP_RECORDED_NON_COMPLETE
-REPAIR_SOURCE_UNPROVEN
-REPAIR_CANDIDATE_PENDING
-REPAIR_CUTOVER_COMPLETE
-RESUMED_WITH_EXPLICIT_GAP
-```
-
-Names are implementation-local, but the observable states and fail-closed
-transitions are not. No state may silently turn an unresolved gap into complete
-coverage.
-
-### P5 - Publication, Checkpoint And Repair Ordering
-
-Production operation must preserve all existing invariants:
-
-```text
-canonical publication durable
-        BEFORE
-checkpoint advance
-
-repair candidate validated
-        BEFORE
-repair cutover
-
-gap support proven
-        BEFORE
-coverage complete assertion
-```
-
-Restart reconciliation may publish recovered records and advance the
-checkpoint, as proven by PR #122, but long-gap repair must still pass through a
-governed A10-compatible evidence path.
-
-### P6 - Operational Runbook And Observability
-
-K03 provides the foundation, but production readiness requires the selected
-server to expose enough operator evidence for:
-
-- current session state and subscription health;
-- last durable checkpoint identity and generation;
-- last durable canonical trade key;
-- publication/certification/catalog failures;
-- reconnect and bounded reconciliation outcomes;
-- explicit gap intervals and repair state;
-- pressure/capacity decisions that affect ingestion;
-- proof that the service is running under the K02 identity and expected
-  catalog/storage authority.
-
-The exact logging, service manager and alerting technology remain
-deployment-local unless a future ADR freezes them.
-
-### P7 - Governance State Reconciliation
-
-Status of each production-readiness governance action:
-
-- update K10 state from pending proof to complete where PR #122 is
-  sufficient -- **done**, this branch (`OPEN_DECISIONS.md`, `CAPABILITY_MAP.md`,
-  `CAPABILITY_DAG.md`, `ROADMAP.md`);
-- keep DG-B long-gap remediation visible as a production-readiness
-  blocker -- **holds**, no governance file weakens the #110 disposition;
-- classify the bounded ingest server loop so it is not hidden behind generic
-  `J03` job runtime or accidentally confused with `J08` live product mode --
-  **done** by ADR-0043 and the `quant_platform.application.live_ingest_server`
-  owner/CLI boundary;
-- keep B06, K07 and K09 outside this v1 ingest-server scope unless a concrete
-  blocker proves they are required -- **holds**, a standing constraint on
-  every step below, not a one-time action.
-
-## Governance Map Generation Requirements
-
-This scope is not the full execution map. The execution map belongs to the
-governance layer derived from this scope. That derived map must be complete
-enough to generate the next issues without re-litigating the scope boundary.
-
-At minimum, the governance map must classify:
-
-- credited state that future issues must reuse rather than reimplement;
-- stale governance state that must be reconciled before implementation claims
-  rely on it;
-- production-readiness blockers created by this scope;
-- design gates that must be resolved before code changes;
-- implementation atoms that can be assigned as bounded issues;
-- real-server proof atoms and the exact evidence each one must produce;
-- closeout/reconciliation atoms for final governance updates;
-- explicit exclusions that must not become implicit issue work.
-
-Each generated issue must name the slice it comes from, the authority it starts
-from, the artifact it is expected to produce, and the acceptance evidence that
-would close it. The map may sequence or split the work more finely than this
-scope, but it may not weaken the stop conditions, convert exclusions into
-implicit work, or treat readiness language as completion evidence.
-
-This map was materialized in `docs/product/CAPABILITY_DAG.md`'s "Live Ingest
-Server Production Readiness v1 — derived governance map" section and generated
-issues #126, #127, #128, #135 and #129. At this closeout it is retired as a
-completed temporary scope map, not a permanent addition to the atom DAG.
-
-## Active Path
-
-One bounded mutation slice remains active at a time. Each step below states
-the finding(s) it resolves (`P1`-`P7`) and the exit criterion that authorizes
-moving to the next step; none of this is concurrent authorization to start a
-later step early.
-
-```text
-1. Governance and scope formalization                              DONE (#123)
-   resolves: P7 (K10 state correction)
-   audit current authority
-   -> record production-readiness gaps (P1-P7)
-   -> open the dedicated remote branch/PR (#123)
-   -> reconcile OPEN_DECISIONS/CAPABILITY_MAP/CAPABILITY_DAG/ROADMAP
-      to PR #122's evidence
-   exit: this branch merges to `main` with all four governance files
-   and SCOPE.md internally consistent (no remaining K10 PARTIAL/pending
-   phrasing); planning-only, no design questions decided here.
-        ↓
-2. Ingest server v1 design gate                                    DONE (#126)
-   resolves: P1, remainder of P7 (loop classification)
-   define the bounded daemon/service composition (single owning module,
-   entrypoint, and how it composes existing A11/K10 functions)
-   -> define operator/runbook evidence (binds to P6)
-   -> prove no generic scheduler/framework is required
-   -> name the loop's capability atom (if any) without implying J03/J08
-   exit: a written design (ADR or design note, per repo convention) that
-   an implementation slice can execute without further semantic decisions;
-   this step decides, it does not implement.
-        ↓
-3. Long-gap remediation design gate                                DONE (#127)
-   resolves: P2, P3, P4
-   re-audit authoritative repair sources (P3 criteria)
-   -> decide source authority or retain explicit-gap-only behavior
-   -> bind the path to A10 repair semantics
-   -> define the gap state machine's accepted states/transitions (P4)
-   exit: a written design that either names a proven repair source/path or
-   explicitly retains explicit-gap-only behavior with no repair source;
-   either outcome is a valid close of this gate.
-        ↓
-4. Implementation slice: bounded ingest server loop                 DONE (#126)
-   resolves: P1, P5 (publication-before-checkpoint), P6
-   run under K02
-   -> use A11/K10/A10/K03/K05/K06 authorities
-   -> preserve publication-before-checkpoint
-        ↓
-5. Implementation slice: long-gap state and repair orchestration    DONE (#127)
-   resolves: P2, P3, P4, P5 (repair ordering)
-   detect/record long gap
-   -> enqueue or represent repair intent
-   -> prove gap stays explicit until repair evidence passes
-        ↓
-6. Real-server production-readiness proof                          DONE (#128, #135)
-   deploy/run bounded server
-   -> stop/restart
-   -> bounded reconcile
-   -> forced long-gap scenario or explicitly accepted equivalent simulation
-   -> verify no silent loss, duplicate or false complete coverage
-        ↓
-7. Governance closeout                                              DONE (#129)
-   reconcile Capability Map / DAG / Roadmap / Open Decisions
-   -> archive this scope per the normal versioned-scope convention
-```
-
-Closed-scope evidence:
-
-- Step 2 and step 4: ADR-0043 plus `quant_platform.application.live_ingest_server`
-  and `tools/live_ingest_server.py` provide the bounded server owner and normal
-  operating loop.
-- Step 3 and step 5: ADR-0044 plus
-  `quant_platform.application.live_gap_orchestration` record unresolved long
-  gaps explicitly and fail closed instead of claiming completeness without
-  repair evidence.
-- Step 6: `docs/integration/LIPR05_LIVE_INGEST_SERVER_PRODUCTION_READINESS_PROOF.md`
-  and `docs/integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md` record
-  the target-host proof, including supervised start, healthy acquire,
-  clean stop, restart reconciliation, checkpoint advancement and DataGateway
-  readback PASS.
-
-## Acceptance
-
-`Live Ingest Server Production Readiness v1` is DONE because all of the
-following are observably true for the selected first Bybit BTCUSDT producer
-operating path:
-
-1. The live-ingest server has one bounded production owner and does not rely on
-   manual proof scripts as the normal operating path.
-2. The server runs under the accepted K02 least-privilege identity and does not
-   gain backup, deletion, repository or administrative authority.
-3. A11 canonicalization/publication semantics are preserved for real Bybit
-   BTCUSDT public trades.
-4. K10 checkpoint advancement remains strictly after durable canonical
-   publication.
-5. Stop/restart/reconcile continues to prove one canonical history with
-   idempotent duplicates and no silent loss.
-6. Long-gap detection records explicit non-complete coverage when bounded
-   reconciliation cannot prove continuity.
-7. No unresolved long gap is claimed complete merely from missing `seq`,
-   elapsed wall time, absence of trades, local buffer contents or operator
-   convenience.
-8. Any long-gap repair uses an authoritative source/path proven for the exact
-   missing support and flows through A10-compatible candidate/cutover evidence.
-9. If no repair source/path is proven, the server can continue from a new
-   governed live segment while preserving the explicit gap.
-10. Operators can inspect session, publication, checkpoint, gap, repair,
-    pressure and authority evidence through documented runbook steps.
-11. Production-readiness proof runs on the target server or an explicitly
-    accepted equivalent and records all material evidence paths.
-12. Governance files are reconciled to the strongest propositions actually
-    proven, without declaring J08 live product mode, B06 live cursor, K07 tier
-    relocation or K09 deletion authority complete by implication.
-
-## Out Of Scope
-
-Do not pull into this scope unless a concrete acceptance blocker proves
-otherwise:
-
-- live trading or order execution;
-- paper/shadow mode;
-- Strategy, Replay, Execution, Portfolio, ML or RL;
-- B06 live DataGateway consumer cursor;
-- J02 API transport or App/TUI/CLI work;
-- L1/L2/L3/MBO acquisition;
-- second venue or generic provider resolution;
-- generic job scheduler, broker, workflow engine or distributed runtime;
-- HA/distributed consensus/off-site DR;
-- K07 tier relocation;
-- K09 retention/deletion authority;
-- speculative long-gap filling without attributable source evidence;
-- mutation of `main` except through reviewed Git integration.
-
-## Stop / Escalation
+## Stop / Escalation Conditions
 
 Stop and report rather than implement if:
 
-- current provider evidence contradicts ADR-0040 or ADR-0042;
-- production readiness would require weakening explicit coverage/gap semantics;
-- long-gap repair cannot prove source completeness for the exact missing
-  interval;
-- the ingest identity would need broader filesystem/database/backup authority
-  than ADR-0041 permits;
-- satisfying the server loop requires silently activating a generic scheduler,
-  B06, K07, K09, J08 or another excluded capability;
-- governance documents conflict with accepted ADRs/contracts in a way this
-  scope cannot resolve without a new decision.
-
-## Verification Proportionality
-
-Use targeted verification while designing and implementing each bounded slice.
-Run the repository-required verification gate once a stable candidate exists.
-
-Real-server evidence is required only for claims that depend on the real
-runtime, permissions, provider behavior or storage/catalog topology. Hermetic
-tests remain appropriate for deterministic state machines, repair semantics and
-failure matrices.
-
-## Current Branch Intent
-
-This branch now carries the full Live Ingest Server Production Readiness v1
-scope result into the PR targeting `main`: the initial governance scope, the
-ADR-0043/ADR-0044 decisions, the bounded server loop, long-gap orchestration,
-supervised deployment artifacts, target-host proof evidence and this closeout
-reconciliation. Merging this branch to `main` promotes the first Bybit BTCUSDT
-live-ingest producer operating path, while preserving the explicit exclusions
-above.
+- A proposed strategy or replay mechanism requires information not causally available at decision time.
+- An execution or ledger calculation produces non-deterministic floating-point discrepancies across platforms.
+- Satisfying replay requirements requires bypassing `DataGateway` or mutating frozen data-plane contracts (`trade-v1`, `CandleDefinition v1`).
+- The execution engine cannot achieve conflict resolution without introducing non-reproducible arbitrary race conditions.
