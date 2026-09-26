@@ -170,6 +170,56 @@ class BybitLiveSourceV1Tests(unittest.TestCase):
                 cutover_key=trade_key_v1(historical[-1]),
             )
 
+    def test_trade_message_before_subscribe_ack_is_treated_as_implicit_subscription(self):
+        # Bybit does not guarantee the subscribe ack is delivered before the
+        # first topic push; a client that has already processed `connected`
+        # but not yet the ack may see a real trade message first. That is an
+        # ordinary wire-ordering race, not a protocol violation -- it must
+        # not raise BybitLiveSourceError.
+        tracker = LiveSessionTracker()
+        tracker.connected(conn_id="c1")
+        batch = canonicalize_bybit_live_message(live_message())
+        tracker.observed_message(batch)
+
+        self.assertEqual(tracker.state, SessionState.ACQUIRING)
+        evidence = tracker.evidence()
+        self.assertEqual(evidence.accepted_records, 1)
+        self.assertFalse(evidence.interruptions)
+        states = tuple(event.state for event in evidence.events)
+        self.assertIn(SessionState.SUBSCRIBED, states)
+
+    def test_late_subscribe_ack_after_implicit_message_is_confirmed_not_rejected(self):
+        # The real ack can still arrive afterward; it must be accepted as
+        # confirmation of the same subscription rather than raising because
+        # the state machine already moved past CONNECTED.
+        tracker = LiveSessionTracker()
+        tracker.connected(conn_id="c1")
+        batch = canonicalize_bybit_live_message(live_message())
+        tracker.observed_message(batch)
+
+        tracker.subscribed(topic="publicTrade.BTCUSDT", conn_id="c1")
+
+        self.assertEqual(tracker.state, SessionState.ACQUIRING)
+        evidence = tracker.evidence()
+        self.assertTrue(evidence.can_assert_complete_interval)
+
+    def test_late_subscribe_ack_for_a_different_topic_still_fails_closed(self):
+        tracker = LiveSessionTracker()
+        tracker.connected(conn_id="c1")
+        batch = canonicalize_bybit_live_message(live_message())
+        tracker.observed_message(batch)
+
+        with self.assertRaises(BybitLiveSourceError):
+            tracker.subscribed(topic="publicTrade.ETHUSDT", conn_id="c1")
+
+    def test_message_before_any_connection_event_still_fails_closed(self):
+        # Only the CONNECTED-before-ack ordering is a legitimate race; a
+        # message with no connection event at all remains a hard error.
+        tracker = LiveSessionTracker()
+        batch = canonicalize_bybit_live_message(live_message())
+        with self.assertRaises(BybitLiveSourceError):
+            tracker.observed_message(batch)
+
     def test_session_disconnect_makes_coverage_non_complete(self):
         tracker = LiveSessionTracker()
         tracker.connected(conn_id="c1")
