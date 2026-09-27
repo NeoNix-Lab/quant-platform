@@ -31,6 +31,8 @@ DG-H K08 backup / restore v1                         FROZEN / COMPLETE
 DG-H K10 checkpoint / recovery v1                    FROZEN / COMPLETE
 Live ingest server composition v1                    FROZEN / COMPLETE
 Live ingest long-gap orchestration v1                FROZEN / COMPLETE
+DG-F G04 session/cooldown semantics v1              FROZEN / COMPLETE — ADR-0045
+DG-F H03 execution-conflict semantics v1            FROZEN / COMPLETE — ADR-0046
 ```
 
 The completed two-stage Producer–Consumer Conformity Gate remains governed by [ADR-0023](../decisions/ADR-0023-producer-consumer-conformity-gate-v1.md). Its gate states above are historical accepted foundation, not live decisions.
@@ -53,7 +55,9 @@ Resolved architecture includes:
 - live-ingest runtime identity/least-privilege semantics under [ADR-0041](../decisions/ADR-0041-live-ingest-runtime-identity-v1.md);
 - live-ingest checkpoint/recovery invariants under [ADR-0042](../decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md);
 - live-ingest server composition under [ADR-0043](../decisions/ADR-0043-live-ingest-server-composition-v1.md);
-- live-ingest long-gap orchestration under [ADR-0044](../decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md).
+- live-ingest long-gap orchestration under [ADR-0044](../decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md);
+- G04 session/calendar/cooldown semantics under [ADR-0045](../decisions/ADR-0045-session-calendar-and-cooldown-semantics-v1.md);
+- H03 execution-conflict and intra-bar fill semantics under [ADR-0046](../decisions/ADR-0046-execution-conflict-and-intra-bar-fill-model-v1.md).
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
@@ -272,20 +276,6 @@ Accepted F08 v1 decisions include:
 - Validation remains the runtime owner and consumes opaque cross-owner evidence without loosening the package DAG.
 
 DG-E is therefore complete through F08. No future scope should reopen these semantics absent contradictory accepted authority.
-
-## DG-F — Strategy / Execution semantics
-
-Blocks `G04,H03` when their Strategy/Replay path is selected.
-
-Resolve with pinned/adversarial vectors:
-
-- session calendars, DST and session-boundary behavior;
-- cooldown/eligibility semantics;
-- stop/target/bracket/OCO behavior;
-- same-bar/intrabar conflicts;
-- partial fills and conflict ordering.
-
-Keep Strategy upstream of Execution. Do not let execution simulation redefine strategy semantics.
 
 ## DG-G — Experiment / RL / Jobs
 
