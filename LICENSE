@@ -1,8 +1,26 @@
-Proprietary Software
+Proprietary Software — Source-Available License
 
-Copyright © 2026. All Rights Reserved.
+Copyright © 2024–2026 NeoNix-Lab. All rights reserved.
 
-This source code and associated documentation are proprietary.
-No permission is granted to copy, modify, distribute, sublicense,
-publish, or create derivative works except with prior written authorization
-from the copyright holder.
+This repository and its associated documentation, specifications, schemas,
+and source code are proprietary. The source code is made publicly visible
+on GitHub solely for the purposes of code inspection, review, and personal
+educational evaluation.
+
+No license or right is granted to any person or entity to:
+1. Copy, reproduce, distribute, or publicly display this software or any
+   portion thereof;
+2. Modify, adapt, translate, reverse engineer, or create derivative works;
+3. Sublicense, lease, sell, or commercially exploit this software in any form;
+4. Deploy, run, or utilize this software for automated quantitative trading,
+   commercial asset management, or SaaS services;
+
+without the express prior written authorization of the copyright holder.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
