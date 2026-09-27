@@ -70,6 +70,7 @@ OWNERS = {
     "quant_platform.strategy": "strategy",
     "quant_platform.execution": "execution",
     "quant_platform.portfolio": "portfolio",
+    "quant_platform.replay": "replay",
     "quant_platform.source_adapters": "source",
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
@@ -100,6 +101,7 @@ ALLOWED = {
     "strategy": {"strategy", "shared"},
     "execution": {"execution", "strategy", "shared"},
     "portfolio": {"portfolio", "execution", "shared"},
+    "replay": {"replay", "access", "strategy", "execution", "portfolio", "shared"},
     "source": {"source", "producer", "shared"},
     # The application seam composes capabilities and owns no domain semantics.
     # Nothing may depend on it: it is the top of the owner graph.
