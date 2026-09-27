@@ -58,15 +58,15 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Validation | Availability/purge/embargo | FROZEN | COMPLETE | Validation | F06 | ADR-0031. |
 | Validation | Labels/censoring/lockbox | FROZEN | COMPLETE | Validation | F07 | ADR-0036; outcome-derived labels, exact target support and terminal lockbox implemented, issue #96/PR #99. |
 | Validation | DSR/PBO | FROZEN | COMPLETE | Research/Validation | F08 | ADR-0037; Validation-owned DSR-L/full-CSCV runtime implemented, issue #98/PR #104. |
-| Strategy | StrategySpec/DecisionIntent | RESOLVED | MISSING | Strategy | G01 | Strategy remains upstream of execution. |
-| Strategy | Policy composition | RESOLVED | MISSING | Strategy | G02 | Deterministic composition required. |
-| Strategy | Risk/sizing | RESOLVED | MISSING | Strategy | G03 | No client-owned logic. |
-| Strategy | Session/cooldown semantics | OPEN_BLOCKING | MISSING | Strategy | G04 | DG-F. |
-| Execution | Order/Fill lifecycle | RESOLVED | MISSING | Execution | H01 | Explicit state transitions. |
-| Execution | Cost/synthetic-fill model | RESOLVED | MISSING | Execution | H02 | Model version is provenance. |
-| Execution | Conflict/partial-fill semantics | OPEN_BLOCKING | MISSING | Execution | H03 | DG-F. |
-| Portfolio | Portfolio/ledger | RESOLVED | MISSING | Portfolio | H04 | Deterministic accounting. |
-| Execution | Deterministic replay | RESOLVED | MISSING | Execution | H05 | Uses canonical data/access; no storage bypass. |
+| Strategy | StrategySpec/DecisionIntent | RESOLVED | COMPLETE | Strategy | G01 | Strategy remains upstream of execution; integrated in Wave 4. |
+| Strategy | Policy composition | RESOLVED | COMPLETE | Strategy | G02 | Deterministic composition integrated in Wave 4. |
+| Strategy | Risk/sizing | RESOLVED | COMPLETE | Strategy | G03 | Reproducible capital allocation and sizing integrated in Wave 4. |
+| Strategy | Session/cooldown semantics | FROZEN | COMPLETE | Strategy | G04 | ADR-0045 freezes session/calendar/cooldown semantics. |
+| Execution | Order/Fill lifecycle | RESOLVED | COMPLETE | Execution | H01 | Explicit state transitions integrated in Wave 4. |
+| Execution | Cost/synthetic-fill model | RESOLVED | COMPLETE | Execution | H02 | Fee/slippage/fill model integrated in Wave 4. |
+| Execution | Conflict/partial-fill semantics | FROZEN | COMPLETE | Execution | H03 | ADR-0046 freezes execution conflict and intra-bar fill semantics. |
+| Portfolio | Portfolio/ledger | RESOLVED | COMPLETE | Portfolio | H04 | Deterministic accounting integrated in Wave 4. |
+| Execution | Deterministic replay | RESOLVED | COMPLETE | Execution | H05 | Uses `DataGateway.scan()`; PR #160 integrated H05 and PR #161/#146 proved V7. |
 | Portfolio | Multi-asset execution | OPEN_DEFERABLE | MISSING | Portfolio | H06 | Wait for concrete product scope. |
 | Experiments | Study/Trial/Run/Artifact semantic model | RESOLVED | COMPLETE | Experiment System | I01 | One canonical experiment identity family. |
 | Experiments | Canonical experiment persistence | RESOLVED | COMPLETE | Experiment System | I02 | One restart-safe canonical persistence model. |
@@ -93,7 +93,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Backup/restore proof | FROZEN | COMPLETE | Operations | K08 | ADR-0039; PR #111 implements identity-bound backup/isolated restore and PR #113 supplies the previously pending real deployment-independence evidence. |
 | Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
 | Operations | Checkpoint/recovery | FROZEN | COMPLETE | Operations/Data Plane | K10 | ADR-0042; PR #114 implements persisted checkpoint/recovery and the full hermetic proof matrix; PR #122 supplies the bounded real-server restart/deployed checkpoint-path proof (`K10_REAL_RESTART_PROOF: PASS`). |
-| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Canonical authority reconciled through the integrated Live Ingest implementation state by governance issue #117. |
+| Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Canonical authority reconciled through Wave 4 closeout by governance issue #147. |
 
 ## Gate / evidence state
 
@@ -108,7 +108,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | ASS-02 semantic selector resolution (C02) | COMPLETE | PR #30 integrated; reviewed exact-head CI passed. |
 | ASS-02 result/error translation (C03) | COMPLETE | PR #41 integrated reviewed head `f382a2e6...`; integrity #91 passed on exact head. |
 | ASS-02 in-process Application vertical | COMPLETE | C02 + C03 complete; does not imply C05/C04/API/jobs/clients. |
-| K11 Governance-state consistency | COMPLETE | Canonical authority reconciled through the integrated Live Ingest implementation state by governance issue #117. |
+| K11 Governance-state consistency | COMPLETE | Canonical authority reconciled through Wave 4 closeout by governance issue #147. |
 | E02 FeatureDefinition v1 semantic foundation | COMPLETE | ADR-0026 accepted; immutable runtime model and targeted tests implemented. |
 | D06 FootprintDefinition v1 representation foundation | COMPLETE | ADR-0027 accepted; immutable historical FINAL Footprint v1 runtime implemented. |
 | B04 Non-contiguous coverage reads v1 | COMPLETE | ADR-0029 accepted; explicit `ALLOW_PARTIAL` DataGateway policy implemented. |
@@ -126,15 +126,14 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | K02 live-ingest runtime identity v1 | COMPLETE | ADR-0041; PR #113 real-server least-privilege, storage and database authority proof. |
 | K10 live-ingest checkpoint/recovery v1 | COMPLETE | ADR-0042; PR #114 hermetic implementation/proof matrix integrated; PR #122 closes the real-server restart/deployed checkpoint-path proof (issues #109, #121). |
 | Live Ingest Server Production Readiness v1 | COMPLETE | Closed for the first Bybit BTCUSDT producer operating path by ADR-0043/ADR-0044, the supervised systemd path, target-host proof and DataGateway readback PASS; does not complete B06, K07, K09, J08 or live product mode. |
+| Wave 4 Strategy / Replay | COMPLETE | `G01`-`G04` and `H01`-`H05` integrated; G04/H03 frozen by ADR-0045/ADR-0046; PR #161 / issue #146 records Golden V7 deterministic replay PASS. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
 
 ## Current frontier
 
-PR #116 integrated the Live Ingest implementation branch into `main`. K08, A11, K02 and K10 are now `COMPLETE`: PR #122 (issues #109, #121) supplies the previously pending K10 real-server restart/deployed-checkpoint proof.
-
-**Live Ingest Server Production Readiness v1** is now closed in `SCOPE.md` for the first Bybit BTCUSDT producer operating path: ADR-0043 defines the bounded persistent server loop, ADR-0044 defines the governed long-gap explicit-gap path, and the supervised target proof records start, stop, restart, reconciliation and DataGateway readback PASS.
+Wave 4 Strategy / Replay is closed on `implement/wave-4`: ADR-0045 and ADR-0046 resolve DG-F, `G01`-`G04` and `H01`-`H05` are implementation complete, PR #160 integrates H05, and PR #161 / issue #146 records Golden V7 deterministic replay PASS on canonical Bybit BTCUSDT data.
 
 The DG-B long-gap remediation proposition remains disposed `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` (#110): A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval filled/lossless until an authoritative repair source/path proves the missing support. ADR-0044 carries this forward as accepted fail-closed behavior rather than reopening DG-B.
 
