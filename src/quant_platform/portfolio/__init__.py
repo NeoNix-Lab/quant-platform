@@ -614,6 +614,8 @@ class PortfolioLedger:
 
         total = self.cash
         for instrument, position in self.positions.items():
+            if position.long.quantity == 0 and position.short.quantity == 0:
+                continue  # fully closed: no live exposure, no mark price needed
             if instrument not in mark_prices:
                 raise PortfolioError(f"missing mark price for instrument: {instrument}")
             price = _decimal(mark_prices[instrument], "mark_price", allow_zero=False)

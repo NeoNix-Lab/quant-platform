@@ -296,6 +296,25 @@ class PortfolioLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(PortfolioError, "missing mark price"):
             ledger.mark_to_market_equity({})
 
+    def test_fully_closed_instrument_does_not_require_a_mark_price(self):
+        ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
+        entry = make_order(side=OrderSide.BUY, quantity="0.1", reduce_only=False, at=AS_OF, provenance="test:open")
+        ledger = ledger.apply_fill(
+            make_fill(order=entry, price="50000", quantity="0.1", fee="0", at=later(1), label="open"), entry
+        )
+        exit_order = make_order(
+            side=OrderSide.SELL, quantity="0.1", reduce_only=True, at=later(1), provenance="test:close"
+        )
+        ledger = ledger.apply_fill(
+            make_fill(order=exit_order, price="50000", quantity="0.1", fee="0", at=later(2), label="close"),
+            exit_order,
+        )
+
+        self.assertEqual(Decimal("0"), ledger.positions["BTCUSDT"].long.quantity)
+        # No mark price supplied for BTCUSDT at all: must not raise, since
+        # there is no live exposure left to value.
+        self.assertEqual(ledger.book_equity, ledger.mark_to_market_equity({}))
+
     def test_ledger_identity_is_deterministic_for_identical_history(self):
         def build() -> PortfolioLedger:
             ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)

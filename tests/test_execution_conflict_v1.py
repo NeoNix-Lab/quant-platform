@@ -163,6 +163,29 @@ class IntraBarResolutionTests(unittest.TestCase):
 
         self.assertEqual((), resolved)
 
+    def test_same_role_tie_break_is_independent_of_input_list_order(self):
+        # Two STOP_LOSS triggers in the same conflict_group, both crossed by
+        # the same event: the winner must be a pure function of trigger
+        # content, never of the order `pending` happened to be passed in.
+        stop_a = make_order(side=OrderSide.SELL, provenance="test:stop-a")
+        stop_b = make_order(side=OrderSide.SELL, provenance="test:stop-b")
+        trigger_a = PendingTrigger(
+            order=stop_a, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
+            role=TriggerRole.STOP_LOSS, conflict_group="pos.long",
+        )
+        trigger_b = PendingTrigger(
+            order=stop_b, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
+            role=TriggerRole.STOP_LOSS, conflict_group="pos.long",
+        )
+        events = (event(1, "t1", "48000"),)
+
+        resolved_ab = resolve_intra_bar_triggers((trigger_a, trigger_b), events)
+        resolved_ba = resolve_intra_bar_triggers((trigger_b, trigger_a), events)
+
+        self.assertEqual(1, len(resolved_ab))
+        self.assertEqual(1, len(resolved_ba))
+        self.assertIs(resolved_ab[0].trigger.order, resolved_ba[0].trigger.order)
+
 
 class OcoGroupTests(unittest.TestCase):
     def test_any_fill_cascades_cancellation_to_every_sibling(self):
@@ -217,6 +240,34 @@ class OcoGroupTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ExecutionError, "is not a member of this OCO group"):
             group.apply_fill(foreign_fill)
+
+    def test_cascade_rejects_a_never_acknowledged_sibling_instead_of_crashing(self):
+        leg_a = make_order(side=OrderSide.BUY, provenance="test:leg-a", reduce_only=False)
+        never_acknowledged = Order.create(
+            instrument="BTCUSDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            quantity="1",
+            submitted_at=AS_OF,
+            provenance="test:leg-b-pending",
+            reduce_only=False,
+        )
+        self.assertEqual("PENDING_NEW", never_acknowledged.status.value)
+        group = OcoGroup.create("oco.btc.breakout", (leg_a, never_acknowledged))
+
+        fill = Fill.create(
+            order_id=leg_a.order_id,
+            fill_time=AS_OF,
+            price="50000",
+            quantity="1",
+            fee="1",
+            liquidity_role=LiquidityRole.TAKER,
+            source_evidence_identity="trade-v1:evidence",
+        )
+        updated = group.apply_fill(fill)
+
+        self.assertEqual("FILLED", updated.members[leg_a.order_id].status.value)
+        self.assertEqual("REJECTED", updated.members[never_acknowledged.order_id].status.value)
 
 
 class ExitLegManagerTests(unittest.TestCase):

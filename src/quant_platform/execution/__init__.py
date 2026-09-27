@@ -1024,6 +1024,18 @@ class TriggerEvent:
     price_event: PriceEvent
 
 
+def _trigger_sort_key(trigger: PendingTrigger) -> tuple[str, int, str, int, str]:
+    """Total, content-derived order: never depends on caller-supplied list order."""
+
+    return (
+        trigger.conflict_group,
+        _TRIGGER_ROLE_PRIORITY[trigger.role],
+        _decimal_string(trigger.trigger_price),
+        trigger.order.submitted_at.epoch_ns,
+        trigger.order.order_id,
+    )
+
+
 def resolve_intra_bar_triggers(
     pending: Iterable[PendingTrigger],
     events: Iterable[PriceEvent],
@@ -1032,15 +1044,18 @@ def resolve_intra_bar_triggers(
     SS1). A still-pending trigger fires on the first event that crosses its
     level. If more than one trigger *in the same conflict_group* fires on the
     exact same event, only the most conservative role fires (STOP_LOSS before
-    ENTRY before TAKE_PROFIT); the others remain pending for a later event --
-    never bar-level high/low heuristics, only the real reconstructed path.
+    ENTRY before TAKE_PROFIT); ties within the same role are broken by
+    ``_trigger_sort_key`` (trigger_price, then submitted_at, then order_id) --
+    never by caller-supplied list order. Losing candidates remain pending for
+    a later event -- never bar-level high/low heuristics, only the real
+    reconstructed path.
 
     Pure and deterministic: identical ``pending``/``events`` (in any input
     order) always produce the identical resolution sequence.
     """
 
     ordered_events = sorted(events, key=lambda event: event.sort_key)
-    remaining = list(pending)
+    remaining = sorted(pending, key=_trigger_sort_key)
     resolved: list[TriggerEvent] = []
     for event in ordered_events:
         if not remaining:
@@ -1052,12 +1067,29 @@ def resolve_intra_bar_triggers(
                 candidates_by_group.setdefault(trigger.conflict_group, []).append(trigger)
             else:
                 still_remaining.append(trigger)
-        for group_candidates in candidates_by_group.values():
-            winner = min(group_candidates, key=lambda trigger: _TRIGGER_ROLE_PRIORITY[trigger.role])
+        for group in sorted(candidates_by_group):
+            group_candidates = candidates_by_group[group]  # already sorted: see remaining's construction
+            winner, *losers = group_candidates
             resolved.append(TriggerEvent(trigger=winner, price_event=event))
-            still_remaining.extend(candidate for candidate in group_candidates if candidate is not winner)
-        remaining = still_remaining
+            still_remaining.extend(losers)
+        remaining = sorted(still_remaining, key=_trigger_sort_key)
     return tuple(resolved)
+
+
+def _withdraw_if_open(order: Order) -> Order:
+    """Terminate ``order`` if still open, using whichever transition is legal.
+
+    A never-acknowledged order (``PENDING_NEW``) cannot be cancelled -- only
+    ``NEW``/``REJECTED`` are legal next states for it -- so it is rejected
+    instead; an already-resting order (``NEW``/``PARTIALLY_FILLED``) is
+    cancelled as usual. A terminal order is returned unchanged.
+    """
+
+    if order.status is OrderStatus.PENDING_NEW:
+        return order.reject()
+    if order.is_open:
+        return order.cancel()
+    return order
 
 
 @dataclass(frozen=True, slots=True)
@@ -1117,7 +1149,7 @@ class OcoGroup:
         for order_id, order in self.members.items():
             if order_id == fill.order_id:
                 continue
-            updated_members[order_id] = order.cancel() if order.is_open else order
+            updated_members[order_id] = _withdraw_if_open(order)
         return OcoGroup(group_id=self.group_id, members=updated_members)
 
     def stable_dict(self) -> dict[str, Any]:
