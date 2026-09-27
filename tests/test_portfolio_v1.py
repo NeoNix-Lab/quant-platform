@@ -287,6 +287,64 @@ class PortfolioLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(PortfolioError, "must not precede the ledger's current state"):
             ledger.apply_fill(early_fill, order)
 
+    def test_ledger_refuses_duplicate_fill_identity(self):
+        ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
+        order = make_order(side=OrderSide.BUY, quantity="1", reduce_only=False, at=AS_OF, provenance="test:open")
+        fill = make_fill(order=order, price="100", quantity="1", fee="0", at=later(1), label="open")
+
+        ledger = ledger.apply_fill(fill, order)
+
+        with self.assertRaisesRegex(PortfolioError, "fill_id was already consumed"):
+            ledger.apply_fill(fill, order)
+
+    def test_ledger_refuses_fill_that_h01_order_state_machine_rejects(self):
+        ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
+        order = make_order(side=OrderSide.BUY, quantity="1", reduce_only=False, at=AS_OF, provenance="test:open")
+        oversized = make_fill(order=order, price="100", quantity="2", fee="0", at=later(1), label="oversized")
+
+        with self.assertRaisesRegex(PortfolioError, "order fill admission failed: fill would exceed order quantity"):
+            ledger.apply_fill(oversized, order)
+
+        canceled = order.cancel()
+        valid_shape_fill = make_fill(order=canceled, price="100", quantity="1", fee="0", at=later(1), label="canceled")
+        with self.assertRaisesRegex(PortfolioError, "order fill admission failed: cannot apply fill"):
+            ledger.apply_fill(valid_shape_fill, canceled)
+
+    def test_ledger_accepts_partial_remainder_only_with_updated_order_state(self):
+        ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
+        order = make_order(side=OrderSide.BUY, quantity="1", reduce_only=False, at=AS_OF, provenance="test:open")
+        first_fill = make_fill(order=order, price="100", quantity="0.4", fee="0", at=later(1), label="partial-1")
+        ledger = ledger.apply_fill(first_fill, order)
+        partially_filled_order = order.apply_fill(first_fill)
+
+        too_large_remainder = make_fill(
+            order=partially_filled_order, price="100", quantity="0.7", fee="0", at=later(2), label="partial-too-large"
+        )
+        with self.assertRaisesRegex(PortfolioError, "order fill admission failed: fill would exceed order quantity"):
+            ledger.apply_fill(too_large_remainder, partially_filled_order)
+
+        final_fill = make_fill(
+            order=partially_filled_order, price="100", quantity="0.6", fee="0", at=later(2), label="partial-2"
+        )
+        ledger = ledger.apply_fill(final_fill, partially_filled_order)
+
+        self.assertEqual(Decimal("1.0"), ledger.positions["BTCUSDT"].long.quantity)
+        self.assertEqual((first_fill.fill_id, final_fill.fill_id), ledger.consumed_fill_ids)
+
+    def test_fill_settlement_transactions_are_bound_to_fill_evidence(self):
+        ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
+        first_order = make_order(side=OrderSide.BUY, quantity="0.1", reduce_only=False, at=AS_OF, provenance="test:one")
+        second_order = make_order(side=OrderSide.BUY, quantity="0.1", reduce_only=False, at=AS_OF, provenance="test:two")
+        first_fill = make_fill(order=first_order, price="50000", quantity="0.1", fee="1", at=later(1), label="same")
+        second_fill = make_fill(order=second_order, price="50000", quantity="0.1", fee="1", at=later(1), label="same")
+
+        ledger = ledger.apply_fill(first_fill, first_order)
+        ledger = ledger.apply_fill(second_fill, second_order)
+
+        self.assertNotEqual(ledger.transactions[1].transaction_id, ledger.transactions[2].transaction_id)
+        self.assertEqual(first_fill.fill_id, ledger.transactions[1].evidence["fill_id"])
+        self.assertEqual(second_fill.fill_id, ledger.transactions[2].evidence["fill_id"])
+
     def test_missing_mark_price_is_refused(self):
         ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
         order = make_order(side=OrderSide.BUY, quantity="0.1", reduce_only=False, at=AS_OF, provenance="test:open")

@@ -49,10 +49,36 @@ def make_order(*, side: OrderSide, quantity: str = "1", provenance: str, reduce_
     ).acknowledge()
 
 
+def make_stop_order(*, side: OrderSide, stop_price: str, quantity: str = "1", provenance: str, reduce_only: bool = True) -> Order:
+    return Order.create(
+        instrument="BTCUSDT",
+        side=side,
+        order_type=OrderType.STOP_MARKET,
+        quantity=quantity,
+        stop_price=stop_price,
+        submitted_at=AS_OF,
+        provenance=provenance,
+        reduce_only=reduce_only,
+    ).acknowledge()
+
+
+def make_limit_order(*, side: OrderSide, limit_price: str, quantity: str = "1", provenance: str, reduce_only: bool = True) -> Order:
+    return Order.create(
+        instrument="BTCUSDT",
+        side=side,
+        order_type=OrderType.LIMIT,
+        quantity=quantity,
+        limit_price=limit_price,
+        submitted_at=AS_OF,
+        provenance=provenance,
+        reduce_only=reduce_only,
+    ).acknowledge()
+
+
 class IntraBarResolutionTests(unittest.TestCase):
     def test_resolves_in_strict_exchange_ts_trade_id_order(self):
-        stop = make_order(side=OrderSide.SELL, provenance="test:stop")
-        target = make_order(side=OrderSide.SELL, provenance="test:target")
+        stop = make_stop_order(side=OrderSide.SELL, stop_price="49000", provenance="test:stop")
+        target = make_limit_order(side=OrderSide.SELL, limit_price="51000", provenance="test:target")
         pending = (
             PendingTrigger(
                 order=stop, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
@@ -79,21 +105,21 @@ class IntraBarResolutionTests(unittest.TestCase):
         self.assertEqual("t3", resolved[1].price_event.trade_id)
 
     def test_conservative_tie_break_stop_loss_wins_over_take_profit_same_event(self):
-        stop = make_order(side=OrderSide.SELL, provenance="test:stop")
-        target = make_order(side=OrderSide.SELL, provenance="test:target")
-        # A single gap event crosses both levels at once (both AT_OR_ABOVE
-        # their own trigger price, so both are simultaneously triggerable).
+        stop = make_stop_order(side=OrderSide.SELL, stop_price="49000", provenance="test:stop")
+        target = make_limit_order(side=OrderSide.BUY, limit_price="49000", provenance="test:target")
+        # A single event can trigger unrelated canonical stop/target-shaped
+        # orders in the same conflict group; the conservative role still wins.
         pending = (
             PendingTrigger(
-                order=stop, trigger_price="49000", direction=TriggerDirection.AT_OR_ABOVE,
+                order=stop, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
                 role=TriggerRole.STOP_LOSS, conflict_group="pos.long",
             ),
             PendingTrigger(
-                order=target, trigger_price="51000", direction=TriggerDirection.AT_OR_ABOVE,
+                order=target, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
                 role=TriggerRole.TAKE_PROFIT, conflict_group="pos.long",
             ),
         )
-        events = (event(1, "t1", "60000"),)
+        events = (event(1, "t1", "48000"),)
 
         resolved = resolve_intra_bar_triggers(pending, events)
 
@@ -101,8 +127,8 @@ class IntraBarResolutionTests(unittest.TestCase):
         self.assertIs(stop, resolved[0].trigger.order)
 
     def test_unrelated_conflict_groups_do_not_suppress_each_other(self):
-        position_a_stop = make_order(side=OrderSide.SELL, provenance="test:a-stop")
-        position_b_target = make_order(side=OrderSide.BUY, provenance="test:b-target")
+        position_a_stop = make_stop_order(side=OrderSide.SELL, stop_price="49000", provenance="test:a-stop")
+        position_b_target = make_limit_order(side=OrderSide.BUY, limit_price="49000", provenance="test:b-target")
         pending = (
             PendingTrigger(
                 order=position_a_stop, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
@@ -122,21 +148,21 @@ class IntraBarResolutionTests(unittest.TestCase):
         self.assertEqual({position_a_stop.order_id, position_b_target.order_id}, fired_orders)
 
     def test_losing_tie_break_candidate_remains_pending_for_a_later_event(self):
-        stop = make_order(side=OrderSide.SELL, provenance="test:stop")
-        target = make_order(side=OrderSide.SELL, provenance="test:target")
+        stop = make_stop_order(side=OrderSide.SELL, stop_price="49000", provenance="test:stop")
+        target = make_limit_order(side=OrderSide.BUY, limit_price="49000", provenance="test:target")
         pending = (
             PendingTrigger(
-                order=stop, trigger_price="49000", direction=TriggerDirection.AT_OR_ABOVE,
+                order=stop, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
                 role=TriggerRole.STOP_LOSS, conflict_group="pos.long",
             ),
             PendingTrigger(
-                order=target, trigger_price="49000", direction=TriggerDirection.AT_OR_ABOVE,
+                order=target, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
                 role=TriggerRole.TAKE_PROFIT, conflict_group="pos.long",
             ),
         )
         events = (
-            event(1, "t1", "50000"),   # both cross; stop wins, target deferred
-            event(2, "t2", "50000"),   # target now fires alone (stop already resolved/removed)
+            event(1, "t1", "48000"),   # both cross; stop wins, target deferred
+            event(2, "t2", "48000"),   # target now fires alone (stop already resolved/removed)
         )
 
         resolved = resolve_intra_bar_triggers(pending, events)
@@ -150,7 +176,7 @@ class IntraBarResolutionTests(unittest.TestCase):
     def test_no_bar_level_heuristic_only_real_events_matter(self):
         # A level between two real trade prices must NOT be considered crossed,
         # even though a naive high/low bar heuristic would assume it was touched.
-        stop = make_order(side=OrderSide.SELL, provenance="test:stop")
+        stop = make_stop_order(side=OrderSide.SELL, stop_price="49500", provenance="test:stop")
         pending = (
             PendingTrigger(
                 order=stop, trigger_price="49500", direction=TriggerDirection.AT_OR_BELOW,
@@ -167,8 +193,8 @@ class IntraBarResolutionTests(unittest.TestCase):
         # Two STOP_LOSS triggers in the same conflict_group, both crossed by
         # the same event: the winner must be a pure function of trigger
         # content, never of the order `pending` happened to be passed in.
-        stop_a = make_order(side=OrderSide.SELL, provenance="test:stop-a")
-        stop_b = make_order(side=OrderSide.SELL, provenance="test:stop-b")
+        stop_a = make_stop_order(side=OrderSide.SELL, stop_price="49000", provenance="test:stop-a")
+        stop_b = make_stop_order(side=OrderSide.SELL, stop_price="49000", provenance="test:stop-b")
         trigger_a = PendingTrigger(
             order=stop_a, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
             role=TriggerRole.STOP_LOSS, conflict_group="pos.long",
@@ -189,8 +215,8 @@ class IntraBarResolutionTests(unittest.TestCase):
     def test_same_role_tie_break_orders_prices_numerically_not_lexicographically(self):
         # 9000 vs 10000: lexicographically "10000" < "9000", but numerically
         # 9000 < 10000. Tie-break must use numeric comparison.
-        order_9000 = make_order(side=OrderSide.SELL, provenance="test:order-9000")
-        order_10000 = make_order(side=OrderSide.SELL, provenance="test:order-10000")
+        order_9000 = make_stop_order(side=OrderSide.SELL, stop_price="9000", provenance="test:order-9000")
+        order_10000 = make_stop_order(side=OrderSide.SELL, stop_price="10000", provenance="test:order-10000")
         trigger_9000 = PendingTrigger(
             order=order_9000, trigger_price="9000", direction=TriggerDirection.AT_OR_BELOW,
             role=TriggerRole.STOP_LOSS, conflict_group="g",
@@ -204,6 +230,26 @@ class IntraBarResolutionTests(unittest.TestCase):
         resolved = resolve_intra_bar_triggers((trigger_10000, trigger_9000), events)
         self.assertEqual(1, len(resolved))
         self.assertEqual(Decimal("9000"), resolved[0].trigger.trigger_price)
+
+    def test_pending_trigger_refuses_to_contradict_wrapped_order_shape(self):
+        market = make_order(side=OrderSide.SELL, provenance="test:market")
+        with self.assertRaisesRegex(ExecutionError, "require a LIMIT, STOP_MARKET or STOP_LIMIT order"):
+            PendingTrigger(
+                order=market, trigger_price="49000", direction=TriggerDirection.AT_OR_BELOW,
+                role=TriggerRole.STOP_LOSS, conflict_group="pos.long",
+            )
+
+        stop = make_stop_order(side=OrderSide.SELL, stop_price="49000", provenance="test:stop")
+        with self.assertRaisesRegex(ExecutionError, "trigger_price must match"):
+            PendingTrigger(
+                order=stop, trigger_price="48000", direction=TriggerDirection.AT_OR_BELOW,
+                role=TriggerRole.STOP_LOSS, conflict_group="pos.long",
+            )
+        with self.assertRaisesRegex(ExecutionError, "direction contradicts"):
+            PendingTrigger(
+                order=stop, trigger_price="49000", direction=TriggerDirection.AT_OR_ABOVE,
+                role=TriggerRole.STOP_LOSS, conflict_group="pos.long",
+            )
 
 
 class OcoGroupTests(unittest.TestCase):

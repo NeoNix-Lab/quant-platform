@@ -23,7 +23,7 @@ orchestration (H05), or margin/multi-asset mechanics (H06, out of scope).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 import hashlib
@@ -33,7 +33,7 @@ from types import MappingProxyType
 from typing import Any
 
 from ..data.models import Instant
-from ..execution import Fill, Order, OrderSide
+from ..execution import ExecutionError, Fill, Order, OrderSide
 
 
 POSITION_SIDE_IDENTITY_DOMAIN = "position-side-v1"
@@ -436,6 +436,7 @@ class LedgerTransaction:
     recorded_at: Instant
     description: str
     lines: tuple[JournalLine, ...]
+    evidence: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "transaction_id", _non_empty_text(self.transaction_id, "transaction_id"))
@@ -454,6 +455,12 @@ class LedgerTransaction:
                 f"journal entry is not balanced: debits={_decimal_string(debits)} "
                 f"credits={_decimal_string(credits)}"
             )
+        if not isinstance(self.evidence, Mapping):
+            raise PortfolioError("evidence must be a mapping")
+        normalized_evidence: dict[str, str] = {}
+        for key, value in self.evidence.items():
+            normalized_evidence[_key(key, "evidence key")] = _non_empty_text(value, f"evidence[{key}]")
+        object.__setattr__(self, "evidence", MappingProxyType(normalized_evidence))
 
     @classmethod
     def create(
@@ -462,12 +469,15 @@ class LedgerTransaction:
         recorded_at: Instant | str,
         description: str,
         lines: tuple[JournalLine, ...],
+        evidence: Mapping[str, str] | None = None,
     ) -> "LedgerTransaction":
         recorded_at_instant = Instant.parse(recorded_at)
+        normalized_evidence = {} if evidence is None else dict(evidence)
         payload = {
             "recorded_at": recorded_at_instant.isoformat(),
             "description": description,
             "lines": [line.stable_dict() for line in lines],
+            "evidence": normalized_evidence,
         }
         transaction_id = f"{LEDGER_TRANSACTION_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(payload)}"
         return cls(
@@ -475,6 +485,7 @@ class LedgerTransaction:
             recorded_at=recorded_at_instant,
             description=description,
             lines=lines,
+            evidence=normalized_evidence,
         )
 
     def stable_dict(self) -> dict[str, Any]:
@@ -483,6 +494,7 @@ class LedgerTransaction:
             "recorded_at": self.recorded_at.isoformat(),
             "description": self.description,
             "lines": [line.stable_dict() for line in self.lines],
+            "evidence": dict(self.evidence),
         }
 
     @property
@@ -502,6 +514,7 @@ class PortfolioLedger:
     positions: Mapping[str, HedgePosition]
     transactions: tuple[LedgerTransaction, ...]
     updated_at: Instant
+    consumed_fill_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "initial_capital", _decimal(self.initial_capital, "initial_capital", allow_zero=False))
@@ -522,8 +535,15 @@ class PortfolioLedger:
         transactions = tuple(self.transactions)
         if not all(isinstance(txn, LedgerTransaction) for txn in transactions):
             raise PortfolioError("transactions must contain LedgerTransaction values")
+        transaction_ids = [txn.transaction_id for txn in transactions]
+        if len(transaction_ids) != len(set(transaction_ids)):
+            raise PortfolioError("transactions must not contain duplicate transaction_id values")
         object.__setattr__(self, "transactions", transactions)
         object.__setattr__(self, "updated_at", Instant.parse(self.updated_at))
+        consumed_fill_ids = tuple(_non_empty_text(fill_id, "consumed_fill_id") for fill_id in self.consumed_fill_ids)
+        if len(consumed_fill_ids) != len(set(consumed_fill_ids)):
+            raise PortfolioError("consumed_fill_ids must be unique")
+        object.__setattr__(self, "consumed_fill_ids", consumed_fill_ids)
 
     @classmethod
     def open(cls, *, initial_capital: Decimal | str | int, as_of: Instant | str) -> "PortfolioLedger":
@@ -546,6 +566,7 @@ class PortfolioLedger:
             positions={},
             transactions=(opening_transaction,),
             updated_at=opened_at,
+            consumed_fill_ids=(),
         )
 
     def apply_fill(self, fill: Fill, order: Order) -> "PortfolioLedger":
@@ -557,6 +578,12 @@ class PortfolioLedger:
             raise PortfolioError("fill.order_id does not match order.order_id")
         if fill.fill_time < self.updated_at:
             raise PortfolioError("fill_time must not precede the ledger's current state")
+        if fill.fill_id in self.consumed_fill_ids:
+            raise PortfolioError("fill_id was already consumed by this ledger")
+        try:
+            order.apply_fill(fill)
+        except ExecutionError as exc:
+            raise PortfolioError(f"order fill admission failed: {exc}") from exc
 
         instrument = order.instrument
         old_hedge = self.positions.get(instrument)
@@ -607,6 +634,12 @@ class PortfolioLedger:
             recorded_at=fill.fill_time,
             description="fill_settlement",
             lines=tuple(lines),
+            evidence={
+                "fill_id": fill.fill_id,
+                "order_id": order.order_id,
+                "instrument": order.instrument,
+                "source_evidence_identity": fill.source_evidence_identity,
+            },
         )
 
         new_positions = dict(self.positions)
@@ -623,6 +656,7 @@ class PortfolioLedger:
             positions=new_positions,
             transactions=(*self.transactions, transaction),
             updated_at=fill.fill_time,
+            consumed_fill_ids=(*self.consumed_fill_ids, fill.fill_id),
         )
 
     @property
@@ -659,6 +693,7 @@ class PortfolioLedger:
                 instrument: position.stable_dict() for instrument, position in sorted(self.positions.items())
             },
             "transactions": [txn.stable_dict() for txn in self.transactions],
+            "consumed_fill_ids": list(self.consumed_fill_ids),
             "updated_at": self.updated_at.isoformat(),
         }
 

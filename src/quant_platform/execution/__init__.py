@@ -1005,15 +1005,44 @@ class PendingTrigger:
     def __post_init__(self) -> None:
         if not isinstance(self.order, Order):
             raise ExecutionError("order must be an Order")
-        object.__setattr__(self, "trigger_price", _decimal(self.trigger_price, "trigger_price", allow_zero=False))
-        object.__setattr__(self, "direction", TriggerDirection(self.direction))
-        object.__setattr__(self, "role", TriggerRole(self.role))
+        trigger_price = _decimal(self.trigger_price, "trigger_price", allow_zero=False)
+        direction = TriggerDirection(self.direction)
+        role = TriggerRole(self.role)
+        canonical_trigger_price = _canonical_trigger_price(self.order)
+        if canonical_trigger_price is None:
+            raise ExecutionError("pending triggers require a LIMIT, STOP_MARKET or STOP_LIMIT order")
+        if trigger_price != canonical_trigger_price:
+            raise ExecutionError("trigger_price must match the wrapped order's canonical trigger price")
+        expected_direction = _canonical_trigger_direction(self.order, role)
+        if direction is not expected_direction:
+            raise ExecutionError("direction contradicts the wrapped order and trigger role")
+        object.__setattr__(self, "trigger_price", trigger_price)
+        object.__setattr__(self, "direction", direction)
+        object.__setattr__(self, "role", role)
         object.__setattr__(self, "conflict_group", _key(self.conflict_group, "conflict_group"))
 
     def is_triggered_by(self, price: Decimal) -> bool:
         if self.direction is TriggerDirection.AT_OR_BELOW:
             return price <= self.trigger_price
         return price >= self.trigger_price
+
+
+def _canonical_trigger_price(order: Order) -> Decimal | None:
+    if order.order_type is OrderType.LIMIT:
+        return order.limit_price
+    if order.order_type in (OrderType.STOP_MARKET, OrderType.STOP_LIMIT):
+        return order.stop_price
+    return None
+
+
+def _canonical_trigger_direction(order: Order, role: TriggerRole) -> TriggerDirection:
+    if role is TriggerRole.STOP_LOSS:
+        return TriggerDirection.AT_OR_BELOW if order.side is OrderSide.SELL else TriggerDirection.AT_OR_ABOVE
+    if role is TriggerRole.TAKE_PROFIT:
+        return TriggerDirection.AT_OR_ABOVE if order.side is OrderSide.SELL else TriggerDirection.AT_OR_BELOW
+    if order.order_type is OrderType.LIMIT:
+        return TriggerDirection.AT_OR_BELOW if order.side is OrderSide.BUY else TriggerDirection.AT_OR_ABOVE
+    return TriggerDirection.AT_OR_ABOVE if order.side is OrderSide.BUY else TriggerDirection.AT_OR_BELOW
 
 
 @dataclass(frozen=True, slots=True)
