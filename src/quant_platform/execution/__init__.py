@@ -278,6 +278,8 @@ class Order:
     submitted_at: Instant
     provenance: str
     filled_quantity: Decimal = Decimal("0")
+    last_fill_time: Instant | None = None
+    updated_at: Instant | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "order_id", _identity_text(self.order_id, "order_id"))
@@ -307,6 +309,16 @@ class Order:
         object.__setattr__(self, "filled_quantity", _decimal(self.filled_quantity, "filled_quantity"))
         if self.filled_quantity > self.quantity:
             raise ExecutionError("filled_quantity must not exceed quantity")
+        if self.last_fill_time is not None:
+            last_fill_time = Instant.parse(self.last_fill_time)
+            if last_fill_time < self.submitted_at:
+                raise ExecutionError("last_fill_time must not precede order submission")
+            object.__setattr__(self, "last_fill_time", last_fill_time)
+        if self.updated_at is not None:
+            updated_at = Instant.parse(self.updated_at)
+            if updated_at < self.submitted_at:
+                raise ExecutionError("updated_at must not precede order submission")
+            object.__setattr__(self, "updated_at", updated_at)
 
     @classmethod
     def create(
@@ -400,12 +412,14 @@ class Order:
             raise ExecutionError(f"cannot apply fill to order in status {self.status.value}")
         if fill.fill_time < self.submitted_at:
             raise ExecutionError("fill_time must not precede order submission")
+        if self.last_fill_time is not None and fill.fill_time < self.last_fill_time:
+            raise ExecutionError("fill_time must not precede the order's previous fill")
         new_filled = self.filled_quantity + fill.quantity
         if new_filled > self.quantity:
             raise ExecutionError("fill would exceed order quantity")
         new_status = OrderStatus.FILLED if new_filled == self.quantity else OrderStatus.PARTIALLY_FILLED
         self._require_transition(new_status)
-        return replace(self, filled_quantity=new_filled, status=new_status)
+        return replace(self, filled_quantity=new_filled, status=new_status, last_fill_time=fill.fill_time)
 
     def replace_price(
         self,
@@ -432,6 +446,7 @@ class Order:
             if self.stop_price is None:
                 raise ExecutionError("order does not carry a stop_price to replace")
             updates["stop_price"] = _decimal(stop_price, "stop_price", allow_zero=False)
+        updates["updated_at"] = replace_at
         return replace(self, **updates)
 
     def stable_dict(self) -> dict[str, Any]:
@@ -449,6 +464,8 @@ class Order:
             "submitted_at": self.submitted_at.isoformat(),
             "provenance": self.provenance,
             "filled_quantity": _decimal_string(self.filled_quantity),
+            "last_fill_time": None if self.last_fill_time is None else self.last_fill_time.isoformat(),
+            "updated_at": None if self.updated_at is None else self.updated_at.isoformat(),
         }
 
     @property
@@ -653,6 +670,13 @@ def build_fill(
         raise ExecutionError("order must be an Order")
     if not isinstance(fee_schedule, FeeSchedule):
         raise ExecutionError("fee_schedule must be a FeeSchedule")
+    if order.status not in _FILLABLE_STATUSES:
+        raise ExecutionError(f"cannot build fill for order in status {order.status.value}")
+    normalized_fill_time = Instant.parse(fill_time)
+    if normalized_fill_time < order.submitted_at:
+        raise ExecutionError("fill_time must not precede order submission")
+    if order.last_fill_time is not None and normalized_fill_time < order.last_fill_time:
+        raise ExecutionError("fill_time must not precede the order's previous fill")
     normalized_quantity = _decimal(quantity, "quantity", allow_zero=False)
     if normalized_quantity > order.open_quantity:
         raise ExecutionError("fill quantity must not exceed the order's open quantity")
@@ -666,7 +690,7 @@ def build_fill(
     fee = fee_schedule.fee_for(notional=notional, liquidity_role=normalized_role)
     return Fill.create(
         order_id=order.order_id,
-        fill_time=fill_time,
+        fill_time=normalized_fill_time,
         price=price,
         quantity=normalized_quantity,
         fee=fee,
@@ -823,7 +847,7 @@ def translate_intent(
         reference_price=reference_price,
         target_position=intent.target_position,
     )
-    if not risk_decision.accepted:
+    if is_entry and not risk_decision.accepted:
         reasons.append(AdmissionRefusalReason.RISK_REFUSED)
 
     sizing_decision = spec.sizing_policy.evaluate(

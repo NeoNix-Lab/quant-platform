@@ -331,6 +331,42 @@ class OrderStateMachineTests(unittest.TestCase):
                 )
             )
 
+    def test_partial_fills_must_be_chronologically_monotonic(self):
+        order = Order.create(
+            instrument="BTCUSDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity="1",
+            submitted_at=OPEN_WEEKDAY_AS_OF,
+            provenance="test:monotonic",
+        ).acknowledge()
+        later = Instant(OPEN_WEEKDAY_AS_OF.epoch_ns + 10)
+        partially_filled = order.apply_fill(
+            Fill.create(
+                order_id=order.order_id,
+                fill_time=later,
+                price="50000",
+                quantity="0.4",
+                fee="1",
+                liquidity_role=LiquidityRole.TAKER,
+                source_evidence_identity="trade-v1:evidence-1",
+            )
+        )
+        self.assertEqual(later, partially_filled.last_fill_time)
+
+        with self.assertRaisesRegex(ExecutionError, "must not precede the order's previous fill"):
+            partially_filled.apply_fill(
+                Fill.create(
+                    order_id=order.order_id,
+                    fill_time=OPEN_WEEKDAY_AS_OF,
+                    price="50000",
+                    quantity="0.6",
+                    fee="1",
+                    liquidity_role=LiquidityRole.TAKER,
+                    source_evidence_identity="trade-v1:evidence-2",
+                )
+            )
+
     def test_replace_price_preserves_order_id_and_respects_status(self):
         order = Order.create(
             instrument="BTCUSDT",
@@ -345,6 +381,8 @@ class OrderStateMachineTests(unittest.TestCase):
         replaced = order.replace_price(limit_price="49500", at=OPEN_WEEKDAY_AS_OF)
         self.assertEqual(order.order_id, replaced.order_id)
         self.assertEqual(Decimal("49500"), replaced.limit_price)
+        self.assertEqual(OPEN_WEEKDAY_AS_OF, replaced.updated_at)
+        self.assertIsNone(order.updated_at)
 
         with self.assertRaisesRegex(ExecutionError, "does not carry a stop_price"):
             order.replace_price(stop_price="48000", at=OPEN_WEEKDAY_AS_OF)
@@ -442,6 +480,49 @@ class FeeAndSlippageTests(unittest.TestCase):
                 order,
                 fill_time=OPEN_WEEKDAY_AS_OF,
                 quantity="2",
+                reference_price="50000",
+                liquidity_role=LiquidityRole.TAKER,
+                fee_schedule=FeeSchedule(policy_key="btc.fees"),
+                source_evidence_identity="trade-v1:evidence",
+            )
+
+    def test_build_fill_refuses_for_a_non_fillable_order(self):
+        canceled = Order.create(
+            instrument="BTCUSDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity="1",
+            submitted_at=OPEN_WEEKDAY_AS_OF,
+            provenance="test:canceled",
+        ).acknowledge().cancel()
+
+        with self.assertRaisesRegex(ExecutionError, "cannot build fill for order in status"):
+            build_fill(
+                canceled,
+                fill_time=OPEN_WEEKDAY_AS_OF,
+                quantity="1",
+                reference_price="50000",
+                liquidity_role=LiquidityRole.TAKER,
+                fee_schedule=FeeSchedule(policy_key="btc.fees"),
+                source_evidence_identity="trade-v1:evidence",
+            )
+
+    def test_build_fill_refuses_fill_time_before_submission(self):
+        order = Order.create(
+            instrument="BTCUSDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity="1",
+            submitted_at=OPEN_WEEKDAY_AS_OF,
+            provenance="test:early-fill",
+        ).acknowledge()
+        earlier = Instant(OPEN_WEEKDAY_AS_OF.epoch_ns - 1)
+
+        with self.assertRaisesRegex(ExecutionError, "fill_time must not precede order submission"):
+            build_fill(
+                order,
+                fill_time=earlier,
+                quantity="1",
                 reference_price="50000",
                 liquidity_role=LiquidityRole.TAKER,
                 fee_schedule=FeeSchedule(policy_key="btc.fees"),
@@ -635,6 +716,30 @@ class TranslateIntentGatingTests(unittest.TestCase):
         self.assertTrue(admission.order.reduce_only)
         self.assertEqual(OrderSide.SELL, admission.order.side)
         self.assertEqual(Decimal("1"), admission.order.quantity)
+
+    def test_exit_is_admitted_even_when_risk_snapshot_is_missing(self):
+        # Regression: risk gating must restrict entries only. A missing or
+        # stale risk feed must never trap an open position by refusing the
+        # exit that would close it.
+        strategy_spec = spec()
+        intent = exit_intent(strategy_spec, decision_time=CLOSED_WEEKEND_AS_OF)
+
+        admission = translate_intent(
+            intent,
+            strategy_spec,
+            submitted_at=CLOSED_WEEKEND_AS_OF,
+            reference_price="50000",
+            risk_snapshot=None,
+            trade_history=None,
+            provenance="test:exit-no-risk-evidence",
+            close_side=OrderSide.SELL,
+            close_quantity="1",
+        )
+
+        self.assertEqual(AdmissionOutcome.ADMITTED, admission.outcome)
+        self.assertEqual((), admission.reasons)
+        self.assertFalse(admission.risk_decision.accepted)
+        self.assertTrue(admission.order.reduce_only)
 
     def test_submitted_at_before_decision_time_is_refused(self):
         strategy_spec = spec()
