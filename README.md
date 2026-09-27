@@ -1,5 +1,7 @@
 # Quant Platform
 
+[![Quant Platform integrity](https://github.com/NeoNix-Lab/quant-platform/actions/workflows/integrity.yml/badge.svg)](https://github.com/NeoNix-Lab/quant-platform/actions/workflows/integrity.yml)
+
 ## What it is
 
 Quant Platform is a historical-first, live-targeted quantitative research and trading platform. The canonical repository is the server-born market-data repository; higher quantitative layers are built incrementally.
