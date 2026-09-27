@@ -7,6 +7,8 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+site/
+.orchestrator/
 
 # Segreti: il .env del catalogo vive in /srv/docker/market-catalog, non qui,
 # ma la regola resta come rete di sicurezza se qualcuno lo copiasse nel repo.

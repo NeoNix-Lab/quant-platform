@@ -1,0 +1,160 @@
+site_name: Quant Platform
+site_url: https://neonix-lab.github.io/quant-platform/
+site_description: Deterministic, event-driven quantitative trading platform foundation with causal temporal guarantees and double-entry portfolio ledger.
+site_author: Nicola Montanari (NeoNix-Lab)
+repo_name: NeoNix-Lab/quant-platform
+repo_url: https://github.com/NeoNix-Lab/quant-platform
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: site
+
+exclude_docs: |
+  /README.md
+
+validation:
+  omitted_files: ignore
+  links:
+    not_found: ignore
+
+theme:
+  name: material
+  language: en
+  palette:
+    # Palette toggle for automatic / light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.arithmatex:
+      generic: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+extra_javascript:
+  - https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js
+  - https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js
+  - javascripts/katex.js
+
+extra_css:
+  - https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css
+
+nav:
+  - Overview:
+      - Welcome: index.md
+      - Target Architecture: architecture/TARGET_ARCHITECTURE.md
+      - Storage Lifecycle: architecture/STORAGE_LIFECYCLE.md
+      - Market Data Ingest: architecture/MARKET_DATA_INGEST.md
+      - Open Decisions: architecture/OPEN_DECISIONS.md
+  - Product & Strategy:
+      - Product Specification: product/PRODUCT.md
+      - Roadmap: product/ROADMAP.md
+      - Capability Map: product/CAPABILITY_MAP.md
+      - Capability DAG: product/CAPABILITY_DAG.md
+  - Core Contracts:
+      - Core Contracts (§1–§33): contracts/CORE_CONTRACTS.md
+      - DataGateway Contract: contracts/DATA_GATEWAY.md
+      - Candle Definition v1: contracts/CANDLE_DEFINITION.md
+      - Declared Coverage: contracts/DECLARED_COVERAGE.md
+      - Market Data Ingest Contracts: contracts/MARKET_DATA_INGEST_CONTRACTS.md
+      - Consumer API Boundary: contracts/CONSUMER_API.md
+      - Producer–Consumer Conformity: contracts/PRODUCER_CONSUMER_CONFORMITY.md
+  - Decisions (ADRs):
+      - ADR Index: decisions/README.md
+      - ADR-0001 Authoritative Codebase: decisions/ADR-0001-authoritative-codebase.md
+      - ADR-0002 API-First: decisions/ADR-0002-api-first.md
+      - ADR-0003 Unified Feature Engine: decisions/ADR-0003-unified-feature-engine.md
+      - ADR-0004 Market Data Levels: decisions/ADR-0004-market-data-levels.md
+      - ADR-0005 Candles First-Class: decisions/ADR-0005-candles-first-class.md
+      - ADR-0006 Temporal Semantics: decisions/ADR-0006-temporal-semantics.md
+      - ADR-0007 Research Strategy Separation: decisions/ADR-0007-research-strategy-separation.md
+      - ADR-0008 Outcome Labeling: decisions/ADR-0008-outcome-labeling.md
+      - ADR-0009 Policy Decision Intent: decisions/ADR-0009-policy-decision-intent.md
+      - ADR-0010 Supervised and RL: decisions/ADR-0010-supervised-and-rl.md
+      - ADR-0011 Strategic vs Execution RL: decisions/ADR-0011-strategic-vs-execution-rl.md
+      - ADR-0012 Unified Execution: decisions/ADR-0012-unified-execution.md
+      - ADR-0013 Historical Live Semantics: decisions/ADR-0013-historical-live-semantics.md
+      - ADR-0014 Experiment Provenance: decisions/ADR-0014-experiment-provenance.md
+      - ADR-0015 No Backward Compatibility: decisions/ADR-0015-no-backward-compatibility.md
+      - ADR-0016 Feature & FeatureSet Definitions: decisions/ADR-0016-feature-definition-and-feature-set-definition.md
+      - ADR-0017 Candle Runtime Materialization: decisions/ADR-0017-candle-runtime-and-materialization.md
+      - ADR-0018 Contract Evolution Policy: decisions/ADR-0018-frozen-market-data-contract-evolution.md
+      - ADR-0019 DataGateway Boundary: decisions/ADR-0019-datagateway-boundary.md
+      - ADR-0020 Consumer API Boundary: decisions/ADR-0020-consumer-api-boundary.md
+      - ADR-0021 CandleDefinition v1: decisions/ADR-0021-candle-definition-v1.md
+      - ADR-0022 Declared Coverage Contract: decisions/ADR-0022-declared-coverage-contract.md
+      - ADR-0023 Conformity Gate v1: decisions/ADR-0023-producer-consumer-conformity-gate-v1.md
+      - ADR-0024 Package Boundary Modular Monolith: decisions/ADR-0024-package-boundary-modular-monolith-v1.md
+      - ADR-0025 Canonical Lineage v2: decisions/ADR-0025-source-acquired-canonical-dataset-lineage-v2.md
+      - ADR-0026 FeatureDefinition v1: decisions/ADR-0026-feature-definition-v1-semantic-foundation.md
+      - ADR-0027 FootprintDefinition v1: decisions/ADR-0027-footprint-definition-v1.md
+      - ADR-0028 PressurePolicy v1: decisions/ADR-0028-pressure-policy-v1.md
+      - ADR-0029 Non-Contiguous Coverage Reads: decisions/ADR-0029-non-contiguous-coverage-reads-v1.md
+      - ADR-0030 General Quality Lifecycle: decisions/ADR-0030-general-quality-lifecycle-v1.md
+      - ADR-0031 Availability Purge Embargo v1: decisions/ADR-0031-availability-purge-embargo-v1.md
+      - ADR-0032 Source Protection v1: decisions/ADR-0032-raw-source-protection-v1.md
+      - ADR-0033 Backfill Repair v1: decisions/ADR-0033-backfill-repair-v1.md
+      - ADR-0034 FeatureArtifact v1: decisions/ADR-0034-feature-artifact-v1.md
+      - ADR-0035 H01 Canonical Integration v1: decisions/ADR-0035-h01-canonical-integration-v1.md
+      - ADR-0036 Labels Censoring Lockbox v1: decisions/ADR-0036-labels-censoring-lockbox-v1.md
+      - ADR-0037 DSR/PBO Robust Comparison: decisions/ADR-0037-dsr-pbo-robust-comparison-v1.md
+      - ADR-0038 Outcome v1 Authority: decisions/ADR-0038-outcome-v1-semantic-authority.md
+      - ADR-0039 Backup Restore v1: decisions/ADR-0039-backup-restore-v1.md
+      - ADR-0040 Bybit Live Trades Ingestion: decisions/ADR-0040-bybit-live-trades-v1.md
+      - ADR-0041 Live-Ingest Runtime Identity: decisions/ADR-0041-live-ingest-runtime-identity-v1.md
+      - ADR-0042 Live-Ingest Checkpoint Recovery: decisions/ADR-0042-live-ingest-checkpoint-recovery-v1.md
+      - ADR-0043 Live-Ingest Server Composition: decisions/ADR-0043-live-ingest-server-composition-v1.md
+      - ADR-0044 Live-Ingest Long-Gap Remediation: decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md
+      - ADR-0045 Session Calendar & Cooldown v1: decisions/ADR-0045-session-calendar-and-cooldown-semantics-v1.md
+      - ADR-0046 Execution Conflict & Intra-Bar Fills: decisions/ADR-0046-execution-conflict-and-intra-bar-fill-model-v1.md
+  - Engineering & Verification:
+      - Definition of Done: engineering/DEFINITION_OF_DONE.md
+      - Repository Synchronization: engineering/REPOSITORY_SYNC.md
+      - Live Ingest Deployment: engineering/LIVE_INGEST_SERVER_DEPLOYMENT.md
+  - Integration Proofs:
+      - Wave 4 Golden Replay Proof: integration/WAVE4_GOLDEN_E2E_DETERMINISTIC_REPLAY.md
+      - Wave 1 Golden E2E Evidence: architecture/WAVE1_GOLDEN_E2E_CLOSEOUT_EVIDENCE.md
+      - Bybit Trade Verification: integration/HUMAN_GOLDEN_E2E_BYBIT_BTCUSDT_2024-01-15.md
+      - Market Platform Integration: integration/MARKET_PLATFORM_INTEGRATION.md
+      - LIPR-05 Production Readiness: integration/LIPR05_LIVE_INGEST_SERVER_PRODUCTION_READINESS_PROOF.md
+      - LIPR-06A Supervised Deployment: integration/LIPR06A_SUPERVISED_LIVE_INGEST_DEPLOYMENT.md
+  - Legacy Adoption:
+      - Adoption Ledger: legacy/ADOPTION_LEDGER.md

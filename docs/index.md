@@ -1,0 +1,63 @@
+# Quant Platform Documentation
+
+Welcome to the technical documentation for **Quant Platform** — a historical-first, live-targeted quantitative research, simulation, and execution infrastructure designed around mathematical determinism, event-driven causality, and institutional accounting rigor.
+
+---
+
+## Architecture at a Glance
+
+The platform is constructed as a modular monolith where each layer has strictly bounded responsibilities and explicit semantic contracts:
+
+```text
+Market Data Ingest (Bybit Trades / L2)
+         ↓
+Data Plane & Storage Roots (Natural Partitioning, Parquet, Manifest Hashes)
+         ↓
+PostgreSQL Catalog & Lineage Tracking (DDL, DataGateway Boundary)
+         ↓
+Representations & Feature Engine (Candles D03, Footprints D04, Features E04/E06)
+         ↓
+Validation & Walk-Forward Engine (Causal Floor, Purged & Embargoed Folds)
+         ↓
+Strategy Policies & Composition (G01 StrategySpec, G02 Signals, G04 Session/Cooldown, G03 Risk/Sizing)
+         ↓
+DecisionIntent (Learner-Agnostic, ADR-0009)
+         ↓
+Unified Execution Engine (H01 Order State Machine, H02 Fees/Slippage, H03 OCO/Conflict Resolver)
+         ↓
+Historical Replay Runtime (H05 Deterministic ReplayEngine, Trace Fingerprint)
+         ↓
+Double-Entry Portfolio Ledger (H04 Ledger Transactions, Realized/Unrealized PnL, Mark-to-Market Equity)
+```
+
+---
+
+## Documentation Sections
+
+| Section | Focus & Contents | Key Documents |
+| :--- | :--- | :--- |
+| **[Product & Roadmap](product/PRODUCT.md)** | Product vision, capability taxonomy, and staged execution roadmap | [Product](product/PRODUCT.md) · [Roadmap](product/ROADMAP.md) · [Capability Map](product/CAPABILITY_MAP.md) |
+| **[Target Architecture](architecture/TARGET_ARCHITECTURE.md)** | System topology, storage lifecycle, and market data ingest architecture | [Target Architecture](architecture/TARGET_ARCHITECTURE.md) · [Storage Lifecycle](architecture/STORAGE_LIFECYCLE.md) · [Ingest Architecture](architecture/MARKET_DATA_INGEST.md) |
+| **[Core Contracts](contracts/CORE_CONTRACTS.md)** | Frozen semantic contracts (§1 through §33), DataGateway interface, and conformity gates | [Core Contracts](contracts/CORE_CONTRACTS.md) · [DataGateway](contracts/DATA_GATEWAY.md) · [CandleDefinition](contracts/CANDLE_DEFINITION.md) |
+| **[Architecture Decision Records](decisions/README.md)** | Chronological immutable architectural decisions (ADR-0001 through ADR-0046) | [ADR Index](decisions/README.md) |
+| **[Engineering & Operations](engineering/REPOSITORY_SYNC.md)** | Definition of Done, repository synchronization, and deployment procedures | [Definition of Done](engineering/DEFINITION_OF_DONE.md) · [Repository Sync](engineering/REPOSITORY_SYNC.md) |
+| **[Integration & Proofs](integration/WAVE4_GOLDEN_E2E_DETERMINISTIC_REPLAY.md)** | End-to-end acceptance proofs and reproducible golden replay evidence | [Wave 4 Golden Replay Proof](integration/WAVE4_GOLDEN_E2E_DETERMINISTIC_REPLAY.md) |
+
+---
+
+## Core Non-Negotiable Invariants
+
+1. **Bitwise Determinism & Monotonic Time**:
+   All simulations advance time exclusively via simulated event timestamps (`Instant`). Replays run on fixture market data produce bitwise-identical `ReplayResult` artifacts, order logs, fill sequences, and SHA-256 trace fingerprints.
+
+2. **Causal Availability Floor**:
+   The platform enforces point-in-time correctness:
+   $$t_{\text{available}} \le t_{\text{decision}}$$
+   Any attempt to access data with a future availability timestamp fails closed with a fatal exception (ADR-0006, ADR-0031).
+
+3. **Double-Entry Accounting Conservation**:
+   All financial math is executed in exact `Decimal` arithmetic. Positions are accounted in hedge mode, strictly conserving balance sheets:
+   $$\text{Equity}_t = \text{Cash}_t + \sum_{i} \text{PositionValue}_{i,t}$$
+
+4. **DataGateway Seam Isolation**:
+   Upper layers (Strategy, Execution, Portfolio, Replay) must consume market data exclusively through `DataGateway.scan()` and `DataGateway.read()`, never directly accessing storage files or raw database tables (ADR-0019).
