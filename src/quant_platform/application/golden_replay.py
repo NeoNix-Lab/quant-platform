@@ -27,8 +27,10 @@ from ..strategy import (
     ExitPolicy,
     FixedFractionSizingPolicy,
     PositionPolicy,
+    SessionDecision,
     SessionPolicyDefinition,
     SessionReferenceMarket,
+    SessionState,
     SignalCombinationMode,
     SignalCombinationPolicy,
     StrategyInput,
@@ -37,6 +39,28 @@ from ..strategy import (
 
 
 CANONICAL_BTCUSDT_DATASET = DatasetIdentity("canonical", "trades", "bybit", "BTCUSDT", "trade-v1")
+
+
+class AlwaysOpenSessionPolicy(SessionPolicyDefinition):
+    """Permissive 24/7 session policy for continuous crypto and replay proofs.
+
+    Evaluates every instant as SessionState.OPEN without calendar or weekend
+    filtering, so that proof and continuous crypto assets trade freely 24/7.
+    """
+
+    def evaluate(self, as_of: Instant) -> tuple[SessionDecision, ...]:
+        evaluation_time = Instant.parse(as_of)
+        return (
+            SessionDecision(
+                policy_identity=self.identity,
+                as_of=evaluation_time,
+                reference_market=self.reference_markets[0],
+                state=SessionState.OPEN,
+                phase="continuous_24_7",
+                trading_date=evaluation_time.isoformat()[:10],
+                reason="always_open",
+            ),
+        )
 
 
 class NoOpExecutionPolicy:
@@ -94,7 +118,7 @@ def minimal_breakout_strategy() -> StrategySpec:
             risk_per_trade_fraction="1",
             max_evidence_age_seconds=3600,
         ),
-        session_policy=SessionPolicyDefinition(
+        session_policy=AlwaysOpenSessionPolicy(
             policy_key="golden.session",
             reference_markets=(SessionReferenceMarket.NEW_YORK,),
         ),
