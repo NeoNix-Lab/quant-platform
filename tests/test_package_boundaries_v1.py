@@ -82,6 +82,7 @@ OWNERS = {
     "quant_platform.application.composition": "application",
     "quant_platform.application.conformity": "application",
     "quant_platform.application.golden_conformity": "application",
+    "quant_platform.application.golden_replay": "application",
     "quant_platform.application.h01_composition": "application",
     "quant_platform.application.live_gap_orchestration": "application",
     "quant_platform.application.live_ingest_server": "application",
@@ -107,7 +108,7 @@ ALLOWED = {
     # Nothing may depend on it: it is the top of the owner graph.
     "application": {
         "application", "access", "representation", "feature", "producer", "operations", "validation",
-        "source", "physical", "shared"
+        "source", "physical", "shared", "strategy", "execution", "portfolio", "replay"
     },
 }
 SHARED_STDLIB = {
