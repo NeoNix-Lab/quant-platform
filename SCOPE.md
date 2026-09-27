@@ -1,8 +1,8 @@
 # Scope: Wave 4 — Strategy & Deterministic Replay v1
 
-Status: **ACTIVE**
+Status: **CLOSED / ARCHIVED**
 
-Scope kind: **implementation, decision-gate resolution and validation scope for Wave 4**.
+Scope kind: **archived implementation, decision-gate resolution and validation scope for Wave 4**.
 
 ## Objective
 
@@ -28,7 +28,7 @@ Deterministic Historical Replay Runtime (H05)
 
 The objective is to enable stateful trading strategies to evaluate canonical inputs, generate learner-agnostic `DecisionIntent`, execute against a unified `ExecutionEngine` under explicit fee and slippage models, record every economic transaction in a double-entry `Portfolio/Ledger`, and produce provably reproducible, bitwise-identical results across repeated historical replays.
 
-This scope resolves Decision Gate **`DG-F`** (Strategy & Execution Semantics) and delivers the implementation of atoms `G01`–`G04` and `H01`–`H05`.
+This scope resolved Decision Gate **`DG-F`** (Strategy & Execution Semantics) and delivered the implementation of atoms `G01`–`G04` and `H01`–`H05`.
 
 It does **not** include live exchange order execution, broker adapters, live consumer cursor `B06`, multi-asset execution `H06`, supervised ML model training (`Wave 5`), API transport (`J02`), thin clients (`J04`–`J06`), or paper/live trading mode (`J07` / `J08`).
 
@@ -97,10 +97,10 @@ Ops     K02 identity, K03 observability, K05 pressure, K06 source protection, K0
 | **G01** | `StrategySpec / DecisionIntent v1` | Strategy | `F07` | `G02`, `H01` | RESOLVED | COMPLETE | Immutable specification; inputs strictly respect availability floor; ADR-0009 |
 | **G02** | `Policy composition v1` | Strategy | `G01` | `G03`, `G04` | RESOLVED | COMPLETE | Deterministic evaluation of entry, exit and position policies |
 | **G03** | `Risk / sizing v1` | Strategy | `G01`, `G02` | `H01` | RESOLVED | COMPLETE | Reproducible capital allocation, max drawdown protection, position sizing |
-| **G04** | `Session / cooldown semantics v1` | Strategy | `G02`, `F06` | `H01`, `H03` | **OPEN_BLOCKING (DG-F)** | COMPLETE | Trading calendar, session schedules, cooldown states, timezone/DST handling |
+| **G04** | `Session / cooldown semantics v1` | Strategy | `G02`, `F06` | `H01`, `H03` | **FROZEN** | COMPLETE | ADR-0045; trading calendar, session schedules, cooldown states, timezone/DST handling |
 | **H01** | `Order / Fill lifecycle v1` | Execution | `G03`, `G04` | `H02`, `H04` | RESOLVED | COMPLETE | Explicit state machine; illegal transitions rejected; reproducible order IDs |
 | **H02** | `Cost / synthetic-fill model v1` | Execution | `H01` | `H04`, `H05` | RESOLVED | COMPLETE | Parameterized fee schedule, deterministic slippage model, provenance |
-| **H03** | `Execution conflict model v1` | Execution | `H01`, `G04` | `H04`, `H05` | **OPEN_BLOCKING (DG-F)** | COMPLETE | Deterministic resolution of same-bar conflicts, intra-bar ambiguity, OCO |
+| **H03** | `Execution conflict model v1` | Execution | `H01`, `G04` | `H04`, `H05` | **FROZEN** | COMPLETE | ADR-0046; deterministic resolution of same-bar conflicts, intra-bar ambiguity, OCO |
 | **H04** | `Portfolio / ledger v1` | Portfolio | `H01`, `H02`, `H03` | `H05`, `I03` | RESOLVED | COMPLETE | Double-entry accounting ledger; equity = cash + positions; exact PnL conservation |
 | **H05** | `Deterministic replay v1` | Execution | `H02`, `H04` | `J07`, `I03` | RESOLVED | COMPLETE | Historical replay runtime binding dataset, strategy, and execution deterministically |
 
@@ -108,7 +108,7 @@ Ops     K02 identity, K03 observability, K05 pressure, K06 source protection, K0
 
 ## Decision Gate: DG-F (Strategy & Execution Semantics)
 
-Wave 4 activates and must resolve Decision Gate **`DG-F`** before dependent execution implementation is authorized:
+Wave 4 resolved Decision Gate **`DG-F`** before dependent execution implementation was credited complete:
 
 ### DG-F.1: Session & Cooldown Semantics (`G04`)
 * **Session calendars**: explicit trading sessions, exchange maintenance windows, weekend boundaries, and trading day rollover.
@@ -125,36 +125,36 @@ Wave 4 activates and must resolve Decision Gate **`DG-F`** before dependent exec
 
 ## Active Path (Execution Sequencing)
 
-The repository rule of **one bounded mutation slice at a time** strictly governs execution:
+The repository rule of **one bounded mutation slice at a time** governed execution. This path is now archived as complete evidence, not as a new active frontier:
 
 ```text
-1. Decision Gate DG-F.1 (ADR-0045) — Session & Cooldown Semantics Design (G04)
+1. Decision Gate DG-F.1 (ADR-0045) — Session & Cooldown Semantics Design (G04) — COMPLETE
    Formalize session calendar, cooldown state machine, and timezone invariants.
         ↓
-2. Decision Gate DG-F.2 (ADR-0046) — Execution Conflict Model Design (H03)
+2. Decision Gate DG-F.2 (ADR-0046) — Execution Conflict Model Design (H03) — COMPLETE
    Formalize same-bar conflict resolution, intra-bar precedence, and fill determinism.
         ↓
-3. Strategy Core Implementation Slice (G01 & G02)
+3. Strategy Core Implementation Slice (G01 & G02) — COMPLETE
    Implement StrategySpec, Policy composition, and DecisionIntent contract/schema.
    Prove temporal availability floor (no lookahead bias).
         ↓
-4. Risk, Sizing & Session Implementation Slice (G03 & G04)
+4. Risk, Sizing & Session Implementation Slice (G03 & G04) — COMPLETE
    Implement risk budgets, position sizing, session filtering, and cooldown runtime.
         ↓
-5. Order & Fill Lifecycle Implementation Slice (H01 & H02)
+5. Order & Fill Lifecycle Implementation Slice (H01 & H02) — COMPLETE
    Implement Order/Fill state machines, fee schedules, and synthetic slippage models.
         ↓
-6. Execution Conflict & Portfolio Ledger Implementation Slice (H03 & H04)
+6. Execution Conflict & Portfolio Ledger Implementation Slice (H03 & H04) — COMPLETE
    Implement same-bar conflict resolver, double-entry accounting ledger, and equity tracking.
         ↓
-7. Deterministic Replay Engine Implementation Slice (H05)
+7. Deterministic Replay Engine Implementation Slice (H05) — COMPLETE
    Implement historical replay runtime composing DataGateway, Features, Strategy, and Ledger.
         ↓
-8. Wave 4 Human / Golden End-to-End Replay Proof (Milestone V7)
+8. Wave 4 Human / Golden End-to-End Replay Proof (Milestone V7) — COMPLETE
    Execute and record deterministic replay proof on canonical Bybit BTCUSDT dataset.
    Prove identical ledger and trade traces across independent runs.
         ↓
-9. Wave 4 Governance Closeout
+9. Wave 4 Governance Closeout — COMPLETE
    Reconcile CAPABILITY_DAG.md, CAPABILITY_MAP.md, ROADMAP.md, and OPEN_DECISIONS.md.
 ```
 
@@ -175,6 +175,15 @@ The repository rule of **one bounded mutation slice at a time** strictly governs
 7. **Architectural Separation**: Quantitative business logic remains in domain and application modules; no strategy or execution logic resides in API or client packages.
 8. **Verification Gate**: The repository verification gate (`tools/run_tests.py` and `tools/check_markdown_links.py`) passes with 100% green status.
 9. **Governance Reconciliation**: Governance documents are reconciled to record Wave 4 as `COMPLETE` and Milestone `V7` as `COMPLETE`.
+
+Closeout evidence:
+
+- ADR-0045 accepted and freezes `G04` session/calendar/cooldown semantics.
+- ADR-0046 accepted and freezes `H03` execution conflict / intra-bar fill semantics.
+- `G01`–`G04` and `H01`–`H05` are integrated on `implement/wave-4`.
+- PR #160 integrated `H05` deterministic historical replay runtime v1.
+- PR #161 / issue #146 record Golden E2E deterministic replay proof `PASS` on canonical Bybit BTCUSDT data, including bitwise-identical `ReplayResult.trace_fingerprint`, order/fill/ledger determinism and `DataGateway.scan()` seam preservation.
+- Issue #147 owns the governance closeout. No new macro-scope or frontier is selected by this archive.
 
 ---
 

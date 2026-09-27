@@ -66,6 +66,7 @@ A11 Bybit live trades acquisition v1                 COMPLETE
 K02 live-ingest runtime identity v1                  COMPLETE
 K10 checkpoint / recovery v1                        COMPLETE (real restart proof: PR #122)
 Live Ingest Server Production Readiness v1          COMPLETE for first producer operating path
+Wave 4 Strategy / Replay                            COMPLETE (G01-G04,H01-H05; V7 Golden PASS)
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
@@ -91,12 +92,12 @@ Completed checkpoints are credited and must not be re-proved absent a concrete i
 TOTAL_ATOMS                     87
 CLASSIFIED_ATOMS                87
 UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     68 / 87 = 78.2%
-OPEN_BLOCKING                   11
+SEMANTIC_FROZEN_OR_RESOLVED     70 / 87 = 80.5%
+OPEN_BLOCKING                   9
 OPEN_DEFERABLE                  8
-ROADMAP_DEFINED                 68 + 11 + 8 = 87
+ROADMAP_DEFINED                 70 + 9 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         49 / 87 = 56.3%
+IMPLEMENTATION_COMPLETE         58 / 87 = 66.7%
 ```
 
 The 100% planning score means every roadmap atom is classified. It does **not** mean every future semantic choice is frozen.
@@ -111,7 +112,7 @@ DG-B  Historical / Live data convergence
 DG-C  Market-data depth (L1/L2)
 DG-D  Application configuration / ASS-03      RESOLVED
 DG-E  Validation semantics                   RESOLVED / IMPLEMENTED
-DG-F  Strategy / Execution semantics
+DG-F  Strategy / Execution semantics                RESOLVED / IMPLEMENTED
 DG-G  Experiment / RL / Jobs
 DG-H  Operational safety
 ```
@@ -123,6 +124,7 @@ Important current boundaries:
 - DG-B long-gap remediation remains blocking only for claiming an unreconciled interruption filled/lossless. ADR-0044 closes the selected production-readiness path by retaining explicit-gap-only behavior until a future authoritative repair source/path is proven.
 - DG-C: L1 does not activate L2; L3 waits for real feed evidence.
 - DG-E: complete through F08.
+- DG-F: G04 session/cooldown semantics are frozen by ADR-0045; H03 execution-conflict semantics are frozen by ADR-0046; G01-G04/H01-H05 are implementation-complete on `implement/wave-4`.
 - DG-H: K02/K03/K04/K05/K06/K08/K10 are complete, including K10's real restart proof (PR #122) and the supervised live-ingest server operating path proof; K07/K09 remain open and are outside the closed scope.
 
 Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension, multi-asset execution and concrete API transport — remain open until their evidence trigger exists.
@@ -147,7 +149,7 @@ V3  DataGateway -> historical Candle                     COMPLETE
 V4  Representation -> Feature -> canonical H01           COMPLETE
 V5  Feature -> Research                                  COMPLETE
 V6  Research -> Validation                               COMPLETE
-V7  Strategy -> deterministic Replay                     BLOCKED by DG-F / upstream implementation
+V7  Strategy -> deterministic Replay                     COMPLETE
 V8  Historical -> Live                                   PARTIAL; first live-ingest producer operating path production-ready, B06/live-consumer and broader live product gates remain open
 V9  Application -> API -> Client                         application service complete; transport deferred
 V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
@@ -157,13 +159,9 @@ V8 is not complete as a whole. The first live-ingest producer operating path now
 
 ## Current execution frontier
 
-PR #116 integrated `implement/live-ingest` into `main`, PR #122 closed K10's previously pending real-server restart/deployed-checkpoint proof, and **Live Ingest Server Production Readiness v1** is now closed in `SCOPE.md`.
+Wave 4 Strategy / Replay is closed on `implement/wave-4`: ADR-0045 and ADR-0046 resolve DG-F, G01-G04/H01-H05 are implementation-complete, PR #160 integrates H05, and PR #161 / issue #146 records Golden V7 deterministic replay PASS on canonical Bybit BTCUSDT data.
 
-The closed path includes ADR-0043's persistent bounded ingest-server loop under K02, ADR-0044's governed long-gap detection/repair-orchestration path built on the disposed DG-B finding (#110), operator/runbook evidence, supervised target proof and governance closeout.
-
-Long-gap remediation is not a speculative implementation task. It activates only when a qualifying unresolved gap/source proposition exists. Until an attributable repair source/path proves the missing interval, that interval remains explicit non-complete coverage. DG-B's disposition (#110, `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`) stands; production readiness does not reopen it.
-
-B06 live-consumer access remains outside the closed macro-scope.
+No new runtime/product frontier is selected by #147. B06, H06, I03-I07, J02/J07/J08, K07/K09, ML/RL, live broker execution and client work remain outside this governance closeout.
 
 No new runtime/product frontier is selected by this closeout. Roadmap state is still **not concurrent authorization**.
 
@@ -176,7 +174,7 @@ Wave 0  Architecture foundation                           COMPLETE
 Wave 1  First canonical computation/application slices    COMPLETE
 Wave 2  Representation / Feature                          COMPLETE
 Wave 3  Research / Validation                             COMPLETE
-Wave 4  Strategy / Replay                                 G01-G03 then DG-F/H01-H05
+Wave 4  Strategy / Replay                                 COMPLETE
 Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
 Wave 6  Live Data Plane                                   K02,K03,K04,K05,K06,K08,K10,A10,A11,A16 COMPLETE; K07,K09,B06 remain open/missing
 Wave 7  Runtime / Clients                                 J02 -> thin clients when real client need exists
