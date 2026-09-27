@@ -3,6 +3,7 @@
 [![Quant Platform integrity](https://github.com/NeoNix-Lab/quant-platform/actions/workflows/integrity.yml/badge.svg)](https://github.com/NeoNix-Lab/quant-platform/actions/workflows/integrity.yml)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue.svg)](https://neonix-lab.github.io/quant-platform/)
 [![Discussions](https://img.shields.io/badge/community-Discussions-purple.svg)](https://github.com/NeoNix-Lab/quant-platform/discussions)
+[![Machine Learning & RL](https://img.shields.io/badge/Machine%20Learning-Causal%20%26%20RL%20Ready-blueviolet.svg)](#machine-learning--rl-integration)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: Proprietary](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
 
@@ -63,6 +64,17 @@ Double-Entry Portfolio Ledger (H04 Ledger Transactions, Realized/Unrealized PnL,
 - **Unified Execution Engine (`H01`–`H03`)**: Order state machine (`PENDING_NEW` through `FILLED`/`CANCELED`), deterministic fill generation, explicit maker/taker fee schedules, synthetic slippage models, and intra-bar execution conflict and OCO resolvers.
 - **Double-Entry Portfolio Ledger (`H04`)**: Double-entry journal lines, multi-asset hedge-mode position sides, exact cost basis tracking, transaction audit logs, and mark-to-market equity curves.
 - **Deterministic Historical Replay Runtime (`H05`)**: End-to-end replay engine streaming from `DataGateway.scan()`, enforcing temporal causality chains ($t_{\text{event}} \le t_{\text{decision}} \le t_{\text{order}} \le t_{\text{fill}} \le t_{\text{ledger}}$), producing bitwise-identical `ReplayResult` artifacts and execution fingerprints.
+
+---
+
+## Machine Learning & RL Integration
+
+**Quant Platform** is engineered from the ground up to solve the most pervasive pitfalls in financial machine learning: lookahead bias, non-stationary feature leakage, and backtest overfitting.
+
+- **Causal Feature Engineering**: Strict mathematical enforcement of the causal availability floor ($t_{\text{available}} \le t_{\text{decision}}$) guarantees that no future information leaks into training features or inference states ([ADR-0006](https://neonix-lab.github.io/quant-platform/decisions/ADR-0006-temporal-semantics/), [ADR-0031](https://neonix-lab.github.io/quant-platform/decisions/ADR-0031-availability-purge-embargo-v1/)).
+- **Purged & Embargoed Cross-Validation**: Native walk-forward cross-validation folds with combinatorial embargo intervals ([ADR-0031](https://neonix-lab.github.io/quant-platform/decisions/ADR-0031-availability-purge-embargo-v1/)) and Deflated Sharpe Ratio / Probability of Backtest Overfitting (DSR/PBO) statistical evaluation ([ADR-0037](https://neonix-lab.github.io/quant-platform/decisions/ADR-0037-dsr-pbo-robust-comparison-v1/)).
+- **Learner-Agnostic Decision Interface (`DecisionIntent`, [ADR-0009](https://neonix-lab.github.io/quant-platform/decisions/ADR-0009-policy-decision-intent/))**: Completely decouples predictive intelligence from execution mechanics. Supervised ML models (LightGBM, XGBoost, CatBoost), deep neural architectures, and Reinforcement Learning agents (PPO, SAC, DQN) feed directly into the deterministic execution state machine and double-entry portfolio ledger.
+- **Sister Research & Recurrent Neural Network Models**: For exploratory recurrent neural network training, sequence modeling, and deep learning experiments sharing this underlying algorithmic foundation, explore our public companion repository [**Rnn_V0_1**](https://github.com/NeoNix-Lab/Rnn_V0_1).
 
 ---
 

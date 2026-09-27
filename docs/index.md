@@ -61,3 +61,14 @@ Double-Entry Portfolio Ledger (H04 Ledger Transactions, Realized/Unrealized PnL,
 
 4. **DataGateway Seam Isolation**:
    Upper layers (Strategy, Execution, Portfolio, Replay) must consume market data exclusively through `DataGateway.scan()` and `DataGateway.read()`, never directly accessing storage files or raw database tables (ADR-0019).
+
+---
+
+## Machine Learning & RL Integration
+
+Quant Platform is engineered to provide institutional foundations for statistical learning and artificial intelligence in quantitative trading:
+
+* **Zero Lookahead Bias**: Mathematically enforced causal floors ($t_{\text{available}} \le t_{\text{decision}}$) protect training features from accidental future leakage.
+* **Purged & Embargoed Cross-Validation**: Native walk-forward cross-validation folds with combinatorial embargo intervals ([ADR-0031](decisions/ADR-0031-availability-purge-embargo-v1.md)) and Deflated Sharpe Ratio / PBO statistical evaluations ([ADR-0037](decisions/ADR-0037-dsr-pbo-robust-comparison-v1.md)).
+* **Learner-Agnostic Decision Interface**: `DecisionIntent` ([ADR-0009](decisions/ADR-0009-policy-decision-intent.md)) allows arbitrary predictive models (Gradient Boosting, PyTorch Deep Learning, Reinforcement Learning agents) to emit trade signals without entangling execution state machines or accounting rules.
+* **Sister Research Ecosystem**: Recurrent neural networks, sequence predictors, and deep learning experiments sharing this algorithmic foundation are explored in our companion repository [**Rnn_V0_1**](https://github.com/NeoNix-Lab/Rnn_V0_1).
