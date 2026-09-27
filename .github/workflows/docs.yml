@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - implement/wave-4
+      - 'implement/**'
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
