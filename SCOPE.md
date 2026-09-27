@@ -1,42 +1,72 @@
-# Scope: Wave 4 — Strategy & Deterministic Replay v1
+# Scope: Wave 5 - Experiment & Supervised ML v1
 
-Status: **CLOSED / ARCHIVED**
+Status: **ACTIVE**
 
-Scope kind: **archived implementation, decision-gate resolution and validation scope for Wave 4**.
+Scope kind: **implementation, legacy-harvest and validation scope for Wave 5**.
+
+Target integration branch: **`implement/wave-5`**, branched from `main` after Wave 4 promotion.
+
+---
+
+## Prerequisite Integration Gate
+
+Wave 5 may start only after the Wave 4 Strategy / Replay path is promoted to `main`.
+
+Current gate evidence:
+
+```text
+Wave 4 promotion PR: #165
+main promotion commit: fa3075f297af677a562d57d20cfcfa83e6eba897
+Wave 4 tag: wave-4-strategy-replay-v1
+Issue #146: Golden V7 deterministic replay proof credited
+Issue #147: Wave 4 governance closeout closed after main promotion
+```
+
+The dependency basis is `CAPABILITY_DAG.md`: `I03` requires `I01,I02,H05`; `I04` requires `E04,F06,F07`; `I05` requires both `I03,I04`.
+
+`I03` and `I04` are therefore parallel prerequisites of `I05`. Any sequencing below is operational batching, not a claim that `I04` semantically depends on `I03`.
+
+---
 
 ## Objective
 
-Build and validate the canonical **Strategy & Deterministic Replay** vertical (Vertical Milestone **V7**) on the `implement/wave-4` integration branch, establishing the bridge between validated quantitative research and stateful economic execution:
+Build and validate the canonical **Experiment & Supervised ML** vertical for reproducible supervised-model evaluation over already-canonical feature, label, validation and replay foundations:
 
 ```text
-Canonical Market Data (DataGateway B02 / D03)
-                     ↓
-Derived Features & Validated Labels (E04 / E06 / F07)
-                     ↓
-StrategySpec & Policies (G01 / G02 / G03 / G04)
-                     ↓
-DecisionIntent (ADR-0009)
-                     ↓
-Execution Engine & Cost/Conflict Model (H01 / H02 / H03)
-                     ↓
-Orders / Realized Fills (ADR-0012)
-                     ↓
-Portfolio & Accounting Ledger (H04)
-                     ↓
-Deterministic Historical Replay Runtime (H05)
+Canonical Feature Artifacts (E04) + Labels / Lockbox (F07)
+                    + Availability / Purge / Embargo (F06)
+                                      |
+                                      v
+                  Supervised input and selection (I04)
+                                      |
+                                      v
+              Trial accounting and comparison (I03)
+                                      |
+                                      v
+          Supervised training and evaluation (I05)
+                                      |
+                                      v
+       Run-bound metrics, model artifacts and prediction artifacts
+                                      |
+                                      v
+     Future Strategy consumption through learner-agnostic DecisionIntent
 ```
 
-The objective is to enable stateful trading strategies to evaluate canonical inputs, generate learner-agnostic `DecisionIntent`, execute against a unified `ExecutionEngine` under explicit fee and slippage models, record every economic transaction in a double-entry `Portfolio/Ledger`, and produce provably reproducible, bitwise-identical results across repeated historical replays.
+The goal is to make supervised learning a deterministic, auditable and reproducible platform capability, not an ad hoc notebook/runtime path. Wave 5 must:
 
-This scope resolved Decision Gate **`DG-F`** (Strategy & Execution Semantics) and delivered the implementation of atoms `G01`–`G04` and `H01`–`H05`.
+1. construct supervised datasets and selections without lookahead leakage;
+2. reuse the canonical validation primitives for walk-forward, availability, purge and embargo;
+3. account for comparable trials through the existing Study / Trial / Run / Artifact identity and persistence model;
+4. train and evaluate deterministic supervised model baselines under explicit environment and artifact identity;
+5. emit model, prediction and metric artifacts through the canonical Experiment System.
 
-It does **not** include live exchange order execution, broker adapters, live consumer cursor `B06`, multi-asset execution `H06`, supervised ML model training (`Wave 5`), API transport (`J02`), thin clients (`J04`–`J06`), or paper/live trading mode (`J07` / `J08`).
+Wave 5 delivers atoms **`I04`**, **`I03`** and **`I05`**. It does not implement strategic RL (`I06`), execution RL (`I07`), job runtime (`J03`), paper/shadow trading (`J07`) or live execution (`J08`).
 
 ---
 
 ## Authority
 
-Start from:
+Read before mutating code or scope-derived issue bodies:
 
 - `AGENTS.md`
 - `README.md`
@@ -45,19 +75,20 @@ Start from:
 - `docs/product/CAPABILITY_DAG.md`
 - `docs/product/ROADMAP.md`
 - `docs/architecture/TARGET_ARCHITECTURE.md`
-- `docs/contracts/CORE_CONTRACTS.md` (Sections 21–27)
-- `docs/architecture/OPEN_DECISIONS.md` (`DG-F` family)
-- `docs/decisions/ADR-0007-research-strategy-separation.md`
+- `docs/contracts/CORE_CONTRACTS.md` (especially sections 11-13, 19-20 and 28-31)
+- `docs/architecture/OPEN_DECISIONS.md` (`DG-G`)
+- `docs/legacy/ADOPTION_LEDGER.md`
+- `docs/decisions/ADR-0006-temporal-semantics.md`
 - `docs/decisions/ADR-0009-policy-decision-intent.md`
-- `docs/decisions/ADR-0012-unified-execution.md`
-- `docs/decisions/ADR-0013-historical-live-semantics.md`
+- `docs/decisions/ADR-0010-supervised-and-rl.md`
+- `docs/decisions/ADR-0014-experiment-provenance.md`
 - `docs/decisions/ADR-0024-package-boundary-modular-monolith-v1.md`
+- `docs/decisions/ADR-0031-availability-purge-embargo-v1.md`
+- `docs/decisions/ADR-0034-feature-artifact-v1.md`
 - `docs/decisions/ADR-0036-labels-censoring-lockbox-v1.md`
-- `docs/decisions/ADR-0038-outcome-v1-semantic-authority.md`
-- `docs/decisions/ADR-0043-live-ingest-server-composition-v1.md`
-- `docs/decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md`
+- `docs/decisions/ADR-0037-dsr-pbo-robust-comparison-v1.md`
 
-Accepted ADRs and frozen contracts remain normative semantic authority. This scope organizes the implementation work for Wave 4 without weakening or reinterpreting existing contracts.
+Accepted ADRs and frozen contracts remain normative semantic authority. Legacy `ml_core` is read-only evidence and must never become a runtime dependency.
 
 ---
 
@@ -66,27 +97,30 @@ Accepted ADRs and frozen contracts remain normative semantic authority. This sco
 Authoritative baseline for this branch:
 
 ```text
-implement/wave-4 @ 67fafb005c0b79df5efa042c81bf52077c4f0d53 (Merge PR #150 into main)
+main @ fa3075f297af677a562d57d20cfcfa83e6eba897
+tag  wave-4-strategy-replay-v1
 ```
 
 Credit, do not reimplement or re-prove absent invalidating evidence:
 
 ```text
-Wave 0  Architecture foundation, schemas, catalog bootstrap, modular monolith (ADR-0024)   COMPLETE
-Wave 1  DataGateway bounded scan (B02), CandleDefinition v1 (D02), historical candles (D03),
-        walk-forward (F05), capacity (K04), config convergence (C05), ASS-01/02/03         COMPLETE
-Wave 2  FootprintDefinition v1 (D06), FeatureDefinition v1 (E02), FeatureArtifact v1 (E04),
-        canonical H01 integration (E06)                                                    COMPLETE
-Wave 3  Research & Validation complete (F01–F08): HypothesisSpec (F01), EventSpec (F02),
-        OutcomeSpec/Outcome v1 (F03/ADR-0038), sweeps (F04), walk-forward (F05),
-        availability/purge/embargo (F06/ADR-0031), labels/censoring/lockbox (F07/ADR-0036),
-        DSR/PBO robust comparison (F08/ADR-0037)                                           COMPLETE
-Wave 6  Live Ingest Server Production Readiness v1 (PR #123, ADR-0043, ADR-0044)           COMPLETE
-Tools   Branching strategy, pre-push guardrail, workflow CLI (PR #148, #149, #150)         COMPLETE
-Data    trade-v1, manifests, catalog DDL, Parquet materialization, certification, publication   COMPLETE
-Ops     K02 identity, K03 observability, K05 pressure, K06 source protection, K08 backup,
-        K10 checkpoint/recovery v1                                                         COMPLETE
+I01 Study / Trial / Run / Artifact semantic model      COMPLETE
+I02 Experiment persistence                             COMPLETE
+E04 FeatureArtifact v1                                 COMPLETE
+F06 Availability / purge / embargo v1                  COMPLETE
+F07 Labels / censoring / lockbox v1                    COMPLETE
+F08 DSR/PBO robust comparison v1                       COMPLETE
+H05 Deterministic historical replay                    COMPLETE
 ```
+
+Important credited implementation details:
+
+- `quant_platform.validation.walk_forward` already owns `WalkForwardFold`, `WalkForwardScheduleSpec` and `build_walk_forward_folds`.
+- `quant_platform.validation.availability` already owns `Embargo`, `DependencyEvidence`, `ValidationCandidate` and `classify_candidate`.
+- `quant_platform.experiments.identities` already owns `StudyIdentity`, `TrialIdentity`, `RunSpecIdentity`, `RunIdentity`, `ArtifactContentIdentity` and `ArtifactIdentity`.
+- `quant_platform.experiments.persistence` already owns `ExperimentRepository`, run lifecycle persistence and artifact registration.
+
+Wave 5 composes these existing primitives. It must not duplicate them under `quant_platform.learning`.
 
 ---
 
@@ -94,111 +128,141 @@ Ops     K02 identity, K03 observability, K05 pressure, K06 source protection, K0
 
 | ID | Capability | Owner | Requires | Unlocks | Decision State | Target Impl State | Acceptance / Authority |
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **G01** | `StrategySpec / DecisionIntent v1` | Strategy | `F07` | `G02`, `H01` | RESOLVED | COMPLETE | Immutable specification; inputs strictly respect availability floor; ADR-0009 |
-| **G02** | `Policy composition v1` | Strategy | `G01` | `G03`, `G04` | RESOLVED | COMPLETE | Deterministic evaluation of entry, exit and position policies |
-| **G03** | `Risk / sizing v1` | Strategy | `G01`, `G02` | `H01` | RESOLVED | COMPLETE | Reproducible capital allocation, max drawdown protection, position sizing |
-| **G04** | `Session / cooldown semantics v1` | Strategy | `G02`, `F06` | `H01`, `H03` | **FROZEN** | COMPLETE | ADR-0045; trading calendar, session schedules, cooldown states, timezone/DST handling |
-| **H01** | `Order / Fill lifecycle v1` | Execution | `G03`, `G04` | `H02`, `H04` | RESOLVED | COMPLETE | Explicit state machine; illegal transitions rejected; reproducible order IDs |
-| **H02** | `Cost / synthetic-fill model v1` | Execution | `H01` | `H04`, `H05` | RESOLVED | COMPLETE | Parameterized fee schedule, deterministic slippage model, provenance |
-| **H03** | `Execution conflict model v1` | Execution | `H01`, `G04` | `H04`, `H05` | **FROZEN** | COMPLETE | ADR-0046; deterministic resolution of same-bar conflicts, intra-bar ambiguity, OCO |
-| **H04** | `Portfolio / ledger v1` | Portfolio | `H01`, `H02`, `H03` | `H05`, `I03` | RESOLVED | COMPLETE | Double-entry accounting ledger; equity = cash + positions; exact PnL conservation |
-| **H05** | `Deterministic replay v1` | Execution | `H02`, `H04` | `J07`, `I03` | RESOLVED | COMPLETE | Historical replay runtime binding dataset, strategy, and execution deterministically |
+| **I04** | `Supervised input / selection v1` | Learning | `E04`, `F06`, `F07` | `I05` | RESOLVED | COMPLETE | Build supervised input projections from canonical features and labels; reuse validation-owned walk-forward/purge/embargo; fail closed on leakage. |
+| **I03** | `Trial accounting / comparison v1` | Experiment System | `I01`, `I02`, `H05` | `I05`, model selection | RESOLVED | COMPLETE | Comparable trial population identity, resume/idempotency and metric comparison through Study / Trial / Run / Artifact persistence. |
+| **I05** | `Supervised training / evaluation v1` | Learning | `I03`, `I04` | `J07` | RESOLVED | COMPLETE | Deterministic baseline model training/evaluation, fold-safe normalization, OOF metrics and model/prediction/metric artifacts. |
 
 ---
 
-## Decision Gate: DG-F (Strategy & Execution Semantics)
+## Decision Gate Clarification: DG-G
 
-Wave 4 resolved Decision Gate **`DG-F`** before dependent execution implementation was credited complete:
+`I03`, `I04` and `I05` are `RESOLVED / MISSING` in the capability model. This Wave is therefore implementation and harvest work, not a new decision-gate resolution.
 
-### DG-F.1: Session & Cooldown Semantics (`G04`)
-* **Session calendars**: explicit trading sessions, exchange maintenance windows, weekend boundaries, and trading day rollover.
-* **Cooldown policy**: deterministic state machine for cool-down periods (post-loss cooldown, maximum consecutive losses cooldown, intra-day frequency limit).
-* **Timezone / DST integrity**: pure temporal evaluation in UTC microseconds without host system clock dependency.
+DG-G remains open only for its still-unresolved branches:
 
-### DG-F.2: Execution Conflict Model (`H03`)
-* **Same-bar conflict resolution**: deterministic precedence rules when multiple orders trigger within the same bar or event bucket (e.g. stop-loss priority over take-profit, or conservative worst-case fill).
-* **Intra-bar ambiguity**: explicit policy for price path uncertainty (conservative assumption vs explicit lower-timeframe/trade-tick resolution).
-* **Order cancellation & OCO**: deterministic One-Cancels-Other linking and cancellation cascading.
-* **Partial fills**: deterministic fill ratio rules under liquidity and synthetic fill constraints.
+- `I06` Strategic RL contract;
+- `I07` Execution RL contract;
+- `J03` Job runtime.
+
+Do not resolve or implement those branches in Wave 5. Do not infer a job scheduler from experiment persistence, and do not infer RL runtime semantics from supervised ML.
 
 ---
 
-## Active Path (Execution Sequencing)
+## Legacy Harvest Map
 
-The repository rule of **one bounded mutation slice at a time** governed execution. This path is now archived as complete evidence, not as a new active frontier:
+Harvest decisions come from `docs/legacy/ADOPTION_LEDGER.md` at legacy baseline `1adf6ba79bcb766c93c6e487017561565ab8c131`.
+
+| Legacy ID | Decision | Wave 5 disposition |
+|---|---|---|
+| `H09` Explicit selection + leakage guard | ADAPT / P1 | Adapt into `I04` as fail-closed feature/label selection checks tied to canonical availability evidence. |
+| `H10` Expanding positional schedule | ADOPT / P2 | Already effectively covered by canonical `validation.walk_forward`; Wave 5 reuses it and may add supervised-composition tests, but must not reimplement it. |
+| `H11` Train-fit fold normalization | ADOPT / P2 | Adopt the pure fit/transform/statistics core for `I05`; fit only on training samples, transform without mutating learned statistics. |
+| `H12` Sample uniqueness | ADAPT / P2 | Adapt into `I04` over the temporally admissible fold universe only; never compute with future-spanning information. |
+| `H13` Supervised wrappers + centroid baseline | ADAPT / P3 | Adapt minimally for deterministic baseline model wrappers and probability-column alignment. External ML dependencies require explicit deterministic dependency policy in the implementing slice. |
+| `H15` Trial accounting | ADAPT / P2 | Converge useful attempt-accounting concepts into existing `ExperimentRepository` / Study / Trial / Run semantics for `I03`. |
+| `H18` Versioned recipe library | ADAPT / P2 | Out of scope for Wave 5 unless a later issue explicitly selects recipe/version-diff work. |
+
+Known legacy defects listed in `ADOPTION_LEDGER.md` are active refusal criteria. Do not port unchanged code that leaks future data, conflates identity/persistence, uses non-canonical storage, or depends on legacy runtime topology.
+
+---
+
+## Package Boundary and Modular Monolith Updates
+
+Wave 5 introduces a new runtime package:
 
 ```text
-1. Decision Gate DG-F.1 (ADR-0045) — Session & Cooldown Semantics Design (G04) — COMPLETE
-   Formalize session calendar, cooldown state machine, and timezone invariants.
-        ↓
-2. Decision Gate DG-F.2 (ADR-0046) — Execution Conflict Model Design (H03) — COMPLETE
-   Formalize same-bar conflict resolution, intra-bar precedence, and fill determinism.
-        ↓
-3. Strategy Core Implementation Slice (G01 & G02) — COMPLETE
-   Implement StrategySpec, Policy composition, and DecisionIntent contract/schema.
-   Prove temporal availability floor (no lookahead bias).
-        ↓
-4. Risk, Sizing & Session Implementation Slice (G03 & G04) — COMPLETE
-   Implement risk budgets, position sizing, session filtering, and cooldown runtime.
-        ↓
-5. Order & Fill Lifecycle Implementation Slice (H01 & H02) — COMPLETE
-   Implement Order/Fill state machines, fee schedules, and synthetic slippage models.
-        ↓
-6. Execution Conflict & Portfolio Ledger Implementation Slice (H03 & H04) — COMPLETE
-   Implement same-bar conflict resolver, double-entry accounting ledger, and equity tracking.
-        ↓
-7. Deterministic Replay Engine Implementation Slice (H05) — COMPLETE
-   Implement historical replay runtime composing DataGateway, Features, Strategy, and Ledger.
-        ↓
-8. Wave 4 Human / Golden End-to-End Replay Proof (Milestone V7) — COMPLETE
-   Execute and record deterministic replay proof on canonical Bybit BTCUSDT dataset.
-   Prove identical ledger and trade traces across independent runs.
-        ↓
-9. Wave 4 Governance Closeout — COMPLETE
-   Reconcile CAPABILITY_DAG.md, CAPABILITY_MAP.md, ROADMAP.md, and OPEN_DECISIONS.md.
+src/quant_platform/learning/
+```
+
+The package-boundary test must register the package explicitly:
+
+```text
+OWNERS:
+  quant_platform.learning -> "learning"
+
+ALLOWED:
+  "learning" -> {"learning", "experiment", "validation", "feature", "shared"}
+```
+
+Boundary rules:
+
+- `learning` must not depend on `application`, `strategy`, `execution`, `portfolio`, `replay`, `access`, `producer`, `source_adapters` or `physical`.
+- `learning` must not open physical storage directly (`Parquet`, CSV, SQLite, object-store paths, catalog tables outside Experiment persistence).
+- `learning` consumes already-canonical logical values and identities: FeatureArtifact / label / validation / experiment identity inputs supplied by its caller or tests.
+- DataGateway access and application composition remain outside `learning`.
+- Strategy integration remains outside Wave 5. Wave 5 may produce artifacts that future Strategy work can consume, but it must not wire model predictions into live or paper `DecisionIntent` execution.
+
+---
+
+## Active Path
+
+The repository rule of one bounded mutation slice at a time governs execution. The operational order below respects risk and reviewability; it is not a claim that `I04` depends on `I03`.
+
+```text
+1. Slice I04 - Supervised Input, Selection and Anti-Leakage
+   - Add `quant_platform.learning` package boundary registration.
+   - Implement supervised input value models and deterministic projection results.
+   - Reuse validation-owned walk-forward / availability / purge / embargo.
+   - Adapt H09 and H12.
+   - Prove no lookahead leakage with adversarial temporal tests.
+        |
+        v
+2. Slice I03 - Trial Accounting and Comparison
+   - Reuse I01/I02 identities and persistence.
+   - Adapt H15 into canonical trial accounting/comparable population semantics.
+   - Implement deterministic comparison protocol and model-selection result values.
+   - Prove resume/idempotency and exact identity conflict handling.
+        |
+        v
+3. Slice I05 - Supervised Training, Evaluation and Artifact Emission
+   - Adopt H11 fold normalizer semantics.
+   - Adapt H13 deterministic baseline model wrappers.
+   - Implement OOF metric calculation and probability-column alignment.
+   - Register model, prediction and metric artifacts through ExperimentRepository.
+        |
+        v
+4. Wave 5 Golden E2E Supervised Proof
+   - Execute a bounded deterministic supervised pipeline over canonical Bybit BTCUSDT evidence.
+   - Prove reproducible folds, selections, metrics and artifact identities across independent runs.
+   - Record evidence under `docs/integration/`.
+        |
+        v
+5. Wave 5 Governance Closeout
+   - Reconcile `CAPABILITY_DAG.md`, `CAPABILITY_MAP.md`, `ROADMAP.md` and `OPEN_DECISIONS.md`.
+   - Promote `implement/wave-5` to `main` only after Golden proof and reconciliation.
 ```
 
 ---
 
 ## Acceptance Criteria
 
-`Wave 4 — Strategy & Deterministic Replay v1` is complete only when all of the following are observably true:
+Wave 5 is complete only when all of the following are observably true:
 
-1. **Temporal Correctness**: `DecisionIntent` generation rejects any feature, label, or market input whose availability timestamp is later than `decision_time`.
-2. **Learner Agnosticism**: `DecisionIntent` conforms strictly to ADR-0009 and is identical in contract regardless of whether produced by rules, heuristics, or future models.
-3. **Execution Invariants**: `Order` and `Fill` state transitions follow an explicit, fail-closed state machine; illegal state transitions (e.g. fill after cancel, duplicate fill) raise explicit domain errors.
-4. **Economic Accounting Conservation**: `Portfolio/Ledger` maintains strict double-entry accounting invariants:
-   $$\text{Equity}_t = \text{Cash}_t + \sum \text{PositionValue}_{i,t}$$
-   $$\Delta \text{Equity} = \text{RealizedPnL} + \Delta \text{UnrealizedPnL} - \text{Fees}$$
-5. **Deterministic Replay Reproducibility**: Given an identical tuple $(\text{Dataset}, \text{StrategySpec}, \text{ExecutionSpec})$, the replay runtime produces identical order IDs, fill timestamps, prices, and final ledger state across repeated executions and platforms.
-6. **DataGateway Seam Preservation**: The strategy and replay engines consume canonical market data exclusively via `DataGateway.scan()` and do not bypass the access layer to inspect Parquet files directly.
-7. **Architectural Separation**: Quantitative business logic remains in domain and application modules; no strategy or execution logic resides in API or client packages.
-8. **Verification Gate**: The repository verification gate (`tools/run_tests.py` and `tools/check_markdown_links.py`) passes with 100% green status.
-9. **Governance Reconciliation**: Governance documents are reconciled to record Wave 4 as `COMPLETE` and Milestone `V7` as `COMPLETE`.
-
-Closeout evidence:
-
-- ADR-0045 accepted and freezes `G04` session/calendar/cooldown semantics.
-- ADR-0046 accepted and freezes `H03` execution conflict / intra-bar fill semantics.
-- `G01`–`G04` and `H01`–`H05` are integrated on `implement/wave-4`.
-- PR #160 integrated `H05` deterministic historical replay runtime v1.
-- PR #161 / issue #146 record Golden E2E deterministic replay proof `PASS` on canonical Bybit BTCUSDT data, including bitwise-identical `ReplayResult.trace_fingerprint`, order/fill/ledger determinism and `DataGateway.scan()` seam preservation.
-- Issue #147 owns the governance closeout. No new macro-scope or frontier is selected by this archive.
+1. **No Lookahead Bias**: supervised input construction refuses any feature, label or dependency unavailable at the applicable decision/fold cutoff.
+2. **Canonical Validation Reuse**: walk-forward, availability, purge and embargo semantics reuse `quant_platform.validation`; `learning` does not define a competing fold or embargo authority.
+3. **Fold-Local Statistics**: every normalizer/scaler fits only on admitted training samples and transforms validation/test samples without mutating fitted statistics.
+4. **Deterministic Computation**: fold generation, selection, sample weighting, normalization, model baseline training, prediction ordering and metric aggregation are deterministic for identical inputs.
+5. **Experiment Identity and Idempotency**: trial/run accounting uses the existing Study / Trial / Run identity and persistence model; duplicate or resumed attempts are exact and conflict-safe.
+6. **Artifact Registration**: model, prediction and metric artifacts use `ArtifactContentIdentity` / `ArtifactIdentity` and are registered through `ExperimentRepository`.
+7. **Package Boundary**: `tests/test_package_boundaries_v1.py` passes with `quant_platform.learning` registered and no forbidden dependencies.
+8. **Verification Gate**: `python tools/workflow.py preflight`, `python tools/check_markdown_links.py` and the relevant focused tests pass.
+9. **Golden Proof**: Wave 5 records a deterministic supervised E2E proof with stable metrics and artifact identities across independent runs.
 
 ---
 
 ## Out of Scope
 
-Do not pull into Wave 4 unless an authorized contract evolution explicitly requires it:
+Do not pull into Wave 5 unless a later authorized scope explicitly changes it:
 
-- Live broker connection or exchange order execution (belongs to live execution phase).
-- Live consumer cursor `B06` (remains independent Data Access atom).
-- Multi-asset portfolio rebalancing / execution `H06` (deferred until concrete multi-asset scope).
-- Supervised ML training pipelines `I04`/`I05` (Wave 5).
-- Strategic RL (`I06`) or Execution RL (`I07`) (Wave 11 / Wave 12).
-- API transport `J02` and UI/CLI clients `J04`–`J06` (Wave 7).
-- Paper / shadow trading runtime `J07` and live product mode `J08` (Wave 8).
-- Deletion / retention authority `K09` or tier relocation `K07`.
+- Strategic RL (`I06`) and execution RL (`I07`).
+- Job runtime / asynchronous distributed execution (`J03`).
+- Paper/shadow trading mode (`J07`) or live product mode (`J08`).
+- Live broker connections, exchange order placement or live trading authorization.
+- Live consumer cursor `B06`.
+- API transport (`J02`) or UI/TUI clients (`J04`-`J06`).
+- Multi-asset execution (`H06`).
+- Versioned recipe library / recipe diffing (`H18`) unless separately scoped.
+- Generic model registry, hyperparameter search infrastructure or arbitrary plugin framework beyond what `I03`-`I05` require.
 
 ---
 
@@ -206,7 +270,8 @@ Do not pull into Wave 4 unless an authorized contract evolution explicitly requi
 
 Stop and report rather than implement if:
 
-- A proposed strategy or replay mechanism requires information not causally available at decision time.
-- An execution or ledger calculation produces non-deterministic floating-point discrepancies across platforms.
-- Satisfying replay requirements requires bypassing `DataGateway` or mutating frozen data-plane contracts (`trade-v1`, `CandleDefinition v1`).
-- The execution engine cannot achieve conflict resolution without introducing non-reproducible arbitrary race conditions.
+- an external ML dependency is required but cannot be made deterministic under pinned versions, fixed seeds and controlled threading;
+- a legacy harvest candidate needs future data or post-fold information that cannot be represented through canonical availability evidence;
+- `learning` needs direct physical storage access, direct catalog reads outside Experiment persistence, or Application-owned composition;
+- supervised outputs require Strategy, Execution, Paper/Shadow or Live runtime semantics to be useful;
+- artifact payload storage requirements exceed the existing Experiment artifact registration boundary and need a new storage authority.
