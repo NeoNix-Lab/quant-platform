@@ -20,6 +20,7 @@ from quant_platform.execution import (
     Fill,
     LiquidityRole,
     Order,
+    OrderAdmission,
     OrderSide,
     OrderStatus,
     OrderType,
@@ -296,6 +297,39 @@ class OrderStateMachineTests(unittest.TestCase):
                 )
             )
 
+    def test_open_quantity_is_zero_once_an_order_reaches_a_terminal_status(self):
+        base = Order.create(
+            instrument="BTCUSDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity="1",
+            submitted_at=OPEN_WEEKDAY_AS_OF,
+            provenance="test:terminal-open-quantity",
+        )
+        self.assertEqual(Decimal("1"), base.open_quantity)  # PENDING_NEW is still "open"
+
+        acknowledged = base.acknowledge()
+        self.assertEqual(Decimal("1"), acknowledged.open_quantity)
+
+        canceled = acknowledged.cancel()
+        self.assertEqual(Decimal("0"), canceled.open_quantity)
+
+        rejected = base.reject()
+        self.assertEqual(Decimal("0"), rejected.open_quantity)
+
+        filled = acknowledged.apply_fill(
+            Fill.create(
+                order_id=acknowledged.order_id,
+                fill_time=OPEN_WEEKDAY_AS_OF,
+                price="50000",
+                quantity="1",
+                fee="1",
+                liquidity_role=LiquidityRole.TAKER,
+                source_evidence_identity="trade-v1:evidence",
+            )
+        )
+        self.assertEqual(Decimal("0"), filled.open_quantity)
+
     def test_fill_quantity_must_be_positive(self):
         with self.assertRaisesRegex(ExecutionError, "quantity must be positive"):
             Fill.create(
@@ -404,6 +438,37 @@ class OrderStateMachineTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ExecutionError, "cannot replace price on order in status"):
             filled.replace_price(limit_price="49500", at=OPEN_WEEKDAY_AS_OF)
+
+    def test_replace_price_refuses_time_travel_before_last_fill_or_previous_replace(self):
+        order = Order.create(
+            instrument="BTCUSDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            quantity="2",
+            limit_price="49000",
+            submitted_at=OPEN_WEEKDAY_AS_OF,
+            provenance="test:replace-causality",
+        ).acknowledge()
+        later = Instant(OPEN_WEEKDAY_AS_OF.epoch_ns + 20)
+        earlier_than_later = Instant(OPEN_WEEKDAY_AS_OF.epoch_ns + 10)
+
+        partially_filled = order.apply_fill(
+            Fill.create(
+                order_id=order.order_id,
+                fill_time=later,
+                price="49000",
+                quantity="1",
+                fee="1",
+                liquidity_role=LiquidityRole.MAKER,
+                source_evidence_identity="trade-v1:evidence",
+            )
+        )
+        with self.assertRaisesRegex(ExecutionError, "must not precede the order's last fill"):
+            partially_filled.replace_price(limit_price="49500", at=earlier_than_later)
+
+        replaced_once = order.replace_price(limit_price="49500", at=later)
+        with self.assertRaisesRegex(ExecutionError, "must not precede the order's previous replace"):
+            replaced_once.replace_price(limit_price="49700", at=earlier_than_later)
 
     def test_order_type_price_shape_is_enforced(self):
         with self.assertRaisesRegex(ExecutionError, "require limit_price"):
@@ -558,6 +623,63 @@ class LegQuantityConservationTests(unittest.TestCase):
         ).acknowledge()
 
         validate_leg_quantity_conservation(legs=(leg_a, leg_b), open_position_quantity="0.5")
+
+
+class OrderAdmissionInvariantTests(unittest.TestCase):
+    def test_normalizes_plain_string_outcome_and_reasons(self):
+        admission = OrderAdmission(
+            outcome="ADMITTED",
+            reasons=(),
+            order=Order.create(
+                instrument="BTCUSDT",
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                quantity="1",
+                submitted_at=OPEN_WEEKDAY_AS_OF,
+                provenance="test:admission-normalize",
+            ),
+            risk_decision=None,
+            sizing_decision=None,
+            session_decisions=(),
+            cooldown_decision=None,
+        )
+
+        self.assertIs(AdmissionOutcome.ADMITTED, admission.outcome)
+        self.assertTrue(admission.admitted)
+
+        refused = OrderAdmission(
+            outcome="REFUSED",
+            reasons=("session_closed",),
+            order=None,
+            risk_decision=None,
+            sizing_decision=None,
+            session_decisions=(),
+            cooldown_decision=None,
+        )
+        self.assertIs(AdmissionOutcome.REFUSED, refused.outcome)
+        self.assertEqual((AdmissionRefusalReason.SESSION_CLOSED,), refused.reasons)
+
+    def test_refuses_inconsistent_outcome_and_payload_combinations(self):
+        with self.assertRaisesRegex(ExecutionError, "ADMITTED admission must carry an order"):
+            OrderAdmission(
+                outcome=AdmissionOutcome.ADMITTED,
+                reasons=(),
+                order=None,
+                risk_decision=None,
+                sizing_decision=None,
+                session_decisions=(),
+                cooldown_decision=None,
+            )
+        with self.assertRaisesRegex(ExecutionError, "REFUSED admission must carry no order"):
+            OrderAdmission(
+                outcome=AdmissionOutcome.REFUSED,
+                reasons=(),
+                order=None,
+                risk_decision=None,
+                sizing_decision=None,
+                session_decisions=(),
+                cooldown_decision=None,
+            )
 
 
 class TranslateIntentGatingTests(unittest.TestCase):

@@ -374,6 +374,8 @@ class Order:
 
     @property
     def open_quantity(self) -> Decimal:
+        if not self.is_open:
+            return Decimal("0")
         return self.quantity - self.filled_quantity
 
     @property
@@ -435,6 +437,10 @@ class Order:
         replace_at = Instant.parse(at)
         if replace_at < self.submitted_at:
             raise ExecutionError("replace instant must not precede order submission")
+        if self.last_fill_time is not None and replace_at < self.last_fill_time:
+            raise ExecutionError("replace instant must not precede the order's last fill")
+        if self.updated_at is not None and replace_at < self.updated_at:
+            raise ExecutionError("replace instant must not precede the order's previous replace")
         if limit_price is None and stop_price is None:
             raise ExecutionError("replace requires at least one of limit_price or stop_price")
         updates: dict[str, Any] = {}
@@ -741,6 +747,10 @@ class OrderAdmission:
     cooldown_decision: "CooldownDecision | CooldownDecisionUnavailable | None"
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "outcome", AdmissionOutcome(self.outcome))
+        object.__setattr__(
+            self, "reasons", tuple(AdmissionRefusalReason(reason) for reason in self.reasons)
+        )
         if self.outcome is AdmissionOutcome.ADMITTED:
             if self.order is None or self.reasons:
                 raise ExecutionError("ADMITTED admission must carry an order and no refusal reasons")
