@@ -118,7 +118,8 @@ class ReplaySpec:
             "lifecycle_policy": self.lifecycle_policy.value,
             "coverage_policy": self.coverage_policy.value,
             "ordering_policy": self.ordering_policy,
-            "batch_size": self.batch_size,
+            # batch_size is an I/O paging knob, not a semantic replay
+            # parameter -- it must not change identity/reproducibility.
         }
 
     @property
@@ -261,6 +262,16 @@ class HistoricalReplayRuntime:
                 if record.instrument != spec.dataset.instrument:
                     raise ReplayError("record instrument does not match replay dataset")
 
+                # Peak equity must reflect this record's own mark-to-market
+                # swing *before* the strategy decides anything on it -- using
+                # only the current, already-known price, never a future one.
+                # Otherwise a price spike-then-reversal with no trade in
+                # between would leave `peak_equity` stale, understating the
+                # true drawdown a subsequent CapitalRiskPolicy check must see.
+                current_snapshot = _equity_snapshot(ledger, record)
+                if current_snapshot.equity > peak_equity:
+                    peak_equity = current_snapshot.equity
+
                 context = ReplayContext(
                     spec=spec,
                     ledger=ledger,
@@ -282,7 +293,7 @@ class HistoricalReplayRuntime:
                 )
                 decisions.append(_composition_trace(composition))
                 if composition.decision_intent is None:
-                    equity_curve.append(_equity_snapshot(ledger, record))
+                    equity_curve.append(current_snapshot)
                     continue
 
                 reference_price = _decimal(record.price, "record.price", allow_zero=False)
@@ -301,7 +312,7 @@ class HistoricalReplayRuntime:
                 )
                 if composition.decision_intent.direction is Direction.FLAT and close_quantity is None:
                     admissions.append(_flat_no_position_admission(composition.decision_intent))
-                    equity_curve.append(_equity_snapshot(ledger, record))
+                    equity_curve.append(current_snapshot)
                     continue
                 admission = translate_intent(
                     composition.decision_intent,
@@ -316,7 +327,7 @@ class HistoricalReplayRuntime:
                 )
                 admissions.append(admission.stable_dict())
                 if admission.order is None:
-                    equity_curve.append(_equity_snapshot(ledger, record))
+                    equity_curve.append(current_snapshot)
                     continue
 
                 acknowledged = admission.order.acknowledge()

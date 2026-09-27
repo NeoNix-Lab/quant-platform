@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from decimal import Decimal
 from pathlib import Path
 import sys
@@ -248,6 +248,94 @@ class ReplayV1Tests(unittest.TestCase):
 
         with self.assertRaisesRegex(ReplayError, "out of temporal order"):
             HistoricalReplayRuntime(_GatewaySpy(records), _features).run(_spec())
+
+    def test_peak_equity_tracks_mark_to_market_swings_with_no_trade(self):
+        # Regression for the adversarial-review exploit: a spike-then-reversal
+        # with no trade in between must still raise peak_equity on the spike
+        # tick, so a later CapitalRiskPolicy drawdown check sees the real
+        # drawdown from that peak, not a stale one from the last fill.
+        tight_strategy = dataclass_replace(
+            _strategy(),
+            risk_policy=CapitalRiskPolicy(
+                policy_key="replay.risk.tight",
+                max_drawdown_fraction="0.01",
+                max_position_notional_fraction="1",
+                max_total_exposure_fraction="1",
+                risk_per_trade_fraction="1",
+                max_evidence_age_seconds=60,
+            ),
+        )
+        spec = dataclass_replace(_spec(), strategy=tight_strategy)
+
+        records = (
+            _record("2026-01-05T15:00:00Z", "1000", "t1"),  # open long @ 1000
+            _record("2026-01-05T15:00:30Z", "2000", "t2"),  # spike: equity 11000, no trade
+            _record("2026-01-05T15:01:00Z", "1050", "t3"),  # drop: equity 10050, re-entry signal
+        )
+
+        def features(record, context):
+            if record.trade_id in ("t1", "t3"):
+                return (
+                    StrategyInput(
+                        key="signal.entry", value=True, available_at=record.exchange_ts, provenance="fixture"
+                    ),
+                )
+            return (
+                StrategyInput(
+                    key="signal.entry", value=False, available_at=record.exchange_ts, provenance="fixture"
+                ),
+            )
+
+        result = HistoricalReplayRuntime(_GatewaySpy(records), features).run(spec)
+
+        # The spike tick (t2) must itself have already raised peak_equity to
+        # 11000, proving no-trade ticks are not silently skipped.
+        self.assertEqual(Decimal("11000"), result.equity_curve[1].equity)
+
+        # t3's own risk evaluation must have been evaluated against that same
+        # 11000 peak (not a stale 10000) -- checked directly on the risk
+        # decision's own evidence, independent of t1's re-signal happening to
+        # also qualify CapitalRiskPolicy's separate de-risking exemption.
+        t3_admission = result.admissions[-1]
+        risk_snapshot_evidence = t3_admission["risk_decision"]["evidence"]
+        self.assertEqual("11000", risk_snapshot_evidence["peak_equity"])
+        self.assertEqual("10050", risk_snapshot_evidence["equity"])
+
+    def test_feature_provider_sees_current_tick_peak_equity_not_stale(self):
+        # F2: context.peak_equity must already reflect this record's own
+        # mark-to-market swing, not just whatever the last fill produced.
+        records = (
+            _record("2026-01-05T15:00:00Z", "1000", "t1"),  # open long @ 1000
+            _record("2026-01-05T15:00:30Z", "2000", "t2"),  # spike, no trade
+        )
+        seen_peaks: list[Decimal] = []
+
+        def features(record, context):
+            seen_peaks.append(context.peak_equity)
+            if record.trade_id == "t1":
+                return (
+                    StrategyInput(
+                        key="signal.entry", value=True, available_at=record.exchange_ts, provenance="fixture"
+                    ),
+                )
+            return ()
+
+        HistoricalReplayRuntime(_GatewaySpy(records), features).run(_spec())
+
+        # t1's own context is built before any position exists (peak == initial capital).
+        self.assertEqual(Decimal("10000"), seen_peaks[0])
+        # t2's context must already see the 11000 mark-to-market peak from t2
+        # itself, not the stale 10000 carried over from t1.
+        self.assertEqual(Decimal("11000"), seen_peaks[1])
+
+    def test_batch_size_does_not_affect_replay_spec_identity(self):
+        # F3: batch_size is a pure I/O paging knob and must not change the
+        # deterministic identity used to prove "same replay, same result".
+        base = _spec()
+        different_batching = dataclass_replace(base, batch_size=4096)
+
+        self.assertNotEqual(base.batch_size, different_batching.batch_size)
+        self.assertEqual(base.identity, different_batching.identity)
 
     def test_flat_without_open_position_is_traced_without_synthetic_order(self):
         records = (_record("2026-01-05T15:00:00Z", "100", "t2"),)
