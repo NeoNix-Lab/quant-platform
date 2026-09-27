@@ -102,13 +102,13 @@ def minimal_breakout_strategy() -> StrategySpec:
         ),
         position_policy=PositionPolicy(
             policy_key="golden.position",
-            long_target_position="1",
-            short_target_position="1",
+            long_target_position="0.01",
+            short_target_position="0.01",
         ),
         sizing_policy=FixedFractionSizingPolicy(
             policy_key="golden.sizing",
-            lot_size="1",
-            min_size="1",
+            lot_size="0.001",
+            min_size="0.001",
         ),
         risk_policy=CapitalRiskPolicy(
             policy_key="golden.risk",
