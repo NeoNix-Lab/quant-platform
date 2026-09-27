@@ -315,6 +315,62 @@ class PortfolioLedgerTests(unittest.TestCase):
         # there is no live exposure left to value.
         self.assertEqual(ledger.book_equity, ledger.mark_to_market_equity({}))
 
+    def test_repeating_fraction_basis_exact_accounting_single_exit(self):
+        # 1 @ 100 + 2 @ 101 => total cost 302 across 3 units.
+        # basis = 302/3 = 100.66666... (non-terminating).
+        # On single full close (3 @ 102), cost_basis_removed must equal 302
+        # exactly without decimal division residue underflow.
+        ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
+        e1 = make_order(side=OrderSide.BUY, quantity="1", reduce_only=False, at=AS_OF, provenance="test:e1")
+        ledger = ledger.apply_fill(make_fill(order=e1, price="100", quantity="1", fee="0", at=later(1), label="e1"), e1)
+        e2 = make_order(side=OrderSide.BUY, quantity="2", reduce_only=False, at=later(1), provenance="test:e2")
+        ledger = ledger.apply_fill(make_fill(order=e2, price="101", quantity="2", fee="0", at=later(2), label="e2"), e2)
+
+        exit_order = make_order(side=OrderSide.SELL, quantity="3", reduce_only=True, at=later(2), provenance="test:exit")
+        ledger = ledger.apply_fill(make_fill(order=exit_order, price="102", quantity="3", fee="0", at=later(3), label="x"), exit_order)
+
+        self.assertEqual(Decimal("10004"), ledger.cash)
+        self.assertEqual(Decimal("0"), ledger.position_asset)
+        self.assertEqual(Decimal("4"), ledger.realized_pnl_total)
+        self.assertEqual(Decimal("10004"), ledger.book_equity)
+
+    def test_repeating_fraction_basis_exact_accounting_laddered_exits(self):
+        # Same non-terminating basis closed in 2 separate fills (1 @ 102, then 2 @ 102).
+        ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
+        e1 = make_order(side=OrderSide.BUY, quantity="1", reduce_only=False, at=AS_OF, provenance="test:e1")
+        ledger = ledger.apply_fill(make_fill(order=e1, price="100", quantity="1", fee="0", at=later(1), label="e1"), e1)
+        e2 = make_order(side=OrderSide.BUY, quantity="2", reduce_only=False, at=later(1), provenance="test:e2")
+        ledger = ledger.apply_fill(make_fill(order=e2, price="101", quantity="2", fee="0", at=later(2), label="e2"), e2)
+
+        x1 = make_order(side=OrderSide.SELL, quantity="1", reduce_only=True, at=later(2), provenance="test:x1")
+        ledger = ledger.apply_fill(make_fill(order=x1, price="102", quantity="1", fee="0", at=later(3), label="x1"), x1)
+        x2 = make_order(side=OrderSide.SELL, quantity="2", reduce_only=True, at=later(3), provenance="test:x2")
+        ledger = ledger.apply_fill(make_fill(order=x2, price="102", quantity="2", fee="0", at=later(4), label="x2"), x2)
+
+        self.assertEqual(Decimal("10004"), ledger.cash)
+        self.assertEqual(Decimal("0"), ledger.position_asset)
+        self.assertEqual(Decimal("4"), ledger.realized_pnl_total)
+        self.assertEqual(Decimal("10004"), ledger.book_equity)
+
+    def test_repeating_fraction_basis_exact_accounting_short_position(self):
+        # Short 1 @ 100 + Short 2 @ 101 => total cost 302 across 3 units.
+        # Cover in 2 fills at 98: profit is (302 - 3*98) = 8.
+        ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
+        e1 = make_order(side=OrderSide.SELL, quantity="1", reduce_only=False, at=AS_OF, provenance="test:e1")
+        ledger = ledger.apply_fill(make_fill(order=e1, price="100", quantity="1", fee="0", at=later(1), label="e1"), e1)
+        e2 = make_order(side=OrderSide.SELL, quantity="2", reduce_only=False, at=later(1), provenance="test:e2")
+        ledger = ledger.apply_fill(make_fill(order=e2, price="101", quantity="2", fee="0", at=later(2), label="e2"), e2)
+
+        x1 = make_order(side=OrderSide.BUY, quantity="1", reduce_only=True, at=later(2), provenance="test:x1")
+        ledger = ledger.apply_fill(make_fill(order=x1, price="98", quantity="1", fee="0", at=later(3), label="x1"), x1)
+        x2 = make_order(side=OrderSide.BUY, quantity="2", reduce_only=True, at=later(3), provenance="test:x2")
+        ledger = ledger.apply_fill(make_fill(order=x2, price="98", quantity="2", fee="0", at=later(4), label="x2"), x2)
+
+        self.assertEqual(Decimal("10008"), ledger.cash)
+        self.assertEqual(Decimal("0"), ledger.position_asset)
+        self.assertEqual(Decimal("8"), ledger.realized_pnl_total)
+        self.assertEqual(Decimal("10008"), ledger.book_equity)
+
     def test_ledger_identity_is_deterministic_for_identical_history(self):
         def build() -> PortfolioLedger:
             ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)

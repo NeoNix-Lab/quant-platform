@@ -186,6 +186,25 @@ class IntraBarResolutionTests(unittest.TestCase):
         self.assertEqual(1, len(resolved_ba))
         self.assertIs(resolved_ab[0].trigger.order, resolved_ba[0].trigger.order)
 
+    def test_same_role_tie_break_orders_prices_numerically_not_lexicographically(self):
+        # 9000 vs 10000: lexicographically "10000" < "9000", but numerically
+        # 9000 < 10000. Tie-break must use numeric comparison.
+        order_9000 = make_order(side=OrderSide.SELL, provenance="test:order-9000")
+        order_10000 = make_order(side=OrderSide.SELL, provenance="test:order-10000")
+        trigger_9000 = PendingTrigger(
+            order=order_9000, trigger_price="9000", direction=TriggerDirection.AT_OR_BELOW,
+            role=TriggerRole.STOP_LOSS, conflict_group="g",
+        )
+        trigger_10000 = PendingTrigger(
+            order=order_10000, trigger_price="10000", direction=TriggerDirection.AT_OR_BELOW,
+            role=TriggerRole.STOP_LOSS, conflict_group="g",
+        )
+        events = (event(1, "t1", "8000"),)
+
+        resolved = resolve_intra_bar_triggers((trigger_10000, trigger_9000), events)
+        self.assertEqual(1, len(resolved))
+        self.assertEqual(Decimal("9000"), resolved[0].trigger.trigger_price)
+
 
 class OcoGroupTests(unittest.TestCase):
     def test_any_fill_cascades_cancellation_to_every_sibling(self):

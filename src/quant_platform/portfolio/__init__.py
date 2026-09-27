@@ -194,16 +194,22 @@ class PositionSide:
     opened_at: Instant | None
     updated_at: Instant
     provenance: str
+    cost_basis: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instrument", _non_empty_text(self.instrument, "instrument"))
         object.__setattr__(self, "direction", PositionDirection(self.direction))
         object.__setattr__(self, "quantity", _decimal(self.quantity, "quantity"))
         object.__setattr__(self, "average_basis", _decimal(self.average_basis, "average_basis"))
+        object.__setattr__(self, "cost_basis", _decimal(self.cost_basis, "cost_basis"))
         if self.quantity > 0 and self.average_basis == 0:
             raise PortfolioError("average_basis must be positive whenever quantity is open")
         if self.quantity == 0 and self.average_basis != 0:
             raise PortfolioError("average_basis must be zero when quantity is flat")
+        if self.quantity > 0 and self.cost_basis == 0 and self.average_basis > 0:
+            object.__setattr__(self, "cost_basis", self.quantity * self.average_basis)
+        if self.quantity == 0 and self.cost_basis != 0:
+            raise PortfolioError("cost_basis must be zero when quantity is flat")
         object.__setattr__(self, "realized_pnl", _signed_decimal(self.realized_pnl, "realized_pnl"))
         if self.opened_at is not None:
             object.__setattr__(self, "opened_at", Instant.parse(self.opened_at))
@@ -230,6 +236,7 @@ class PositionSide:
             opened_at=None,
             updated_at=Instant.parse(as_of),
             provenance=provenance,
+            cost_basis=Decimal("0"),
         )
 
     def unrealized_pnl(self, mark_price: Decimal | str | int) -> Decimal:
@@ -248,7 +255,7 @@ class PositionSide:
         sensitivity to price moves (see PR discussion / H04 design notes).
         """
 
-        return (self.quantity * self.average_basis) + self.unrealized_pnl(mark_price)
+        return self.cost_basis + self.unrealized_pnl(mark_price)
 
     def apply_increase(
         self,
@@ -262,11 +269,13 @@ class PositionSide:
         px = _decimal(price, "price", allow_zero=False)
         at_instant = Instant.parse(at)
         new_quantity = self.quantity + qty
-        new_basis = ((self.average_basis * self.quantity) + (px * qty)) / new_quantity
+        new_cost_basis = self.cost_basis + (px * qty)
+        new_basis = new_cost_basis / new_quantity
         return replace(
             self,
             quantity=new_quantity,
             average_basis=new_basis,
+            cost_basis=new_cost_basis,
             opened_at=self.opened_at or at_instant,
             updated_at=at_instant,
             provenance=provenance,
@@ -285,15 +294,28 @@ class PositionSide:
             raise PortfolioError("cannot reduce a position side by more than its open quantity")
         px = _decimal(price, "price", allow_zero=False)
         at_instant = Instant.parse(at)
-        if self.direction is PositionDirection.LONG:
-            delta = (px - self.average_basis) * qty
-        else:
-            delta = (self.average_basis - px) * qty
         new_quantity = self.quantity - qty
+        if new_quantity == 0:
+            cost_basis_removed = self.cost_basis
+            new_cost_basis = Decimal("0")
+            new_basis = Decimal("0")
+            if self.direction is PositionDirection.LONG:
+                delta = (px * qty) - cost_basis_removed
+            else:
+                delta = cost_basis_removed - (px * qty)
+        else:
+            cost_basis_removed = qty * self.average_basis
+            new_cost_basis = self.cost_basis - cost_basis_removed
+            new_basis = self.average_basis
+            if self.direction is PositionDirection.LONG:
+                delta = (px - self.average_basis) * qty
+            else:
+                delta = (self.average_basis - px) * qty
         new_side = replace(
             self,
             quantity=new_quantity,
-            average_basis=self.average_basis if new_quantity > 0 else Decimal("0"),
+            average_basis=new_basis,
+            cost_basis=new_cost_basis,
             realized_pnl=self.realized_pnl + delta,
             opened_at=self.opened_at if new_quantity > 0 else None,
             updated_at=at_instant,
@@ -307,6 +329,7 @@ class PositionSide:
             "direction": self.direction.value,
             "quantity": _decimal_string(self.quantity),
             "average_basis": _decimal_string(self.average_basis),
+            "cost_basis": _decimal_string(self.cost_basis),
             "realized_pnl": _decimal_string(self.realized_pnl),
             "opened_at": None if self.opened_at is None else self.opened_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
@@ -546,6 +569,7 @@ class PortfolioLedger:
         old_side = old_hedge.long if direction is PositionDirection.LONG else old_hedge.short
 
         new_hedge, realized_delta = old_hedge.apply_fill(fill, order)
+        new_side = new_hedge.long if direction is PositionDirection.LONG else new_hedge.short
 
         lines: list[JournalLine] = []
         if is_increase:
@@ -556,7 +580,7 @@ class PortfolioLedger:
             new_cash = self.cash - notional
             new_realized_total = self.realized_pnl_total
         else:
-            cost_basis_removed = fill.quantity * old_side.average_basis
+            cost_basis_removed = old_side.cost_basis - new_side.cost_basis
             cash_delta = cost_basis_removed + realized_delta
             lines.append(JournalLine(account=AccountType.POSITION_ASSET, side=EntrySide.CREDIT, amount=cost_basis_removed))
             if realized_delta > 0:
@@ -587,6 +611,8 @@ class PortfolioLedger:
 
         new_positions = dict(self.positions)
         new_positions[instrument] = new_hedge
+        if all(pos.long.quantity == 0 and pos.short.quantity == 0 for pos in new_positions.values()):
+            new_position_asset = Decimal("0")
 
         return replace(
             self,

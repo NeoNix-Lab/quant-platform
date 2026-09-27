@@ -1024,13 +1024,13 @@ class TriggerEvent:
     price_event: PriceEvent
 
 
-def _trigger_sort_key(trigger: PendingTrigger) -> tuple[str, int, str, int, str]:
+def _trigger_sort_key(trigger: PendingTrigger) -> tuple[str, int, Decimal, int, str]:
     """Total, content-derived order: never depends on caller-supplied list order."""
 
     return (
         trigger.conflict_group,
         _TRIGGER_ROLE_PRIORITY[trigger.role],
-        _decimal_string(trigger.trigger_price),
+        trigger.trigger_price,
         trigger.order.submitted_at.epoch_ns,
         trigger.order.order_id,
     )
