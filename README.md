@@ -1,6 +1,8 @@
 # Quant Platform
 
 [![Quant Platform integrity](https://github.com/NeoNix-Lab/quant-platform/actions/workflows/integrity.yml/badge.svg)](https://github.com/NeoNix-Lab/quant-platform/actions/workflows/integrity.yml)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue.svg)](https://neonix-lab.github.io/quant-platform/)
+[![Discussions](https://img.shields.io/badge/community-Discussions-purple.svg)](https://github.com/NeoNix-Lab/quant-platform/discussions)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: Proprietary](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
 
@@ -128,6 +130,7 @@ python -m unittest tests.test_replay_v1
 
 ## Documentation & Authority
 
+- **[Interactive Documentation (GitHub Pages)](https://neonix-lab.github.io/quant-platform/)**
 - [Product Specification](docs/product/PRODUCT.md)
 - [Capability Map](docs/product/CAPABILITY_MAP.md)
 - [Product Roadmap](docs/product/ROADMAP.md)
