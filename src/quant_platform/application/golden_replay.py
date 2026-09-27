@@ -15,7 +15,7 @@ from typing import Any
 
 from ..access.catalog import Catalog
 from ..access.gateway import DataGateway
-from ..data.models import DatasetIdentity
+from ..data.models import DatasetIdentity, Instant
 from ..execution import FeeSchedule
 from ..replay import HistoricalReplayRuntime, ReplayContext, ReplayResult, ReplaySpec
 from ..source_adapters.bybit import BYBIT_ORDERING_PROVIDER, BYBIT_TRADE_V1_ORDERING_POLICY

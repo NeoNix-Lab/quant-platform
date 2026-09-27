@@ -101,6 +101,8 @@ class StrategyAndSpecConstructionTests(unittest.TestCase):
         strategy = minimal_breakout_strategy()
         self.assertIsInstance(strategy, StrategySpec)
         self.assertTrue(strategy.strategy_identity.startswith("strategy-spec-v1:sha256:"))
+        decisions = strategy.session_policy.evaluate(Instant.parse("2024-01-15T00:00:00Z"))
+        self.assertEqual("OPEN", decisions[0].state.value)
 
     def test_build_spec_uses_the_canonical_bybit_btcusdt_dataset_and_real_ordering_policy(self):
         spec = build_golden_replay_spec(
