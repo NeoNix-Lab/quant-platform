@@ -20,6 +20,7 @@ jobs:
       - name: Close linked issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -31,10 +32,16 @@ jobs:
           import re
           import subprocess
 
+          repo = os.environ.get("REPO", "")
           pr_number = os.environ.get("PR_NUMBER", "")
           pr_body = os.environ.get("PR_BODY") or ""
           pr_head_ref = os.environ.get("PR_HEAD_REF") or ""
           base_ref = os.environ.get("BASE_REF") or ""
+
+          # Issues labeled hold-until-main (governance closeouts, vertical/E2E
+          # proof issues) must not close on an implement/<wave> merge -- they
+          # only close for real once the wave promotes to main.
+          HOLD_LABEL = "hold-until-main"
 
           issue_numbers = set()
 
@@ -54,10 +61,31 @@ jobs:
               exit(0)
 
           for issue_num in sorted(issue_numbers, key=int):
+              labels_res = subprocess.run(
+                  ["gh", "issue", "view", issue_num, "--repo", repo,
+                   "--json", "labels", "-q", ".labels[].name"],
+                  capture_output=True,
+                  text=True,
+              )
+              labels = set(labels_res.stdout.split())
+
+              if HOLD_LABEL in labels:
+                  print(f"Issue #{issue_num} is labeled '{HOLD_LABEL}'; leaving open despite merge into {base_ref}.")
+                  hold_comment = (
+                      f"PR #{pr_number} merged into `{base_ref}`, but this issue is held open "
+                      f"until this wave promotes to `main` (labeled `{HOLD_LABEL}`)."
+                  )
+                  subprocess.run(
+                      ["gh", "issue", "comment", issue_num, "--repo", repo, "--body", hold_comment],
+                      capture_output=True,
+                      text=True,
+                  )
+                  continue
+
               print(f"Closing issue #{issue_num} via PR #{pr_number}...")
               comment = f"Automatically closed by PR #{pr_number} merged into `{base_ref}`."
               res = subprocess.run(
-                  ["gh", "issue", "close", issue_num, "--comment", comment],
+                  ["gh", "issue", "close", issue_num, "--repo", repo, "--comment", comment],
                   capture_output=True,
                   text=True,
               )
