@@ -1,16 +1,16 @@
-"""Order/Fill lifecycle, fee/slippage cost models, and the G03/G04 admission seam v1.
+"""Order/Fill lifecycle, fee/slippage cost models, and conflict resolution v1.
 
-This package owns H01/H02: the executable ``Order`` state machine, the
-``Fill`` value type, a parameterized fee schedule, and a deterministic
-synthetic slippage model. It also owns the seam translating a Strategy
-``DecisionIntent`` into an admitted (or explicitly refused) ``Order`` by
-evaluating ``StrategySpec``'s session, cooldown, risk and sizing policies --
-closing the gap left open by G02's pure ``compose_decision``, which never
-consults those policies itself.
+This package owns H01/H02/H03: the executable ``Order`` state machine, the
+``Fill`` value type, a parameterized fee schedule, a deterministic synthetic
+slippage model, the seam translating a Strategy ``DecisionIntent`` into an
+admitted (or explicitly refused) ``Order`` (evaluating ``StrategySpec``'s
+session, cooldown, risk and sizing policies), the intra-bar chronological
+conflict resolver (ADR-0046 SS1), OCO entry-group cancellation cascades
+(ADR-0046 SS3), and independent multileg exit-leg management (ADR-0046 SS4).
 
-It does not implement same-bar/OCO conflict resolution or intra-bar
-sequencing (H03), double-entry portfolio/ledger accounting (H04), or live
-venue adapters -- all out of scope for this slice.
+It does not implement double-entry portfolio/ledger accounting (H04, owned
+by ``quant_platform.portfolio``), historical replay orchestration (H05), or
+live venue adapters -- all out of scope for this package.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from enum import StrEnum
 import hashlib
 import json
 import re
+from types import MappingProxyType
 from typing import Any
 
 from ..data.models import Instant
@@ -930,23 +931,362 @@ def admit_composition_result(
     return translate_intent(result.decision_intent, spec, **kwargs)
 
 
+# ---------------------------------------------------------------------------
+# H03: intra-bar chronological conflict resolution (ADR-0046 SS1), OCO entry
+# groups (SS3), and independent multileg exit management (SS4).
+# ---------------------------------------------------------------------------
+
+
+class TriggerRole(StrEnum):
+    """Tie-break priority when >1 trigger fires on the exact same price event.
+
+    Lower priority value wins ties (STOP_LOSS is the most conservative
+    outcome and always wins over ENTRY or TAKE_PROFIT per ADR-0046 SS1).
+    """
+
+    STOP_LOSS = "STOP_LOSS"
+    ENTRY = "ENTRY"
+    TAKE_PROFIT = "TAKE_PROFIT"
+
+
+_TRIGGER_ROLE_PRIORITY: dict[TriggerRole, int] = {
+    TriggerRole.STOP_LOSS: 0,
+    TriggerRole.ENTRY: 1,
+    TriggerRole.TAKE_PROFIT: 2,
+}
+
+
+class TriggerDirection(StrEnum):
+    AT_OR_BELOW = "AT_OR_BELOW"
+    AT_OR_ABOVE = "AT_OR_ABOVE"
+
+
+@dataclass(frozen=True, slots=True)
+class PriceEvent:
+    """One ordered chronological trade-path event within a bar (ADR-0046 SS1).
+
+    Deliberately minimal and execution-owned (not ``TradeRecord``): the
+    intra-bar engine only needs an ordered ``(exchange_ts, trade_id)`` stream
+    and a price, per the ADR's forward-compatibility note -- adapting a real
+    dataset's trade stream into this shape is the replay orchestration's job
+    (H05, issue #145), not this package's.
+    """
+
+    exchange_ts: Instant
+    trade_id: str
+    price: Decimal
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "exchange_ts", Instant.parse(self.exchange_ts))
+        object.__setattr__(self, "trade_id", _non_empty_text(self.trade_id, "trade_id"))
+        object.__setattr__(self, "price", _decimal(self.price, "price", allow_zero=False))
+
+    @property
+    def sort_key(self) -> tuple[int, str]:
+        return (self.exchange_ts.epoch_ns, self.trade_id)
+
+
+@dataclass(frozen=True, slots=True)
+class PendingTrigger:
+    """One resting order awaiting a triggering price event within a bar.
+
+    ``conflict_group`` scopes the tie-break rule: only triggers sharing the
+    same group (e.g. one position side's stop + targets) compete for
+    conservative precedence on a single event. Unrelated triggers (different
+    groups) never suppress each other even if they fire on the same event.
+    """
+
+    order: Order
+    trigger_price: Decimal
+    direction: TriggerDirection
+    role: TriggerRole
+    conflict_group: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.order, Order):
+            raise ExecutionError("order must be an Order")
+        trigger_price = _decimal(self.trigger_price, "trigger_price", allow_zero=False)
+        direction = TriggerDirection(self.direction)
+        role = TriggerRole(self.role)
+        canonical_trigger_price = _canonical_trigger_price(self.order)
+        if canonical_trigger_price is None:
+            raise ExecutionError("pending triggers require a LIMIT, STOP_MARKET or STOP_LIMIT order")
+        if trigger_price != canonical_trigger_price:
+            raise ExecutionError("trigger_price must match the wrapped order's canonical trigger price")
+        expected_direction = _canonical_trigger_direction(self.order, role)
+        if direction is not expected_direction:
+            raise ExecutionError("direction contradicts the wrapped order and trigger role")
+        object.__setattr__(self, "trigger_price", trigger_price)
+        object.__setattr__(self, "direction", direction)
+        object.__setattr__(self, "role", role)
+        object.__setattr__(self, "conflict_group", _key(self.conflict_group, "conflict_group"))
+
+    def is_triggered_by(self, price: Decimal) -> bool:
+        if self.direction is TriggerDirection.AT_OR_BELOW:
+            return price <= self.trigger_price
+        return price >= self.trigger_price
+
+
+def _canonical_trigger_price(order: Order) -> Decimal | None:
+    if order.order_type is OrderType.LIMIT:
+        return order.limit_price
+    if order.order_type in (OrderType.STOP_MARKET, OrderType.STOP_LIMIT):
+        return order.stop_price
+    return None
+
+
+def _canonical_trigger_direction(order: Order, role: TriggerRole) -> TriggerDirection:
+    if role is TriggerRole.STOP_LOSS:
+        return TriggerDirection.AT_OR_BELOW if order.side is OrderSide.SELL else TriggerDirection.AT_OR_ABOVE
+    if role is TriggerRole.TAKE_PROFIT:
+        return TriggerDirection.AT_OR_ABOVE if order.side is OrderSide.SELL else TriggerDirection.AT_OR_BELOW
+    if order.order_type is OrderType.LIMIT:
+        return TriggerDirection.AT_OR_BELOW if order.side is OrderSide.BUY else TriggerDirection.AT_OR_ABOVE
+    return TriggerDirection.AT_OR_ABOVE if order.side is OrderSide.BUY else TriggerDirection.AT_OR_BELOW
+
+
+@dataclass(frozen=True, slots=True)
+class TriggerEvent:
+    """One ``PendingTrigger`` resolved as fired against one ``PriceEvent``."""
+
+    trigger: PendingTrigger
+    price_event: PriceEvent
+
+
+def _trigger_sort_key(trigger: PendingTrigger) -> tuple[str, int, Decimal, int, str]:
+    """Total, content-derived order: never depends on caller-supplied list order."""
+
+    return (
+        trigger.conflict_group,
+        _TRIGGER_ROLE_PRIORITY[trigger.role],
+        trigger.trigger_price,
+        trigger.order.submitted_at.epoch_ns,
+        trigger.order.order_id,
+    )
+
+
+def resolve_intra_bar_triggers(
+    pending: Iterable[PendingTrigger],
+    events: Iterable[PriceEvent],
+) -> tuple[TriggerEvent, ...]:
+    """Walk ``events`` in canonical ``(exchange_ts, trade_id)`` order (ADR-0046
+    SS1). A still-pending trigger fires on the first event that crosses its
+    level. If more than one trigger *in the same conflict_group* fires on the
+    exact same event, only the most conservative role fires (STOP_LOSS before
+    ENTRY before TAKE_PROFIT); ties within the same role are broken by
+    ``_trigger_sort_key`` (trigger_price, then submitted_at, then order_id) --
+    never by caller-supplied list order. Losing candidates remain pending for
+    a later event -- never bar-level high/low heuristics, only the real
+    reconstructed path.
+
+    Pure and deterministic: identical ``pending``/``events`` (in any input
+    order) always produce the identical resolution sequence.
+    """
+
+    ordered_events = sorted(events, key=lambda event: event.sort_key)
+    remaining = sorted(pending, key=_trigger_sort_key)
+    resolved: list[TriggerEvent] = []
+    for event in ordered_events:
+        if not remaining:
+            break
+        still_remaining: list[PendingTrigger] = []
+        candidates_by_group: dict[str, list[PendingTrigger]] = {}
+        for trigger in remaining:
+            if trigger.is_triggered_by(event.price):
+                candidates_by_group.setdefault(trigger.conflict_group, []).append(trigger)
+            else:
+                still_remaining.append(trigger)
+        for group in sorted(candidates_by_group):
+            group_candidates = candidates_by_group[group]  # already sorted: see remaining's construction
+            winner, *losers = group_candidates
+            resolved.append(TriggerEvent(trigger=winner, price_event=event))
+            still_remaining.extend(losers)
+        remaining = sorted(still_remaining, key=_trigger_sort_key)
+    return tuple(resolved)
+
+
+def _withdraw_if_open(order: Order) -> Order:
+    """Terminate ``order`` if still open, using whichever transition is legal.
+
+    A never-acknowledged order (``PENDING_NEW``) cannot be cancelled -- only
+    ``NEW``/``REJECTED`` are legal next states for it -- so it is rejected
+    instead; an already-resting order (``NEW``/``PARTIALLY_FILLED``) is
+    cancelled as usual. A terminal order is returned unchanged.
+    """
+
+    if order.status is OrderStatus.PENDING_NEW:
+        return order.reject()
+    if order.is_open:
+        return order.cancel()
+    return order
+
+
+@dataclass(frozen=True, slots=True)
+class OcoGroup:
+    """A dynamic One-Cancels-Other entry group (ADR-0046 SS3).
+
+    Any fill (full or partial) of any member immediately cascades
+    cancellation to every other current member. No sub-groups: membership is
+    always a flat set of ``Order`` values.
+    """
+
+    group_id: str
+    members: Mapping[str, Order]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "group_id", _key(self.group_id, "oco group_id"))
+        if not isinstance(self.members, Mapping):
+            raise ExecutionError("members must be a mapping of order_id -> Order")
+        normalized: dict[str, Order] = {}
+        for order_id, order in self.members.items():
+            if not isinstance(order, Order):
+                raise ExecutionError("OCO members must be Order values")
+            if order.order_id != order_id:
+                raise ExecutionError("members mapping key must match order.order_id")
+            normalized[order_id] = order
+        object.__setattr__(self, "members", MappingProxyType(normalized))
+
+    @classmethod
+    def create(cls, group_id: str, orders: Iterable[Order]) -> "OcoGroup":
+        return cls(group_id=group_id, members={order.order_id: order for order in orders})
+
+    def add_leg(self, order: Order) -> "OcoGroup":
+        if not isinstance(order, Order):
+            raise ExecutionError("order must be an Order")
+        if order.order_id in self.members:
+            raise ExecutionError("order is already a member of this OCO group")
+        updated = dict(self.members)
+        updated[order.order_id] = order
+        return OcoGroup(group_id=self.group_id, members=updated)
+
+    def remove_leg(self, order_id: str) -> "OcoGroup":
+        if order_id not in self.members:
+            raise ExecutionError("order_id is not a member of this OCO group")
+        updated = dict(self.members)
+        del updated[order_id]
+        return OcoGroup(group_id=self.group_id, members=updated)
+
+    def apply_fill(self, fill: "Fill") -> "OcoGroup":
+        """Apply ``fill`` to its member order; cascade-cancel every sibling."""
+
+        if not isinstance(fill, Fill):
+            raise ExecutionError("fill must be a Fill")
+        target = self.members.get(fill.order_id)
+        if target is None:
+            raise ExecutionError("fill.order_id is not a member of this OCO group")
+        updated_members = {fill.order_id: target.apply_fill(fill)}
+        for order_id, order in self.members.items():
+            if order_id == fill.order_id:
+                continue
+            updated_members[order_id] = _withdraw_if_open(order)
+        return OcoGroup(group_id=self.group_id, members=updated_members)
+
+    def stable_dict(self) -> dict[str, Any]:
+        return {
+            "group_id": self.group_id,
+            "members": {order_id: order.stable_dict() for order_id, order in self.members.items()},
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ExitLegManager:
+    """Independent multileg exit management for one position side (ADR-0046 SS4).
+
+    Reuses ``validate_leg_quantity_conservation`` (the same invariant #143
+    already enforces standalone) as the admission gate for every new leg, so
+    the two never diverge. Filling one leg never touches any sibling.
+    """
+
+    position_key: str
+    legs: Mapping[str, Order]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "position_key", _key(self.position_key, "position_key"))
+        if not isinstance(self.legs, Mapping):
+            raise ExecutionError("legs must be a mapping of order_id -> Order")
+        normalized: dict[str, Order] = {}
+        for order_id, order in self.legs.items():
+            if not isinstance(order, Order):
+                raise ExecutionError("legs must contain Order values")
+            if not order.reduce_only:
+                raise ExecutionError("exit legs must be reduce_only orders")
+            if order.order_id != order_id:
+                raise ExecutionError("legs mapping key must match order.order_id")
+            normalized[order_id] = order
+        object.__setattr__(self, "legs", MappingProxyType(normalized))
+
+    @classmethod
+    def create(cls, position_key: str, legs: Iterable[Order] = ()) -> "ExitLegManager":
+        return cls(position_key=position_key, legs={order.order_id: order for order in legs})
+
+    def add_leg(self, order: Order, *, open_position_quantity: Decimal | str | int) -> "ExitLegManager":
+        if not isinstance(order, Order):
+            raise ExecutionError("order must be an Order")
+        if not order.reduce_only:
+            raise ExecutionError("exit legs must be reduce_only orders")
+        if order.order_id in self.legs:
+            raise ExecutionError("order is already a member exit leg")
+        candidate_legs = [*self.legs.values(), order]
+        validate_leg_quantity_conservation(legs=candidate_legs, open_position_quantity=open_position_quantity)
+        updated = dict(self.legs)
+        updated[order.order_id] = order
+        return ExitLegManager(position_key=self.position_key, legs=updated)
+
+    def apply_fill(self, fill: "Fill") -> "ExitLegManager":
+        """Apply ``fill`` to its member leg only; siblings are never touched."""
+
+        if not isinstance(fill, Fill):
+            raise ExecutionError("fill must be a Fill")
+        target = self.legs.get(fill.order_id)
+        if target is None:
+            raise ExecutionError("fill.order_id is not a member exit leg")
+        updated = dict(self.legs)
+        updated[fill.order_id] = target.apply_fill(fill)
+        return ExitLegManager(position_key=self.position_key, legs=updated)
+
+    def remove_leg(self, order_id: str) -> "ExitLegManager":
+        if order_id not in self.legs:
+            raise ExecutionError("order_id is not a member exit leg")
+        updated = dict(self.legs)
+        del updated[order_id]
+        return ExitLegManager(position_key=self.position_key, legs=updated)
+
+    @property
+    def active_open_quantity(self) -> Decimal:
+        return sum((leg.open_quantity for leg in self.legs.values() if leg.is_open), Decimal("0"))
+
+    def stable_dict(self) -> dict[str, Any]:
+        return {
+            "position_key": self.position_key,
+            "legs": {order_id: order.stable_dict() for order_id, order in self.legs.items()},
+        }
+
+
 __all__ = [
     "AdmissionOutcome",
     "AdmissionRefusalReason",
     "ExecutionError",
+    "ExitLegManager",
     "FeeSchedule",
     "Fill",
     "LiquidityRole",
+    "OcoGroup",
     "Order",
     "OrderAdmission",
     "OrderSide",
     "OrderStatus",
     "OrderType",
+    "PendingTrigger",
+    "PriceEvent",
     "SlippageModelKind",
     "SyntheticSlippageModel",
     "TimeInForce",
+    "TriggerDirection",
+    "TriggerEvent",
+    "TriggerRole",
     "admit_composition_result",
     "build_fill",
+    "resolve_intra_bar_triggers",
     "translate_intent",
     "validate_leg_quantity_conservation",
 ]
