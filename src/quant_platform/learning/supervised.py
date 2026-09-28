@@ -19,7 +19,11 @@ from types import MappingProxyType
 from typing import Any
 
 from quant_platform.data.models import CoverageInterval, Instant
-from quant_platform.features.definitions import FeatureObservation, ObservationLifecycle
+from quant_platform.features.definitions import (
+    FeatureDefinitionId,
+    FeatureObservation,
+    ObservationLifecycle,
+)
 from quant_platform.validation.availability import (
     CandidateClassification,
     DependencyCutoffRole,
@@ -118,6 +122,7 @@ class SupervisedSelectionPolicy:
     policy_key: str
     semantic_version: str | int
     implementation_code_identity: str
+    feature_definition_ids: Sequence[str | FeatureDefinitionId]
     require_labeled_targets: bool = True
     sample_uniqueness_version: str | int = "1"
     notes: str | None = None
@@ -130,6 +135,19 @@ class SupervisedSelectionPolicy:
             "implementation_code_identity",
             _text(self.implementation_code_identity, "implementation_code_identity"),
         )
+        feature_definition_ids = tuple(
+            str(
+                item
+                if isinstance(item, FeatureDefinitionId)
+                else FeatureDefinitionId(_text(item, "feature_definition_id"))
+            )
+            for item in self.feature_definition_ids
+        )
+        if not feature_definition_ids:
+            raise LearningError("feature_definition_ids must not be empty")
+        if len(set(feature_definition_ids)) != len(feature_definition_ids):
+            raise LearningError("feature_definition_ids must be distinct")
+        object.__setattr__(self, "feature_definition_ids", feature_definition_ids)
         if type(self.require_labeled_targets) is not bool:
             raise LearningError("require_labeled_targets must be a boolean")
         object.__setattr__(
@@ -146,6 +164,7 @@ class SupervisedSelectionPolicy:
             "policy_key": self.policy_key,
             "semantic_version": self.semantic_version,
             "implementation_code_identity": self.implementation_code_identity,
+            "feature_definition_ids": list(self.feature_definition_ids),
             "require_labeled_targets": self.require_labeled_targets,
             "sample_uniqueness_version": self.sample_uniqueness_version,
             "notes": self.notes,
@@ -239,7 +258,7 @@ class SupervisedSampleCandidate:
         feature_ids = [feature.observation.identity for feature in features]
         if len(set(feature_ids)) != len(feature_ids):
             raise LearningError("sample candidate features must be distinct observations")
-        object.__setattr__(self, "features", tuple(sorted(features, key=lambda item: item.observation.identity)))
+        object.__setattr__(self, "features", tuple(features))
         if not isinstance(self.label, LabelResult):
             raise LearningError("label must be a LabelResult")
         if not isinstance(self.metadata, Mapping):
@@ -254,6 +273,12 @@ class SupervisedSampleCandidate:
 
     def validation_candidate(self) -> ValidationCandidate:
         return ValidationCandidate(d=self.decision_time, dependencies=self.dependencies)
+
+    def validation_candidate_for_side(self, side: ProjectionSide) -> ValidationCandidate:
+        if side is ProjectionSide.TRAIN:
+            return self.validation_candidate()
+        feature_dependencies = tuple(feature.dependency_evidence for feature in self.features)
+        return ValidationCandidate(d=self.decision_time, dependencies=feature_dependencies)
 
     def stable_dict(self) -> dict[str, Any]:
         return {
@@ -300,6 +325,10 @@ class SupervisedProjectionSample:
         if include_identity:
             payload["sample_identity"] = self.sample_identity
         return payload
+
+    @property
+    def feature_values(self) -> tuple[Any, ...]:
+        return tuple(feature.observation.value for feature in self.feature_inputs)
 
     def _identity_payload(self) -> dict[str, Any]:
         return {
@@ -397,6 +426,25 @@ class SupervisedProjection:
             payload["projection_identity"] = self.projection_identity
         return payload
 
+    @property
+    def feature_schema(self) -> tuple[str, ...]:
+        return tuple(self.selection_policy.feature_definition_ids)
+
+    def samples_for_side(self, side: ProjectionSide | str | None = None) -> tuple[SupervisedProjectionSample, ...]:
+        if side is None:
+            return self.samples
+        selected_side = ProjectionSide(side)
+        return tuple(sample for sample in self.samples if sample.side is selected_side)
+
+    def feature_matrix(self, side: ProjectionSide | str | None = None) -> tuple[tuple[Any, ...], ...]:
+        return tuple(sample.feature_values for sample in self.samples_for_side(side))
+
+    def target_vector(self, side: ProjectionSide | str | None = None) -> tuple[Any, ...]:
+        return tuple(sample.label.value for sample in self.samples_for_side(side))
+
+    def sample_weights(self, side: ProjectionSide | str | None = None) -> tuple[str, ...]:
+        return tuple(sample.sample_uniqueness_weight for sample in self.samples_for_side(side))
+
 
 def build_supervised_projection(
     *,
@@ -424,6 +472,7 @@ def build_supervised_projection(
         raise LearningError("lockbox must be a Lockbox")
 
     items = tuple(candidates)
+    schema = tuple(selection_policy.feature_definition_ids)
     seen_sample_ids: set[str] = set()
     admitted: list[tuple[SupervisedSampleCandidate, CandidateClassification]] = []
     rejections: list[SupervisedProjectionRejection] = []
@@ -434,8 +483,10 @@ def build_supervised_projection(
         if candidate.sample_id in seen_sample_ids:
             raise LearningError(f"duplicate sample_id: {candidate.sample_id}")
         seen_sample_ids.add(candidate.sample_id)
+        _ordered_features(candidate, schema)
 
-        validation_candidate = candidate.validation_candidate()
+        side = _side_for_candidate(fold, candidate)
+        validation_candidate = candidate.validation_candidate_for_side(side)
         if lockbox is not None:
             try:
                 lockbox.check_development_candidate(validation_candidate)
@@ -474,16 +525,21 @@ def build_supervised_projection(
                 )
             )
 
-    weights = _sample_uniqueness_weights(tuple(candidate for candidate, _ in admitted))
+    train_candidates = tuple(
+        candidate
+        for candidate, _ in admitted
+        if _side_for_candidate(fold, candidate) is ProjectionSide.TRAIN
+    )
+    weights = _sample_uniqueness_weights(train_candidates)
     samples = tuple(
         SupervisedProjectionSample(
             sample_id=candidate.sample_id,
-            side=ProjectionSide.TRAIN if candidate.decision_time < fold.test.start else ProjectionSide.TEST,
+            side=_side_for_candidate(fold, candidate),
             decision_time=candidate.decision_time,
-            feature_inputs=tuple(candidate.features),
+            feature_inputs=_ordered_features(candidate, schema),
             label=candidate.label,
             validation_classification=classification,
-            sample_uniqueness_weight=weights[candidate.sample_id],
+            sample_uniqueness_weight=weights.get(candidate.sample_id, "1"),
         )
         for candidate, classification in admitted
     )
@@ -510,7 +566,7 @@ def _sample_uniqueness_weights(candidates: tuple[SupervisedSampleCandidate, ...]
     for sample_id, interval in intervals.items():
         duration = interval.end.epoch_ns - interval.start.epoch_ns
         if duration <= 0:
-            weights[sample_id] = "0"
+            weights[sample_id] = "1"
             continue
         boundaries = {interval.start.epoch_ns, interval.end.epoch_ns}
         for other in intervals.values():
@@ -532,6 +588,29 @@ def _sample_uniqueness_weights(candidates: tuple[SupervisedSampleCandidate, ...]
             total += Fraction(right - left, duration) * Fraction(1, concurrency)
         weights[sample_id] = _fraction_to_text(total)
     return weights
+
+
+def _side_for_candidate(fold: WalkForwardFold, candidate: SupervisedSampleCandidate) -> ProjectionSide:
+    return ProjectionSide.TRAIN if candidate.decision_time < fold.test.start else ProjectionSide.TEST
+
+
+def _ordered_features(
+    candidate: SupervisedSampleCandidate,
+    schema: tuple[str, ...],
+) -> tuple[SupervisedFeatureInput, ...]:
+    by_definition: dict[str, SupervisedFeatureInput] = {}
+    for feature in candidate.features:
+        definition_id = str(feature.observation.definition_id)
+        if definition_id in by_definition:
+            raise LearningError(f"duplicate feature definition in sample {candidate.sample_id}: {definition_id}")
+        by_definition[definition_id] = feature
+    actual = tuple(by_definition)
+    if set(actual) != set(schema) or len(actual) != len(schema):
+        raise LearningError(
+            f"sample {candidate.sample_id} feature schema mismatch: "
+            f"expected {list(schema)}, got {sorted(actual)}"
+        )
+    return tuple(by_definition[definition_id] for definition_id in schema)
 
 
 def _fraction_text(value: Any, field_name: str) -> Fraction:

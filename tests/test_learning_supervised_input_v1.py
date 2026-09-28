@@ -27,6 +27,7 @@ from quant_platform.learning import (
     SupervisedSelectionPolicy,
     build_supervised_projection,
 )
+from quant_platform.learning.supervised import _sample_uniqueness_weights
 from quant_platform.validation import (
     Embargo,
     LabelDefinition,
@@ -66,6 +67,7 @@ def policy() -> SupervisedSelectionPolicy:
         policy_key="i04.supervised_input",
         semantic_version=1,
         implementation_code_identity="test-code-ref",
+        feature_definition_ids=(FEATURE_ID_A,),
     )
 
 
@@ -182,6 +184,9 @@ class SupervisedInputV1Tests(unittest.TestCase):
         self.assertEqual(ProjectionSide.TRAIN, first.samples[0].side)
         self.assertEqual(first.stable_dict(), second.stable_dict())
         self.assertTrue(first.identity.startswith("supervised-projection-v1:sha256:"))
+        self.assertEqual((FEATURE_ID_A,), first.feature_schema)
+        self.assertEqual((("1",), ("1",)), first.feature_matrix())
+        self.assertEqual(("1/100", "1/100"), first.target_vector())
 
     def test_future_feature_availability_is_rejected_by_validation(self):
         future_feature = feature(
@@ -221,6 +226,39 @@ class SupervisedInputV1Tests(unittest.TestCase):
 
         self.assertEqual((), projection.samples)
         self.assertEqual("LABEL_NOT_AVAILABLE", projection.rejections[0].reason)
+
+    def test_test_side_sample_is_admitted_without_training_target_cutoff(self):
+        test_target = label(
+            "1",
+            horizon=("2026-01-01T01:10:00Z", "2026-01-01T01:30:00Z"),
+            causal_available_at="2026-01-01T01:30:00Z",
+        )
+        test_feature = feature(
+            FEATURE_ID_A,
+            observation_identity="test-feature",
+            support=("2026-01-01T01:00:00Z", "2026-01-01T01:10:00Z"),
+            causal_available_at="2026-01-01T01:10:00Z",
+            observed_available_at="2026-01-01T01:10:00Z",
+        )
+
+        projection = build_supervised_projection(
+            fold=fold(),
+            embargo=Embargo(0),
+            selection_policy=policy(),
+            candidates=(
+                candidate(
+                    "sample-1",
+                    "2026-01-01T01:10:00Z",
+                    features=(test_feature,),
+                    target=test_target,
+                ),
+            ),
+        )
+
+        self.assertEqual((), projection.rejections)
+        self.assertEqual(("sample-1",), tuple(sample.sample_id for sample in projection.samples))
+        self.assertEqual(ProjectionSide.TEST, projection.samples[0].side)
+        self.assertEqual(("1",), projection.sample_weights(ProjectionSide.TEST))
 
     def test_target_support_at_held_out_boundary_is_purged(self):
         target = label(
@@ -272,6 +310,66 @@ class SupervisedInputV1Tests(unittest.TestCase):
                 ),
             )
 
+    def test_feature_selection_policy_requires_exact_feature_schema(self):
+        unexpected_feature = feature(
+            FEATURE_ID_B,
+            observation_identity="unexpected-feature",
+            support=("2026-01-01T00:00:00Z", "2026-01-01T00:10:00Z"),
+        )
+        with self.assertRaisesRegex(LearningError, "feature schema mismatch"):
+            build_supervised_projection(
+                fold=fold(),
+                embargo=Embargo(0),
+                selection_policy=policy(),
+                candidates=(
+                    candidate(
+                        "sample-z",
+                        "2026-01-01T00:10:00Z",
+                        features=(unexpected_feature,),
+                    ),
+                ),
+            )
+
+    def test_train_sample_weights_do_not_include_test_samples(self):
+        train = candidate(
+            "sample-a",
+            "2026-01-01T00:10:00Z",
+            target=label(
+                "a",
+                horizon=("2026-01-01T00:10:00Z", "2026-01-01T00:30:00Z"),
+                causal_available_at="2026-01-01T00:30:00Z",
+            ),
+        )
+        test_target = label(
+            "1",
+            horizon=("2026-01-01T01:10:00Z", "2026-01-01T01:30:00Z"),
+            causal_available_at="2026-01-01T01:30:00Z",
+        )
+        test = candidate(
+            "sample-1",
+            "2026-01-01T01:10:00Z",
+            features=(
+                feature(
+                    FEATURE_ID_A,
+                    observation_identity="test-feature",
+                    support=("2026-01-01T01:00:00Z", "2026-01-01T01:10:00Z"),
+                    causal_available_at="2026-01-01T01:10:00Z",
+                    observed_available_at="2026-01-01T01:10:00Z",
+                ),
+            ),
+            target=test_target,
+        )
+
+        projection = build_supervised_projection(
+            fold=fold(),
+            embargo=Embargo(0),
+            selection_policy=policy(),
+            candidates=(test, train),
+        )
+
+        self.assertEqual(("1",), projection.sample_weights(ProjectionSide.TRAIN))
+        self.assertEqual(("1",), projection.sample_weights(ProjectionSide.TEST))
+
     def test_sample_uniqueness_uses_only_temporally_admitted_universe(self):
         first = candidate(
             "sample-a",
@@ -296,7 +394,7 @@ class SupervisedInputV1Tests(unittest.TestCase):
             "2026-01-01T00:50:00Z",
             features=(
                 feature(
-                    FEATURE_ID_B,
+                    FEATURE_ID_A,
                     observation_identity="purged-feature",
                     support=("2026-01-01T00:50:00Z", "2026-01-01T01:05:00Z"),
                 ),
@@ -323,6 +421,24 @@ class SupervisedInputV1Tests(unittest.TestCase):
         self.assertEqual({"sample-a": expected, "sample-b": expected}, weights)
         self.assertEqual(("sample-c",), tuple(rejection.sample_id for rejection in projection.rejections))
         self.assertEqual("PURGED", projection.rejections[0].reason)
+
+    def test_zero_duration_uniqueness_weight_is_one_not_zero(self):
+        censored = label(
+            "e",
+            horizon=("2026-01-01T00:10:00Z", "2026-01-01T00:10:00Z"),
+            causal_available_at="2026-01-01T00:10:00Z",
+            state=OutcomeState.CENSORED_END_OF_DATA,
+        )
+        zero_duration_candidate = candidate(
+            "sample-e",
+            "2026-01-01T00:10:00Z",
+            target=censored,
+        )
+
+        self.assertEqual(
+            {"sample-e": "1"},
+            _sample_uniqueness_weights((zero_duration_candidate,)),
+        )
 
 
 if __name__ == "__main__":
