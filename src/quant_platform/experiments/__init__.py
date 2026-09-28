@@ -1,5 +1,23 @@
 """Experiment System identity and provenance primitives."""
 
+from .accounting import (
+    COMPARABLE_TRIAL_POPULATION_IDENTITY_DOMAIN,
+    EXPERIMENT_METRIC_DEFINITION_IDENTITY_DOMAIN,
+    TRIAL_METRIC_COMPARISON_IDENTITY_DOMAIN,
+    ComparableTrialPopulation,
+    ComparisonEntryStatus,
+    ExperimentAccountingError,
+    MetricComparisonEntry,
+    MetricDefinition,
+    MetricDirection,
+    MetricResult,
+    MetricStatus,
+    MetricValueKind,
+    TrialAttemptResult,
+    TrialMetricComparison,
+    compare_trial_attempts,
+    record_trial_attempt,
+)
 from .identities import (
     ArtifactContentIdentity,
     ArtifactIdentity,
@@ -25,12 +43,24 @@ from .persistence import (
 )
 
 __all__ = [
+    "COMPARABLE_TRIAL_POPULATION_IDENTITY_DOMAIN",
+    "EXPERIMENT_METRIC_DEFINITION_IDENTITY_DOMAIN",
+    "TRIAL_METRIC_COMPARISON_IDENTITY_DOMAIN",
     "ArtifactRecord",
     "ArtifactContentIdentity",
     "ArtifactIdentity",
     "ArtifactRegistration",
+    "ComparableTrialPopulation",
     "ComparisonProtocolIdentity",
+    "ComparisonEntryStatus",
+    "ExperimentAccountingError",
     "ExperimentIdentityError",
+    "MetricComparisonEntry",
+    "MetricDefinition",
+    "MetricDirection",
+    "MetricResult",
+    "MetricStatus",
+    "MetricValueKind",
     "ExperimentPersistenceConflict",
     "ExperimentPersistenceError",
     "ExperimentPersistenceNotFound",
@@ -42,6 +72,10 @@ __all__ = [
     "RunSpecIdentity",
     "StudyIdentity",
     "TERMINAL_RUN_STATES",
+    "TrialAttemptResult",
     "TrialDimensionAssignment",
     "TrialIdentity",
+    "TrialMetricComparison",
+    "compare_trial_attempts",
+    "record_trial_attempt",
 ]
