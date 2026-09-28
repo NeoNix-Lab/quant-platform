@@ -5,6 +5,8 @@ from .gateway import (
     DataGateway,
     DataScan,
     DataScanOpenMetadata,
+    LiveStream,
+    LiveStreamState,
     ScanState,
 )
 from .models import (
@@ -15,6 +17,14 @@ from .models import (
     DataSlice,
     DataSliceMetadata,
     LifecyclePolicy,
+    LiveGapEvent,
+    LiveGapStatus,
+    LiveSessionEvent,
+    LiveSessionState,
+    LiveStreamCursorV1,
+    LiveStreamEvent,
+    LiveStreamRequest,
+    LiveTradeEvent,
 )
 
 __all__ = [
@@ -22,6 +32,8 @@ __all__ = [
     "DataGateway",
     "DataScan",
     "DataScanOpenMetadata",
+    "LiveStream",
+    "LiveStreamState",
     "ScanState",
     "CatalogDataset",
     "CatalogPartition",
@@ -30,4 +42,12 @@ __all__ = [
     "DataSlice",
     "DataSliceMetadata",
     "LifecyclePolicy",
+    "LiveGapEvent",
+    "LiveGapStatus",
+    "LiveSessionEvent",
+    "LiveSessionState",
+    "LiveStreamCursorV1",
+    "LiveStreamEvent",
+    "LiveStreamRequest",
+    "LiveTradeEvent",
 ]
