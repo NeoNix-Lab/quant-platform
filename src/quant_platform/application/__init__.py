@@ -103,6 +103,13 @@ from .golden_replay import (
     minimal_breakout_strategy,
     run_golden_replay_proof,
 )
+from .golden_supervised import (
+    DEFAULT_GOLDEN_FIXTURE,
+    PRICE_DELTA_FEATURE_ID,
+    WAVE5_GOLDEN_SUPERVISED_PROOF_VERSION,
+    Wave5GoldenSupervisedProof,
+    run_wave5_golden_supervised_proof,
+)
 
 __all__ = [
     "BUCKET_OBSERVATION_IDENTITY_DOMAIN",
@@ -117,6 +124,7 @@ __all__ = [
     "ConsumerMarketDataQuery",
     "ConsumerMarketDataResult",
     "ConsumerProvenance",
+    "DEFAULT_GOLDEN_FIXTURE",
     "GoldenExpectation",
     "GoldenReplayProof",
     "H01CompositionError",
@@ -138,6 +146,7 @@ __all__ = [
     "RECOVERY_MANIFEST_SCHEMA_VERSION",
     "CatalogRestoreSession",
     "PredecessorEvidence",
+    "PRICE_DELTA_FEATURE_ID",
     "RecoveryBackupExport",
     "RestoreCatalog",
     "RestoredRecoverySet",
@@ -151,6 +160,8 @@ __all__ = [
     "UnsupportedOption",
     "UnsupportedRepresentation",
     "UnsupportedVenue",
+    "WAVE5_GOLDEN_SUPERVISED_PROOF_VERSION",
+    "Wave5GoldenSupervisedProof",
     "VerificationMismatch",
     "WriteResult",
     "bucket_observation_identity",
@@ -175,6 +186,7 @@ __all__ = [
     "resolve_market_data_request",
     "restore_recovery_set",
     "run_golden_replay_proof",
+    "run_wave5_golden_supervised_proof",
     "run_import",
     "run_vertical",
     "verify_vertical",
