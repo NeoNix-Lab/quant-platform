@@ -86,3 +86,4 @@ Beyond our frozen core architecture, we actively explore cutting-edge quantitati
 * [**RFC #186: JEPA World Models for Order Flow & L3/MBO Data**](https://github.com/NeoNix-Lab/quant-platform/discussions/186) — Self-supervised representation learning (Fin-JEPA) on unlabelled high-frequency market events.
 
 *Have an idea or research proposal? Join the debate in [**Discussions ➔ Ideas**](https://github.com/NeoNix-Lab/quant-platform/discussions/categories/ideas)!*
+

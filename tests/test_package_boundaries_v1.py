@@ -59,7 +59,11 @@ OWNERS = {
     "quant_platform.validation.lockbox": "validation",
     "quant_platform.validation.robustness": "validation",
     "quant_platform.validation.walk_forward": "validation",
+    "quant_platform.learning": "learning",
+    "quant_platform.learning.supervised": "learning",
+    "quant_platform.learning.training": "learning",
     "quant_platform.experiments": "experiment",
+    "quant_platform.experiments.accounting": "experiment",
     "quant_platform.experiments.identities": "experiment",
     "quant_platform.experiments.persistence": "experiment",
     "quant_platform.research": "research",
@@ -83,6 +87,7 @@ OWNERS = {
     "quant_platform.application.conformity": "application",
     "quant_platform.application.golden_conformity": "application",
     "quant_platform.application.golden_replay": "application",
+    "quant_platform.application.golden_supervised": "application",
     "quant_platform.application.h01_composition": "application",
     "quant_platform.application.live_gap_orchestration": "application",
     "quant_platform.application.live_ingest_server": "application",
@@ -97,6 +102,7 @@ ALLOWED = {
     "feature": {"feature", "shared"},
     "operations": {"operations", "shared"},
     "validation": {"validation", "shared"},
+    "learning": {"learning", "experiment", "validation", "feature", "shared"},
     "experiment": {"experiment", "shared"},
     "research": {"research", "feature", "shared"},
     "strategy": {"strategy", "shared"},
@@ -108,7 +114,8 @@ ALLOWED = {
     # Nothing may depend on it: it is the top of the owner graph.
     "application": {
         "application", "access", "representation", "feature", "producer", "operations", "validation",
-        "source", "physical", "shared", "strategy", "execution", "portfolio", "replay"
+        "source", "physical", "shared", "strategy", "execution", "portfolio", "replay",
+        "learning", "experiment"
     },
 }
 SHARED_STDLIB = {
