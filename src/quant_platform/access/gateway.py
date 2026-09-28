@@ -418,10 +418,14 @@ class LiveStream(Iterator[LiveStreamEvent]):
         islands = self._islands()
 
         for index, island in enumerate(islands):
-            self._segment_id = self._segment_id_for(island.start)
             check_gap = index > 0 or cursor is not None
+            has_gap = check_gap and island.start > pos
+            if index == 0 and cursor is not None and not has_gap:
+                self._segment_id = cursor.coverage_segment_id
+            else:
+                self._segment_id = self._segment_id_for(island.start)
             pending_gap: tuple[str, Instant, LiveStreamCursorV1] | None = None
-            if check_gap and island.start > pos:
+            if has_gap:
                 assert cursor is not None  # index==0 with cursor is None never reaches here
                 gap_id = self._gap_id(cursor)
                 yield LiveGapEvent(

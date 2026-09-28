@@ -322,6 +322,20 @@ class ResumeTests(unittest.TestCase):
 
         self.assertEqual(events[0].cursor.coverage_segment_id, events[1].cursor.coverage_segment_id)
 
+    def test_coverage_segment_id_preserved_on_resume_within_same_contiguous_island(self):
+        p = partition("dt=2024-01-01/hour=00", "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", partition_id="partition-a")
+        records = (trade("2024-01-01T00:00:01Z", "1"), trade("2024-01-01T00:00:02Z", "2"))
+        gw, _ = gateway([p], {p.rel_path: [records]})
+
+        events1 = [e for e in gw.live_stream(live_request()) if isinstance(e, LiveTradeEvent)]
+        first_cursor = events1[0].cursor
+
+        events2 = [e for e in gw.live_stream(live_request(), cursor=first_cursor) if isinstance(e, LiveTradeEvent)]
+        resumed_cursor = events2[0].cursor
+
+        self.assertEqual(first_cursor.coverage_segment_id, resumed_cursor.coverage_segment_id)
+        self.assertEqual("2", events2[0].record.trade_id)
+
     def test_full_incremental_replay_matches_one_full_drain(self):
         p = partition("dt=2024-01-01/hour=00", "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", partition_id="partition-a")
         records = tuple(trade(f"2024-01-01T00:00:0{i}Z", str(i)) for i in range(1, 6))
