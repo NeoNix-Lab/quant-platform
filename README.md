@@ -78,6 +78,21 @@ Double-Entry Portfolio Ledger (H04 Ledger Transactions, Realized/Unrealized PnL,
 
 ---
 
+## Research Frontiers & Community RFCs
+
+Beyond our frozen core architecture, we actively explore cutting-edge quantitative ideas with researchers and the open-source community:
+
+- [**RFC #182: Live Execution Adapters**](https://github.com/NeoNix-Lab/quant-platform/discussions/182) — Evaluating CCXT Pro vs. Native Async WebSockets (Bybit / Interactive Brokers) within our deterministic state machine.
+- [**RFC #183: Causal Reinforcement Learning & Reward Function Design**](https://github.com/NeoNix-Lab/quant-platform/discussions/183) — Formulating cost-penalized differential Sharpe rewards and risk budgets in `DecisionIntent`.
+- [**RFC #184: Interactive Order Flow & Footprint Visualizer**](https://github.com/NeoNix-Lab/quant-platform/discussions/184) — Designing a terminal TUI vs. lightweight web UI for cluster delta footprints and replay stepping.
+- [**RFC #185: System One Decision Models (TypeSafe Jev)**](https://github.com/NeoNix-Lab/quant-platform/discussions/185) — Evaluating fast typed inference models against exchange fee hurdles and adverse-selection gating.
+- [**RFC #186: JEPA World Models for Order Flow & L3/MBO Data**](https://github.com/NeoNix-Lab/quant-platform/discussions/186) — Self-supervised representation learning (Fin-JEPA) on unlabelled high-frequency market events.
+
+*Have an idea or research proposal? Join the debate in [**Discussions ➔ Ideas**](https://github.com/NeoNix-Lab/quant-platform/discussions/categories/ideas)!*
+
+---
+
+
 ## Repository Layout
 
 ```text

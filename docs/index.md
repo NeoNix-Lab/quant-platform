@@ -72,3 +72,18 @@ Quant Platform is engineered to provide institutional foundations for statistica
 * **Purged & Embargoed Cross-Validation**: Native walk-forward cross-validation folds with combinatorial embargo intervals ([ADR-0031](decisions/ADR-0031-availability-purge-embargo-v1.md)) and Deflated Sharpe Ratio / PBO statistical evaluations ([ADR-0037](decisions/ADR-0037-dsr-pbo-robust-comparison-v1.md)).
 * **Learner-Agnostic Decision Interface**: `DecisionIntent` ([ADR-0009](decisions/ADR-0009-policy-decision-intent.md)) allows arbitrary predictive models (Gradient Boosting, PyTorch Deep Learning, Reinforcement Learning agents) to emit trade signals without entangling execution state machines or accounting rules.
 * **Sister Research Ecosystem**: Recurrent neural networks, sequence predictors, and deep learning experiments sharing this algorithmic foundation are explored in our companion repository [**Rnn_V0_1**](https://github.com/NeoNix-Lab/Rnn_V0_1).
+
+---
+
+## Research Frontiers & Community RFCs
+
+Beyond our frozen core architecture, we actively explore cutting-edge quantitative ideas with researchers and the open-source community:
+
+* [**RFC #182: Live Execution Adapters**](https://github.com/NeoNix-Lab/quant-platform/discussions/182) — Evaluating CCXT Pro vs. Native Async WebSockets (Bybit / Interactive Brokers) within our deterministic state machine.
+* [**RFC #183: Causal Reinforcement Learning & Reward Function Design**](https://github.com/NeoNix-Lab/quant-platform/discussions/183) — Formulating cost-penalized differential Sharpe rewards and risk budgets in `DecisionIntent`.
+* [**RFC #184: Interactive Order Flow & Footprint Visualizer**](https://github.com/NeoNix-Lab/quant-platform/discussions/184) — Designing a terminal TUI vs. lightweight web UI for cluster delta footprints and replay stepping.
+* [**RFC #185: System One Decision Models (TypeSafe Jev)**](https://github.com/NeoNix-Lab/quant-platform/discussions/185) — Evaluating fast typed inference models against exchange fee hurdles and adverse-selection gating.
+* [**RFC #186: JEPA World Models for Order Flow & L3/MBO Data**](https://github.com/NeoNix-Lab/quant-platform/discussions/186) — Self-supervised representation learning (Fin-JEPA) on unlabelled high-frequency market events.
+
+*Have an idea or research proposal? Join the debate in [**Discussions ➔ Ideas**](https://github.com/NeoNix-Lab/quant-platform/discussions/categories/ideas)!*
+
