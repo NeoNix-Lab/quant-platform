@@ -61,6 +61,7 @@ OWNERS = {
     "quant_platform.validation.walk_forward": "validation",
     "quant_platform.learning": "learning",
     "quant_platform.learning.supervised": "learning",
+    "quant_platform.learning.training": "learning",
     "quant_platform.experiments": "experiment",
     "quant_platform.experiments.accounting": "experiment",
     "quant_platform.experiments.identities": "experiment",
