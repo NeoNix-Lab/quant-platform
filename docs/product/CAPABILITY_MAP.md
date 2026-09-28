@@ -70,9 +70,9 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Portfolio | Multi-asset execution | OPEN_DEFERABLE | MISSING | Portfolio | H06 | Wait for concrete product scope. |
 | Experiments | Study/Trial/Run/Artifact semantic model | RESOLVED | COMPLETE | Experiment System | I01 | One canonical experiment identity family. |
 | Experiments | Canonical experiment persistence | RESOLVED | COMPLETE | Experiment System | I02 | One restart-safe canonical persistence model. |
-| Experiments | Trial accounting/comparison | RESOLVED | MISSING | Experiment System | I03 | Requires persistence/replay. |
-| ML | Supervised input/selection | RESOLVED | MISSING | Learning | I04 | Depends on Feature + Validation semantics. |
-| ML | Supervised training/evaluation | RESOLVED | MISSING | Learning | I05 | Binds code/data/splits/model/metrics. |
+| Experiments | Trial accounting/comparison | RESOLVED | COMPLETE | Experiment System | I03 | PR #178 / issue #171; comparable trial population identity, resume/idempotency and metric comparison. |
+| ML | Supervised input/selection | RESOLVED | COMPLETE | Learning | I04 | PR #177 / issue #172; feature/label selection reuses Validation availability and fails closed on leakage. |
+| ML | Supervised training/evaluation | RESOLVED | COMPLETE | Learning | I05 | PR #179 / issue #173; deterministic baseline training/evaluation with model, prediction and metric artifact identities. |
 | RL | Strategic RL contract | OPEN_BLOCKING | MISSING | Strategic RL | I06 | DG-G strategic-RL branch. |
 | RL | Execution RL contract | OPEN_BLOCKING | MISSING | Execution RL | I07 | DG-G execution-RL branch; structurally separate from strategic RL. |
 | Interfaces | Consumer API semantic boundary | FROZEN | COMPLETE | Application/API | J01 | ADR-0020; semantic API is not a DataGateway wrapper and does not imply transport runtime. |
@@ -127,17 +127,18 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | K10 live-ingest checkpoint/recovery v1 | COMPLETE | ADR-0042; PR #114 hermetic implementation/proof matrix integrated; PR #122 closes the real-server restart/deployed checkpoint-path proof (issues #109, #121). |
 | Live Ingest Server Production Readiness v1 | COMPLETE | Closed for the first Bybit BTCUSDT producer operating path by ADR-0043/ADR-0044, the supervised systemd path, target-host proof and DataGateway readback PASS; does not complete B06, K07, K09, J08 or live product mode. |
 | Wave 4 Strategy / Replay | COMPLETE | `G01`-`G04` and `H01`-`H05` integrated; G04/H03 frozen by ADR-0045/ADR-0046; PR #161 / issue #146 records Golden V7 deterministic replay PASS. |
+| Wave 5 Experiment / Supervised ML | COMPLETE | I03/I04/I05 integrated by PR #178/#177/#179; PR #180 / issue #174 records Golden supervised E2E PASS with stable projection, run, metric and artifact identities. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
 
 ## Current frontier
 
-Wave 4 Strategy / Replay is closed on `implement/wave-4`: ADR-0045 and ADR-0046 resolve DG-F, `G01`-`G04` and `H01`-`H05` are implementation complete, PR #160 integrates H05, and PR #161 / issue #146 records Golden V7 deterministic replay PASS on canonical Bybit BTCUSDT data.
+Wave 5 Experiment / Supervised ML is closed on `implement/wave-5`: PR #177, PR #178 and PR #179 complete I04/I03/I05, and PR #180 / issue #174 records Golden supervised E2E PASS on bounded canonical Bybit BTCUSDT evidence.
 
 The DG-B long-gap remediation proposition remains disposed `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` (#110): A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval filled/lossless until an authoritative repair source/path proves the missing support. ADR-0044 carries this forward as accepted fail-closed behavior rather than reopening DG-B.
 
-B06 live-consumer cursor remains outside the closed scope and unresolved.
+B06 live-consumer cursor remains outside the closed scope and unresolved. DG-G remains open only for I06, I07 and J03; J07 remains missing and is not implemented by the supervised ML closeout.
 
 No new runtime/product frontier is selected by this closeout. Frontier/readiness state is **not concurrent implementation authorization**.
 

@@ -1,8 +1,8 @@
 # Scope: Wave 5 - Experiment & Supervised ML v1
 
-Status: **ACTIVE**
+Status: **CLOSED / RECONCILED**
 
-Scope kind: **implementation, legacy-harvest and validation scope for Wave 5**.
+Scope kind: **completed implementation, legacy-harvest, validation and governance-closeout scope for Wave 5**.
 
 Target integration branch: **`implement/wave-5`**, branched from `main` after Wave 4 promotion.
 
@@ -20,6 +20,17 @@ main promotion commit: fa3075f297af677a562d57d20cfcfa83e6eba897
 Wave 4 tag: wave-4-strategy-replay-v1
 Issue #146: Golden V7 deterministic replay proof credited
 Issue #147: Wave 4 governance closeout closed after main promotion
+```
+
+Wave 5 closeout evidence:
+
+```text
+I04 Supervised input / selection: PR #177, merge 9ac325f10d71fff8f1db8bf9fee4ffa9153ea8c1
+I03 Trial accounting / comparison: PR #178, merge 7f34a1472101c1e8342f151535ccf2480ccb4f1c
+I05 Supervised training / evaluation: PR #179, merge 2a256c810fd19b55570a25ba4a8510aae891a889
+Wave 5 Golden E2E supervised proof: PR #180, merge 609eb5466f08e8726b59f7d1198d54c230b6e2bc
+Evidence document: docs/integration/WAVE5_GOLDEN_E2E_SUPERVISED_ML.md
+Governance reconciliation: issue #175
 ```
 
 The dependency basis is `CAPABILITY_DAG.md`: `I03` requires `I01,I02,H05`; `I04` requires `E04,F06,F07`; `I05` requires both `I03,I04`.
@@ -136,7 +147,9 @@ Wave 5 composes these existing primitives. It must not duplicate them under `qua
 
 ## Decision Gate Clarification: DG-G
 
-`I03`, `I04` and `I05` are `RESOLVED / MISSING` in the capability model. This Wave is therefore implementation and harvest work, not a new decision-gate resolution.
+`I03`, `I04` and `I05` are now `RESOLVED / COMPLETE` in the capability model.
+This Wave was implementation and harvest work, not a new decision-gate
+resolution.
 
 DG-G remains open only for its still-unresolved branches:
 
@@ -229,7 +242,7 @@ The repository rule of one bounded mutation slice at a time governs execution. T
         v
 5. Wave 5 Governance Closeout
    - Reconcile `CAPABILITY_DAG.md`, `CAPABILITY_MAP.md`, `ROADMAP.md` and `OPEN_DECISIONS.md`.
-   - Promote `implement/wave-5` to `main` only after Golden proof and reconciliation.
+   - Prepare `implement/wave-5` for promotion to `main` after Golden proof and reconciliation.
 ```
 
 ---

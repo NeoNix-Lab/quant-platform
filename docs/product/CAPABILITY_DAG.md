@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 4 Strategy / Replay complete and Milestone V7 closed on `implement/wave-4`**.
+Status: **CANONICAL; Wave 5 Experiment / Supervised ML complete on `implement/wave-5`**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,7 +10,7 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after Wave 4 closeout:
+Current audited inventory after Wave 5 closeout:
 
 ```text
 TOTAL_ATOMS                     = 87
@@ -21,7 +21,7 @@ OPEN_BLOCKING                   = 9
 OPEN_DEFERABLE                  = 8
 ROADMAP_DEFINED                 = 70 + 9 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         = 58 / 87 = 66.7%
+IMPLEMENTATION_COMPLETE         = 61 / 87 = 70.1%
 ```
 
 The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved atom proposition has a bounded activation rule. The 80.5% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, L1/L2/L3, RL, transport, deletion or unrelated operational semantics.
@@ -164,9 +164,9 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 |---|---|---|---|---|---|---|---|
 | I01 | Study/Trial/Run/Artifact semantic model | Experiment System | Core concepts | I02,I03 | RESOLVED | COMPLETE | One canonical experiment identity family |
 | I02 | Experiment persistence | Experiment System | I01,A05 | I03,J03 | RESOLVED | COMPLETE | One restart-safe canonical persistence model |
-| I03 | Trial accounting/comparison | Experiment System | I01,I02,H05 | model selection | RESOLVED | MISSING | Resume idempotent; comparable population identity |
-| I04 | Supervised input/selection | Learning | E04,F06,F07 | I05 | RESOLVED | MISSING | Durable split/provenance/anti-leakage evidence |
-| I05 | Supervised training/evaluation | Learning | I03,I04 | J07 | RESOLVED | MISSING | Run binds code/data/splits/model/metrics |
+| I03 | Trial accounting/comparison | Experiment System | I01,I02,H05 | model selection | RESOLVED | COMPLETE | PR #178 / issue #171; resume idempotent, comparable population identity and metric comparison |
+| I04 | Supervised input/selection | Learning | E04,F06,F07 | I05 | RESOLVED | COMPLETE | PR #177 / issue #172; durable split/provenance/anti-leakage evidence |
+| I05 | Supervised training/evaluation | Learning | I03,I04 | J07 | RESOLVED | COMPLETE | PR #179 / issue #173; run binds code/data/splits/model/metrics and emits model/prediction/metric artifacts |
 | I06 | Strategic RL contract | Strategic RL | G01,F07,I01 | RL runtime | OPEN_BLOCKING | MISSING | State/action/reward excludes execution-control task; DG-G strategic-RL branch |
 | I07 | Execution RL contract | Execution RL | H01-H05,I01 | RL runtime | OPEN_BLOCKING | MISSING | Structurally separate execution task; DG-G execution-RL branch |
 
@@ -264,7 +264,11 @@ F07 is frozen/complete under ADR-0036 and F08 is frozen/complete under ADR-0037.
 
 ### DG-G — Experiment / RL / Jobs
 
-I02 experiment persistence is resolved and complete. Remaining atom decisions: `I06,I07,J03`.
+The supervised Experiment / ML branch is resolved and implementation-complete
+through I05: I03 is integrated by PR #178 / issue #171, I04 by PR #177 / issue
+#172, I05 by PR #179 / issue #173, and PR #180 / issue #174 records the Wave 5
+Golden E2E supervised proof with stable projection, run, metric and artifact
+identities. Remaining DG-G atom decisions are only `I06`, `I07` and `J03`.
 
 ### DG-H — Operational safety
 
@@ -293,14 +297,13 @@ Still-open atom branches are `K07` tier relocation and `K09` deletion authority;
 
 ## Execution frontier
 
-Wave 4 Strategy / Replay is closed on `implement/wave-4`. ADR-0045 and
-ADR-0046 resolve DG-F; `G01`-`G04` and `H01`-`H05` are complete; PR #160
-integrates H05; PR #161 / issue #146 records Golden V7 deterministic replay
-PASS.
+Wave 5 Experiment / Supervised ML is closed on `implement/wave-5`: PR #177,
+PR #178 and PR #179 complete I04/I03/I05, and PR #180 / issue #174 records
+Golden supervised E2E PASS on bounded canonical Bybit BTCUSDT evidence.
 
 No new runtime/product frontier is selected by this document. The closeout does
-not activate B06, H06, I03-I07, J02/J07/J08, K07/K09, ML/RL, live broker
-execution or client work.
+not activate B06, H06, I06-I07, J02/J07/J08, K07/K09, RL, live broker execution
+or client work. J07 remains `MISSING`; I05 is only one prerequisite.
 
 This is a **frontier, not concurrent authorization**. `SCOPE.md` records the
 closed scope and its exclusions.
@@ -371,7 +374,7 @@ Wave 1  First canonical computation/application slices    COMPLETE (C05,D03,E05,
 Wave 2  Representation / Feature vertical                 COMPLETE (E04,E06; ADR-0034/ADR-0035)
 Wave 3  Research / Validation                             COMPLETE (F01-F08; ADR-0031/ADR-0036/ADR-0037/ADR-0038)
 Wave 4  Strategy / Replay                                 COMPLETE (G01-G04,H01-H05; V7 Golden PASS)
-Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
+Wave 5  Experiment / Supervised ML                       COMPLETE (I01-I05; Golden supervised E2E PASS)
 Wave 6  Live Data Plane                                   K02,K03,K04,K05,K06,K08,K10,A10,A11,A16 COMPLETE; K07,K09,B06 remain open/missing
 Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 when real client need exists
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
