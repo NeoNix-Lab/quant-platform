@@ -59,12 +59,27 @@ specific roots are involved.
 
 ### 2. Eligibility predicate
 
-Closing item 14: a partition is relocation-eligible only when its catalog
-`state` column is `"closed"` — the same terminal, immutable lifecycle state
-`LifecyclePolicy.VALID_AND_CLOSED` already exposes to readers. A partition
-still in `"valid"` (open/actively-written) or `"degraded"` state is refused
-(closing item 15's mandate that open partitions must be excluded, made
-concrete). This needs no new column: `state` already exists on `partitions`.
+Closing item 14, corrected against the actual catalog schema
+(`db/init/001_catalog.sql`'s `partitions.state` `CHECK` constraint:
+`'writing'|'closed'|'valid'|'degraded'|'invalid'|'superseded'`, plus the
+`closed_is_sealed` constraint proving every state other than `'writing'` is
+already sealed — `content_sha256`/`manifest_sha256`/`closed_at` all
+`NOT NULL`): `'writing'` is the only actively-written, not-yet-sealed state;
+`'valid'` is the validated, fully-usable terminal state, not an open one.
+
+A partition is relocation-eligible exactly when its `state` is one of the
+states `quant_platform.access.models.LifecyclePolicy.VALID_CLOSED_AND_DEGRADED`
+already names as reader-visible: `{"valid", "closed", "degraded"}` — reusing
+`DataGateway`'s own existing authoritative definition of "a state a consumer
+may read" rather than inventing a narrower or wider predicate. This
+correctly **includes** `"valid"` (the most common and most important
+tier-migration candidate — already-validated canonical data) and `"closed"`
+(sealed, pending validation), and correctly **excludes** `'writing'` (open,
+unstable — closing item 15's mandate). `'invalid'` and `'superseded'` are
+also excluded in v1: neither is reachable through any `LifecyclePolicy`, so
+neither has an established consumer-visibility contract for this ADR to
+reason about; relocating them is deferred, not refused on principle. This
+needs no new column: `state` already exists on `partitions`.
 
 ### 3. Admission gates: K05 pressure and K06 protection
 
@@ -123,12 +138,22 @@ freshly computed `(sha256, size)` — via the same primitive shape as
 already-recorded** `content_sha256` for that partition. It does not compute
 a new identity or a new manifest; it confirms the physical copy matches the
 logical identity already on record (closing item 39's auto-answer: no new
-semantic dataset/version is created). The durable `VERIFIED` phase record
-itself, written only after this comparison succeeds, is the evidence that
-verification preceded the switch (closing item 40); a restart that finds a
-`VERIFIED` record with a stale/missing/corrupt `target_content_sha256`
-treats it as not-verified and restages from scratch (closing item 35 —
-fail closed, never trust ambiguous evidence).
+semantic dataset/version is created). The durable `VERIFIED` phase record,
+written after this comparison first succeeds, is audit evidence that
+verification happened at that point in time — it is **not**, by itself,
+sufficient authorization to switch. This check is **unconditionally
+re-executed against the current physical target bytes immediately before
+every attempt** at the `SWITCHED` transition, on a fresh run exactly as much
+as on a resumed one — there is no path to `SWITCHED` that skips it, and a
+prior `VERIFIED` record never licenses skipping it (closing item 40 with a
+mandatory, not optional, gate; closing item 35 by construction — stale,
+missing or corrupt evidence simply cannot pass a check that is always
+freshly re-run). If this immediate pre-switch check fails — the staged file
+is missing, truncated, or its hash/size no longer matches the catalog's
+`content_sha256`/`byte_size` — the job reverts to `STAGED` (its stale
+`VERIFIED` record is superseded) and must restage and re-verify before any
+further switch attempt; it must never proceed to `SWITCHED` on unconfirmed
+current-state evidence.
 
 ### 6. Pure/impure split (closing items 41, 53-55)
 
@@ -174,7 +199,7 @@ against the phase state machine in decision 4:
 |---|---|---|
 | No record (crash before `PLANNED` committed) | points to source | Original is authoritative; start fresh, equivalent to a first attempt. |
 | `PLANNED` or `STAGED` (incomplete/no verified copy) | points to source | Original is authoritative; discard any partial staged copy and restage from scratch. |
-| `VERIFIED` | points to source | Original is authoritative; proceed directly to the `SWITCHED` transition — no need to recopy, but re-run decision 5's comparison if the durable evidence is not fully trustworthy (see decision 5). |
+| `VERIFIED` | points to source | Original is authoritative; re-run decision 5's `(sha256, size)` check against the *current* staged target bytes — mandatory and unconditional, never skipped because a prior `VERIFIED` record exists. On success, proceed to `SWITCHED`. On failure, revert to `STAGED` and restage from scratch before any further switch attempt. |
 | `SWITCHED` (or `VERIFIED` but catalog already shows target — a switch that committed durably but whose record update lagged) | points to target | New placement is authoritative; the source copy is harmless cleanup debt. Resume at cleanup (decision 9). |
 | `CLEANED_UP` | points to target | Job already complete; idempotent no-op. |
 
