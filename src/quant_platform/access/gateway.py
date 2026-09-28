@@ -9,6 +9,8 @@ from typing import Any
 
 from .catalog import Catalog
 from .models import (
+    LIVE_GAP_EVENT_SCHEMA_V1,
+    LIVE_STREAM_CURSOR_SCHEMA_V1,
     CatalogDataset,
     CatalogPartition,
     CoveragePolicy,
@@ -16,6 +18,15 @@ from .models import (
     DataSlice,
     DataSliceMetadata,
     LifecyclePolicy,
+    LiveGapEvent,
+    LiveGapStatus,
+    LiveSessionEvent,
+    LiveSessionState,
+    LiveStreamCursorV1,
+    LiveStreamEvent,
+    LiveStreamRequest,
+    LiveTradeEvent,
+    _fingerprint,
     gaps_for,
     intersect,
     merge_intervals,
@@ -28,6 +39,7 @@ from ..data.models import (
     DataIntegrityError,
     DatasetIdentity,
     Instant,
+    InvalidRequest,
     NaturalPartitionIdentity,
     NoCoverage,
     SchemaMismatch,
@@ -246,6 +258,214 @@ class DataScan(Iterator[tuple[Any, ...]]):
         self._state = ScanState.COMPLETED
 
 
+# A deterministic, non-wall-clock upper bound for "everything published so
+# far" (ADR-0047: the domain layer has no ``Instant.now()`` -- ``live_stream``
+# asks the catalog for whatever exists up to this sentinel, which real data
+# will never reach, rather than inventing a wall-clock "now" concept).
+_FAR_FUTURE = Instant(9_999_999_999_000_000_000)
+
+_DEFAULT_LIVE_BATCH_SIZE = 65_536
+
+
+class LiveStreamState(str, Enum):
+    OPEN = "open"
+    READING = "reading"
+    EXHAUSTED = "exhausted"
+    ABORTED = "aborted"
+
+
+class LiveStream(Iterator[LiveStreamEvent]):
+    """Resumable live tail over already-published canonical partitions (B06).
+
+    One call to :meth:`DataGateway.live_stream` computes currently eligible
+    coverage once (mirroring :class:`DataScan`'s own open-time preparation)
+    and delivers everything from the resume point through whatever is
+    currently published; it never blocks waiting for more data to arrive
+    (ADR-0047 decisions 1-2: a synchronous pull iterator over already-durable
+    storage, not a subscription/broker). Reaching the live edge completes
+    normally (``EXHAUSTED``, no event) -- callers resume by calling
+    :meth:`DataGateway.live_stream` again with the last delivered cursor.
+    """
+
+    def __init__(
+        self,
+        *,
+        dataset: CatalogDataset,
+        ordering_policy: str,
+        ordering_provider: OrderingProvider,
+        partitions: tuple[CatalogPartition, ...],
+        coverage_segment_id: str,
+        resume_point: Instant,
+        cursor: LiveStreamCursorV1 | None,
+        batch_reader: BatchReader,
+        path_resolver: Callable[[str, str, str], Any],
+        batch_size: int,
+    ) -> None:
+        self.dataset = dataset
+        self.ordering_policy = ordering_policy
+        self.ordering_provider = ordering_provider
+        self.partitions = partitions
+        self.coverage_segment_id = coverage_segment_id
+        self._initial_cursor = cursor
+        self._resume_point = resume_point
+        self._batch_reader = batch_reader
+        self._path_resolver = path_resolver
+        self._batch_size = batch_size
+        self._state = LiveStreamState.OPEN
+        self._iterator: Iterator[LiveStreamEvent] | None = None
+        self._last_ordering_key: tuple[Any, ...] | None = None
+
+    @property
+    def state(self) -> LiveStreamState:
+        return self._state
+
+    def __iter__(self) -> "LiveStream":
+        return self
+
+    def __next__(self) -> LiveStreamEvent:
+        if self._state in {LiveStreamState.EXHAUSTED, LiveStreamState.ABORTED}:
+            raise StopIteration
+        if self._iterator is None:
+            self._state = LiveStreamState.READING
+            self._iterator = self._events()
+        try:
+            return next(self._iterator)
+        except StopIteration:
+            self._state = LiveStreamState.EXHAUSTED
+            raise
+        except Exception:
+            self._state = LiveStreamState.ABORTED
+            raise
+
+    def close(self) -> None:
+        """Abort an unfinished stream without manufacturing further events."""
+
+        if self._state == LiveStreamState.EXHAUSTED:
+            return
+        iterator = self._iterator
+        if iterator is not None:
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
+        self._state = LiveStreamState.ABORTED
+
+    def _new_cursor(self, *, exchange_ts: Instant, trade_id: str, sequence: str | None) -> LiveStreamCursorV1:
+        return LiveStreamCursorV1(
+            schema_version=LIVE_STREAM_CURSOR_SCHEMA_V1,
+            dataset_identity=self.dataset.identity,
+            ordering_policy=self.ordering_policy,
+            coverage_segment_id=self.coverage_segment_id,
+            last_canonical_exchange_ts=exchange_ts,
+            last_canonical_trade_id=trade_id,
+            last_observed_sequence=sequence,
+        )
+
+    def _gap_id(self, previous_cursor: LiveStreamCursorV1) -> str:
+        order_key = previous_cursor.last_canonical_order_key
+        return _fingerprint(
+            {
+                "dataset_identity": self.dataset.identity.stable_dict(),
+                "ordering_policy": self.ordering_policy,
+                "previous_coverage_segment_id": previous_cursor.coverage_segment_id,
+                "previous_order_key": (
+                    [order_key[0].isoformat(), order_key[1]] if order_key is not None else None
+                ),
+            }
+        )
+
+    def _islands(self) -> tuple[CoverageInterval, ...]:
+        request_interval = CoverageInterval(self._resume_point, _FAR_FUTURE)
+        eligible = tuple(
+            clipped
+            for partition in self.partitions
+            if (coverage := partition.coverage) is not None
+            if (clipped := intersect(coverage, request_interval)) is not None
+        )
+        return merge_intervals(eligible)
+
+    def _events(self) -> Iterator[LiveStreamEvent]:
+        cursor = self._initial_cursor
+        if cursor is not None and cursor.last_canonical_order_key is not None:
+            yield LiveSessionEvent(state=LiveSessionState.RECONNECTED, cursor=cursor, evidence=None)
+
+        pos = self._resume_point
+        islands = self._islands()
+
+        for index, island in enumerate(islands):
+            check_gap = index > 0 or cursor is not None
+            pending_gap: tuple[str, Instant, LiveStreamCursorV1] | None = None
+            if check_gap and island.start > pos:
+                assert cursor is not None  # index==0 with cursor is None never reaches here
+                gap_id = self._gap_id(cursor)
+                yield LiveGapEvent(
+                    schema_version=LIVE_GAP_EVENT_SCHEMA_V1,
+                    gap_id=gap_id,
+                    status=LiveGapStatus.OPEN,
+                    previous_cursor=cursor,
+                    lower_bound=pos,
+                    upper_bound=None,
+                    resumed_cursor=None,
+                    reason=(
+                        "no eligible coverage between the last delivered position "
+                        "and the next published segment"
+                    ),
+                )
+                pending_gap = (gap_id, pos, cursor)
+
+            after_key = cursor.last_canonical_order_key if index == 0 and island.start <= pos else None
+
+            for record in self._read_island(island, after_key=after_key):
+                exchange_ts = Instant.parse(record.exchange_ts)
+                new_cursor = self._new_cursor(
+                    exchange_ts=exchange_ts, trade_id=record.trade_id, sequence=record.sequence
+                )
+                if pending_gap is not None:
+                    gap_id, lower_bound, previous_cursor = pending_gap
+                    yield LiveGapEvent(
+                        schema_version=LIVE_GAP_EVENT_SCHEMA_V1,
+                        gap_id=gap_id,
+                        status=LiveGapStatus.CLOSED,
+                        previous_cursor=previous_cursor,
+                        lower_bound=lower_bound,
+                        upper_bound=exchange_ts,
+                        resumed_cursor=new_cursor,
+                        reason="a subsequent governed segment resumed publication",
+                    )
+                    pending_gap = None
+                yield LiveTradeEvent(record=record, cursor=new_cursor)
+                cursor = new_cursor
+            pos = island.end
+
+    def _read_island(
+        self, island: CoverageInterval, *, after_key: tuple[Instant, str] | None
+    ) -> Iterator[Any]:
+        for partition in self.partitions:
+            coverage = partition.coverage
+            if coverage is None:
+                continue
+            clipped = intersect(coverage, island)
+            if clipped is None:
+                continue
+            path = self._path_resolver(partition.storage_root, partition.dataset_rel_root, partition.rel_path)
+            for raw_batch in self._batch_reader(str(path), clipped.start, clipped.end, self._batch_size):
+                for record in raw_batch:
+                    if record.venue != self.dataset.identity.venue or record.instrument != self.dataset.identity.instrument:
+                        raise DataIntegrityError(
+                            "Parquet record identity does not match catalog dataset",
+                            context={"dataset_identity": self.dataset.identity.stable_dict()},
+                        )
+                    ordering_key = self.ordering_provider.key(record)
+                    if after_key is not None and ordering_key <= after_key:
+                        continue
+                    if self._last_ordering_key is not None:
+                        if ordering_key == self._last_ordering_key:
+                            raise DataIntegrityError("duplicate canonical ordering key")
+                        if ordering_key < self._last_ordering_key:
+                            raise DataIntegrityError("canonical records are not in required physical order")
+                    self._last_ordering_key = ordering_key
+                    yield record
+
+
 class DataGateway:
     """Read canonical ``trade-v1`` data through the PostgreSQL catalog."""
 
@@ -311,6 +531,97 @@ class DataGateway:
         if metadata is None:  # defensive: full drain must complete the scan
             raise RuntimeError("DataGateway scan ended without completion metadata")
         return DataSlice(records=tuple(records), metadata=metadata)
+
+    def live_stream(
+        self,
+        request: LiveStreamRequest,
+        *,
+        cursor: LiveStreamCursorV1 | None = None,
+        batch_size: int = _DEFAULT_LIVE_BATCH_SIZE,
+    ) -> LiveStream:
+        """Open a resumable live read (B06) additive to :meth:`scan` (ADR-0047).
+
+        Delivers everything from ``cursor`` (or the beginning, if ``None``)
+        through whatever is currently published, then completes normally --
+        it never blocks waiting for more data. An unprovable interruption
+        surfaces as an explicit :class:`~.models.LiveGapEvent`, never as
+        fabricated continuity (issue #110's disposition is unaffected).
+        """
+
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
+        if cursor is not None:
+            if not isinstance(cursor, LiveStreamCursorV1):
+                raise InvalidRequest("cursor must be a LiveStreamCursorV1")
+            if cursor.dataset_identity != request.dataset_selector:
+                raise InvalidRequest("cursor dataset_identity does not match the live stream request")
+            if cursor.ordering_policy != request.ordering_policy:
+                raise InvalidRequest("cursor ordering_policy does not match the live stream request")
+
+        ordering_provider = self._validate_support(request)
+        dataset = self.catalog.resolve_dataset(request.dataset_selector)
+        if dataset.identity.record_schema_id != request.schema_requirement:
+            raise SchemaMismatch(
+                "requested schema does not match the catalog dataset",
+                context={
+                    "requested_schema": request.schema_requirement,
+                    "stored_schema": dataset.identity.record_schema_id,
+                },
+            )
+
+        resume_point = (
+            cursor.last_canonical_exchange_ts
+            if cursor is not None and cursor.last_canonical_exchange_ts is not None
+            else Instant(0)
+        )
+        selected = self.catalog.select_partitions(
+            dataset, resume_point, _FAR_FUTURE, request.lifecycle_policy.states
+        )
+        partitions = self._ordered_partitions(selected)
+        self._validate_partition_set(dataset, partitions)
+
+        coverage_segment_id = self._coverage_segment_id(
+            dataset_identity=dataset.identity,
+            ordering_policy=request.ordering_policy,
+            partitions=partitions,
+        )
+
+        return LiveStream(
+            dataset=dataset,
+            ordering_policy=request.ordering_policy,
+            ordering_provider=ordering_provider,
+            partitions=partitions,
+            coverage_segment_id=coverage_segment_id,
+            resume_point=resume_point,
+            cursor=cursor,
+            batch_reader=self._batch_reader,
+            path_resolver=self._path_resolver,
+            batch_size=batch_size,
+        )
+
+    @staticmethod
+    def _coverage_segment_id(
+        *, dataset_identity: DatasetIdentity, ordering_policy: str, partitions: tuple[CatalogPartition, ...]
+    ) -> str:
+        """A discriminator over currently eligible coverage (ADR-0047 decision 8).
+
+        Deliberately not read from ``operations.checkpoint.LiveCheckpointV1``:
+        ``access`` must not depend on ``operations`` (package boundary), and
+        this seam only ever needs a value that changes when the catalog's own
+        eligible coverage changes -- not A11's internal recovery-domain
+        identity.
+        """
+
+        islands = merge_intervals(
+            interval for partition in partitions if (interval := partition.coverage) is not None
+        )
+        return _fingerprint(
+            {
+                "dataset_identity": dataset_identity.stable_dict(),
+                "ordering_policy": ordering_policy,
+                "islands": [island.stable_dict() for island in islands],
+            }
+        )
 
     def _prepare(
         self,
@@ -546,4 +857,11 @@ class DataGateway:
         )
 
 
-__all__ = ["DataGateway", "DataScan", "DataScanOpenMetadata", "ScanState"]
+__all__ = [
+    "DataGateway",
+    "DataScan",
+    "DataScanOpenMetadata",
+    "LiveStream",
+    "LiveStreamState",
+    "ScanState",
+]
