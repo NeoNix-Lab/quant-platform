@@ -45,10 +45,11 @@ jobs:
 
           issue_numbers = set()
 
-          # 1. Match linking keywords in body: "Closes #123", "Fixes #123", "Resolves #123"
-          keyword_pattern = r'(?i)\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\s+#(\d+)\b'
+          # 1. Match linking keywords in body: "Closes #123", "Closes #123, #124", "Fixes #123 and #124"
+          keyword_pattern = r'(?i)\b(?:close[sd]?|fixe?[sd]?|resolve[sd]?)\s+((?:#\d+(?:[,\s]+(?:and\s+)?)*)+)'
           for match in re.finditer(keyword_pattern, pr_body):
-              issue_numbers.add(match.group(1))
+              for num in re.findall(r'#(\d+)', match.group(0)):
+                  issue_numbers.add(num)
 
           # 2. Match branch pattern like "agent/issue-123-45"
           branch_pattern = r'issue-(\d+)'
@@ -69,7 +70,7 @@ jobs:
               )
               labels = set(labels_res.stdout.split())
 
-              if HOLD_LABEL in labels:
+              if HOLD_LABEL in labels and base_ref != "main":
                   print(f"Issue #{issue_num} is labeled '{HOLD_LABEL}'; leaving open despite merge into {base_ref}.")
                   hold_comment = (
                       f"PR #{pr_number} merged into `{base_ref}`, but this issue is held open "
