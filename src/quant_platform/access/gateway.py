@@ -294,7 +294,6 @@ class LiveStream(Iterator[LiveStreamEvent]):
         ordering_policy: str,
         ordering_provider: OrderingProvider,
         partitions: tuple[CatalogPartition, ...],
-        coverage_segment_id: str,
         resume_point: Instant,
         cursor: LiveStreamCursorV1 | None,
         batch_reader: BatchReader,
@@ -305,7 +304,6 @@ class LiveStream(Iterator[LiveStreamEvent]):
         self.ordering_policy = ordering_policy
         self.ordering_provider = ordering_provider
         self.partitions = partitions
-        self.coverage_segment_id = coverage_segment_id
         self._initial_cursor = cursor
         self._resume_point = resume_point
         self._batch_reader = batch_reader
@@ -314,6 +312,14 @@ class LiveStream(Iterator[LiveStreamEvent]):
         self._state = LiveStreamState.OPEN
         self._iterator: Iterator[LiveStreamEvent] | None = None
         self._last_ordering_key: tuple[Any, ...] | None = None
+        # The governed-segment discriminator for whichever island is
+        # currently being delivered (ADR-0047 decision 8): it must change
+        # across an explicit gap, so it is keyed on the island's *start*
+        # only, never its end -- an island's end keeps growing as more data
+        # is organically published into the same still-open segment, and
+        # that ordinary growth must never look like a new segment the way a
+        # real gap does.
+        self._segment_id: str | None = None
 
     @property
     def state(self) -> LiveStreamState:
@@ -349,12 +355,32 @@ class LiveStream(Iterator[LiveStreamEvent]):
                 close()
         self._state = LiveStreamState.ABORTED
 
+    def _segment_id_for(self, island_start: Instant) -> str:
+        """A per-island governed-segment discriminator (ADR-0047 decision 8).
+
+        Deliberately not read from ``operations.checkpoint.LiveCheckpointV1``:
+        ``access`` must not depend on ``operations`` (package boundary), and
+        this seam only ever needs a value that changes across an explicit
+        gap -- not A11's internal recovery-domain identity. Keyed on the
+        island's start only (never its end, which keeps growing as more data
+        is organically published into the same still-open segment).
+        """
+
+        return _fingerprint(
+            {
+                "dataset_identity": self.dataset.identity.stable_dict(),
+                "ordering_policy": self.ordering_policy,
+                "segment_start": island_start.isoformat(),
+            }
+        )
+
     def _new_cursor(self, *, exchange_ts: Instant, trade_id: str, sequence: str | None) -> LiveStreamCursorV1:
+        assert self._segment_id is not None  # set before any record is read (see _events)
         return LiveStreamCursorV1(
             schema_version=LIVE_STREAM_CURSOR_SCHEMA_V1,
             dataset_identity=self.dataset.identity,
             ordering_policy=self.ordering_policy,
-            coverage_segment_id=self.coverage_segment_id,
+            coverage_segment_id=self._segment_id,
             last_canonical_exchange_ts=exchange_ts,
             last_canonical_trade_id=trade_id,
             last_observed_sequence=sequence,
@@ -392,6 +418,7 @@ class LiveStream(Iterator[LiveStreamEvent]):
         islands = self._islands()
 
         for index, island in enumerate(islands):
+            self._segment_id = self._segment_id_for(island.start)
             check_gap = index > 0 or cursor is not None
             pending_gap: tuple[str, Instant, LiveStreamCursorV1] | None = None
             if check_gap and island.start > pos:
@@ -439,20 +466,55 @@ class LiveStream(Iterator[LiveStreamEvent]):
     def _read_island(
         self, island: CoverageInterval, *, after_key: tuple[Instant, str] | None
     ) -> Iterator[Any]:
-        for partition in self.partitions:
+        for index, partition in enumerate(self.partitions):
             coverage = partition.coverage
             if coverage is None:
                 continue
             clipped = intersect(coverage, island)
             if clipped is None:
                 continue
+            previous_partition = self.partitions[index - 1] if index else None
+            next_partition = (
+                self.partitions[index + 1] if index + 1 < len(self.partitions) else None
+            )
+            previous_end = (
+                previous_partition.coverage.end
+                if previous_partition is not None and previous_partition.coverage is not None
+                else None
+            )
+            next_start = (
+                next_partition.coverage.start
+                if next_partition is not None and next_partition.coverage is not None
+                else None
+            )
             path = self._path_resolver(partition.storage_root, partition.dataset_rel_root, partition.rel_path)
             for raw_batch in self._batch_reader(str(path), clipped.start, clipped.end, self._batch_size):
                 for record in raw_batch:
+                    # Fail-closed exactly like DataScan._validate_and_account_batch:
+                    # a live consumer cursor must never treat an out-of-window
+                    # record as authoritative continuity evidence, regardless of
+                    # whether a malformed file or a misbehaving reader produced
+                    # it -- B06 does not trust the batch reader any more than B02
+                    # historical scan does.
                     if record.venue != self.dataset.identity.venue or record.instrument != self.dataset.identity.instrument:
                         raise DataIntegrityError(
                             "Parquet record identity does not match catalog dataset",
                             context={"dataset_identity": self.dataset.identity.stable_dict()},
+                        )
+                    if previous_end is not None and record.exchange_ts < previous_end:
+                        raise DataIntegrityError(
+                            "record crosses backward over the previous partition boundary",
+                            context={"partition": partition.natural_identity.stable_dict()},
+                        )
+                    if next_start is not None and record.exchange_ts >= next_start:
+                        raise DataIntegrityError(
+                            "record crosses forward over the next partition boundary",
+                            context={"partition": partition.natural_identity.stable_dict()},
+                        )
+                    if record.exchange_ts < coverage.start or record.exchange_ts >= coverage.end:
+                        raise DataIntegrityError(
+                            "record is outside partition declared coverage",
+                            context={"partition": partition.natural_identity.stable_dict()},
                         )
                     ordering_key = self.ordering_provider.key(record)
                     if after_key is not None and ordering_key <= after_key:
@@ -580,47 +642,16 @@ class DataGateway:
         partitions = self._ordered_partitions(selected)
         self._validate_partition_set(dataset, partitions)
 
-        coverage_segment_id = self._coverage_segment_id(
-            dataset_identity=dataset.identity,
-            ordering_policy=request.ordering_policy,
-            partitions=partitions,
-        )
-
         return LiveStream(
             dataset=dataset,
             ordering_policy=request.ordering_policy,
             ordering_provider=ordering_provider,
             partitions=partitions,
-            coverage_segment_id=coverage_segment_id,
             resume_point=resume_point,
             cursor=cursor,
             batch_reader=self._batch_reader,
             path_resolver=self._path_resolver,
             batch_size=batch_size,
-        )
-
-    @staticmethod
-    def _coverage_segment_id(
-        *, dataset_identity: DatasetIdentity, ordering_policy: str, partitions: tuple[CatalogPartition, ...]
-    ) -> str:
-        """A discriminator over currently eligible coverage (ADR-0047 decision 8).
-
-        Deliberately not read from ``operations.checkpoint.LiveCheckpointV1``:
-        ``access`` must not depend on ``operations`` (package boundary), and
-        this seam only ever needs a value that changes when the catalog's own
-        eligible coverage changes -- not A11's internal recovery-domain
-        identity.
-        """
-
-        islands = merge_intervals(
-            interval for partition in partitions if (interval := partition.coverage) is not None
-        )
-        return _fingerprint(
-            {
-                "dataset_identity": dataset_identity.stable_dict(),
-                "ordering_policy": ordering_policy,
-                "islands": [island.stable_dict() for island in islands],
-            }
         )
 
     def _prepare(

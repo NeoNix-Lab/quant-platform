@@ -120,6 +120,18 @@ class FakeBatchReader:
                 yield filtered
 
 
+class UntrustworthyBatchReader:
+    """A misbehaving reader that ignores the requested [start, end) window --
+    simulates a malformed parquet file so tests can prove LiveStream does not
+    trust the reader any more than DataScan does."""
+
+    def __init__(self, batches_by_path: dict[str, list[tuple[TradeRecord, ...]]]):
+        self.batches_by_path = batches_by_path
+
+    def __call__(self, path: str, start: Instant, end: Instant, batch_size: int):
+        yield from self.batches_by_path.get(path, [])
+
+
 def gateway(
     partitions: list[CatalogPartition], batches_by_path: dict[str, list[tuple[TradeRecord, ...]]]
 ) -> tuple[DataGateway, FakeBatchReader]:
@@ -281,6 +293,34 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(LiveGapStatus.CLOSED, closed_gap.status)
         self.assertEqual(instant("2024-01-01T02:00:01Z"), closed_gap.upper_bound)
         self.assertEqual("2", closed_gap.resumed_cursor.last_canonical_trade_id)
+        self.assertNotEqual(cursor.coverage_segment_id, closed_gap.resumed_cursor.coverage_segment_id)
+
+    def test_coverage_segment_id_changes_across_an_explicit_gap(self):
+        left = partition("dt=2024-01-01/hour=00", "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", partition_id="partition-a")
+        right = partition("dt=2024-01-01/hour=02", "2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z", partition_id="partition-b")
+        left_records = (trade("2024-01-01T00:00:01Z", "1"),)
+        right_records = (trade("2024-01-01T02:00:01Z", "2"),)
+        gw, _ = gateway([left, right], {left.rel_path: [left_records], right.rel_path: [right_records]})
+
+        events = list(gw.live_stream(live_request()))
+        trade_events = [e for e in events if isinstance(e, LiveTradeEvent)]
+        gap_events = [e for e in events if isinstance(e, LiveGapEvent)]
+
+        pre_gap_cursor = trade_events[0].cursor
+        post_gap_cursor = trade_events[1].cursor
+        open_gap, closed_gap = gap_events
+        self.assertNotEqual(pre_gap_cursor.coverage_segment_id, post_gap_cursor.coverage_segment_id)
+        self.assertEqual(pre_gap_cursor.coverage_segment_id, open_gap.previous_cursor.coverage_segment_id)
+        self.assertEqual(post_gap_cursor.coverage_segment_id, closed_gap.resumed_cursor.coverage_segment_id)
+
+    def test_coverage_segment_id_stays_stable_within_one_contiguous_island(self):
+        p = partition("dt=2024-01-01/hour=00", "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", partition_id="partition-a")
+        records = (trade("2024-01-01T00:00:01Z", "1"), trade("2024-01-01T00:00:02Z", "2"))
+        gw, _ = gateway([p], {p.rel_path: [records]})
+
+        events = [e for e in gw.live_stream(live_request()) if isinstance(e, LiveTradeEvent)]
+
+        self.assertEqual(events[0].cursor.coverage_segment_id, events[1].cursor.coverage_segment_id)
 
     def test_full_incremental_replay_matches_one_full_drain(self):
         p = partition("dt=2024-01-01/hour=00", "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", partition_id="partition-a")
@@ -329,6 +369,41 @@ class IntegrityTests(unittest.TestCase):
         p = partition("dt=2024-01-01/hour=00", "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", partition_id="partition-a")
         records = (trade("2024-01-01T00:00:02Z", "2"), trade("2024-01-01T00:00:01Z", "1"))
         gw, _ = gateway([p], {p.rel_path: [records]})
+
+        with self.assertRaises(DataIntegrityError):
+            list(gw.live_stream(live_request()))
+
+    def test_untrustworthy_reader_cannot_smuggle_a_record_outside_declared_coverage(self):
+        # partition-a declares [00:00, 01:00); a misbehaving reader hands back
+        # a record at 05:00 anyway. LiveStream must not trust it -- exactly
+        # like DataScan never trusts its own batch reader.
+        p = partition("dt=2024-01-01/hour=00", "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", partition_id="partition-a")
+        rogue_record = trade("2024-01-01T05:00:00Z", "1")
+        reader = UntrustworthyBatchReader({p.rel_path: [(rogue_record,)]})
+        gw = DataGateway(
+            FakeCatalog([p]),
+            batch_reader=reader,
+            path_resolver=lambda _root, _dataset_root, rel_path: rel_path,
+            ordering_providers=(BYBIT_ORDERING_PROVIDER,),
+        )
+
+        with self.assertRaises(DataIntegrityError):
+            list(gw.live_stream(live_request()))
+
+    def test_untrustworthy_reader_cannot_cross_backward_over_the_previous_partition_boundary(self):
+        left = partition("dt=2024-01-01/hour=00", "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", partition_id="partition-a")
+        right = partition("dt=2024-01-01/hour=01", "2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z", partition_id="partition-b")
+        # right's reader hands back a record that actually belongs before
+        # left's coverage ended -- must be refused, not silently accepted as
+        # live continuity evidence.
+        rogue_record = trade("2024-01-01T00:00:30Z", "1")
+        reader = UntrustworthyBatchReader({right.rel_path: [(rogue_record,)]})
+        gw = DataGateway(
+            FakeCatalog([left, right]),
+            batch_reader=reader,
+            path_resolver=lambda _root, _dataset_root, rel_path: rel_path,
+            ordering_providers=(BYBIT_ORDERING_PROVIDER,),
+        )
 
         with self.assertRaises(DataIntegrityError):
             list(gw.live_stream(live_request()))
