@@ -1,77 +1,74 @@
-# Scope: Wave 5 - Experiment & Supervised ML v1
+# Scope: Wave 6 - Live Consumer Data Plane & Storage Lifecycle v1
 
-Status: **CLOSED / RECONCILED**
+Status: **OPEN**
 
-Scope kind: **completed implementation, legacy-harvest, validation and governance-closeout scope for Wave 5**.
+Scope kind: **decision-gate resolution and bounded implementation scope for Wave 6**.
 
-Target integration branch: **`implement/wave-5`**, branched from `main` after Wave 4 promotion.
+Target integration branch: **`implement/wave-6`**, branched from `main` after Wave 5 promotion.
 
 ---
 
 ## Prerequisite Integration Gate
 
-Wave 5 may start only after the Wave 4 Strategy / Replay path is promoted to `main`.
+Wave 6 may start only after the Wave 5 Experiment / Supervised ML path is promoted to `main`.
 
 Current gate evidence:
 
 ```text
-Wave 4 promotion PR: #165
-main promotion commit: fa3075f297af677a562d57d20cfcfa83e6eba897
-Wave 4 tag: wave-4-strategy-replay-v1
-Issue #146: Golden V7 deterministic replay proof credited
-Issue #147: Wave 4 governance closeout closed after main promotion
+Wave 5 promotion PR: #187
+main promotion commit: e4d6c1b667c6cd6b975dd512d7346d510798638d
+Wave 5 tag: wave-5-experiment-supervised-ml-v1
+Issue #174: Wave 5 Golden E2E supervised proof credited
+Issue #175: Wave 5 governance closeout closed after main promotion
 ```
 
-Wave 5 closeout evidence:
+The dependency basis is `CAPABILITY_DAG.md`: `B06` requires `A11,B03`; `D04` requires `B06,D02`; `K07` requires `K05,K06`; `K09` requires `K08`.
 
-```text
-I04 Supervised input / selection: PR #177, merge 9ac325f10d71fff8f1db8bf9fee4ffa9153ea8c1
-I03 Trial accounting / comparison: PR #178, merge 7f34a1472101c1e8342f151535ccf2480ccb4f1c
-I05 Supervised training / evaluation: PR #179, merge 2a256c810fd19b55570a25ba4a8510aae891a889
-Wave 5 Golden E2E supervised proof: PR #180, merge 609eb5466f08e8726b59f7d1198d54c230b6e2bc
-Evidence document: docs/integration/WAVE5_GOLDEN_E2E_SUPERVISED_ML.md
-Governance reconciliation: issue #175
-```
-
-The dependency basis is `CAPABILITY_DAG.md`: `I03` requires `I01,I02,H05`; `I04` requires `E04,F06,F07`; `I05` requires both `I03,I04`.
-
-`I03` and `I04` are therefore parallel prerequisites of `I05`. Any sequencing below is operational batching, not a claim that `I04` semantically depends on `I03`.
+`B06`/`D04` (Track A, Data Access/Representation) and `K07`/`K09` (Track B, Operations) are independent tracks — neither technically depends on the other. Any sequencing below is operational batching under the repository's one-bounded-mutation-slice-at-a-time rule, not a semantic dependency claim.
 
 ---
 
 ## Objective
 
-Build and validate the canonical **Experiment & Supervised ML** vertical for reproducible supervised-model evaluation over already-canonical feature, label, validation and replay foundations:
+Resolve the two still-open Decision Gate families that `ROADMAP.md`'s Decision-gate model tracks as `DG-B` (Historical/Live data convergence) and `DG-H` (Operational safety), and implement their remaining atoms:
 
 ```text
-Canonical Feature Artifacts (E04) + Labels / Lockbox (F07)
-                    + Availability / Purge / Embargo (F06)
-                                      |
-                                      v
-                  Supervised input and selection (I04)
-                                      |
-                                      v
-              Trial accounting and comparison (I03)
-                                      |
-                                      v
-          Supervised training and evaluation (I05)
-                                      |
-                                      v
-       Run-bound metrics, model artifacts and prediction artifacts
-                                      |
-                                      v
-     Future Strategy consumption through learner-agnostic DecisionIntent
+Track A — Live Consumer Data Plane (DG-B)
+  A11 live acquisition (COMPLETE) + B03 result identity (COMPLETE)
+                    |
+                    v
+          B06 live access / consumer cursor
+                    |
+                    v
+       D04 incremental / live candle computation
+                    |
+                    v
+   future J07 paper trading consumer (out of scope here)
+
+Track B — Storage Lifecycle & Operational Safety (DG-H)
+  K06 RAW/source protection (COMPLETE) + K08 backup/restore proof (COMPLETE)
+                    |
+                    v
+            K07 storage tier relocation
+                    |
+                    v
+       K09 retention / governed deletion authority
+                    |
+                    v
+        sustainable long-running live operation
 ```
 
-The goal is to make supervised learning a deterministic, auditable and reproducible platform capability, not an ad hoc notebook/runtime path. Wave 5 must:
+`B06` and `K07`/`K09` are `OPEN_BLOCKING` in `CAPABILITY_DAG.md`: their semantics are not yet frozen by any ADR. `D04` is already `FROZEN` (candle semantics are fixed by `ADR-0021`/`CANDLE_DEFINITION.md`); only its live/incremental implementation is `MISSING`. Wave 6 must therefore:
 
-1. construct supervised datasets and selections without lookahead leakage;
-2. reuse the canonical validation primitives for walk-forward, availability, purge and embargo;
-3. account for comparable trials through the existing Study / Trial / Run / Artifact identity and persistence model;
-4. train and evaluate deterministic supervised model baselines under explicit environment and artifact identity;
-5. emit model, prediction and metric artifacts through the canonical Experiment System.
+1. resolve `DG-B`'s live-consumer cursor semantics (resume, ordering, disconnect, explicit gap notification) through a design gate that produces an ADR;
+2. implement `DataGateway.live_stream()` against that ADR without inventing a new repair engine or claiming completeness the provider cannot prove (per `ADR-0040`/issue #110's `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition);
+3. implement incremental/live candle computation that converges to the historical `D03`/`ADR-0021` `CLOSED` output, with `PARTIAL` state for candles still forming;
+4. resolve `DG-H`'s tier-relocation crash-safety algorithm through a design gate that produces an ADR;
+5. implement crash-safe hot→cold/deep-cold relocation without ever creating a window of consumer-visible data disappearance;
+6. resolve `DG-H`'s retention/deletion-authority policy through a design gate that produces an ADR;
+7. implement governed deletion that never removes protected or sole-recoverable evidence, gated on a verified `K08` restore.
 
-Wave 5 delivers atoms **`I04`**, **`I03`** and **`I05`**. It does not implement strategic RL (`I06`), execution RL (`I07`), job runtime (`J03`), paper/shadow trading (`J07`) or live execution (`J08`).
+Wave 6 delivers atoms **`B06`**, **`D04`**, **`K07`** and **`K09`**. It does not implement paper trading (`J07`), live product mode (`J08`), API transport (`J02`), a second venue, or L1/L2/L3 market depth.
 
 ---
 
@@ -84,22 +81,23 @@ Read before mutating code or scope-derived issue bodies:
 - `docs/product/PRODUCT.md`
 - `docs/product/CAPABILITY_MAP.md`
 - `docs/product/CAPABILITY_DAG.md`
-- `docs/product/ROADMAP.md`
+- `docs/product/ROADMAP.md` (Decision-gate model; `DG-B`, `DG-H` boundaries)
 - `docs/architecture/TARGET_ARCHITECTURE.md`
-- `docs/contracts/CORE_CONTRACTS.md` (especially sections 11-13, 19-20 and 28-31)
-- `docs/architecture/OPEN_DECISIONS.md` (`DG-G`)
-- `docs/legacy/ADOPTION_LEDGER.md`
-- `docs/decisions/ADR-0006-temporal-semantics.md`
-- `docs/decisions/ADR-0009-policy-decision-intent.md`
-- `docs/decisions/ADR-0010-supervised-and-rl.md`
-- `docs/decisions/ADR-0014-experiment-provenance.md`
+- `docs/contracts/DATA_GATEWAY.md`
+- `docs/contracts/CANDLE_DEFINITION.md`
+- `docs/architecture/STORAGE_LIFECYCLE.md`
+- `docs/architecture/OPEN_DECISIONS.md` (`DG-B`, `DG-H`)
+- `docs/decisions/ADR-0019-datagateway-boundary.md`
+- `docs/decisions/ADR-0021-candle-definition-v1.md`
 - `docs/decisions/ADR-0024-package-boundary-modular-monolith-v1.md`
-- `docs/decisions/ADR-0031-availability-purge-embargo-v1.md`
-- `docs/decisions/ADR-0034-feature-artifact-v1.md`
-- `docs/decisions/ADR-0036-labels-censoring-lockbox-v1.md`
-- `docs/decisions/ADR-0037-dsr-pbo-robust-comparison-v1.md`
+- `docs/decisions/ADR-0028-pressure-policy-v1.md`
+- `docs/decisions/ADR-0029-non-contiguous-coverage-reads-v1.md`
+- `docs/decisions/ADR-0032-raw-source-protection-v1.md`
+- `docs/decisions/ADR-0033-backfill-repair-v1.md`
+- `docs/decisions/ADR-0039-backup-restore-v1.md`
+- `docs/decisions/ADR-0040-bybit-live-trades-v1.md`
 
-Accepted ADRs and frozen contracts remain normative semantic authority. Legacy `ml_core` is read-only evidence and must never become a runtime dependency.
+Accepted ADRs and frozen contracts remain normative semantic authority. Issue #110's `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition is not reopened by this scope.
 
 ---
 
@@ -108,30 +106,37 @@ Accepted ADRs and frozen contracts remain normative semantic authority. Legacy `
 Authoritative baseline for this branch:
 
 ```text
-main @ fa3075f297af677a562d57d20cfcfa83e6eba897
-tag  wave-4-strategy-replay-v1
+main @ e4d6c1b667c6cd6b975dd512d7346d510798638d
+tag  wave-5-experiment-supervised-ml-v1
 ```
 
 Credit, do not reimplement or re-prove absent invalidating evidence:
 
 ```text
-I01 Study / Trial / Run / Artifact semantic model      COMPLETE
-I02 Experiment persistence                             COMPLETE
-E04 FeatureArtifact v1                                 COMPLETE
-F06 Availability / purge / embargo v1                  COMPLETE
-F07 Labels / censoring / lockbox v1                    COMPLETE
-F08 DSR/PBO robust comparison v1                       COMPLETE
-H05 Deterministic historical replay                    COMPLETE
+A10 Backfill and repair v1                             COMPLETE
+A11 Live trades acquisition                            COMPLETE
+A16 General quality lifecycle                          COMPLETE
+B02 Bounded historical scan (DataGateway.scan())       COMPLETE
+B03 Result identity / provenance                        COMPLETE
+B04 Non-contiguous coverage read                        COMPLETE
+D02 CandleDefinition v1                                 COMPLETE
+K02 Runtime identity v1                                 COMPLETE
+K03 Observability                                       COMPLETE
+K04 Capacity observation                                COMPLETE
+K05 Health/pressure policy v1 (ADR-0028)                COMPLETE
+K06 RAW/source protection v1 (ADR-0032)                 COMPLETE
+K08 Backup/restore proof v1 (ADR-0039)                  COMPLETE
+K10 Checkpoint/recovery v1 (ADR-0042)                   COMPLETE
 ```
 
 Important credited implementation details:
 
-- `quant_platform.validation.walk_forward` already owns `WalkForwardFold`, `WalkForwardScheduleSpec` and `build_walk_forward_folds`.
-- `quant_platform.validation.availability` already owns `Embargo`, `DependencyEvidence`, `ValidationCandidate` and `classify_candidate`.
-- `quant_platform.experiments.identities` already owns `StudyIdentity`, `TrialIdentity`, `RunSpecIdentity`, `RunIdentity`, `ArtifactContentIdentity` and `ArtifactIdentity`.
-- `quant_platform.experiments.persistence` already owns `ExperimentRepository`, run lifecycle persistence and artifact registration.
+- `quant_platform.access.gateway.DataGateway.scan()` already owns the bounded, ordered, finite historical read seam (`B02`). `B06` is a distinct, additive live/streaming seam on the same `DataGateway` class — it must not duplicate or replace `scan()`.
+- `quant_platform.representation.candles` already owns `D03`'s historical, batch-computed candle sealing logic under `ADR-0021`. `D04` must converge to the same `CLOSED` output for identical trade input; it must not define a competing candle definition.
+- `quant_platform.operations.protection`, `.pressure`, `.checkpoint` already own pure, catalog-independent decision seams for `K05`/`K06`/`K10`. `K07`/`K09` follow the same pattern: pure decision/algorithm logic in `operations`, composed with the catalog at the `application` layer — `operations` must not gain a dependency on `access`/`producer`.
+- `quant_platform.application.live_ingest_server` and `.live_gap_orchestration` already demonstrate the application-composition pattern this scope reuses for wiring pure domain seams to the catalog and to a real running process.
 
-Wave 5 composes these existing primitives. It must not duplicate them under `quant_platform.learning`.
+Wave 6 composes these existing primitives. It must not duplicate `DataGateway.scan()`'s bounded-read semantics, `representation.candles`'s sealing logic, or `operations`'s existing pure decision seams.
 
 ---
 
@@ -139,143 +144,129 @@ Wave 5 composes these existing primitives. It must not duplicate them under `qua
 
 | ID | Capability | Owner | Requires | Unlocks | Decision State | Target Impl State | Acceptance / Authority |
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **I04** | `Supervised input / selection v1` | Learning | `E04`, `F06`, `F07` | `I05` | RESOLVED | COMPLETE | Build supervised input projections from canonical features and labels; reuse validation-owned walk-forward/purge/embargo; fail closed on leakage. |
-| **I03** | `Trial accounting / comparison v1` | Experiment System | `I01`, `I02`, `H05` | `I05`, model selection | RESOLVED | COMPLETE | Comparable trial population identity, resume/idempotency and metric comparison through Study / Trial / Run / Artifact persistence. |
-| **I05** | `Supervised training / evaluation v1` | Learning | `I03`, `I04` | `J07` | RESOLVED | COMPLETE | Deterministic baseline model training/evaluation, fold-safe normalization, OOF metrics and model/prediction/metric artifacts. |
+| **B06** | `Live access / consumer cursor v1` | Data Access | `A11`, `B03` | `D04`, `J07` | OPEN_BLOCKING → RESOLVED (this scope) | COMPLETE | `DataGateway.live_stream()`: deterministic consumer resume/replay, explicit disconnect and gap notification; never invents missing trades. |
+| **D04** | `Incremental / live candle computation v1` | Representation | `B06`, `D02` | `J07` | FROZEN | COMPLETE | `PARTIAL` forming candle plus `CLOSED` candle that is numerically identical to `D03`'s historical output for the same trades. |
+| **K07** | `Storage tier relocation v1` | Operations/Data Plane | `K05`, `K06` | storage lifecycle | OPEN_BLOCKING → RESOLVED (this scope) | COMPLETE | Crash at any point yields either the old or the new valid placement, never neither; catalog updates only after target verification. |
+| **K09** | `Retention / deletion authority v1` | Operations | `K08` | sustainable live | OPEN_BLOCKING → RESOLVED (this scope) | COMPLETE | Never deletes protected or sole-recoverable evidence; deletion requires a verified `K08` restore path first. |
 
 ---
 
-## Decision Gate Clarification: DG-G
+## Decision Gate Resolution: DG-B and DG-H
 
-`I03`, `I04` and `I05` are now `RESOLVED / COMPLETE` in the capability model.
-This Wave was implementation and harvest work, not a new decision-gate
-resolution.
+Unlike Wave 5 (whose `I03`/`I04`/`I05` decision states were already `RESOLVED` before implementation began), `B06`, `K07` and `K09` are `OPEN_BLOCKING` today. This scope's Active Path therefore includes dedicated **design-gate** issues — using this repository's `[agent] Design gate` template — that must each produce a committed ADR before their corresponding implementation slice starts. This mirrors the exact pattern already used for `K02`/`K06` (`ADR-0041`, `ADR-0044`) during the Live Ingest Server Production Readiness effort.
 
-DG-G remains open only for its still-unresolved branches:
+- **DG-B / B06**: produces the next ADR (`ADR-0047`), resolving live-consumer cursor resume/ordering/disconnect/gap-notification semantics. Must not reopen issue #110's `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition — an unprovable gap stays an explicit, auditable non-complete interval, never a silently filled one.
+- **DG-H / K07**: produces the next ADR (`ADR-0048`), resolving the tier-relocation algorithm and restart protocol left open by `STORAGE_LIFECYCLE.md` §4/§13.
+- **DG-H / K09**: produces the next ADR (`ADR-0049`), resolving retention periods and deletion authority left open by `STORAGE_LIFECYCLE.md` §13, gated on `K08`.
 
-- `I06` Strategic RL contract;
-- `I07` Execution RL contract;
-- `J03` Job runtime.
+`D04` requires no new design gate: its semantics are already `FROZEN` by `ADR-0021`.
 
-Do not resolve or implement those branches in Wave 5. Do not infer a job scheduler from experiment persistence, and do not infer RL runtime semantics from supervised ML.
-
----
-
-## Legacy Harvest Map
-
-Harvest decisions come from `docs/legacy/ADOPTION_LEDGER.md` at legacy baseline `1adf6ba79bcb766c93c6e487017561565ab8c131`.
-
-| Legacy ID | Decision | Wave 5 disposition |
-|---|---|---|
-| `H09` Explicit selection + leakage guard | ADAPT / P1 | Adapt into `I04` as fail-closed feature/label selection checks tied to canonical availability evidence. |
-| `H10` Expanding positional schedule | ADOPT / P2 | Already effectively covered by canonical `validation.walk_forward`; Wave 5 reuses it and may add supervised-composition tests, but must not reimplement it. |
-| `H11` Train-fit fold normalization | ADOPT / P2 | Adopt the pure fit/transform/statistics core for `I05`; fit only on training samples, transform without mutating learned statistics. |
-| `H12` Sample uniqueness | ADAPT / P2 | Adapt into `I04` over the temporally admissible fold universe only; never compute with future-spanning information. |
-| `H13` Supervised wrappers + centroid baseline | ADAPT / P3 | Adapt minimally for deterministic baseline model wrappers and probability-column alignment. External ML dependencies require explicit deterministic dependency policy in the implementing slice. |
-| `H15` Trial accounting | ADAPT / P2 | Converge useful attempt-accounting concepts into existing `ExperimentRepository` / Study / Trial / Run semantics for `I03`. |
-| `H18` Versioned recipe library | ADAPT / P2 | Out of scope for Wave 5 unless a later issue explicitly selects recipe/version-diff work. |
-
-Known legacy defects listed in `ADOPTION_LEDGER.md` are active refusal criteria. Do not port unchanged code that leaks future data, conflates identity/persistence, uses non-canonical storage, or depends on legacy runtime topology.
+DG-B remains open beyond this scope only for its already-disposed long-gap remediation proposition (#110, unchanged). DG-H remains open beyond this scope for no currently-identified atom.
 
 ---
 
 ## Package Boundary and Modular Monolith Updates
 
-Wave 5 introduces a new runtime package:
+Wave 6 does not introduce a new top-level package, but extends existing owners:
 
 ```text
-src/quant_platform/learning/
+quant_platform.access.gateway   -- add DataGateway.live_stream() (owner: access, unchanged)
+quant_platform.representation.candles -- add incremental/live sealing path (owner: representation, unchanged)
+quant_platform.operations.<relocation module>  -- new submodule, owner: operations
+quant_platform.operations.<retention module>   -- new submodule, owner: operations
+quant_platform.application.<storage lifecycle composer> -- new submodule, owner: application
 ```
 
-The package-boundary test must register the package explicitly:
+Each new submodule must be registered explicitly in `tests/test_package_boundaries_v1.py`'s `OWNERS` dict (module → owner), matching the existing one-entry-per-submodule pattern. No `ALLOWED` edge changes are anticipated:
 
-```text
-OWNERS:
-  quant_platform.learning -> "learning"
+- `access` remains `{"access", "physical", "shared"}` — `B06` does not need a new outbound edge.
+- `representation` remains `{"representation", "shared"}` — `D04`'s live path must receive already-extracted primitive trade fields from its `application`-layer caller, exactly as `D03` already does for historical batches; it must never import `access` directly.
+- `operations` remains `{"operations", "shared"}` — `K07`/`K09`'s relocation/retention algorithms must stay pure and catalog-independent; actual catalog mutation is composed at the `application` layer, exactly as `live_ingest_server.py` already composes `operations.checkpoint` with the catalog.
+- `application`'s existing `{"application", "access", "representation", "feature", "producer", "operations", "validation", "source", "physical", "shared", "strategy", "execution", "portfolio", "replay"}` already covers every edge this scope needs; no `ALLOWED` change is anticipated there.
 
-ALLOWED:
-  "learning" -> {"learning", "experiment", "validation", "feature", "shared"}
-```
-
-Boundary rules:
-
-- `learning` must not depend on `application`, `strategy`, `execution`, `portfolio`, `replay`, `access`, `producer`, `source_adapters` or `physical`.
-- `learning` must not open physical storage directly (`Parquet`, CSV, SQLite, object-store paths, catalog tables outside Experiment persistence).
-- `learning` consumes already-canonical logical values and identities: FeatureArtifact / label / validation / experiment identity inputs supplied by its caller or tests.
-- DataGateway access and application composition remain outside `learning`.
-- Strategy integration remains outside Wave 5. Wave 5 may produce artifacts that future Strategy work can consume, but it must not wire model predictions into live or paper `DecisionIntent` execution.
+Exact new submodule names are an implementation decision for each design-gate ADR to fix, not this document.
 
 ---
 
 ## Active Path
 
-The repository rule of one bounded mutation slice at a time governs execution. The operational order below respects risk and reviewability; it is not a claim that `I04` depends on `I03`.
+The repository rule of one bounded mutation slice at a time governs execution. Track A and Track B are independent; the order below is operational batching, not a dependency claim between the tracks.
 
 ```text
-1. Slice I04 - Supervised Input, Selection and Anti-Leakage
-   - Add `quant_platform.learning` package boundary registration.
-   - Implement supervised input value models and deterministic projection results.
-   - Reuse validation-owned walk-forward / availability / purge / embargo.
-   - Adapt H09 and H12.
-   - Prove no lookahead leakage with adversarial temporal tests.
+1. Design gate - DG-B: B06 Live-Consumer Cursor Semantics
+   - Produce ADR-0047 resolving resume/ordering/disconnect/gap-notification semantics.
+   - Must not reopen issue #110's NO_AUTHORITATIVE_REPAIR_PATH_PROVEN disposition.
         |
         v
-2. Slice I03 - Trial Accounting and Comparison
-   - Reuse I01/I02 identities and persistence.
-   - Adapt H15 into canonical trial accounting/comparable population semantics.
-   - Implement deterministic comparison protocol and model-selection result values.
-   - Prove resume/idempotency and exact identity conflict handling.
+2. Slice B06 - DataGateway Live Streaming Access & Consumer Cursor
+   - Implement DataGateway.live_stream() per ADR-0047.
+   - Explicit disconnect handling and gap notification; no invented trades.
         |
         v
-3. Slice I05 - Supervised Training, Evaluation and Artifact Emission
-   - Adopt H11 fold normalizer semantics.
-   - Adapt H13 deterministic baseline model wrappers.
-   - Implement OOF metric calculation and probability-column alignment.
-   - Register model, prediction and metric artifacts through ExperimentRepository.
+3. Slice D04 - Incremental and Live Candle Computation
+   - Implement PARTIAL/CLOSED candle sealing over the B06 live stream.
+   - Prove numeric equivalence with D03's historical CLOSED output.
         |
         v
-4. Wave 5 Golden E2E Supervised Proof
-   - Execute a bounded deterministic supervised pipeline over canonical Bybit BTCUSDT evidence.
-   - Prove reproducible folds, selections, metrics and artifact identities across independent runs.
-   - Record evidence under `docs/integration/`.
+4. Design gate - DG-H: K07 Storage Tier Relocation Algorithm
+   - Produce ADR-0048 resolving the crash-safe relocation algorithm and restart protocol.
         |
         v
-5. Wave 5 Governance Closeout
-   - Reconcile `CAPABILITY_DAG.md`, `CAPABILITY_MAP.md`, `ROADMAP.md` and `OPEN_DECISIONS.md`.
-   - Prepare `implement/wave-5` for promotion to `main` after Golden proof and reconciliation.
+5. Slice K07 - Storage Tier Relocation & Warm/Cold Migration
+   - Implement crash-safe hot->cold/deep-cold relocation per ADR-0048.
+   - Catalog location changes only after target verification; source removed only after verification.
+        |
+        v
+6. Design gate - DG-H: K09 Retention & Deletion Authority Policy
+   - Produce ADR-0049 resolving retention periods and deletion authority, gated on K08.
+        |
+        v
+7. Slice K09 - Retention, Deletion Authority & Compliance Audit
+   - Implement governed deletion per ADR-0049.
+   - Never delete protected or sole-recoverable evidence; require a verified K08 restore first.
+        |
+        v
+8. Wave 6 Golden E2E Proof
+   - Prove a live consumer (B06) computing live candles (D04) while a K07 relocation
+     and a K09 retention pass run concurrently, without corruption or consumer-visible
+     data disappearance.
+        |
+        v
+9. Wave 6 Governance Closeout
+   - Reconcile CAPABILITY_DAG.md, CAPABILITY_MAP.md, ROADMAP.md and OPEN_DECISIONS.md.
+   - Prepare implement/wave-6 for promotion to main after the Golden proof and reconciliation.
 ```
 
 ---
 
 ## Acceptance Criteria
 
-Wave 5 is complete only when all of the following are observably true:
+Wave 6 is complete only when all of the following are observably true:
 
-1. **No Lookahead Bias**: supervised input construction refuses any feature, label or dependency unavailable at the applicable decision/fold cutoff.
-2. **Canonical Validation Reuse**: walk-forward, availability, purge and embargo semantics reuse `quant_platform.validation`; `learning` does not define a competing fold or embargo authority.
-3. **Fold-Local Statistics**: every normalizer/scaler fits only on admitted training samples and transforms validation/test samples without mutating fitted statistics.
-4. **Deterministic Computation**: fold generation, selection, sample weighting, normalization, model baseline training, prediction ordering and metric aggregation are deterministic for identical inputs.
-5. **Experiment Identity and Idempotency**: trial/run accounting uses the existing Study / Trial / Run identity and persistence model; duplicate or resumed attempts are exact and conflict-safe.
-6. **Artifact Registration**: model, prediction and metric artifacts use `ArtifactContentIdentity` / `ArtifactIdentity` and are registered through `ExperimentRepository`.
-7. **Package Boundary**: `tests/test_package_boundaries_v1.py` passes with `quant_platform.learning` registered and no forbidden dependencies.
-8. **Verification Gate**: `python tools/workflow.py preflight`, `python tools/check_markdown_links.py` and the relevant focused tests pass.
-9. **Golden Proof**: Wave 5 records a deterministic supervised E2E proof with stable metrics and artifact identities across independent runs.
+1. **No Invented Continuity**: `B06`'s live cursor never fabricates a trade or claims interval completeness the provider cannot prove; unprovable gaps remain explicit per issue #110/`ADR-0040`.
+2. **Deterministic Resume**: a consumer that reconnects at a recorded cursor position resumes without duplication or loss of already-delivered records.
+3. **Candle Equivalence**: `D04`'s sealed `CLOSED` candles are numerically identical to `D03`'s historical computation for the same underlying trades; `PARTIAL` candles never leak into `CLOSED`-only consumers.
+4. **Crash-Safe Relocation**: a simulated crash at any point during a `K07` relocation leaves either the original or the fully-verified new placement authoritative, never neither, and never a consumer-visible gap.
+5. **Governed Deletion**: `K09` refuses to delete any unique RAW/source or sole-recoverable evidence, and refuses deletion of anything without a prior verified `K08` restore.
+6. **Package Boundary**: `tests/test_package_boundaries_v1.py` passes with all new submodules registered and no forbidden dependency (`representation`/`operations` do not gain an `access`/`producer` edge).
+7. **Verification Gate**: `python tools/workflow.py preflight`, `python tools/check_markdown_links.py` and the relevant focused tests pass.
+8. **Golden Proof**: Wave 6 records a live-consumer + live-candle + concurrent-relocation + concurrent-retention proof with no corruption or consumer-visible disappearance, on bounded canonical Bybit BTCUSDT evidence.
 
 ---
 
 ## Out of Scope
 
-Do not pull into Wave 5 unless a later authorized scope explicitly changes it:
+Do not pull into Wave 6 unless a later authorized scope explicitly changes it:
 
-- Strategic RL (`I06`) and execution RL (`I07`).
-- Job runtime / asynchronous distributed execution (`J03`).
 - Paper/shadow trading mode (`J07`) or live product mode (`J08`).
-- Live broker connections, exchange order placement or live trading authorization.
-- Live consumer cursor `B06`.
 - API transport (`J02`) or UI/TUI clients (`J04`-`J06`).
-- Multi-asset execution (`H06`).
-- Versioned recipe library / recipe diffing (`H18`) unless separately scoped.
-- Generic model registry, hyperparameter search infrastructure or arbitrary plugin framework beyond what `I03`-`I05` require.
+- A second venue or generic provider resolution.
+- L1/L2 market depth (`A13`/`A14`) or L3/MBO (`A15`).
+- Strategy/Execution/Portfolio/Replay/ML/RL semantics of any kind.
+- A generic job scheduler, broker, or workflow engine.
+- HA/distributed consensus or off-site disaster recovery.
+- Speculative long-gap filling without attributable source evidence (issue #110 stays disposed).
+- Concrete deployment capacity thresholds, backup destination/topology, or monitoring/alerting technology selection (`STORAGE_LIFECYCLE.md` §13's still-open items beyond `K07`/`K09`'s own scope).
 
 ---
 
@@ -283,8 +274,8 @@ Do not pull into Wave 5 unless a later authorized scope explicitly changes it:
 
 Stop and report rather than implement if:
 
-- an external ML dependency is required but cannot be made deterministic under pinned versions, fixed seeds and controlled threading;
-- a legacy harvest candidate needs future data or post-fold information that cannot be represented through canonical availability evidence;
-- `learning` needs direct physical storage access, direct catalog reads outside Experiment persistence, or Application-owned composition;
-- supervised outputs require Strategy, Execution, Paper/Shadow or Live runtime semantics to be useful;
-- artifact payload storage requirements exceed the existing Experiment artifact registration boundary and need a new storage authority.
+- a design-gate ADR cannot resolve its decision without weakening an accepted contract (`DATA_GATEWAY.md`, `CANDLE_DEFINITION.md`, `STORAGE_LIFECYCLE.md`);
+- `B06` cannot provide explicit gap notification without either inventing continuity or reopening issue #110;
+- `D04`'s live path cannot converge to `D03`'s historical output without a semantic change to `ADR-0021`;
+- `K07`/`K09` cannot guarantee crash-safety or protected-evidence non-deletion without direct `operations` → `access`/`producer` coupling that the package boundary forbids;
+- the Golden E2E proof requires Strategy, Execution, Paper/Shadow, Live runtime, or client/API semantics to be meaningful.
