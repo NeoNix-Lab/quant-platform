@@ -142,10 +142,28 @@ class LiveSessionEvent:
     evidence: str | None  # operational/diagnostic only, e.g. provider session id
 
 
+class LiveGapStatus(str, Enum):
+    OPEN = "open"      # lower bound proven; upper bound not yet proven
+    CLOSED = "closed"  # both bounds proven; a resumed cursor exists
+
+
 @dataclass(frozen=True, slots=True)
 class LiveGapEvent:
-    cursor: LiveStreamCursorV1
+    schema_version: str  # "live-gap-event-v1"
+    gap_id: str  # sha256(dataset_identity, ordering_policy, previous_coverage_segment_id, previous_cursor.last_canonical_order_key) -- stable across the OPEN/CLOSED pair
+    status: LiveGapStatus
+    previous_cursor: LiveStreamCursorV1  # last cursor proven continuous before the interruption
+    lower_bound: Instant  # == previous_cursor.last_canonical_exchange_ts
+    upper_bound: Instant | None  # None while OPEN; set once CLOSED
+    resumed_cursor: LiveStreamCursorV1 | None  # None while OPEN; the new governed segment's first cursor once CLOSED
     reason: str
+
+    @property
+    def affected_interval(self) -> CoverageInterval | None:
+        """Exact non-complete support, once knowable; ``None`` while OPEN."""
+        if self.upper_bound is None:
+            return None
+        return CoverageInterval(start=self.lower_bound, end=self.upper_bound)
 ```
 
 - `LiveTradeEvent` is the only authoritative data-delivery event.
@@ -156,13 +174,36 @@ class LiveGapEvent:
   treatment of ack/heartbeat/pong). A `RECONNECTED` event with no
   accompanying `LiveGapEvent` means continuity was re-established inside the
   bounded recent-public-trades window (`ADR-0040` §"Consequences"); a
-  `RECONNECTED` event immediately followed by a `LiveGapEvent` means it was
-  not, and the interruption is explicit.
-- `LiveGapEvent` is the explicit, descriptive-only signal required when the
-  last durable key cannot be found. It is evidence, never a completeness
-  claim, and it must never be synthesized into a zero-trade interval,
-  interpolated row, or sentinel (closing open decisions 12, 14, 24 exactly
-  as already auto-answered, now given a concrete carrier type).
+  `RECONNECTED` event immediately followed by an `OPEN` `LiveGapEvent` means
+  it was not, and the interruption is explicit.
+- `LiveGapEvent` carries **stable structured gap facts**, not a bare notice.
+  It is emitted as a correlated pair sharing one `gap_id`:
+  - **`OPEN`** — emitted the moment the last durable key cannot be found
+    inside `A11`'s bounded recent-public-trades window. `lower_bound` (the
+    last canonically proven instant) is always known at this point;
+    `upper_bound`/`resumed_cursor` are `None` because the far edge of the
+    interruption is not yet provable — the type makes that unknowability
+    explicit instead of hiding it inside `reason`.
+  - **`CLOSED`** — emitted once a subsequent governed live segment actually
+    begins publishing again, carrying the same `gap_id`, the now-known
+    `upper_bound` (that segment's first canonical `exchange_ts`) and
+    `resumed_cursor` (the cursor pointing at that first record).
+  - `affected_interval` (a `CoverageInterval`, `B04`'s own exact-complement
+    gap type) is only ever available once `CLOSED` — this is the "affected
+    coverage interval/segment non-complete with explicit interruption
+    evidence" issue #193's acceptance criterion requires, and `gap_id` is
+    the stable non-complete/interruption evidence identity that criterion
+    also requires.
+  - It is evidence, never a completeness claim, and must never be
+    synthesized into a zero-trade interval, interpolated row, or sentinel
+    (closing open decisions 12, 14, 24 exactly as already auto-answered,
+    now given a concrete, structurally correlatable carrier type).
+  - A consumer (in particular `D04`, issue #195) that sees an `OPEN`
+    `LiveGapEvent` for a `gap_id` it has not yet seen `CLOSED` must treat
+    every instant from that event's `lower_bound` onward as unsafe to seal
+    a `CLOSED` candle over, until the matching `CLOSED` event supplies the
+    exact `affected_interval` — at which point sealing may resume strictly
+    after `upper_bound`.
 
 No terminal/error event type is defined in v1: a fatal, non-recoverable
 error propagates as a raised exception from the iterator, exactly as
@@ -202,10 +243,13 @@ as `B03` already requires for historical reads.
   `LiveSessionEvent`; an unprovable gap surfaces as `LiveGapEvent` and never
   as fabricated continuity; and no new physical storage or catalog schema is
   required anywhere in this design.
-- `D04` (issue #195) can consume `LiveTradeEvent`/`LiveGapEvent` directly: it
-  must never seal a `CLOSED` candle across an interval a `LiveGapEvent`
-  covers (closing questionnaire items 27-29), because a live gap is not
-  proof of a zero-trade interval.
+- `D04` (issue #195) can consume `LiveTradeEvent`/`LiveGapEvent` directly and
+  correlate `OPEN`/`CLOSED` pairs by `gap_id`: it must never seal a `CLOSED`
+  candle over any instant at or after an still-`OPEN` gap's `lower_bound`,
+  and once the matching `CLOSED` event arrives it must treat exactly
+  `affected_interval` as unsafe to have sealed, resuming normal sealing only
+  strictly after `upper_bound` (closing questionnaire items 27-29), because a
+  live gap is not proof of a zero-trade interval.
 - No generic pub/sub framework, message broker, or new repair engine was
   introduced; `A10` remains the only repair capability, and issue #110's
   disposition is unchanged.
