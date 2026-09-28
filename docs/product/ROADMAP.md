@@ -97,7 +97,7 @@ OPEN_BLOCKING                   9
 OPEN_DEFERABLE                  8
 ROADMAP_DEFINED                 70 + 9 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         58 / 87 = 66.7%
+IMPLEMENTATION_COMPLETE         61 / 87 = 70.1%
 ```
 
 The 100% planning score means every roadmap atom is classified. It does **not** mean every future semantic choice is frozen.
@@ -125,6 +125,7 @@ Important current boundaries:
 - DG-C: L1 does not activate L2; L3 waits for real feed evidence.
 - DG-E: complete through F08.
 - DG-F: G04 session/cooldown semantics are frozen by ADR-0045; H03 execution-conflict semantics are frozen by ADR-0046; G01-G04/H01-H05 are implementation-complete on `implement/wave-4`.
+- DG-G: the supervised branch I03/I04/I05 is implementation-complete and Golden-proven by Wave 5; remaining unresolved branches are I06 strategic RL, I07 execution RL and J03 job runtime.
 - DG-H: K02/K03/K04/K05/K06/K08/K10 are complete, including K10's real restart proof (PR #122) and the supervised live-ingest server operating path proof; K07/K09 remain open and are outside the closed scope.
 
 Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension, multi-asset execution and concrete API transport — remain open until their evidence trigger exists.
@@ -159,9 +160,13 @@ V8 is not complete as a whole. The first live-ingest producer operating path now
 
 ## Current execution frontier
 
-Wave 4 Strategy / Replay is closed on `implement/wave-4`: ADR-0045 and ADR-0046 resolve DG-F, G01-G04/H01-H05 are implementation-complete, PR #160 integrates H05, and PR #161 / issue #146 records Golden V7 deterministic replay PASS on canonical Bybit BTCUSDT data.
+Wave 5 Experiment / Supervised ML is closed on `implement/wave-5`: PR #177,
+PR #178 and PR #179 complete I04/I03/I05, and PR #180 / issue #174 records
+Golden supervised E2E PASS on bounded canonical Bybit BTCUSDT evidence.
 
-No new runtime/product frontier is selected by #147. B06, H06, I03-I07, J02/J07/J08, K07/K09, ML/RL, live broker execution and client work remain outside this governance closeout.
+No new runtime/product frontier is selected by #175. B06, H06, I06-I07,
+J02/J07/J08, K07/K09, RL, live broker execution and client work remain outside
+this governance closeout. J07 remains `MISSING`; I05 is only one prerequisite.
 
 No new runtime/product frontier is selected by this closeout. Roadmap state is still **not concurrent authorization**.
 
@@ -175,7 +180,7 @@ Wave 1  First canonical computation/application slices    COMPLETE
 Wave 2  Representation / Feature                          COMPLETE
 Wave 3  Research / Validation                             COMPLETE
 Wave 4  Strategy / Replay                                 COMPLETE
-Wave 5  Experiment / Supervised ML                       I01,I02 COMPLETE; I03-I05 remain
+Wave 5  Experiment / Supervised ML                       COMPLETE (I01-I05; Golden supervised E2E PASS)
 Wave 6  Live Data Plane                                   K02,K03,K04,K05,K06,K08,K10,A10,A11,A16 COMPLETE; K07,K09,B06 remain open/missing
 Wave 7  Runtime / Clients                                 J02 -> thin clients when real client need exists
 Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates

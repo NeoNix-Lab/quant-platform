@@ -281,6 +281,27 @@ DG-E is therefore complete through F08. No future scope should reopen these sema
 
 Independent branches:
 
+### Supervised Experiment / ML branch (`I03`,`I04`,`I05`) — RESOLVED / IMPLEMENTED
+
+Wave 5 closes the supervised branch of DG-G without resolving RL or job-runtime
+semantics:
+
+- `I04` Supervised input / selection is complete via PR #177 / issue #172:
+  supervised projections reuse Validation-owned availability, purge, embargo,
+  label and lockbox evidence and fail closed on leakage.
+- `I03` Trial accounting / comparison is complete via PR #178 / issue #171:
+  comparable trial population identity, resume/idempotency and metric
+  comparison are expressed through the canonical Experiment System.
+- `I05` Supervised training / evaluation is complete via PR #179 / issue #173:
+  deterministic fold-safe baseline training emits model, prediction and metric
+  artifact identities.
+- PR #180 / issue #174 records the Golden supervised E2E proof in
+  `../integration/WAVE5_GOLDEN_E2E_SUPERVISED_ML.md`, with stable projection,
+  run, metric and artifact identities across independent runs.
+
+This does **not** freeze Strategic RL (`I06`), Execution RL (`I07`), Job
+runtime (`J03`), paper/shadow trading (`J07`) or live product mode (`J08`).
+
 ### Experiment persistence (`I02`)
 
 Resolve one canonical Study/Trial/Run/Artifact persistence model. Restart/query/resume must preserve identity and idempotency; avoid competing persistence stores/models.
