@@ -1,105 +1,60 @@
-# Scope: Wave 6 - Live Consumer Data Plane & Storage Lifecycle v1
+# Scope: Wave 7 - API & Platform Transport v1
 
-Status: **CLOSED**
+Status: **OPEN**
 
-Scope kind: **decision-gate resolution and bounded implementation scope for Wave 6**.
+Scope kind: **decision-gate resolution and bounded implementation scope for Wave 7**.
 
-Target integration branch: **`implement/wave-6`**, branched from `main` after Wave 5 promotion.
-
----
-
-## Closeout Result
-
-Wave 6 is closed by the governance reconciliation in issue #201 after the
-Golden proof PR #212 was merged into `implement/wave-6`.
-
-Credited closeout evidence:
-
-```text
-B06 design:          ADR-0047, issue #193, PR #202
-B06 implementation:  issue #194, PR #204
-D04 implementation:  issue #195, PR #205
-B06 -> D04 composer: issue #206, PR #208
-K07 design:          ADR-0048, issue #196, PR #203
-K07 implementation:  issue #197, PR #209
-K09 design:          ADR-0049, issue #198, PR #210
-K09 implementation:  issue #199, PR #211
-Golden proof:        issue #200, PR #212,
-                     docs/integration/WAVE6_GOLDEN_E2E_LIVE_CONSUMER_STORAGE_LIFECYCLE.md
-```
-
-The completed scope updates the authoritative governance state only for
-`B06`, `D04`, `K07` and `K09`. It does not complete paper/shadow trading
-(`J07`), live product mode (`J08`), API transport (`J02`), clients, a second
-venue, L1/L2/L3 market depth, RL, broker/live execution or any generic job
-runtime. Issue #110's long-gap disposition remains the accepted DG-B rule:
-long gaps beyond bounded reconciliation may be explicit non-complete evidence,
-but may not be claimed filled/lossless without future attributable repair
-evidence.
+Target integration branch: **`implement/wave-7`**, branched from `main` after Wave 6 promotion.
 
 ---
 
 ## Prerequisite Integration Gate
 
-Wave 6 may start only after the Wave 5 Experiment / Supervised ML path is promoted to `main`.
+Wave 7 may start only after the Wave 6 Live Consumer Data Plane & Storage Lifecycle path is promoted to `main`.
 
 Current gate evidence:
 
 ```text
-Wave 5 promotion PR: #187
-main promotion commit: e4d6c1b667c6cd6b975dd512d7346d510798638d
-Wave 5 tag: wave-5-experiment-supervised-ml-v1
-Issue #174: Wave 5 Golden E2E supervised proof credited
-Issue #175: Wave 5 governance closeout closed after main promotion
+Wave 6 promotion PR: #214
+main promotion commit: 093f4f6fc267cd294cac31527f4557e55f30cf51
+Wave 6 tag: wave-6-live-consumer-data-plane-storage-lifecycle-v1
+Issue #200: Wave 6 Golden E2E proof credited
+Issue #201: Wave 6 governance closeout closed after main promotion
 ```
 
-The dependency basis is `CAPABILITY_DAG.md`: `B06` requires `A11,B03`; `D04` requires `B06,D02`; `K07` requires `K05,K06`; `K09` requires `K08`.
-
-`B06`/`D04` (Track A, Data Access/Representation) and `K07`/`K09` (Track B, Operations) are independent tracks — neither technically depends on the other. Any sequencing below is operational batching under the repository's one-bounded-mutation-slice-at-a-time rule, not a semantic dependency claim.
+**Explicit note on the `J02` decision gate.** `docs/architecture/OPEN_DECISIONS.md` and `ROADMAP.md` both record `J02` as `OPEN_DEFERABLE`, gated on "a real remote/client need," and explicitly state that roadmap/frontier completion is **not** concurrent authorization to open it. This scope is opened on an explicit operator decision to proceed now; it does not itself assert or fabricate a specific external client story. Design gate step 1 below (`DG-I`) is exactly where the concrete transport/serialization/runtime-host choice — and any concrete driving client scenario the operator wants to name — gets pinned. Until that design gate closes, this document intentionally leaves those specifics open rather than inventing them.
 
 ---
 
 ## Objective
 
-Resolve the two still-open Decision Gate families that `ROADMAP.md`'s Decision-gate model tracks as `DG-B` (Historical/Live data convergence) and `DG-H` (Operational safety), and implement their remaining atoms:
+Resolve the still-open `J02` API-transport decision and implement the thin canonical clients that depend on it:
 
 ```text
-Track A — Live Consumer Data Plane (DG-B)
-  A11 live acquisition (COMPLETE) + B03 result identity (COMPLETE)
+Application Service (C01-C05, ASS-01/ASS-02/ASS-03 -- already COMPLETE)
                     |
                     v
-          B06 live access / consumer cursor
+        J02 canonical API transport runtime
+           (REST / WebSocket / gRPC / other -- design-gate choice)
                     |
-                    v
-       D04 incremental / live candle computation
-                    |
-                    v
-   future J07 paper trading consumer (out of scope here)
-
-Track B — Storage Lifecycle & Operational Safety (DG-H)
-  K06 RAW/source protection (COMPLETE) + K08 backup/restore proof (COMPLETE)
-                    |
-                    v
-            K07 storage tier relocation
-                    |
-                    v
-       K09 retention / governed deletion authority
-                    |
-                    v
-        sustainable long-running live operation
+        +-----------+-----------+
+        |           |           |
+        v           v           v
+   J04 CLI      J05 TUI      J06 App UI
+  (or direct   (operator    (interactive
+   bounded      dashboard)   visualization)
+   C03 path)
 ```
 
-At Wave 6 start, `B06` and `K07`/`K09` were `OPEN_BLOCKING` in `CAPABILITY_DAG.md`: their semantics were not yet frozen by any ADR. `D04` was already `FROZEN` (candle semantics fixed by `ADR-0021`/`CANDLE_DEFINITION.md`); only its live/incremental implementation was `MISSING`. Wave 6 therefore required:
+`J02` is `OPEN_DEFERABLE` in `CAPABILITY_DAG.md`: no transport protocol, serialization, pagination/streaming shape or runtime host is frozen yet, even though the Consumer API semantics it must carry (`C02`/`C03`) are already `FROZEN`/`COMPLETE`. `J04`, `J05` and `J06` are already `RESOLVED` at the decision level (thin-client semantics are settled: no quantitative or storage logic in any client) but `MISSING` at the implementation level. Wave 7 must therefore:
 
-1. resolve `DG-B`'s live-consumer cursor semantics (resume, ordering, disconnect, explicit gap notification) through a design gate that produces an ADR;
-2. implement `DataGateway.live_stream()` against that ADR without inventing a new repair engine or claiming completeness the provider cannot prove (per `ADR-0040`/issue #110's `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition);
-3. implement incremental/live candle computation that converges to the historical `D03`/`ADR-0021` `CLOSED` output, with `PARTIAL` state for candles still forming;
-4. resolve `DG-H`'s tier-relocation crash-safety algorithm through a design gate that produces an ADR;
-5. implement crash-safe hot→cold/deep-cold relocation without ever creating a window of consumer-visible data disappearance;
-6. resolve `DG-H`'s retention/deletion-authority policy through a design gate that produces an ADR;
-7. implement governed deletion that never removes protected or sole-recoverable evidence, gated on a verified `K08` restore.
+1. resolve `J02`'s concrete transport/serialization/runtime-host choice, and the exact package-boundary shape for the transport runtime and for client code, through a design gate that produces an ADR;
+2. implement `J02` binding directly to the already-complete Application Service (`C02`/`C03`) without leaking quantitative business logic into the transport layer;
+3. implement `J04` (CLI), reusing the DAG's own permitted alternative of an explicitly bounded in-process `C03` path where that is simpler than waiting on `J02`;
+4. implement `J05` (TUI) and `J06` (App UI), both of which the DAG requires to go through `J02`;
+5. prove the full client round-trip against the real Application Service on bounded canonical evidence.
 
-Wave 6 delivers atoms **`B06`**, **`D04`**, **`K07`** and **`K09`**. It does not implement paper trading (`J07`), live product mode (`J08`), API transport (`J02`), a second venue, or L1/L2/L3 market depth.
+Wave 7 delivers atoms **`J02`**, **`J04`**, **`J05`** and **`J06`**. It does not deliver `J03` (job runtime — see Out of Scope), `J07` (paper/shadow trading), `J08` (live product mode), a second venue, or L1/L2/L3 market depth.
 
 ---
 
@@ -112,23 +67,13 @@ Read before mutating code or scope-derived issue bodies:
 - `docs/product/PRODUCT.md`
 - `docs/product/CAPABILITY_MAP.md`
 - `docs/product/CAPABILITY_DAG.md`
-- `docs/product/ROADMAP.md` (Decision-gate model; `DG-B`, `DG-H` boundaries)
+- `docs/product/ROADMAP.md` (Decision-gate model; execution waves)
 - `docs/architecture/TARGET_ARCHITECTURE.md`
-- `docs/contracts/DATA_GATEWAY.md`
-- `docs/contracts/CANDLE_DEFINITION.md`
-- `docs/architecture/STORAGE_LIFECYCLE.md`
-- `docs/architecture/OPEN_DECISIONS.md` (`DG-B`, `DG-H`)
-- `docs/decisions/ADR-0019-datagateway-boundary.md`
-- `docs/decisions/ADR-0021-candle-definition-v1.md`
+- `docs/contracts/CORE_CONTRACTS.md` (Consumer API / ASS-02 sections)
+- `docs/architecture/OPEN_DECISIONS.md` (`J02` — Canonical API transport)
 - `docs/decisions/ADR-0024-package-boundary-modular-monolith-v1.md`
-- `docs/decisions/ADR-0028-pressure-policy-v1.md`
-- `docs/decisions/ADR-0029-non-contiguous-coverage-reads-v1.md`
-- `docs/decisions/ADR-0032-raw-source-protection-v1.md`
-- `docs/decisions/ADR-0033-backfill-repair-v1.md`
-- `docs/decisions/ADR-0039-backup-restore-v1.md`
-- `docs/decisions/ADR-0040-bybit-live-trades-v1.md`
 
-Accepted ADRs and frozen contracts remain normative semantic authority. Issue #110's `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition is not reopened by this scope.
+Accepted ADRs and frozen contracts remain normative semantic authority. `C02`/`C03`'s frozen Consumer API semantics (selector resolution, result/error envelope) are not renegotiated by this scope — `J02` carries them, it does not redesign them.
 
 ---
 
@@ -137,37 +82,27 @@ Accepted ADRs and frozen contracts remain normative semantic authority. Issue #1
 Authoritative baseline for this branch:
 
 ```text
-main @ e4d6c1b667c6cd6b975dd512d7346d510798638d
-tag  wave-5-experiment-supervised-ml-v1
+main @ 093f4f6fc267cd294cac31527f4557e55f30cf51
+tag  wave-6-live-consumer-data-plane-storage-lifecycle-v1
 ```
 
 Credit, do not reimplement or re-prove absent invalidating evidence:
 
 ```text
-A10 Backfill and repair v1                             COMPLETE
-A11 Live trades acquisition                            COMPLETE
-A16 General quality lifecycle                          COMPLETE
-B02 Bounded historical scan (DataGateway.scan())       COMPLETE
-B03 Result identity / provenance                        COMPLETE
-B04 Non-contiguous coverage read                        COMPLETE
-D02 CandleDefinition v1                                 COMPLETE
-K02 Runtime identity v1                                 COMPLETE
-K03 Observability                                       COMPLETE
-K04 Capacity observation                                COMPLETE
-K05 Health/pressure policy v1 (ADR-0028)                COMPLETE
-K06 RAW/source protection v1 (ADR-0032)                 COMPLETE
-K08 Backup/restore proof v1 (ADR-0039)                  COMPLETE
-K10 Checkpoint/recovery v1 (ADR-0042)                   COMPLETE
+C01 Application ownership                               COMPLETE
+C02 ASS-02 semantic selector resolution                  COMPLETE
+C03 ASS-02 result/error translation                      COMPLETE
+C04 Tool orchestration convergence (ASS-03)               COMPLETE
+C05 Configuration convergence                            COMPLETE
 ```
 
 Important credited implementation details:
 
-- `quant_platform.access.gateway.DataGateway.scan()` already owns the bounded, ordered, finite historical read seam (`B02`). `B06` is a distinct, additive live/streaming seam on the same `DataGateway` class — it must not duplicate or replace `scan()`.
-- `quant_platform.representation.candles` already owns `D03`'s historical, batch-computed candle sealing logic under `ADR-0021`. `D04` must converge to the same `CLOSED` output for identical trade input; it must not define a competing candle definition.
-- `quant_platform.operations.protection`, `.pressure`, `.checkpoint` already own pure, catalog-independent decision seams for `K05`/`K06`/`K10`. `K07`/`K09` follow the same pattern: pure decision/algorithm logic in `operations`, composed with the catalog at the `application` layer — `operations` must not gain a dependency on `access`/`producer`.
-- `quant_platform.application.live_ingest_server` and `.live_gap_orchestration` already demonstrate the application-composition pattern this scope reuses for wiring pure domain seams to the catalog and to a real running process.
+- `quant_platform.application.market_data` already owns the full Consumer API surface (`ConsumerMarketDataQuery`, `ConsumerMarketDataResult`, `ConsumerApiError`, the six frozen `ConsumerErrorCode` values, `execute_market_data_query`, `resolve_market_data_request`). `J02` is a transport wrapper around this surface — it must not redefine request/result/error semantics, only carry them over a wire protocol.
+- `quant_platform.application.composition` / `.conformity` already demonstrate the `application`-owned composition pattern this scope's transport runtime must reuse rather than duplicate.
+- No client-facing package exists yet anywhere in `src/quant_platform`. `J02`/`J04`/`J05`/`J06` are wholly new.
 
-Wave 6 composes these existing primitives. It must not duplicate `DataGateway.scan()`'s bounded-read semantics, `representation.candles`'s sealing logic, or `operations`'s existing pure decision seams.
+Wave 7 composes the existing, already-complete Application Service. It must not duplicate `C02`/`C03`'s selector-resolution or result/error-translation logic anywhere in the transport or client layers.
 
 ---
 
@@ -175,138 +110,121 @@ Wave 6 composes these existing primitives. It must not duplicate `DataGateway.sc
 
 | ID | Capability | Owner | Requires | Unlocks | Decision State | Target Impl State | Acceptance / Authority |
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **B06** | `Live access / consumer cursor v1` | Data Access | `A11`, `B03` | `D04`, `J07` | OPEN_BLOCKING → FROZEN (`ADR-0047`) | COMPLETE | `DataGateway.live_stream()`: deterministic consumer resume/replay, explicit disconnect and gap notification; never invents missing trades. |
-| **D04** | `Incremental / live candle computation v1` | Representation | `B06`, `D02` | `J07` | FROZEN | COMPLETE | `PARTIAL` forming candle plus `CLOSED` candle that is numerically identical to `D03`'s historical output for the same trades. |
-| **K07** | `Storage tier relocation v1` | Operations/Data Plane | `K05`, `K06` | storage lifecycle | OPEN_BLOCKING → FROZEN (`ADR-0048`) | COMPLETE | Crash at any point yields either the old or the new valid placement, never neither; catalog updates only after target verification. |
-| **K09** | `Retention / deletion authority v1` | Operations | `K08` | sustainable live | OPEN_BLOCKING → FROZEN (`ADR-0049`) | COMPLETE | Never deletes protected or sole-recoverable evidence; deletion requires a verified `K08` restore path first. |
+| **J02** | `Canonical API transport runtime v1` | API Runtime | `C03`, real client need (this scope) | `J04-J06` | OPEN_DEFERABLE → RESOLVED (this scope) | COMPLETE | Remote typed transport binding the Application Service without leaking quantitative/storage logic; exact protocol/serialization/runtime-host fixed by the design gate. |
+| **J04** | `Canonical CLI client v1` | Client Layer | `J02` OR explicitly bounded in-process `C03` | operator workflow | RESOLVED | COMPLETE | Thin command-line client; no quantitative/storage logic; may bypass `J02` via the DAG's own bounded in-process alternative. |
+| **J05** | `Terminal UI (TUI) operational client v1` | Client Layer | `J02` | interactive workflow | RESOLVED | COMPLETE | Thin terminal dashboard over `J02`; same canonical semantics as the CLI. |
+| **J06** | `App UI client v1 (Web/Desktop visualization)` | Client Layer | `J02` | product workflow | RESOLVED | COMPLETE | Thin interactive client over `J02`; business logic remains behind the service boundary. |
 
 ---
 
-## Decision Gate Resolution: DG-B and DG-H
+## Decision Gate Resolution: DG-I (new)
 
-Unlike Wave 5 (whose `I03`/`I04`/`I05` decision states were already `RESOLVED` before implementation began), `B06`, `K07` and `K09` were `OPEN_BLOCKING` at Wave 6 start. This scope's Active Path therefore included dedicated **design-gate** issues — using this repository's `[agent] Design gate` template — that each produced a committed ADR before their corresponding implementation slice started. This mirrors the exact pattern already used for `K02`/`K06` (`ADR-0041`, `ADR-0044`) during the Live Ingest Server Production Readiness effort.
+`ROADMAP.md`'s Decision-gate model (`DG-A` through `DG-H`) has no existing family for API transport and client convergence. This scope introduces **`DG-I` — API Transport & Client Convergence** to resolve `J02`. Unlike Wave 6 (which resolved sub-branches of the already-named `DG-B`/`DG-H`), this is the first atom under `DG-I`; formal registration of the `DG-I` name in `ROADMAP.md`'s Decision-gate model table happens at this wave's governance closeout, following the same deferred-registration precedent every prior wave used (the gate model table is reconciled at closeout, not at scope-opening).
 
-- **DG-B / B06**: produces the next ADR (`ADR-0047`), resolving live-consumer cursor resume/ordering/disconnect/gap-notification semantics. Must not reopen issue #110's `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition — an unprovable gap stays an explicit, auditable non-complete interval, never a silently filled one.
-- **DG-H / K07**: produces the next ADR (`ADR-0048`), resolving the tier-relocation algorithm and restart protocol left open by `STORAGE_LIFECYCLE.md` §4/§13.
-- **DG-H / K09**: produces the next ADR (`ADR-0049`), resolving retention periods and deletion authority left open by `STORAGE_LIFECYCLE.md` §13, gated on `K08`.
+`J04`/`J05`/`J06` need no design gate of their own: their decision state is already `RESOLVED` (thin-client semantics are settled) and their only blocking dependency is `J02`'s concrete shape (or, for `J04` alone, the bounded in-process alternative).
 
-`D04` requires no new design gate: its semantics are already `FROZEN` by `ADR-0021`.
-
-DG-B remains open beyond this scope only for its already-disposed long-gap remediation proposition (#110, unchanged). DG-H remains open beyond this scope for no currently-identified atom.
+- **DG-I / J02**: produces the next ADR (`ADR-0050`), resolving:
+  - the concrete transport protocol(s) (REST / WebSocket / gRPC / Arrow Flight / other) and serialization format;
+  - pagination/streaming shape for bounded and unbounded (live) Consumer API results;
+  - the runtime host / process topology (in-process ASGI/WSGI app, standalone server, reused `application.live_ingest_server`-style composition, or other);
+  - the package-boundary shape for the transport runtime (new owner, e.g. `quant_platform.transport`, bound only to `application`) and for client code (whether clients live inside `src/quant_platform` at all, given they must not depend on domain packages, or as a separate top-level directory);
+  - the exact shape of `J04`'s "explicitly bounded in-process `C03`" alternative, if selected for the CLI, and confirmation it follows the same `tools/*.py`-style application-only import discipline already enforced by `tests/test_package_boundaries_v1.py`'s executable-orchestration seam test.
 
 ---
 
 ## Package Boundary and Modular Monolith Updates
 
-Wave 6 does not introduce a new top-level package, but extends existing owners:
+Wave 7 introduces capability categories this repository has not yet needed:
 
 ```text
-quant_platform.access.gateway   -- add DataGateway.live_stream() (owner: access, unchanged)
-quant_platform.representation.candles -- add incremental/live sealing path (owner: representation, unchanged)
-quant_platform.operations.<relocation module>  -- new submodule, owner: operations
-quant_platform.operations.<retention module>   -- new submodule, owner: operations
-quant_platform.application.<storage lifecycle composer> -- new submodule, owner: application
+API Runtime    -- J02, likely a new owner (e.g. "transport") bound only to "application"
+Client Layer   -- J04/J05/J06, thin processes that must not import domain packages
+                  ("access", "producer", "representation", "operations", "strategy",
+                  "execution", "portfolio", "replay", "source", "physical") at all
 ```
 
-Each new submodule must be registered explicitly in `tests/test_package_boundaries_v1.py`'s `OWNERS` dict (module → owner), matching the existing one-entry-per-submodule pattern. No `ALLOWED` edge changes are anticipated:
+Boundary rules to be fixed exactly by the `DG-I` design gate, constrained as follows:
 
-- `access` remains `{"access", "physical", "shared"}` — `B06` does not need a new outbound edge.
-- `representation` remains `{"representation", "shared"}` — `D04`'s live path must receive already-extracted primitive trade fields from its `application`-layer caller, exactly as `D03` already does for historical batches; it must never import `access` directly.
-- `operations` remains `{"operations", "shared"}` — `K07`/`K09`'s relocation/retention algorithms must stay pure and catalog-independent; actual catalog mutation is composed at the `application` layer, exactly as `live_ingest_server.py` already composes `operations.checkpoint` with the catalog.
-- `application`'s existing `{"application", "access", "representation", "feature", "producer", "operations", "validation", "source", "physical", "shared", "strategy", "execution", "portfolio", "replay"}` already covers every edge this scope needs; no `ALLOWED` change is anticipated there.
+- the transport runtime may depend on `application` (to reach `C02`/`C03`) and `shared`; it must gain no dependency on any domain-owner package directly, mirroring every other `application`-composed capability in this repository;
+- remote clients (`J05`/`J06`, and `J04` if built over `J02`) talk to `J02` only over its wire protocol — they have no legitimate reason to import `quant_platform` at all, and must not;
+- `J04`'s bounded in-process alternative, if chosen, must follow `tools/*.py`'s existing constraint: import only from `quant_platform.application`, never reach into domain packages directly;
+- no client may contain quantitative business logic, storage access, or strategy/execution/portfolio semantics of any kind — that discipline is enforced by `CAPABILITY_DAG.md`'s own `RESOLVED` disposition for `J04`/`J05`/`J06` and must not be silently narrowed or widened by this scope.
 
-Exact new submodule names are an implementation decision for each design-gate ADR to fix, not this document.
+Exact new package/module names are an implementation decision for the `DG-I` ADR to fix, not this document.
 
 ---
 
 ## Active Path
 
-The repository rule of one bounded mutation slice at a time governs execution. Track A and Track B are independent; the order below is operational batching, not a dependency claim between the tracks.
+The repository rule of one bounded mutation slice at a time governs execution.
 
 ```text
-1. Design gate - DG-B: B06 Live-Consumer Cursor Semantics
-   - Produce ADR-0047 resolving resume/ordering/disconnect/gap-notification semantics.
-   - Must not reopen issue #110's NO_AUTHORITATIVE_REPAIR_PATH_PROVEN disposition.
+1. Design gate - DG-I: J02 API Transport Concrete Choice
+   - Produce ADR-0050 resolving protocol, serialization, pagination/streaming,
+     runtime host, and the transport/client package-boundary shape.
+   - Must not renegotiate C02/C03's already-frozen Consumer API semantics.
         |
         v
-2. Slice B06 - DataGateway Live Streaming Access & Consumer Cursor
-   - Implement DataGateway.live_stream() per ADR-0047.
-   - Explicit disconnect handling and gap notification; no invented trades.
+2. Slice J02 - Canonical API Transport Runtime
+   - Implement the transport runtime per ADR-0050, binding directly to C02/C03.
+   - No quantitative/storage logic in the transport layer.
         |
         v
-3. Slice D04 - Incremental and Live Candle Computation
-   - Implement PARTIAL/CLOSED candle sealing over already-extracted trade fields.
-   - Prove numeric equivalence with D03's historical CLOSED output.
+3. Slice J04 - Canonical CLI Client
+   - Implement per ADR-0050's chosen path (over J02, or the bounded in-process
+     C03 alternative). May proceed in parallel with step 2 if the bounded
+     in-process alternative is chosen, since it would not depend on J02.
         |
         v
-4. Slice - Compose B06 into D04 (gap-safe watermark)
-   - Implement the application-layer composer driving D04's IncrementalCandleBuilder
-     from B06's live_stream() events.
-   - Never advance the sealing watermark across an interval a LiveGapEvent has not
-     yet proven complete (OPEN blocks advancement; CLOSED resumes it from upper_bound).
+4. Slice J05 - Terminal UI (TUI) Operational Client
+   - Implement over J02. Thin dashboard; no business logic.
         |
         v
-5. Design gate - DG-H: K07 Storage Tier Relocation Algorithm
-   - Produce ADR-0048 resolving the crash-safe relocation algorithm and restart protocol.
+5. Slice J06 - App UI Client (Web/Desktop Visualization)
+   - Implement over J02. Thin interactive client; no business logic.
         |
         v
-6. Slice K07 - Storage Tier Relocation & Warm/Cold Migration
-   - Implement crash-safe hot->cold/deep-cold relocation per ADR-0048.
-   - Catalog location changes only after target verification; source removed only after verification.
+6. Wave 7 Golden E2E Proof
+   - Prove a full client round-trip (at least one of J04/J05/J06) against the
+     real Application Service on bounded canonical evidence, with request/
+     response fidelity identical to a direct in-process C02/C03 call.
         |
         v
-7. Design gate - DG-H: K09 Retention & Deletion Authority Policy
-   - Produce ADR-0049 resolving retention periods and deletion authority, gated on K08.
-        |
-        v
-8. Slice K09 - Retention, Deletion Authority & Compliance Audit
-   - Implement governed deletion per ADR-0049.
-   - Never delete protected or sole-recoverable evidence; require a verified K08 restore first.
-        |
-        v
-9. Wave 6 Golden E2E Proof
-   - Prove a live consumer (B06) computing live candles (D04, composed per step 4) while a
-     K07 relocation and a K09 retention pass run concurrently, without corruption or
-     consumer-visible data disappearance.
-        |
-        v
-10. Wave 6 Governance Closeout
+7. Wave 7 Governance Closeout
+   - Register DG-I in ROADMAP.md's Decision-gate model.
    - Reconcile CAPABILITY_DAG.md, CAPABILITY_MAP.md, ROADMAP.md and OPEN_DECISIONS.md.
-   - Prepare implement/wave-6 for promotion to main after the Golden proof and reconciliation.
+   - Prepare implement/wave-7 for promotion to main after the Golden proof and reconciliation.
 ```
 
-Step 4 was added after D04 (#195) landed: neither #195 nor the Golden E2E proof (step 9) build the actual B06-to-D04 wiring on their own -- #195 explicitly excludes B06's stream/cursor semantics, and the proof step must not introduce new semantics. Step 4 closes that gap; see issue #206.
+Step 3 (`J04`) is drawn out of strict sequence deliberately: per the DAG's own `J02 OR explicitly bounded in-process C03` dependency, it is not required to wait for step 2 if the design gate selects the in-process alternative. Steps 4-5 (`J05`/`J06`) strictly require step 2, with no such alternative.
 
 ---
 
 ## Acceptance Criteria
 
-Wave 6 is complete only when all of the following are observably true:
+Wave 7 is complete only when all of the following are observably true:
 
-1. **No Invented Continuity**: `B06`'s live cursor never fabricates a trade or claims interval completeness the provider cannot prove; unprovable gaps remain explicit per issue #110/`ADR-0040`.
-2. **Deterministic Resume**: a consumer that reconnects at a recorded cursor position resumes without duplication or loss of already-delivered records.
-3. **Candle Equivalence**: `D04`'s sealed `CLOSED` candles are numerically identical to `D03`'s historical computation for the same underlying trades; `PARTIAL` candles never leak into `CLOSED`-only consumers.
-4. **Crash-Safe Relocation**: a simulated crash at any point during a `K07` relocation leaves either the original or the fully-verified new placement authoritative, never neither, and never a consumer-visible gap.
-5. **Governed Deletion**: `K09` refuses to delete any unique RAW/source or sole-recoverable evidence, and refuses deletion of anything without a prior verified `K08` restore.
-6. **Package Boundary**: `tests/test_package_boundaries_v1.py` passes with all new submodules registered and no forbidden dependency (`representation`/`operations` do not gain an `access`/`producer` edge).
-7. **Verification Gate**: `python tools/workflow.py preflight`, `python tools/check_markdown_links.py` and the relevant focused tests pass.
-8. **Golden Proof**: Wave 6 records a live-consumer + live-candle + concurrent-relocation + concurrent-retention proof with no corruption or consumer-visible disappearance, on bounded canonical Bybit BTCUSDT evidence.
+1. **Semantic Fidelity**: every transport-carried request/response is observably identical, in canonical content, to the same request executed directly against `C02`/`C03` in-process — `J02` carries the Consumer API, it does not reinterpret it.
+2. **No Business Logic Leakage**: the transport runtime and every client contain no quantitative, storage, strategy, execution or portfolio logic; `tests/test_package_boundaries_v1.py` holds this structurally, not by convention alone.
+3. **Thin Clients**: `J04`/`J05`/`J06` each contain no business logic and correctly render/submit through their chosen path (`J02` or, for `J04` only, the bounded in-process alternative).
+4. **Package Boundary**: `tests/test_package_boundaries_v1.py` passes with every new owner registered and no forbidden dependency; no client package gains a domain-owner dependency.
+5. **Verification Gate**: `python tools/workflow.py preflight`, `python tools/check_markdown_links.py` and the relevant focused tests pass.
+6. **Golden Proof**: Wave 7 records a deterministic client-to-service round-trip proof with stable identities, on bounded canonical evidence.
 
 ---
 
 ## Out of Scope
 
-Do not pull into Wave 6 unless a later authorized scope explicitly changes it:
+Do not pull into Wave 7 unless a later authorized scope explicitly changes it:
 
-- Paper/shadow trading mode (`J07`) or live product mode (`J08`).
-- API transport (`J02`) or UI/TUI clients (`J04`-`J06`).
+- **`J03` (job runtime)**: still `OPEN_BLOCKING` under `DG-G`, and not required by any of `J02`/`J04`/`J05`/`J06`'s own DAG dependencies. Including it here would silently widen this scope into an unrelated, still-unresolved decision family; it is deferred to its own dedicated scope.
+- Paper/shadow trading (`J07`) or live product mode (`J08`).
 - A second venue or generic provider resolution.
 - L1/L2 market depth (`A13`/`A14`) or L3/MBO (`A15`).
-- Strategy/Execution/Portfolio/Replay/ML/RL semantics of any kind.
-- A generic job scheduler, broker, or workflow engine.
-- HA/distributed consensus or off-site disaster recovery.
-- Speculative long-gap filling without attributable source evidence (issue #110 stays disposed).
-- Concrete deployment capacity thresholds, backup destination/topology, or monitoring/alerting technology selection (`STORAGE_LIFECYCLE.md` §13's still-open items beyond `K07`/`K09`'s own scope).
+- Strategy/Execution/Portfolio/Replay/ML/RL semantics of any kind reachable from a client.
+- Live broker connections, exchange order placement or live trading authorization.
+- A generic job scheduler, workflow engine, or message broker beyond what `DG-I`'s own transport choice strictly requires.
+- Redesigning `C02`/`C03`'s already-frozen Consumer API semantics.
 
 ---
 
@@ -314,8 +232,7 @@ Do not pull into Wave 6 unless a later authorized scope explicitly changes it:
 
 Stop and report rather than implement if:
 
-- a design-gate ADR cannot resolve its decision without weakening an accepted contract (`DATA_GATEWAY.md`, `CANDLE_DEFINITION.md`, `STORAGE_LIFECYCLE.md`);
-- `B06` cannot provide explicit gap notification without either inventing continuity or reopening issue #110;
-- `D04`'s live path cannot converge to `D03`'s historical output without a semantic change to `ADR-0021`;
-- `K07`/`K09` cannot guarantee crash-safety or protected-evidence non-deletion without direct `operations` → `access`/`producer` coupling that the package boundary forbids;
-- the Golden E2E proof requires Strategy, Execution, Paper/Shadow, Live runtime, or client/API semantics to be meaningful.
+- `DG-I`'s design gate cannot resolve a transport/serialization/runtime-host choice without weakening `C02`/`C03`'s accepted Consumer API contract;
+- a client requires any capability beyond thin rendering/submission over the chosen transport (or, for `J04`, the bounded in-process alternative);
+- `J02` cannot be implemented without a new domain-package dependency from the transport layer;
+- the Golden E2E proof requires `J03`, `J07`, `J08`, or any capability this scope's Out of Scope section excludes.
