@@ -89,6 +89,7 @@ OWNERS = {
     "quant_platform.application.golden_replay": "application",
     "quant_platform.application.golden_supervised": "application",
     "quant_platform.application.h01_composition": "application",
+    "quant_platform.application.live_candle_stream": "application",
     "quant_platform.application.live_gap_orchestration": "application",
     "quant_platform.application.live_ingest_server": "application",
     "quant_platform.application.market_data": "application",
