@@ -134,6 +134,13 @@ from .retention_deletion import (
     execute_retention_deletion,
     recover_retention_deletion_result,
 )
+from .wave6_golden import (
+    WAVE6_CANONICAL_BTCUSDT_TRADES,
+    WAVE6_DATASET_REL_ROOT,
+    WAVE6_GOLDEN_E2E_PROOF_VERSION,
+    Wave6GoldenE2EProof,
+    run_wave6_golden_e2e_proof,
+)
 
 __all__ = [
     "BUCKET_OBSERVATION_IDENTITY_DOMAIN",
@@ -199,7 +206,11 @@ __all__ = [
     "UnsupportedRepresentation",
     "UnsupportedVenue",
     "WAVE5_GOLDEN_SUPERVISED_PROOF_VERSION",
+    "WAVE6_CANONICAL_BTCUSDT_TRADES",
+    "WAVE6_DATASET_REL_ROOT",
+    "WAVE6_GOLDEN_E2E_PROOF_VERSION",
     "Wave5GoldenSupervisedProof",
+    "Wave6GoldenE2EProof",
     "VerificationMismatch",
     "WriteResult",
     "bucket_observation_identity",
@@ -229,6 +240,7 @@ __all__ = [
     "recover_retention_deletion_result",
     "run_golden_replay_proof",
     "run_wave5_golden_supervised_proof",
+    "run_wave6_golden_e2e_proof",
     "run_import",
     "run_vertical",
     "verify_vertical",
