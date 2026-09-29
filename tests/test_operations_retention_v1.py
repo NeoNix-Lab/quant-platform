@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
 import unittest
 
-from quant_platform.data.models import DatasetIdentity, Instant
-from quant_platform.operations.relocation import RelocationPhase
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from quant_platform.data.models import DatasetIdentity, Instant  # noqa: E402
+from quant_platform.operations.relocation import RelocationPhase  # noqa: E402
 from quant_platform.operations.retention import (
     DeletionCandidateV1,
     PreservationClass,

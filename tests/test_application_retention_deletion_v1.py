@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from quant_platform.application.retention_deletion import (
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from quant_platform.application.retention_deletion import (  # noqa: E402
     InMemoryRetentionDeletionAuditStore,
     RetentionDeletionApplicationError,
     RetentionDeletionCrashPoint,
