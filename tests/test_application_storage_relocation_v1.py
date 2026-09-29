@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from quant_platform.application.storage_relocation import (
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from quant_platform.application.storage_relocation import (  # noqa: E402
     RelocationCrashPoint,
     RelocationInterrupted,
     relocate_storage_tier,
 )
-from quant_platform.data.models import DatasetIdentity, Instant
-from quant_platform.operations.relocation import RelocationPhase, RelocationPlan, RelocationRecordV1
-from quant_platform.operations.relocation import RelocationVerificationFailed
+from quant_platform.data.models import DatasetIdentity, Instant  # noqa: E402
+from quant_platform.operations.relocation import RelocationPhase, RelocationPlan, RelocationRecordV1  # noqa: E402
+from quant_platform.operations.relocation import RelocationVerificationFailed  # noqa: E402
 
 
 PAYLOAD = b"k07 sealed partition bytes\n"

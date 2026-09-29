@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
 import unittest
 
-from quant_platform.data.models import DatasetIdentity, Instant
-from quant_platform.operations.pressure import (
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from quant_platform.data.models import DatasetIdentity, Instant  # noqa: E402
+from quant_platform.operations.pressure import (  # noqa: E402
     PressureDecision,
     PressureDecisionUnavailable,
     PressureDecisionUnavailableReason,
@@ -13,7 +18,7 @@ from quant_platform.operations.pressure import (
     TimeToFullKind,
     restrictions_for_state,
 )
-from quant_platform.operations.protection import (
+from quant_platform.operations.protection import (  # noqa: E402
     AcceptedReconstructionContract,
     ArtifactAssessmentResult,
     ArtifactProtectionIdentity,
@@ -24,7 +29,7 @@ from quant_platform.operations.protection import (
     ProtectionState,
     ProtectionUnitIdentity,
 )
-from quant_platform.operations.relocation import (
+from quant_platform.operations.relocation import (  # noqa: E402
     RelocationDomainMismatch,
     RelocationPhase,
     RelocationPhaseError,
