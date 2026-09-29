@@ -8,6 +8,7 @@ it never opens DataGateway, catalog, files, source adapters or storage.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import hashlib
 import json
 import re
@@ -28,6 +29,7 @@ from ..ordering import TRADES_CANONICAL_TOTAL_ORDER_V1
 CANDLE_DEFINITION_V1_VERSION = 1
 CANDLE_V1_RECORD_SCHEMA = "candle-v1"
 CANDLE_RESULT_FINGERPRINT_V1_DOMAIN = "historical-candle-result-v1"
+CANDLE_INCREMENTAL_RUNTIME_V1_DOMAIN = "incremental-candle-runtime-v1"
 _NANOS_PER_SECOND = 1_000_000_000
 _DURATION_UNITS = {
     "ns": 1,
@@ -69,6 +71,13 @@ class CandleOrderingError(CandleComputationError):
 
 class CandleProvenanceError(CandleComputationError):
     """Raised when reproducibility evidence is missing or inconsistent."""
+
+
+class CandleRuntimeState(str, Enum):
+    """Runtime envelope state for mutable PARTIAL and immutable CLOSED candles."""
+
+    PARTIAL = "PARTIAL"
+    CLOSED = "CLOSED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +224,65 @@ class CandleRecord:
             "close": self.close,
             "volume": self.volume,
             "trade_count": self.trade_count,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class IncrementalCandleUpdate:
+    """One incremental/live candle observation envelope.
+
+    ``record`` uses the same canonical OHLCV shape as ``CandleRecord`` so that
+    CLOSED output can be compared directly with the historical D03 runtime. The
+    runtime ``state`` remains outside the row, preserving the v1 rule that
+    materialized ``candle-v1`` rows are CLOSED records only.
+    """
+
+    state: CandleRuntimeState
+    record: CandleRecord
+    definition_identity: str
+    causal_floor: Instant
+    observed_available_at: Instant | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, CandleRuntimeState):
+            try:
+                object.__setattr__(self, "state", CandleRuntimeState(self.state))
+            except ValueError as exc:
+                raise CandleInputError("unknown candle runtime state") from exc
+        if not isinstance(self.record, CandleRecord):
+            raise CandleInputError("record must be a CandleRecord")
+        if not isinstance(self.definition_identity, str) or not self.definition_identity.strip():
+            raise CandleInputError("definition_identity must be a non-empty string")
+        if not isinstance(self.causal_floor, Instant):
+            raise CandleInputError("causal_floor must be an Instant")
+        if self.observed_available_at is not None:
+            object.__setattr__(self, "observed_available_at", Instant.parse(self.observed_available_at))
+            if self.observed_available_at < self.causal_floor:
+                raise CandleFinalizationError(
+                    "observed availability cannot precede the candle causal floor",
+                    context={
+                        "observed_available_at": self.observed_available_at.isoformat(),
+                        "causal_floor": self.causal_floor.isoformat(),
+                    },
+                )
+
+    @property
+    def bucket_start(self) -> Instant:
+        return Instant.parse(self.record.bucket_start)
+
+    @property
+    def bucket_end(self) -> Instant:
+        return Instant.parse(self.record.bucket_end)
+
+    def stable_dict(self) -> dict[str, Any]:
+        return {
+            "state": self.state.value,
+            "record": self.record.stable_dict(),
+            "definition_identity": self.definition_identity,
+            "causal_floor": self.causal_floor.isoformat(),
+            "observed_available_at": (
+                self.observed_available_at.isoformat() if self.observed_available_at else None
+            ),
         }
 
 
@@ -373,6 +441,114 @@ class _BucketAccumulator:
         )
 
 
+class IncrementalCandleBuilder:
+    """Mutable PARTIAL / explicit-watermark CLOSED candle runtime.
+
+    The builder consumes already ordered canonical ``TradeRecord`` values and
+    never owns live acquisition, cursoring, source repair, catalog access or
+    finalization policy. A caller must provide explicit source finalization via
+    :meth:`close_through`; wall-clock passage alone never seals a bucket.
+    """
+
+    def __init__(self, definition: CandleDefinitionV1):
+        if not isinstance(definition, CandleDefinitionV1):
+            raise CandleInputError("definition must be CandleDefinitionV1")
+        self.definition = definition
+        self._buckets: dict[int, _BucketAccumulator] = {}
+        self._closed_bucket_starts: set[int] = set()
+        self._previous_exchange_ns: int | None = None
+        self._finalized_until_ns: int | None = None
+
+    def consume(self, record: TradeRecord) -> IncrementalCandleUpdate:
+        """Consume one observed trade and return the updated PARTIAL envelope."""
+
+        if not isinstance(record, TradeRecord):
+            raise CandleInputError("incremental candles require TradeRecord input")
+        exchange_ts = Instant.parse(record.exchange_ts)
+        if self._previous_exchange_ns is not None and exchange_ts.epoch_ns < self._previous_exchange_ns:
+            raise CandleOrderingError("supplied trades are not in deterministic source order")
+        if self._finalized_until_ns is not None and exchange_ts.epoch_ns < self._finalized_until_ns:
+            raise CandleFinalizationError(
+                "late trade falls inside already finalized candle support",
+                context={
+                    "exchange_ts": exchange_ts.isoformat(),
+                    "finalized_until": Instant(self._finalized_until_ns).isoformat(),
+                },
+            )
+        bucket_start = _bucket_start_ns(exchange_ts.epoch_ns, self.definition.duration_ns)
+        if bucket_start in self._closed_bucket_starts:
+            raise CandleFinalizationError(
+                "trade falls inside an already CLOSED candle bucket",
+                context={"bucket_start": Instant(bucket_start).isoformat()},
+            )
+        self._previous_exchange_ns = exchange_ts.epoch_ns
+        accumulator = self._buckets.setdefault(
+            bucket_start,
+            _BucketAccumulator(bucket_start, self.definition.duration_ns),
+        )
+        accumulator.consume(
+            _ExactDecimal.parse(record.price, "price"),
+            _ExactDecimal.parse(record.size, "size"),
+        )
+        return self._update_for(bucket_start, CandleRuntimeState.PARTIAL)
+
+    def close_through(
+        self,
+        finalized_until: Instant | str,
+        *,
+        observed_available_at: Instant | str | None = None,
+    ) -> tuple[IncrementalCandleUpdate, ...]:
+        """Seal every non-empty bucket whose full support is finalized.
+
+        ``finalized_until`` is caller-supplied source finalization/watermark
+        evidence. It must advance monotonically. Empty finalized buckets remain
+        omitted, matching CandleDefinition v1.
+        """
+
+        watermark = Instant.parse(finalized_until)
+        if self._finalized_until_ns is not None and watermark.epoch_ns < self._finalized_until_ns:
+            raise CandleFinalizationError("source finalization watermark cannot move backward")
+        observed = Instant.parse(observed_available_at) if observed_available_at is not None else None
+        closable = tuple(
+            bucket_start
+            for bucket_start in sorted(self._buckets)
+            if bucket_start not in self._closed_bucket_starts
+            and bucket_start + self.definition.duration_ns <= watermark.epoch_ns
+        )
+        if observed is not None:
+            for bucket_start in closable:
+                bucket_end_ns = bucket_start + self.definition.duration_ns
+                if observed.epoch_ns < bucket_end_ns:
+                    raise CandleFinalizationError(
+                        "observed availability cannot precede the candle causal floor",
+                        context={
+                            "observed_available_at": observed.isoformat(),
+                            "causal_floor": Instant(bucket_end_ns).isoformat(),
+                        },
+                    )
+        self._finalized_until_ns = watermark.epoch_ns
+        closed: list[IncrementalCandleUpdate] = []
+        for bucket_start in closable:
+            self._closed_bucket_starts.add(bucket_start)
+            closed.append(self._update_for(bucket_start, CandleRuntimeState.CLOSED, observed))
+        return tuple(closed)
+
+    def _update_for(
+        self,
+        bucket_start: int,
+        state: CandleRuntimeState,
+        observed_available_at: Instant | None = None,
+    ) -> IncrementalCandleUpdate:
+        accumulator = self._buckets[bucket_start]
+        return IncrementalCandleUpdate(
+            state=state,
+            record=accumulator.record(),
+            definition_identity=self.definition.definition_identity,
+            causal_floor=Instant(bucket_start + self.definition.duration_ns),
+            observed_available_at=observed_available_at,
+        )
+
+
 def parse_duration_ns(value: int | str) -> int:
     """Return the canonical positive integer nanosecond duration."""
 
@@ -473,6 +649,12 @@ def aggregate_historical_candles(
             _ExactDecimal.parse(record.size, "size"),
         )
     return tuple(buckets[start_ns].record() for start_ns in sorted(buckets))
+
+
+def closed_candle_records(updates: Iterable[IncrementalCandleUpdate]) -> tuple[CandleRecord, ...]:
+    """Return only CLOSED records from incremental/live envelopes."""
+
+    return tuple(update.record for update in updates if update.state is CandleRuntimeState.CLOSED)
 
 
 def build_historical_candle_result(
@@ -692,6 +874,7 @@ def _result_identity(
 
 __all__ = [
     "CANDLE_DEFINITION_V1_VERSION",
+    "CANDLE_INCREMENTAL_RUNTIME_V1_DOMAIN",
     "CANDLE_RESULT_FINGERPRINT_V1_DOMAIN",
     "CANDLE_V1_RECORD_SCHEMA",
     "CandleComputationError",
@@ -702,11 +885,15 @@ __all__ = [
     "CandleOrderingError",
     "CandleProvenanceError",
     "CandleRecord",
+    "CandleRuntimeState",
     "HistoricalCandleCoverage",
     "HistoricalCandleResult",
     "HistoricalCandleSourceEvidence",
+    "IncrementalCandleBuilder",
+    "IncrementalCandleUpdate",
     "aggregate_historical_candles",
     "build_historical_candle_result",
+    "closed_candle_records",
     "parse_duration_ns",
     "required_bucket_support",
 ]
