@@ -428,6 +428,47 @@ CREATE INDEX ON partitions (storage_root_id);
 CREATE INDEX ON partitions (state) WHERE state NOT IN ('valid','superseded');
 
 -- ---------------------------------------------------------------------------
+-- relocation_jobs — K07 durable restart record for crash-safe tier relocation.
+-- The partition row remains the read authority.  This table records only the
+-- relocation workflow phase and target byte identity required to resume safely.
+-- ---------------------------------------------------------------------------
+CREATE TABLE relocation_jobs (
+    relocation_id          text PRIMARY KEY
+                                CHECK (relocation_id ~
+                                       '^relocation-v1:sha256:[0-9a-f]{64}$'),
+    dataset_identity       jsonb       NOT NULL,
+    catalog_partition_id   uuid        NOT NULL REFERENCES partitions(partition_id)
+                                ON DELETE CASCADE,
+    partition_key          text        NOT NULL
+                                CHECK (partition_key ~
+                                       '^[a-z_]+=[A-Za-z0-9._-]+(/[a-z_]+=[A-Za-z0-9._-]+)*$'),
+    revision               integer     NOT NULL CHECK (revision > 0),
+    source_storage_root_id text        NOT NULL REFERENCES storage_roots ON DELETE RESTRICT,
+    target_storage_root_id text        NOT NULL REFERENCES storage_roots ON DELETE RESTRICT,
+    dataset_rel_root       rel_path_safe NOT NULL,
+    rel_path               rel_path_safe NOT NULL CHECK (position('%' in rel_path) = 0),
+    expected_content_sha256 char(64)   NOT NULL CHECK (expected_content_sha256 ~ '^[0-9a-f]{64}$'),
+    expected_size_bytes    bigint      NOT NULL CHECK (expected_size_bytes >= 0),
+    phase                  text        NOT NULL
+                                CHECK (phase IN ('PLANNED','STAGED','VERIFIED',
+                                                 'SWITCHED','CLEANED_UP','REFUSED')),
+    target_content_sha256  char(64)    CHECK (target_content_sha256 ~ '^[0-9a-f]{64}$'),
+    target_size_bytes      bigint      CHECK (target_size_bytes >= 0),
+    refusal_reason         text,
+    updated_at             timestamptz NOT NULL DEFAULT now(),
+
+    CHECK (source_storage_root_id <> target_storage_root_id),
+    CHECK (starts_with(rel_path, partition_key || '/')),
+    CHECK ((phase IN ('VERIFIED','SWITCHED','CLEANED_UP'))
+           = (target_content_sha256 IS NOT NULL AND target_size_bytes IS NOT NULL)),
+    CHECK ((phase = 'REFUSED') = (refusal_reason IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX relocation_jobs_one_inflight
+    ON relocation_jobs (catalog_partition_id)
+    WHERE phase IN ('PLANNED','STAGED','VERIFIED','SWITCHED');
+
+-- ---------------------------------------------------------------------------
 -- dataset_lineage — quale dataset deriva da quale, e per mano di quale
 -- TRASFORMAZIONE, identificata semanticamente e per versione.
 -- Risponde a "se raw X e' sbagliato, cosa devo rigenerare".

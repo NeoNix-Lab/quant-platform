@@ -116,6 +116,13 @@ from .live_candle_stream import (
     LiveCandleStreamReport,
     compose_live_candle_stream,
 )
+from .storage_relocation import (
+    PostgresRelocationCatalog,
+    RelocationCatalog,
+    RelocationCrashPoint,
+    RelocationInterrupted,
+    relocate_storage_tier,
+)
 
 __all__ = [
     "BUCKET_OBSERVATION_IDENTITY_DOMAIN",
@@ -156,9 +163,13 @@ __all__ = [
     "CatalogRestoreSession",
     "PredecessorEvidence",
     "PRICE_DELTA_FEATURE_ID",
+    "PostgresRelocationCatalog",
     "RecoveryBackupExport",
     "RestoreCatalog",
     "RestoredRecoverySet",
+    "RelocationCatalog",
+    "RelocationCrashPoint",
+    "RelocationInterrupted",
     "RunReport",
     "SUPPORTED_CATEGORY",
     "SUPPORTED_INSTRUMENT",
@@ -195,6 +206,7 @@ __all__ = [
     "observe_scan",
     "resolve_market_data_request",
     "restore_recovery_set",
+    "relocate_storage_tier",
     "run_golden_replay_proof",
     "run_wave5_golden_supervised_proof",
     "run_import",
