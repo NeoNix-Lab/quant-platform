@@ -52,17 +52,34 @@ class GapSafeLiveCandleComposer:
 
     def __init__(self, definition: CandleDefinitionV1):
         self._builder = IncrementalCandleBuilder(definition)
+        self._duration_ns = definition.duration_ns
         self._active_gap_lowers: dict[str, Instant] = {}
         self._closed_gap_intervals: list[CoverageInterval] = []
         self._last_close_watermark_ns: int | None = None
+        # Bucket starts (epoch ns) a gap is known to fall inside. D04's
+        # IncrementalCandleBuilder has no concept of a gap and no way to
+        # "un-merge" a bucket once a trade lands in it (by design -- gaps
+        # are a B06 concept D04 must not know about), so once a bucket is
+        # poisoned it is permanently excluded here: neither fed further
+        # trades nor ever reported PARTIAL or CLOSED again. This is a
+        # deliberate, minor, documented limitation rather than a full
+        # discard/repair primitive on the builder: in already-acquired
+        # canonical data, a live gap landing inside a still-open candle
+        # bucket is expected to be rare (A11/ADR-0040 already reconciles
+        # ordinary reconnects before B06 ever sees a gap at all).
+        self._poisoned_bucket_starts: set[int] = set()
 
     def handle(self, event: LiveStreamEvent) -> tuple[IncrementalCandleUpdate, ...]:
         """Handle one B06 event and return any safe D04 updates."""
 
         if isinstance(event, LiveTradeEvent):
-            partial = self._builder.consume(event.record)
+            bucket_start_ns = _bucket_start_ns(Instant.parse(event.record.exchange_ts), self._duration_ns)
+            if bucket_start_ns in self._poisoned_bucket_starts:
+                partial: tuple[IncrementalCandleUpdate, ...] = ()
+            else:
+                partial = (self._builder.consume(event.record),)
             closed = self._advance_with_trade_cursor(event.cursor)
-            return (partial, *closed)
+            return (*partial, *closed)
         if isinstance(event, LiveGapEvent):
             return self._handle_gap(event)
         if isinstance(event, LiveSessionEvent):
@@ -75,10 +92,24 @@ class GapSafeLiveCandleComposer:
             return self._advance_watermark(_instant_before(event.lower_bound))
         self._active_gap_lowers.pop(event.gap_id, None)
         assert event.upper_bound is not None  # guaranteed by LiveGapEvent
-        self._closed_gap_intervals.append(CoverageInterval(event.lower_bound, event.upper_bound))
+        gap_interval = CoverageInterval(event.lower_bound, event.upper_bound)
+        self._closed_gap_intervals.append(gap_interval)
+        self._poison_buckets_overlapping(gap_interval)
         # The CLOSED event proves the affected interval's far edge; it is not
         # proof that the affected interval itself contains complete source data.
         return self._advance_watermark(event.lower_bound)
+
+    def _poison_buckets_overlapping(self, gap_interval: CoverageInterval) -> None:
+        # gap_interval is half-open [start, end): the bucket the exclusive
+        # end instant itself starts is not actually touched by the gap, so
+        # poison up to the bucket containing the last instant *inside* it.
+        last_gap_instant = _instant_before(gap_interval.end) or gap_interval.start
+        start = _bucket_start_ns(gap_interval.start, self._duration_ns)
+        end = _bucket_start_ns(last_gap_instant, self._duration_ns)
+        bucket_start_ns = start
+        while bucket_start_ns <= end:
+            self._poisoned_bucket_starts.add(bucket_start_ns)
+            bucket_start_ns += self._duration_ns
 
     def _advance_with_trade_cursor(
         self, cursor: LiveStreamCursorV1
@@ -155,6 +186,12 @@ def _instant_before(value: Instant) -> Instant | None:
 
 def _overlaps(left: CoverageInterval, right: CoverageInterval) -> bool:
     return left.start < right.end and right.start < left.end
+
+
+def _bucket_start_ns(value: Instant, duration_ns: int) -> int:
+    """Mirror D04's own UTC-epoch bucket alignment (CandleDefinition v1)."""
+
+    return (value.epoch_ns // duration_ns) * duration_ns
 
 
 __all__ = [

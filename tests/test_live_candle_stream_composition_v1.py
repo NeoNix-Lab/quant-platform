@@ -17,7 +17,10 @@ from quant_platform.access import (  # noqa: E402
     LiveStreamRequest,
     LiveTradeEvent,
 )
-from quant_platform.application import compose_live_candle_stream  # noqa: E402
+from quant_platform.application import (  # noqa: E402
+    GapSafeLiveCandleComposer,
+    compose_live_candle_stream,
+)
 from quant_platform.data.models import DatasetIdentity, Instant, TradeRecord  # noqa: E402
 from quant_platform.ordering import TRADES_CANONICAL_TOTAL_ORDER_V1  # noqa: E402
 from quant_platform.representation import (  # noqa: E402
@@ -157,6 +160,59 @@ class LiveCandleStreamCompositionTests(unittest.TestCase):
                 for update in report.updates
             )
         )
+
+        # The gap-straddled bucket must never be reported at all past the
+        # point the gap opened, in ANY state -- not just excluded when
+        # CLOSED. A PARTIAL update reflecting a post-gap trade silently
+        # merged into a pre-gap accumulator is just as much a fabricated
+        # continuity claim as a premature CLOSED one.
+        bucket_10_00_updates = [
+            update for update in report.updates if update.record.bucket_start == "2024-01-01T10:00:00Z"
+        ]
+        self.assertTrue(bucket_10_00_updates, "pre-gap PARTIAL updates for the bucket should still be reported")
+        max_volume_seen = max(int(update.record.volume) for update in bucket_10_00_updates)
+        self.assertEqual(
+            2,
+            max_volume_seen,
+            "the post-gap trade must never be merged into the pre-gap bucket accumulator",
+        )
+
+    def test_poisoned_bucket_never_consumes_a_post_gap_trade_landing_inside_it(self):
+        composer = GapSafeLiveCandleComposer(self.definition)
+        composer.handle(trade_event("2024-01-01T10:00:00Z", "100", "1", "1"))
+        composer.handle(trade_event("2024-01-01T10:01:00Z", "101", "1", "2"))
+        open_gap = LiveGapEvent(
+            schema_version="live-gap-event-v1",
+            gap_id="gap-x",
+            status=LiveGapStatus.OPEN,
+            previous_cursor=cursor("2024-01-01T10:01:00Z", "2"),
+            lower_bound=instant("2024-01-01T10:02:00Z"),
+            upper_bound=None,
+            resumed_cursor=None,
+            reason="fixture",
+        )
+        composer.handle(open_gap)
+        resumed_cursor = cursor("2024-01-01T10:04:00Z", "3", segment="segment-b")
+        closed_gap = LiveGapEvent(
+            schema_version="live-gap-event-v1",
+            gap_id="gap-x",
+            status=LiveGapStatus.CLOSED,
+            previous_cursor=open_gap.previous_cursor,
+            lower_bound=open_gap.lower_bound,
+            upper_bound=instant("2024-01-01T10:04:00Z"),
+            resumed_cursor=resumed_cursor,
+            reason="fixture",
+        )
+        composer.handle(closed_gap)
+
+        updates = composer.handle(trade_event("2024-01-01T10:04:00Z", "102", "1", "3", segment="segment-b"))
+
+        self.assertEqual((), updates)
+        for _bucket_start, accumulator in composer._builder._buckets.items():
+            record = accumulator.record()
+            if record.bucket_start == "2024-01-01T10:00:00Z":
+                self.assertEqual("2", record.volume)
+                self.assertEqual("101", record.close)
 
 
 if __name__ == "__main__":
