@@ -2,6 +2,7 @@
 
 from .candles import (
     CANDLE_DEFINITION_V1_VERSION,
+    CANDLE_INCREMENTAL_RUNTIME_V1_DOMAIN,
     CANDLE_RESULT_FINGERPRINT_V1_DOMAIN,
     CANDLE_V1_RECORD_SCHEMA,
     CandleComputationError,
@@ -12,11 +13,15 @@ from .candles import (
     CandleOrderingError,
     CandleProvenanceError,
     CandleRecord,
+    CandleRuntimeState,
     HistoricalCandleCoverage,
     HistoricalCandleResult,
     HistoricalCandleSourceEvidence,
+    IncrementalCandleBuilder,
+    IncrementalCandleUpdate,
     aggregate_historical_candles,
     build_historical_candle_result,
+    closed_candle_records,
     parse_duration_ns,
     required_bucket_support,
 )
@@ -46,6 +51,7 @@ from .footprints import (
 
 __all__ = [
     "CANDLE_DEFINITION_V1_VERSION",
+    "CANDLE_INCREMENTAL_RUNTIME_V1_DOMAIN",
     "CANDLE_RESULT_FINGERPRINT_V1_DOMAIN",
     "CANDLE_V1_RECORD_SCHEMA",
     "CandleComputationError",
@@ -56,6 +62,7 @@ __all__ = [
     "CandleOrderingError",
     "CandleProvenanceError",
     "CandleRecord",
+    "CandleRuntimeState",
     "FOOTPRINT_DEFINITION_V1_VERSION",
     "FOOTPRINT_RESULT_FINGERPRINT_V1_DOMAIN",
     "FOOTPRINT_V1_RECORD_SCHEMA",
@@ -76,10 +83,13 @@ __all__ = [
     "HistoricalFootprintCoverage",
     "HistoricalFootprintResult",
     "HistoricalFootprintSourceEvidence",
+    "IncrementalCandleBuilder",
+    "IncrementalCandleUpdate",
     "aggregate_historical_candles",
     "aggregate_historical_footprints",
     "build_historical_candle_result",
     "build_historical_footprint_result",
+    "closed_candle_records",
     "parse_duration_ns",
     "required_bucket_support",
     "required_footprint_bucket_support",

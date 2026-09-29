@@ -29,7 +29,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Access | Result identity/provenance | FROZEN | COMPLETE | Data Access | B03 | Semantic/source identity distinct from physical locator. |
 | Access | Non-contiguous coverage read | FROZEN | COMPLETE | Data Access | B04 | Explicit `ALLOW_PARTIAL` coverage reads; ADR-0029. |
 | Access | Durable DatasetSnapshot | OPEN_DEFERABLE | MISSING | Data Access | B05 | Shape waits for a concrete durable-replay requirement. |
-| Access | Live access/cursor | OPEN_BLOCKING | MISSING | Data Access | B06 | DG-B live-consumer branch only; intentionally not frozen by ADR-0040. |
+| Access | Live access/cursor | FROZEN | COMPLETE | Data Access | B06 | ADR-0047 freezes deterministic consumer cursor, replay, disconnect and explicit gap semantics; PR #204 implements `DataGateway.live_stream()` and PR #212 proves the bounded Wave 6 live-consumer path. |
 | Access | Schema evolution beyond accepted versions | OPEN_DEFERABLE | MISSING | Data Access | B08 | Resolve against real next-version evidence. |
 | Application | ASS-01 ownership/enforcement | RESOLVED | COMPLETE | Application | C01 | `quant_platform.application` is the canonical in-process composition owner; PR #27 merged. |
 | Application | ASS-02 semantic selector resolution | FROZEN | COMPLETE | Application | C02 | PR #30 integrated the reviewed `trades@1` semantic selector resolution. |
@@ -40,7 +40,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Representation | Representation identity | RESOLVED | PARTIAL | Representation | D01 | Distinct from DatasetIdentity. |
 | Representation | CandleDefinition v1 | FROZEN | COMPLETE | Representation | D02 | Accepted semantic contract; runtime is a separate capability. |
 | Representation | Historical Candle computation | FROZEN | COMPLETE | Representation | D03 | On-demand CLOSED candles. |
-| Representation | Incremental/live Candle computation | FROZEN | MISSING | Representation | D04 | Runtime blocked by live access implementation, not by Candle semantics. |
+| Representation | Incremental/live Candle computation | FROZEN | COMPLETE | Representation | D04 | PR #205 implements incremental/live candle computation; PR #208 composes B06 into D04 with gap-safe watermarking; PR #212 proves the bounded Wave 6 live-candle path. |
 | Representation | Candle materialization identity | OPEN_BLOCKING | MISSING | Representation | D05 | DG-A candle-materialization branch; not a prerequisite of canonical H01. |
 | Representation | Footprint representation | FROZEN | COMPLETE | Representation | D06 | FootprintDefinition v1 exact duration/tick-grid/sparse levels/finality; ADR-0027. |
 | Features | Definition/set/artifact separation | FROZEN | COMPLETE | Feature Engine | E01 | Architectural identity separation accepted. |
@@ -89,9 +89,9 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Capacity observation | RESOLVED | COMPLETE | Operations | K04 | Observational only. |
 | Operations | Health/pressure policy | FROZEN | COMPLETE | Operations | K05 | ADR-0028. |
 | Operations | RAW/source protection | FROZEN | COMPLETE | Operations/Data Plane | K06 | ADR-0032; attributable-evidence protection-identity/assessment seam, no backup dependency. |
-| Operations | Tier relocation | OPEN_BLOCKING | MISSING | Operations/Data Plane | K07 | DG-H relocation branch; sibling of backup after source protection. |
+| Operations | Tier relocation | FROZEN | COMPLETE | Operations/Data Plane | K07 | ADR-0048 freezes crash-safe old-or-new-valid relocation semantics; PR #209 implements storage tier relocation and PR #212 proves the bounded Wave 6 storage lifecycle path. |
 | Operations | Backup/restore proof | FROZEN | COMPLETE | Operations | K08 | ADR-0039; PR #111 implements identity-bound backup/isolated restore and PR #113 supplies the previously pending real deployment-independence evidence. |
-| Operations | Retention/deletion authority | OPEN_BLOCKING | MISSING | Operations | K09 | DG-H deletion branch. |
+| Operations | Retention/deletion authority | FROZEN | COMPLETE | Operations | K09 | ADR-0049 freezes retention/deletion authority; PR #211 implements governed deletion and PR #212 proves the bounded Wave 6 storage lifecycle path. |
 | Operations | Checkpoint/recovery | FROZEN | COMPLETE | Operations/Data Plane | K10 | ADR-0042; PR #114 implements persisted checkpoint/recovery and the full hermetic proof matrix; PR #122 supplies the bounded real-server restart/deployed checkpoint-path proof (`K10_REAL_RESTART_PROOF: PASS`). |
 | Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Canonical authority reconciled through Wave 4 closeout by governance issue #147. |
 
@@ -128,18 +128,19 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Live Ingest Server Production Readiness v1 | COMPLETE | Closed for the first Bybit BTCUSDT producer operating path by ADR-0043/ADR-0044, the supervised systemd path, target-host proof and DataGateway readback PASS; does not complete B06, K07, K09, J08 or live product mode. |
 | Wave 4 Strategy / Replay | COMPLETE | `G01`-`G04` and `H01`-`H05` integrated; G04/H03 frozen by ADR-0045/ADR-0046; PR #161 / issue #146 records Golden V7 deterministic replay PASS. |
 | Wave 5 Experiment / Supervised ML | COMPLETE | I03/I04/I05 integrated by PR #178/#177/#179; PR #180 / issue #174 records Golden supervised E2E PASS with stable projection, run, metric and artifact identities. |
+| Wave 6 Live Consumer Data Plane & Storage Lifecycle | COMPLETE | B06/D04/K07/K09 are frozen and implemented by ADR-0047/0048/0049, PR #204/#205/#208/#209/#211, and Golden proof PR #212. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
 
 ## Current frontier
 
-Wave 5 Experiment / Supervised ML is closed on `implement/wave-5`: PR #177, PR #178 and PR #179 complete I04/I03/I05, and PR #180 / issue #174 records Golden supervised E2E PASS on bounded canonical Bybit BTCUSDT evidence.
+Wave 6 Live Consumer Data Plane & Storage Lifecycle is closed on `implement/wave-6`: ADR-0047/0048/0049 and PR #204/#205/#208/#209/#211 complete B06/D04/K07/K09, and PR #212 / issue #200 records Golden live-consumer + live-candle + storage-lifecycle E2E PASS on bounded canonical Bybit BTCUSDT evidence.
 
 The DG-B long-gap remediation proposition remains disposed `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` (#110): A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval filled/lossless until an authoritative repair source/path proves the missing support. ADR-0044 carries this forward as accepted fail-closed behavior rather than reopening DG-B.
 
-B06 live-consumer cursor remains outside the closed scope and unresolved. DG-G remains open only for I06, I07 and J03; J07 remains missing and is not implemented by the supervised ML closeout.
+DG-B has no remaining B06 atom blocker after Wave 6; its only still-disposed proposition is issue #110's long-gap remediation rule. DG-H has no currently identified open atom after K07/K09 completion. DG-G remains open only for I06, I07 and J03; J07 remains missing and is not implemented by the Wave 6 closeout.
 
-No new runtime/product frontier is selected by this closeout. Frontier/readiness state is **not concurrent implementation authorization**.
+No new runtime/product frontier is selected by this closeout. J02, J07, J08, clients, RL, broker/live execution, second venue and L1/L2/L3 market depth remain outside the completed Wave 6 scope. Frontier/readiness state is **not concurrent implementation authorization**.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.

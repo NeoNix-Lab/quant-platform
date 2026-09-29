@@ -53,6 +53,8 @@ OWNERS = {
     "quant_platform.operations.pressure": "operations",
     "quant_platform.operations.protection": "operations",
     "quant_platform.operations.recovery": "operations",
+    "quant_platform.operations.relocation": "operations",
+    "quant_platform.operations.retention": "operations",
     "quant_platform.validation": "validation",
     "quant_platform.validation.availability": "validation",
     "quant_platform.validation.labels": "validation",
@@ -89,9 +91,13 @@ OWNERS = {
     "quant_platform.application.golden_replay": "application",
     "quant_platform.application.golden_supervised": "application",
     "quant_platform.application.h01_composition": "application",
+    "quant_platform.application.live_candle_stream": "application",
     "quant_platform.application.live_gap_orchestration": "application",
     "quant_platform.application.live_ingest_server": "application",
     "quant_platform.application.market_data": "application",
+    "quant_platform.application.retention_deletion": "application",
+    "quant_platform.application.storage_relocation": "application",
+    "quant_platform.application.wave6_golden": "application",
 }
 ALLOWED = {
     "shared": {"shared"},

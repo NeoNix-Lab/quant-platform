@@ -31,6 +31,9 @@ DG-H K08 backup / restore v1                         FROZEN / COMPLETE
 DG-H K10 checkpoint / recovery v1                    FROZEN / COMPLETE
 Live ingest server composition v1                    FROZEN / COMPLETE
 Live ingest long-gap orchestration v1                FROZEN / COMPLETE
+DG-B B06 live consumer cursor v1                     FROZEN / COMPLETE — ADR-0047
+DG-H K07 storage tier relocation v1                  FROZEN / COMPLETE — ADR-0048
+DG-H K09 retention / deletion authority v1           FROZEN / COMPLETE — ADR-0049
 DG-F G04 session/cooldown semantics v1              FROZEN / COMPLETE — ADR-0045
 DG-F H03 execution-conflict semantics v1            FROZEN / COMPLETE — ADR-0046
 ```
@@ -57,7 +60,10 @@ Resolved architecture includes:
 - live-ingest server composition under [ADR-0043](../decisions/ADR-0043-live-ingest-server-composition-v1.md);
 - live-ingest long-gap orchestration under [ADR-0044](../decisions/ADR-0044-live-ingest-long-gap-remediation-v1.md);
 - G04 session/calendar/cooldown semantics under [ADR-0045](../decisions/ADR-0045-session-calendar-and-cooldown-semantics-v1.md);
-- H03 execution-conflict and intra-bar fill semantics under [ADR-0046](../decisions/ADR-0046-execution-conflict-and-intra-bar-fill-model-v1.md).
+- H03 execution-conflict and intra-bar fill semantics under [ADR-0046](../decisions/ADR-0046-execution-conflict-and-intra-bar-fill-model-v1.md);
+- B06 live-consumer cursor semantics under [ADR-0047](../decisions/ADR-0047-live-consumer-cursor-v1.md);
+- K07 storage tier relocation semantics under [ADR-0048](../decisions/ADR-0048-storage-tier-relocation-v1.md);
+- K09 retention/deletion authority semantics under [ADR-0049](../decisions/ADR-0049-retention-deletion-authority-v1.md).
 
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
@@ -213,9 +219,18 @@ Issue #110's disposition (above) and ADR-0044 are the current record. A negative
 
 Do not solve this by treating missing `seq` values, absence of trades, wall-clock time or a finite local buffer as proof of completeness.
 
-### Live consumer cursor (`B06`) — still OPEN / OUTSIDE CURRENT SCOPE
+### Live consumer cursor (`B06`) — RESOLVED / IMPLEMENTED
 
-B06 deterministic consumer resume/replay semantics remain unresolved until a real live consumer is selected. ADR-0040 freezes A11 acquisition/reconciliation state only; it does not silently freeze B06.
+B06 deterministic consumer resume/replay semantics are frozen under
+[ADR-0047](../decisions/ADR-0047-live-consumer-cursor-v1.md).
+ADR-0040 remains the acquisition/reconciliation authority; ADR-0047 is the
+consumer-cursor authority.
+
+PR #204 implements `DataGateway.live_stream()` with deterministic replay,
+disconnect and explicit gap notification semantics, and PR #212 proves the
+bounded Wave 6 live-consumer path. The disposed issue #110 long-gap rule is
+unchanged: an interval beyond bounded reconciliation remains explicit
+non-complete evidence until a future attributable repair path proves it.
 
 ## DG-C — Market-data depth
 
@@ -349,9 +364,15 @@ deletion itself. K07 and K08 may depend on its output. **Accepted known
 limitation:** `ProtectionObligationEvidence`'s obligation kind is not yet
 type-restricted to K06-owned concerns, tracked for a future narrowing pass.
 
-### Tier relocation (`K07`)
+### Tier relocation (`K07`) — RESOLVED / IMPLEMENTED
 
-If relocation is selected, freeze crash-safe old-or-new-valid placement semantics. This is a sibling downstream use of source protection, not a prerequisite of backup/restore.
+K07 crash-safe old-or-new-valid placement semantics are frozen under
+[ADR-0048](../decisions/ADR-0048-storage-tier-relocation-v1.md). This is a
+sibling downstream use of source protection, not a prerequisite of
+backup/restore.
+
+PR #209 implements storage tier relocation, and PR #212 proves the bounded Wave
+6 storage-lifecycle path without consumer-visible disappearance.
 
 ### Backup/restore (`K08`) — RESOLVED / IMPLEMENTED
 
@@ -359,9 +380,16 @@ K08 semantics are frozen under [ADR-0039](../decisions/ADR-0039-backup-restore-v
 
 PR #111 implements the identity-bound recovery set, export/restore and isolated Postgres/DataGateway proof. PR #113 supplies the previously pending deployment-independence evidence on the real topology and removes ingest write authority over the independent recovery tier. K08 is therefore implementation `COMPLETE` for v1.
 
-### Retention/deletion (`K09`)
+### Retention/deletion (`K09`) — RESOLVED / IMPLEMENTED
 
-Restore proof must precede deletion authority. No protected or sole recoverable evidence may be deleted.
+K09 retention/deletion authority is frozen under
+[ADR-0049](../decisions/ADR-0049-retention-deletion-authority-v1.md). Restore
+proof must precede deletion authority. No protected or sole recoverable evidence
+may be deleted.
+
+PR #211 implements governed deletion, and PR #212 proves the bounded Wave 6
+storage-lifecycle path. DG-H has no currently identified open atom after Wave 6
+closeout.
 
 ### Checkpoint/recovery (`K10`) — RESOLVED / IMPLEMENTED
 
@@ -427,6 +455,12 @@ Wait for explicit multi-asset product scope.
 ### Canonical API transport (`J02`)
 
 Consumer API semantics are already frozen. Concrete HTTP/gRPC/Arrow Flight/WebSocket/other transport, serialization, pagination/streaming and runtime host remain deferred until a real remote/client need exists.
+
+### Paper/shadow and live product runtime (`J07`,`J08`)
+
+Wave 6 completes bounded data-plane/storage prerequisites only. It does not
+activate or complete paper/shadow trading, broker/live execution or live product
+mode. Those runtime/product decisions remain outside the completed Wave 6 scope.
 
 ## Implementation-local choices — not governance blockers
 
