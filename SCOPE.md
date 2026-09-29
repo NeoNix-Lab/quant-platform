@@ -204,38 +204,47 @@ The repository rule of one bounded mutation slice at a time governs execution. T
         |
         v
 3. Slice D04 - Incremental and Live Candle Computation
-   - Implement PARTIAL/CLOSED candle sealing over the B06 live stream.
+   - Implement PARTIAL/CLOSED candle sealing over already-extracted trade fields.
    - Prove numeric equivalence with D03's historical CLOSED output.
         |
         v
-4. Design gate - DG-H: K07 Storage Tier Relocation Algorithm
+4. Slice - Compose B06 into D04 (gap-safe watermark)
+   - Implement the application-layer composer driving D04's IncrementalCandleBuilder
+     from B06's live_stream() events.
+   - Never advance the sealing watermark across an interval a LiveGapEvent has not
+     yet proven complete (OPEN blocks advancement; CLOSED resumes it from upper_bound).
+        |
+        v
+5. Design gate - DG-H: K07 Storage Tier Relocation Algorithm
    - Produce ADR-0048 resolving the crash-safe relocation algorithm and restart protocol.
         |
         v
-5. Slice K07 - Storage Tier Relocation & Warm/Cold Migration
+6. Slice K07 - Storage Tier Relocation & Warm/Cold Migration
    - Implement crash-safe hot->cold/deep-cold relocation per ADR-0048.
    - Catalog location changes only after target verification; source removed only after verification.
         |
         v
-6. Design gate - DG-H: K09 Retention & Deletion Authority Policy
+7. Design gate - DG-H: K09 Retention & Deletion Authority Policy
    - Produce ADR-0049 resolving retention periods and deletion authority, gated on K08.
         |
         v
-7. Slice K09 - Retention, Deletion Authority & Compliance Audit
+8. Slice K09 - Retention, Deletion Authority & Compliance Audit
    - Implement governed deletion per ADR-0049.
    - Never delete protected or sole-recoverable evidence; require a verified K08 restore first.
         |
         v
-8. Wave 6 Golden E2E Proof
-   - Prove a live consumer (B06) computing live candles (D04) while a K07 relocation
-     and a K09 retention pass run concurrently, without corruption or consumer-visible
-     data disappearance.
+9. Wave 6 Golden E2E Proof
+   - Prove a live consumer (B06) computing live candles (D04, composed per step 4) while a
+     K07 relocation and a K09 retention pass run concurrently, without corruption or
+     consumer-visible data disappearance.
         |
         v
-9. Wave 6 Governance Closeout
+10. Wave 6 Governance Closeout
    - Reconcile CAPABILITY_DAG.md, CAPABILITY_MAP.md, ROADMAP.md and OPEN_DECISIONS.md.
    - Prepare implement/wave-6 for promotion to main after the Golden proof and reconciliation.
 ```
+
+Step 4 was added after D04 (#195) landed: neither #195 nor the Golden E2E proof (step 9) build the actual B06-to-D04 wiring on their own -- #195 explicitly excludes B06's stream/cursor semantics, and the proof step must not introduce new semantics. Step 4 closes that gap; see issue #206.
 
 ---
 
