@@ -67,6 +67,7 @@ K02 live-ingest runtime identity v1                  COMPLETE
 K10 checkpoint / recovery v1                        COMPLETE (real restart proof: PR #122)
 Live Ingest Server Production Readiness v1          COMPLETE for first producer operating path
 Wave 4 Strategy / Replay                            COMPLETE (G01-G04,H01-H05; V7 Golden PASS)
+Wave 6 Live Consumer Data Plane & Storage Lifecycle COMPLETE (B06,D04,K07,K09; Golden PASS)
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
@@ -92,12 +93,12 @@ Completed checkpoints are credited and must not be re-proved absent a concrete i
 TOTAL_ATOMS                     87
 CLASSIFIED_ATOMS                87
 UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     70 / 87 = 80.5%
-OPEN_BLOCKING                   9
+SEMANTIC_FROZEN_OR_RESOLVED     73 / 87 = 83.9%
+OPEN_BLOCKING                   6
 OPEN_DEFERABLE                  8
-ROADMAP_DEFINED                 70 + 9 + 8 = 87
+ROADMAP_DEFINED                 73 + 6 + 8 = 87
 ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         61 / 87 = 70.1%
+IMPLEMENTATION_COMPLETE         65 / 87 = 74.7%
 ```
 
 The 100% planning score means every roadmap atom is classified. It does **not** mean every future semantic choice is frozen.
@@ -120,13 +121,13 @@ DG-H  Operational safety
 Important current boundaries:
 
 - DG-A: `D05` remains independent from completed H01.
-- DG-B: A10/B04 historical repair is complete; A11 is frozen and implemented; B06 consumer-live cursor remains open/outside the selected scope.
+- DG-B: A10/B04 historical repair is complete; A11 is frozen and implemented; B06 consumer-live cursor is frozen and implemented by Wave 6.
 - DG-B long-gap remediation remains blocking only for claiming an unreconciled interruption filled/lossless. ADR-0044 closes the selected production-readiness path by retaining explicit-gap-only behavior until a future authoritative repair source/path is proven.
 - DG-C: L1 does not activate L2; L3 waits for real feed evidence.
 - DG-E: complete through F08.
 - DG-F: G04 session/cooldown semantics are frozen by ADR-0045; H03 execution-conflict semantics are frozen by ADR-0046; G01-G04/H01-H05 are implementation-complete on `implement/wave-4`.
 - DG-G: the supervised branch I03/I04/I05 is implementation-complete and Golden-proven by Wave 5; remaining unresolved branches are I06 strategic RL, I07 execution RL and J03 job runtime.
-- DG-H: K02/K03/K04/K05/K06/K08/K10 are complete, including K10's real restart proof (PR #122) and the supervised live-ingest server operating path proof; K07/K09 remain open and are outside the closed scope.
+- DG-H: K02/K03/K04/K05/K06/K07/K08/K09/K10 are complete, including K10's real restart proof (PR #122), the supervised live-ingest server operating path proof, and the Wave 6 storage lifecycle proof.
 
 Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension, multi-asset execution and concrete API transport — remain open until their evidence trigger exists.
 
@@ -151,24 +152,27 @@ V4  Representation -> Feature -> canonical H01           COMPLETE
 V5  Feature -> Research                                  COMPLETE
 V6  Research -> Validation                               COMPLETE
 V7  Strategy -> deterministic Replay                     COMPLETE
-V8  Historical -> Live                                   PARTIAL; first live-ingest producer operating path production-ready, B06/live-consumer and broader live product gates remain open
+V8  Historical -> Live                                   COMPLETE for the bounded data-plane/storage lifecycle path; broader live product gates remain open
 V9  Application -> API -> Client                         application service complete; transport deferred
 V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
 ```
 
-V8 is not complete as a whole. The first live-ingest producer operating path now converges with canonical publication/storage/access under K08/A11/K02/K10 evidence, ADR-0043/ADR-0044, and supervised target proof; B06 remains outside the selected first-ingest scope; and any long gap beyond bounded provider reconciliation must remain explicit until authoritative repair evidence exists.
+V8 is complete for the bounded data-plane/storage lifecycle path selected through Wave 6: the first live-ingest producer path and the live consumer/candle/storage lifecycle path now converge through K08/A11/K02/K10, B06/D04 and K07/K09 evidence, ADR-0043/ADR-0044/ADR-0047/ADR-0048/ADR-0049, and the Wave 6 Golden proof. This does not complete J07/J08, broker/live execution, clients, second venue or market-depth branches; any long gap beyond bounded provider reconciliation must remain explicit until authoritative repair evidence exists.
 
 ## Current execution frontier
 
-Wave 5 Experiment / Supervised ML is closed on `implement/wave-5`: PR #177,
-PR #178 and PR #179 complete I04/I03/I05, and PR #180 / issue #174 records
-Golden supervised E2E PASS on bounded canonical Bybit BTCUSDT evidence.
+Wave 6 Live Consumer Data Plane & Storage Lifecycle is closed on
+`implement/wave-6`: ADR-0047/0048/0049 and PR #204/#205/#208/#209/#211
+complete B06/D04/K07/K09, and PR #212 / issue #200 records Golden
+live-consumer + live-candle + storage-lifecycle E2E PASS on bounded canonical Bybit BTCUSDT
+evidence.
 
-No new runtime/product frontier is selected by #175. B06, H06, I06-I07,
-J02/J07/J08, K07/K09, RL, live broker execution and client work remain outside
-this governance closeout. J07 remains `MISSING`; I05 is only one prerequisite.
+No new runtime/product frontier is selected by this closeout. H06, I06-I07,
+J02/J07/J08, RL, live broker execution, client work, second venue and L1/L2/L3
+market depth remain outside this governance closeout. J07 remains `MISSING`;
+Wave 6 completes data-plane/storage prerequisites only.
 
-No new runtime/product frontier is selected by this closeout. Roadmap state is still **not concurrent authorization**.
+Roadmap state is still **not concurrent authorization**.
 
 ## Execution waves
 
@@ -181,18 +185,18 @@ Wave 2  Representation / Feature                          COMPLETE
 Wave 3  Research / Validation                             COMPLETE
 Wave 4  Strategy / Replay                                 COMPLETE
 Wave 5  Experiment / Supervised ML                       COMPLETE (I01-I05; Golden supervised E2E PASS)
-Wave 6  Live Data Plane                                   K02,K03,K04,K05,K06,K08,K10,A10,A11,A16 COMPLETE; K07,K09,B06 remain open/missing
+Wave 6  Live Data Plane                                   COMPLETE (B06,D04,K07,K09 plus credited K02,K03,K04,K05,K06,K08,K10,A10,A11,A16; Golden PASS)
 Wave 7  Runtime / Clients                                 J02 -> thin clients when real client need exists
 Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates
 ```
 
-The closed Live Ingest scope was a bounded path through part of Wave 6, not authorization to implement Wave 6 generally.
+The earlier closed Live Ingest scope was a bounded path through part of Wave 6, not authorization to implement Wave 6 generally. Wave 6 itself is now complete only for the bounded live data-plane/storage lifecycle path described above.
 
 ## Producer / storage interpretation
 
 Capacity observation, application work, historical representation work, backup design and other independent capabilities may advance in parallel when their declared dependencies are met, subject to the active scope's mutation policy.
 
-Backfill/repair does not require the entire storage-tiering program. K08 backup/restore and A11 live acquisition are complete for the selected first-live path; K09 deletion authority remains separate, and tier relocation remains independent. API transport does not precede the completed in-process ASS-02 service.
+Backfill/repair does not require the entire storage-tiering program. K08 backup/restore, A11 live acquisition, B06 live consumer access, D04 live candles, K07 tier relocation and K09 deletion authority are complete for the selected bounded Wave 6 path. API transport does not precede the completed in-process ASS-02 service.
 
 ## Planning rule
 

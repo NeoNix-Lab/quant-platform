@@ -1,10 +1,41 @@
 # Scope: Wave 6 - Live Consumer Data Plane & Storage Lifecycle v1
 
-Status: **OPEN**
+Status: **CLOSED**
 
 Scope kind: **decision-gate resolution and bounded implementation scope for Wave 6**.
 
 Target integration branch: **`implement/wave-6`**, branched from `main` after Wave 5 promotion.
+
+---
+
+## Closeout Result
+
+Wave 6 is closed by the governance reconciliation in issue #201 after the
+Golden proof PR #212 was merged into `implement/wave-6`.
+
+Credited closeout evidence:
+
+```text
+B06 design:          ADR-0047, issue #193, PR #202
+B06 implementation:  issue #194, PR #204
+D04 implementation:  issue #195, PR #205
+B06 -> D04 composer: issue #206, PR #208
+K07 design:          ADR-0048, issue #196, PR #203
+K07 implementation:  issue #197, PR #209
+K09 design:          ADR-0049, issue #198, PR #210
+K09 implementation:  issue #199, PR #211
+Golden proof:        issue #200, PR #212,
+                     docs/integration/WAVE6_GOLDEN_E2E_LIVE_CONSUMER_STORAGE_LIFECYCLE.md
+```
+
+The completed scope updates the authoritative governance state only for
+`B06`, `D04`, `K07` and `K09`. It does not complete paper/shadow trading
+(`J07`), live product mode (`J08`), API transport (`J02`), clients, a second
+venue, L1/L2/L3 market depth, RL, broker/live execution or any generic job
+runtime. Issue #110's long-gap disposition remains the accepted DG-B rule:
+long gaps beyond bounded reconciliation may be explicit non-complete evidence,
+but may not be claimed filled/lossless without future attributable repair
+evidence.
 
 ---
 
@@ -58,7 +89,7 @@ Track B — Storage Lifecycle & Operational Safety (DG-H)
         sustainable long-running live operation
 ```
 
-`B06` and `K07`/`K09` are `OPEN_BLOCKING` in `CAPABILITY_DAG.md`: their semantics are not yet frozen by any ADR. `D04` is already `FROZEN` (candle semantics are fixed by `ADR-0021`/`CANDLE_DEFINITION.md`); only its live/incremental implementation is `MISSING`. Wave 6 must therefore:
+At Wave 6 start, `B06` and `K07`/`K09` were `OPEN_BLOCKING` in `CAPABILITY_DAG.md`: their semantics were not yet frozen by any ADR. `D04` was already `FROZEN` (candle semantics fixed by `ADR-0021`/`CANDLE_DEFINITION.md`); only its live/incremental implementation was `MISSING`. Wave 6 therefore required:
 
 1. resolve `DG-B`'s live-consumer cursor semantics (resume, ordering, disconnect, explicit gap notification) through a design gate that produces an ADR;
 2. implement `DataGateway.live_stream()` against that ADR without inventing a new repair engine or claiming completeness the provider cannot prove (per `ADR-0040`/issue #110's `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition);
@@ -144,16 +175,16 @@ Wave 6 composes these existing primitives. It must not duplicate `DataGateway.sc
 
 | ID | Capability | Owner | Requires | Unlocks | Decision State | Target Impl State | Acceptance / Authority |
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **B06** | `Live access / consumer cursor v1` | Data Access | `A11`, `B03` | `D04`, `J07` | OPEN_BLOCKING → RESOLVED (this scope) | COMPLETE | `DataGateway.live_stream()`: deterministic consumer resume/replay, explicit disconnect and gap notification; never invents missing trades. |
+| **B06** | `Live access / consumer cursor v1` | Data Access | `A11`, `B03` | `D04`, `J07` | OPEN_BLOCKING → FROZEN (`ADR-0047`) | COMPLETE | `DataGateway.live_stream()`: deterministic consumer resume/replay, explicit disconnect and gap notification; never invents missing trades. |
 | **D04** | `Incremental / live candle computation v1` | Representation | `B06`, `D02` | `J07` | FROZEN | COMPLETE | `PARTIAL` forming candle plus `CLOSED` candle that is numerically identical to `D03`'s historical output for the same trades. |
-| **K07** | `Storage tier relocation v1` | Operations/Data Plane | `K05`, `K06` | storage lifecycle | OPEN_BLOCKING → RESOLVED (this scope) | COMPLETE | Crash at any point yields either the old or the new valid placement, never neither; catalog updates only after target verification. |
-| **K09** | `Retention / deletion authority v1` | Operations | `K08` | sustainable live | OPEN_BLOCKING → RESOLVED (this scope) | COMPLETE | Never deletes protected or sole-recoverable evidence; deletion requires a verified `K08` restore path first. |
+| **K07** | `Storage tier relocation v1` | Operations/Data Plane | `K05`, `K06` | storage lifecycle | OPEN_BLOCKING → FROZEN (`ADR-0048`) | COMPLETE | Crash at any point yields either the old or the new valid placement, never neither; catalog updates only after target verification. |
+| **K09** | `Retention / deletion authority v1` | Operations | `K08` | sustainable live | OPEN_BLOCKING → FROZEN (`ADR-0049`) | COMPLETE | Never deletes protected or sole-recoverable evidence; deletion requires a verified `K08` restore path first. |
 
 ---
 
 ## Decision Gate Resolution: DG-B and DG-H
 
-Unlike Wave 5 (whose `I03`/`I04`/`I05` decision states were already `RESOLVED` before implementation began), `B06`, `K07` and `K09` are `OPEN_BLOCKING` today. This scope's Active Path therefore includes dedicated **design-gate** issues — using this repository's `[agent] Design gate` template — that must each produce a committed ADR before their corresponding implementation slice starts. This mirrors the exact pattern already used for `K02`/`K06` (`ADR-0041`, `ADR-0044`) during the Live Ingest Server Production Readiness effort.
+Unlike Wave 5 (whose `I03`/`I04`/`I05` decision states were already `RESOLVED` before implementation began), `B06`, `K07` and `K09` were `OPEN_BLOCKING` at Wave 6 start. This scope's Active Path therefore included dedicated **design-gate** issues — using this repository's `[agent] Design gate` template — that each produced a committed ADR before their corresponding implementation slice started. This mirrors the exact pattern already used for `K02`/`K06` (`ADR-0041`, `ADR-0044`) during the Live Ingest Server Production Readiness effort.
 
 - **DG-B / B06**: produces the next ADR (`ADR-0047`), resolving live-consumer cursor resume/ordering/disconnect/gap-notification semantics. Must not reopen issue #110's `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition — an unprovable gap stays an explicit, auditable non-complete interval, never a silently filled one.
 - **DG-H / K07**: produces the next ADR (`ADR-0048`), resolving the tier-relocation algorithm and restart protocol left open by `STORAGE_LIFECYCLE.md` §4/§13.
