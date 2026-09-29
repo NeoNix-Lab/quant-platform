@@ -469,6 +469,24 @@ CREATE UNIQUE INDEX relocation_jobs_one_inflight
     WHERE phase IN ('PLANNED','STAGED','VERIFIED','SWITCHED');
 
 -- ---------------------------------------------------------------------------
+-- deletion_audit_records — K09 governed-deletion decisions and application
+-- results.  This table is an audit trail, not a generic compliance subsystem.
+-- ---------------------------------------------------------------------------
+CREATE TABLE deletion_audit_records (
+    deletion_decision_id text PRIMARY KEY
+                         CHECK (deletion_decision_id ~
+                                '^retention-deletion-decision-v1:sha256:[0-9a-f]{64}$'),
+    decision             text        NOT NULL CHECK (decision IN ('PERMITTED','REFUSED')),
+    candidate            jsonb       NOT NULL,
+    decision_document    jsonb       NOT NULL,
+    application_result   jsonb,
+    deleted_at           timestamptz,
+    updated_at           timestamptz NOT NULL DEFAULT now(),
+
+    CHECK (deleted_at IS NULL OR application_result IS NOT NULL)
+);
+
+-- ---------------------------------------------------------------------------
 -- dataset_lineage — quale dataset deriva da quale, e per mano di quale
 -- TRASFORMAZIONE, identificata semanticamente e per versione.
 -- Risponde a "se raw X e' sbagliato, cosa devo rigenerare".

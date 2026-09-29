@@ -54,6 +54,7 @@ OWNERS = {
     "quant_platform.operations.protection": "operations",
     "quant_platform.operations.recovery": "operations",
     "quant_platform.operations.relocation": "operations",
+    "quant_platform.operations.retention": "operations",
     "quant_platform.validation": "validation",
     "quant_platform.validation.availability": "validation",
     "quant_platform.validation.labels": "validation",
@@ -94,6 +95,7 @@ OWNERS = {
     "quant_platform.application.live_gap_orchestration": "application",
     "quant_platform.application.live_ingest_server": "application",
     "quant_platform.application.market_data": "application",
+    "quant_platform.application.retention_deletion": "application",
     "quant_platform.application.storage_relocation": "application",
 }
 ALLOWED = {
