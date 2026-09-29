@@ -110,11 +110,18 @@ from .golden_supervised import (
     Wave5GoldenSupervisedProof,
     run_wave5_golden_supervised_proof,
 )
+from .live_candle_stream import (
+    DEFAULT_LIVE_CANDLE_BATCH_SIZE,
+    GapSafeLiveCandleComposer,
+    LiveCandleStreamReport,
+    compose_live_candle_stream,
+)
 
 __all__ = [
     "BUCKET_OBSERVATION_IDENTITY_DOMAIN",
     "CANONICAL_BTCUSDT_DATASET",
     "CANONICAL_FIELD_ORDER",
+    "DEFAULT_LIVE_CANDLE_BATCH_SIZE",
     "DEFAULT_MARKET_DATA_BATCH_SIZE",
     "ApplicationRequestError",
     "Check",
@@ -127,6 +134,7 @@ __all__ = [
     "DEFAULT_GOLDEN_FIXTURE",
     "GoldenExpectation",
     "GoldenReplayProof",
+    "GapSafeLiveCandleComposer",
     "H01CompositionError",
     "H01Evaluation",
     "HarnessConfig",
@@ -136,6 +144,7 @@ __all__ = [
     "ImportReport",
     "MarketDataApplication",
     "MarketDataApplicationConfig",
+    "LiveCandleStreamReport",
     "MinimalBreakoutFeatureProvider",
     "NoOpExecutionPolicy",
     "NormalizedMarketDataQuery",
@@ -169,6 +178,7 @@ __all__ = [
     "build_golden_replay_spec",
     "capture_recovery_set",
     "collect_preflight",
+    "compose_live_candle_stream",
     "compose_market_data_application",
     "encode_record",
     "evaluate_h01_imbalance",
