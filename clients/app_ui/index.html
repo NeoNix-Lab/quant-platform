@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quant Platform Market Data</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="toolbar" aria-label="Market data request">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">QP</span>
+          <div>
+            <h1>Market Data Client</h1>
+            <p>J06 App UI over the J02 WebSocket transport</p>
+          </div>
+        </div>
+        <form id="query-form" class="query-grid">
+          <label>
+            API URL
+            <input id="api-url" name="apiUrl" value="ws://127.0.0.1:8765" autocomplete="off">
+          </label>
+          <label>
+            Venue
+            <input id="venue" name="venue" value="bybit" autocomplete="off">
+          </label>
+          <label>
+            Instrument
+            <input id="instrument" name="instrument" value="BTCUSDT" autocomplete="off">
+          </label>
+          <label>
+            Start
+            <input id="start" name="start" value="2024-01-01T00:00:00Z" autocomplete="off">
+          </label>
+          <label>
+            End
+            <input id="end" name="end" value="2024-01-01T01:00:00Z" autocomplete="off">
+          </label>
+          <label>
+            Max rows
+            <input id="max-rows" name="maxRows" type="number" min="1" max="200" value="25">
+          </label>
+          <button id="submit-query" type="submit">Run query</button>
+        </form>
+      </section>
+
+      <section class="status-strip" aria-live="polite">
+        <span id="connection-state" class="pill neutral">Idle</span>
+        <span id="request-id">request_id=-</span>
+        <span id="row-count">rows=-</span>
+        <span id="coverage-state">coverage=-</span>
+      </section>
+
+      <section id="error-panel" class="error-panel" hidden></section>
+
+      <section class="result-area" aria-label="Canonical result">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Exchange time</th>
+                <th>Price</th>
+                <th>Size</th>
+                <th>Side</th>
+                <th>Trade id</th>
+                <th>Sequence</th>
+              </tr>
+            </thead>
+            <tbody id="result-rows">
+              <tr><td colspan="6" class="empty">No response yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <pre id="raw-response" class="raw-output" aria-label="Raw J02 response">{}</pre>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
