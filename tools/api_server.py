@@ -48,6 +48,7 @@ async def _run(args: argparse.Namespace) -> int:
         port=args.port,
         catalog_dsn=args.dsn,
         batch_size=args.batch_size,
+        allow_non_loopback=args.allow_non_loopback,
     )
     print("=== J02 API transport server v1 ===")
     print(f"host={config.host}")
@@ -64,6 +65,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=int(os.environ.get("QP_API_PORT", "8765")))
     parser.add_argument("--dsn", default=_default_dsn(), help="Catalog DSN; defaults to CATALOG_DSN")
     parser.add_argument("--batch-size", type=int, default=int(os.environ.get("QP_API_BATCH_SIZE", "65536")))
+    parser.add_argument(
+        "--allow-non-loopback",
+        action="store_true",
+        default=os.environ.get("QP_API_ALLOW_NON_LOOPBACK", "").lower() in {"1", "true", "yes"},
+        help="Permit binding to a non-loopback interface; authentication remains out of scope for J02 v1",
+    )
     args = parser.parse_args(argv)
     return asyncio.run(_run(args))
 

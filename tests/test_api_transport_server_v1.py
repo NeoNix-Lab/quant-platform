@@ -7,6 +7,8 @@ import asyncio
 import json
 from pathlib import Path
 import sys
+import threading
+import time
 import unittest
 
 import websockets
@@ -22,6 +24,7 @@ from test_application_market_data_result_v1 import (  # noqa: E402
 from test_bounded_datagateway_read_v1 import LEFT, RIGHT, trade  # noqa: E402
 
 from quant_platform.application import (  # noqa: E402
+    ApiTransportServerConfig,
     ConsumerApiError,
     ConsumerErrorCode,
     J02_REQUEST_SCHEMA_VERSION,
@@ -58,6 +61,13 @@ def batches():
 
 
 class ApiTransportEncodingTests(unittest.TestCase):
+    def test_non_loopback_bind_requires_explicit_operator_override(self):
+        with self.assertRaises(ValueError):
+            ApiTransportServerConfig(host="0.0.0.0")
+
+        config = ApiTransportServerConfig(host="0.0.0.0", allow_non_loopback=True)
+        self.assertEqual("0.0.0.0", config.host)
+
     def test_success_response_is_lossless_consumer_result_payload(self):
         gateway = covered_gateway(batches())
         direct = execute_market_data_query(query(), gateway=gateway)
@@ -145,6 +155,43 @@ class ApiTransportWebSocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("request-2", response_two["request_id"])
         self.assertEqual(first.request_identity, response_one["result"]["request_identity"])
         self.assertEqual(second.request_identity, response_two["result"]["request_identity"])
+
+    async def test_blocking_application_reads_do_not_serialize_unrelated_connections(self):
+        direct = execute_market_data_query(query(), gateway=covered_gateway(batches()))
+        calls: list[tuple[float, float]] = []
+        lock = threading.Lock()
+
+        def execute(_query):
+            start = time.perf_counter()
+            time.sleep(0.25)
+            end = time.perf_counter()
+            with lock:
+                calls.append((start, end))
+            return direct
+
+        async with websockets.serve(
+            lambda websocket: handle_api_transport_connection(websocket, execute=execute),
+            "127.0.0.1",
+            0,
+        ) as server:
+            port = server.sockets[0].getsockname()[1]
+
+            async def send_once(request_id):
+                async with websockets.connect(f"ws://127.0.0.1:{port}") as websocket:
+                    await websocket.send(json.dumps(request_payload(request_id=request_id)))
+                    return json.loads(await websocket.recv())
+
+            one, two = await asyncio.gather(send_once("a"), send_once("b"))
+
+        self.assertEqual("ok", one["status"])
+        self.assertEqual("ok", two["status"])
+        self.assertEqual(2, len(calls))
+        ordered = sorted(calls)
+        self.assertLess(
+            ordered[1][0],
+            ordered[0][1],
+            "independent WebSocket connections must not be serialized by blocking reads",
+        )
 
 
 if __name__ == "__main__":

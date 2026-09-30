@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import asyncio
+import ipaddress
 import json
 from typing import Any
 
@@ -49,6 +50,7 @@ class ApiTransportServerConfig:
     port: int = 8765
     catalog_dsn: str = ""
     batch_size: int = DEFAULT_MARKET_DATA_BATCH_SIZE
+    allow_non_loopback: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.host, str) or not self.host.strip():
@@ -63,6 +65,10 @@ class ApiTransportServerConfig:
             or self.batch_size < 1
         ):
             raise ValueError("batch_size must be a positive integer")
+        if not isinstance(self.allow_non_loopback, bool):
+            raise TypeError("allow_non_loopback must be a boolean")
+        if not self.allow_non_loopback and not _is_loopback_bind_host(self.host):
+            raise ValueError("non-loopback bind requires allow_non_loopback=True")
 
 
 def compose_market_data_executor(config: ApiTransportServerConfig) -> MarketDataExecutor:
@@ -197,7 +203,8 @@ async def handle_api_transport_connection(websocket: Any, *, execute: MarketData
     """Serve sequential J02 request/response exchanges on one WebSocket."""
 
     async for message in websocket:
-        await websocket.send(handle_api_transport_message(message, execute=execute))
+        response = await asyncio.to_thread(handle_api_transport_message, message, execute=execute)
+        await websocket.send(response)
 
 
 async def run_api_transport_server(
@@ -226,6 +233,16 @@ def _message_text(message: str | bytes) -> str:
     if isinstance(message, bytes):
         return message.decode("utf-8")
     raise TypeError("WebSocket messages must be text or UTF-8 bytes")
+
+
+def _is_loopback_bind_host(host: str) -> bool:
+    text = host.strip().lower()
+    if text == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(text).is_loopback
+    except ValueError:
+        return False
 
 
 def _trade_record_dict(record: Any) -> dict[str, Any]:
