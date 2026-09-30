@@ -1,6 +1,6 @@
 # Scope: Wave 7 - API & Platform Transport v1
 
-Status: **OPEN**
+Status: **CLOSED — exceptional operator closeout**
 
 Scope kind: **decision-gate resolution and bounded implementation scope for Wave 7**.
 
@@ -22,7 +22,27 @@ Issue #200: Wave 6 Golden E2E proof credited
 Issue #201: Wave 6 governance closeout closed after main promotion
 ```
 
-**Explicit note on the `J02` decision gate.** `docs/architecture/OPEN_DECISIONS.md` and `ROADMAP.md` both record `J02` as `OPEN_DEFERABLE`, gated on "a real remote/client need," and explicitly state that roadmap/frontier completion is **not** concurrent authorization to open it. This scope is opened on an explicit operator decision to proceed now; it does not itself assert or fabricate a specific external client story. Design gate step 1 below (`DG-I`) is exactly where the concrete transport/serialization/runtime-host choice — and any concrete driving client scenario the operator wants to name — gets pinned. Until that design gate closes, this document intentionally leaves those specifics open rather than inventing them.
+Closeout evidence:
+
+```text
+Wave 7 integration branch: implement/wave-7
+Wave 7 head at closeout: b5a6aea66cf9b657a17b61abdef530d97050782d
+DG-I / J02 ADR: ADR-0050
+J02 implementation: PR #225
+J04 implementation: PR #226
+J05 implementation: PR #227
+J06 implementation: PR #228
+Issue #222: closed by explicit operator exception during expedited Wave 7 closeout
+Issue #223: governance reconciliation scope
+```
+
+The Wave 7 Golden E2E proof item (#222) is closed by explicit operator direction
+without adding a dedicated `docs/integration/` Golden proof artifact. This
+closeout credits the merged J02/J04/J05/J06 implementation and focused PR
+evidence, but it does **not** claim an additional full Golden client-to-service
+round-trip proof beyond what is already recorded in the slice PRs.
+
+**Historical note on the `J02` decision gate.** At scope opening, `docs/architecture/OPEN_DECISIONS.md` and `ROADMAP.md` both recorded `J02` as `OPEN_DEFERABLE`, gated on "a real remote/client need," and explicitly stated that roadmap/frontier completion is **not** concurrent authorization to open it. This scope was opened on an explicit operator decision to proceed; it did not itself assert or fabricate a specific external client story. Design gate step 1 below (`DG-I`) is where the concrete transport/serialization/runtime-host choice — and any concrete driving client scenario the operator wanted to name — was pinned.
 
 ---
 
@@ -46,13 +66,13 @@ Application Service (C01-C05, ASS-01/ASS-02/ASS-03 -- already COMPLETE)
    C03 path)
 ```
 
-`J02` is `OPEN_DEFERABLE` in `CAPABILITY_DAG.md`: no transport protocol, serialization, pagination/streaming shape or runtime host is frozen yet, even though the Consumer API semantics it must carry (`C02`/`C03`) are already `FROZEN`/`COMPLETE`. `J04`, `J05` and `J06` are already `RESOLVED` at the decision level (thin-client semantics are settled: no quantitative or storage logic in any client) but `MISSING` at the implementation level. Wave 7 must therefore:
+At scope opening, `J02` was `OPEN_DEFERABLE` in `CAPABILITY_DAG.md`: no transport protocol, serialization, pagination/streaming shape or runtime host was frozen yet, even though the Consumer API semantics it must carry (`C02`/`C03`) were already `FROZEN`/`COMPLETE`. `J04`, `J05` and `J06` were already `RESOLVED` at the decision level (thin-client semantics are settled: no quantitative or storage logic in any client) but `MISSING` at the implementation level. Wave 7 therefore had to:
 
 1. resolve `J02`'s concrete transport/serialization/runtime-host choice, and the exact package-boundary shape for the transport runtime and for client code, through a design gate that produces an ADR;
 2. implement `J02` binding directly to the already-complete Application Service (`C02`/`C03`) without leaking quantitative business logic into the transport layer;
 3. implement `J04` (CLI), reusing the DAG's own permitted alternative of an explicitly bounded in-process `C03` path where that is simpler than waiting on `J02`;
 4. implement `J05` (TUI) and `J06` (App UI), both of which the DAG requires to go through `J02`;
-5. prove the full client round-trip against the real Application Service on bounded canonical evidence.
+5. prove the full client round-trip against the real Application Service on bounded canonical evidence, or explicitly close that proof item by operator exception at wave closeout.
 
 Wave 7 delivers atoms **`J02`**, **`J04`**, **`J05`** and **`J06`**. It does not deliver `J03` (job runtime — see Out of Scope), `J07` (paper/shadow trading), `J08` (live product mode), a second venue, or L1/L2/L3 market depth.
 
@@ -110,7 +130,7 @@ Wave 7 composes the existing, already-complete Application Service. It must not 
 
 | ID | Capability | Owner | Requires | Unlocks | Decision State | Target Impl State | Acceptance / Authority |
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **J02** | `Canonical API transport runtime v1` | API Runtime | `C03`, real client need (this scope) | `J04-J06` | OPEN_DEFERABLE → RESOLVED (this scope) | COMPLETE | Remote typed transport binding the Application Service without leaking quantitative/storage logic; exact protocol/serialization/runtime-host fixed by the design gate. |
+| **J02** | `Canonical API transport runtime v1` | API Runtime | `C03`, real client need (this scope) | `J04-J06` | RESOLVED | COMPLETE | Remote typed transport binding the Application Service without leaking quantitative/storage logic; exact protocol/serialization/runtime-host fixed by ADR-0050. |
 | **J04** | `Canonical CLI client v1` | Client Layer | `J02` OR explicitly bounded in-process `C03` | operator workflow | RESOLVED | COMPLETE | Thin command-line client; no quantitative/storage logic; may bypass `J02` via the DAG's own bounded in-process alternative. |
 | **J05** | `Terminal UI (TUI) operational client v1` | Client Layer | `J02` | interactive workflow | RESOLVED | COMPLETE | Thin terminal dashboard over `J02`; same canonical semantics as the CLI. |
 | **J06** | `App UI client v1 (Web/Desktop visualization)` | Client Layer | `J02` | product workflow | RESOLVED | COMPLETE | Thin interactive client over `J02`; business logic remains behind the service boundary. |
@@ -185,9 +205,11 @@ The repository rule of one bounded mutation slice at a time governs execution.
         |
         v
 6. Wave 7 Golden E2E Proof
-   - Prove a full client round-trip (at least one of J04/J05/J06) against the
-     real Application Service on bounded canonical evidence, with request/
-     response fidelity identical to a direct in-process C02/C03 call.
+   - Normally prove a full client round-trip (at least one of J04/J05/J06)
+     against the real Application Service on bounded canonical evidence, with
+     request/response fidelity identical to a direct in-process C02/C03 call.
+   - For this expedited closeout only, #222 is closed by explicit operator
+     exception without claiming a new Golden proof artifact.
         |
         v
 7. Wave 7 Governance Closeout
@@ -209,7 +231,7 @@ Wave 7 is complete only when all of the following are observably true:
 3. **Thin Clients**: `J04`/`J05`/`J06` each contain no business logic and correctly render/submit through their chosen path (`J02` or, for `J04` only, the bounded in-process alternative).
 4. **Package Boundary**: `tests/test_package_boundaries_v1.py` passes with every new owner registered and no forbidden dependency; no client package gains a domain-owner dependency.
 5. **Verification Gate**: `python tools/workflow.py preflight`, `python tools/check_markdown_links.py` and the relevant focused tests pass.
-6. **Golden Proof**: Wave 7 records a deterministic client-to-service round-trip proof with stable identities, on bounded canonical evidence.
+6. **Golden Proof**: Wave 7 normally records a deterministic client-to-service round-trip proof with stable identities, on bounded canonical evidence. For this exceptional closeout, this criterion is waived by explicit operator direction and no additional Golden proof artifact is claimed.
 
 ---
 

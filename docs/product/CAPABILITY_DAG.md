@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 6 Live Consumer Data Plane & Storage Lifecycle complete on `implement/wave-6`**.
+Status: **CANONICAL; Wave 7 API & Platform Transport complete on `implement/wave-7`**.
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,21 +10,21 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after Wave 6 closeout:
+Current audited inventory after Wave 7 closeout:
 
 ```text
 TOTAL_ATOMS                     = 87
 CLASSIFIED_ATOMS                = 87
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 73 / 87 = 83.9%
+SEMANTIC_FROZEN_OR_RESOLVED     = 74 / 87 = 85.1%
 OPEN_BLOCKING                   = 6
-OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 73 + 6 + 8 = 87
+OPEN_DEFERABLE                  = 7
+ROADMAP_DEFINED                 = 74 + 6 + 7 = 87
 ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         = 65 / 87 = 74.7%
+IMPLEMENTATION_COMPLETE         = 69 / 87 = 79.3%
 ```
 
-The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved atom proposition has a bounded activation rule. The 83.9% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, L1/L2/L3, RL, transport or unrelated operational semantics.
+The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved atom proposition has a bounded activation rule. The 85.1% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, L1/L2/L3, RL or unrelated operational semantics.
 
 The selected Live Ingest scope also carried one explicit **scope-level DG-B proposition** that is not a new atom and therefore is not included in the 87-atom counts: remediation of live gaps that exceed the bounded provider reconciliation window. It is now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110) -- see DG-B below -- and remains `OPEN_BLOCKING` as a standing rule for claiming any such gap filled/lossless, while A11/K10 are allowed to record the gap explicitly and continue with a new governed segment.
 
@@ -175,11 +175,11 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
 | J01 | Consumer API semantics | Application/API | D01 | C02,J02 | FROZEN | COMPLETE | Stable semantic selector/result/error boundary; ADR-0020 |
-| J02 | Canonical API transport | API Runtime | C03,real client need | J04-J06 | OPEN_DEFERABLE | MISSING | Preserve Consumer API semantics; transport intentionally deferred |
+| J02 | Canonical API transport | API Runtime | C03,real client need | J04-J06 | RESOLVED | COMPLETE | ADR-0050; HTTP JSON transport preserves Consumer API semantics without domain/storage logic |
 | J03 | Job runtime | Runtime | C03,I02 | long operations | OPEN_BLOCKING | MISSING | Durable identity/retry/result semantics; DG-G job branch |
-| J04 | CLI client | Client Layer | J02 or explicitly bounded in-process C03 | operator workflow | RESOLVED | MISSING | Thin client; no quantitative/storage logic |
-| J05 | TUI client | Client Layer | J02 | interactive workflow | RESOLVED | MISSING | Same canonical semantics |
-| J06 | App UI | Client Layer | J02 | product workflow | RESOLVED | MISSING | Business logic remains behind service boundary |
+| J04 | CLI client | Client Layer | J02 or explicitly bounded in-process C03 | operator workflow | RESOLVED | COMPLETE | Thin client; no quantitative/storage logic |
+| J05 | TUI client | Client Layer | J02 | interactive workflow | RESOLVED | COMPLETE | Same canonical semantics |
+| J06 | App UI | Client Layer | J02 | product workflow | RESOLVED | COMPLETE | Business logic remains behind service boundary |
 | J07 | Paper/shadow mode | Runtime | A11,H05,I05,J02,K03 | J08 | RESOLVED | MISSING | Same decisions, simulated routing, explicit evidence |
 | J08 | Live product mode | Runtime/Operations | J07,K02,K03,K05,K06,K08,K09,K10 | production | RESOLVED | MISSING | Explicit authorization/audit/recovery gates |
 
@@ -213,7 +213,7 @@ K08/A11/K02/K10 are now complete for the selected first live-ingest path, includ
 
 ## Decision gates
 
-There are now **14 unresolved atom decisions** (6 `OPEN_BLOCKING`, 8 `OPEN_DEFERABLE`) grouped into gate families. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
+There are now **13 unresolved atom decisions** (6 `OPEN_BLOCKING`, 7 `OPEN_DEFERABLE`) grouped into gate families. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
 
 A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path.
 
@@ -280,6 +280,15 @@ K02, K03, K05, K06, K08 and K10 are complete for the selected first Live Ingest 
 
 K07 tier relocation and K09 deletion authority are now `FROZEN` under ADR-0048/ADR-0049 and implementation `COMPLETE` via PR #209/#211, with bounded Golden coverage in PR #212. DG-H has no currently identified open atom after Wave 6 closeout.
 
+### DG-I — API transport / client convergence — RESOLVED / IMPLEMENTED
+
+`J02` canonical API transport is resolved by ADR-0050 and implementation
+`COMPLETE` in Wave 7. `J04` CLI, `J05` TUI and `J06` App UI are also
+implementation `COMPLETE` as thin clients over the accepted API/client
+boundary. Issue #222 was closed by explicit operator exception during expedited
+Wave 7 closeout, so this section does not claim an additional dedicated Golden
+E2E artifact beyond the merged slice evidence.
+
 ## Vertical milestones
 
 | ID | Path | Proposition | State |
@@ -292,21 +301,20 @@ K07 tier relocation and K09 deletion authority are now `FROZEN` under ADR-0048/A
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | COMPLETE (`F06` + `F07`) |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | COMPLETE (`G01`-`G04` + `H01`-`H05`; ADR-0045/ADR-0046; PR #161/#146 Golden PASS) |
 | V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | COMPLETE for bounded data-plane/storage lifecycle path under ADR-0043/ADR-0044/ADR-0047/ADR-0048/ADR-0049 and PR #212; broader live product gates remain open |
-| V9 | Application -> API -> Client | One application semantic implementation serves thin clients | APPLICATION SERVICE COMPLETE; transport deferred |
+| V9 | Application -> API -> Client | One application semantic implementation serves thin clients | COMPLETE for bounded HTTP JSON transport and thin clients; #222 exceptional Golden waiver |
 | V10 | Paper -> Live | Full canonical stack crosses explicit operational authorization gate | BLOCKED |
 
 ## Execution frontier
 
-Wave 6 Live Consumer Data Plane & Storage Lifecycle is closed on
-`implement/wave-6`: ADR-0047/0048/0049 and PR #204/#205/#208/#209/#211
-complete B06/D04/K07/K09, and PR #212 / issue #200 records Golden
-live-consumer + live-candle + storage-lifecycle E2E PASS on bounded canonical Bybit BTCUSDT
-evidence.
+Wave 7 API & Platform Transport is closed on `implement/wave-7`: ADR-0050 and
+PR #225/#226/#227/#228 complete J02/J04/J05/J06. Issue #222 was closed by
+explicit operator exception during expedited closeout, so this document does
+not claim an additional dedicated Golden E2E artifact.
 
 No new runtime/product frontier is selected by this document. The closeout does
-not activate H06, I06-I07, J02/J07/J08, RL, live broker execution, client work,
-second venue or L1/L2/L3 market depth. J07 remains `MISSING`; Wave 6 completes
-data-plane/storage prerequisites only.
+not activate H06, I06-I07, J07/J08, RL, live broker execution, second venue or
+L1/L2/L3 market depth. J07 remains `MISSING`; Wave 7 completes the bounded
+API/client path only.
 
 This is a **frontier, not concurrent authorization**. `SCOPE.md` records the
 closed scope and its exclusions.
@@ -382,7 +390,7 @@ Wave 3  Research / Validation                             COMPLETE (F01-F08; ADR
 Wave 4  Strategy / Replay                                 COMPLETE (G01-G04,H01-H05; V7 Golden PASS)
 Wave 5  Experiment / Supervised ML                       COMPLETE (I01-I05; Golden supervised E2E PASS)
 Wave 6  Live Data Plane                                   COMPLETE (B06,D04,K07,K09 plus credited K02,K03,K04,K05,K06,K08,K10,A10,A11,A16; Golden PASS)
-Wave 7  Runtime / Clients                                 J02 -> J04/J05/J06 when real client need exists
+Wave 7  Runtime / Clients                                 COMPLETE (J02 -> J04/J05/J06; exceptional Golden waiver)
 Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
 ```
 

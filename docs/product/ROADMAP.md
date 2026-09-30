@@ -68,6 +68,7 @@ K10 checkpoint / recovery v1                        COMPLETE (real restart proof
 Live Ingest Server Production Readiness v1          COMPLETE for first producer operating path
 Wave 4 Strategy / Replay                            COMPLETE (G01-G04,H01-H05; V7 Golden PASS)
 Wave 6 Live Consumer Data Plane & Storage Lifecycle COMPLETE (B06,D04,K07,K09; Golden PASS)
+Wave 7 API & Platform Transport v1              COMPLETE (J02,J04,J05,J06; exceptional Golden waiver)
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
@@ -93,12 +94,12 @@ Completed checkpoints are credited and must not be re-proved absent a concrete i
 TOTAL_ATOMS                     87
 CLASSIFIED_ATOMS                87
 UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     73 / 87 = 83.9%
+SEMANTIC_FROZEN_OR_RESOLVED     74 / 87 = 85.1%
 OPEN_BLOCKING                   6
-OPEN_DEFERABLE                  8
-ROADMAP_DEFINED                 73 + 6 + 8 = 87
+OPEN_DEFERABLE                  7
+ROADMAP_DEFINED                 74 + 6 + 7 = 87
 ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         65 / 87 = 74.7%
+IMPLEMENTATION_COMPLETE         69 / 87 = 79.3%
 ```
 
 The 100% planning score means every roadmap atom is classified. It does **not** mean every future semantic choice is frozen.
@@ -116,6 +117,7 @@ DG-E  Validation semantics                   RESOLVED / IMPLEMENTED
 DG-F  Strategy / Execution semantics                RESOLVED / IMPLEMENTED
 DG-G  Experiment / RL / Jobs
 DG-H  Operational safety
+DG-I  API transport / client convergence        RESOLVED / IMPLEMENTED
 ```
 
 Important current boundaries:
@@ -129,7 +131,7 @@ Important current boundaries:
 - DG-G: the supervised branch I03/I04/I05 is implementation-complete and Golden-proven by Wave 5; remaining unresolved branches are I06 strategic RL, I07 execution RL and J03 job runtime.
 - DG-H: K02/K03/K04/K05/K06/K07/K08/K09/K10 are complete, including K10's real restart proof (PR #122), the supervised live-ingest server operating path proof, and the Wave 6 storage lifecycle proof.
 
-Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension, multi-asset execution and concrete API transport — remain open until their evidence trigger exists.
+Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension and multi-asset execution — remain open until their evidence trigger exists. Concrete API transport was resolved by ADR-0050 in Wave 7.
 
 ## Operational dependency direction
 
@@ -153,7 +155,7 @@ V5  Feature -> Research                                  COMPLETE
 V6  Research -> Validation                               COMPLETE
 V7  Strategy -> deterministic Replay                     COMPLETE
 V8  Historical -> Live                                   COMPLETE for the bounded data-plane/storage lifecycle path; broader live product gates remain open
-V9  Application -> API -> Client                         application service complete; transport deferred
+V9  Application -> API -> Client                         COMPLETE for bounded HTTP JSON transport and thin clients
 V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
 ```
 
@@ -161,16 +163,15 @@ V8 is complete for the bounded data-plane/storage lifecycle path selected throug
 
 ## Current execution frontier
 
-Wave 6 Live Consumer Data Plane & Storage Lifecycle is closed on
-`implement/wave-6`: ADR-0047/0048/0049 and PR #204/#205/#208/#209/#211
-complete B06/D04/K07/K09, and PR #212 / issue #200 records Golden
-live-consumer + live-candle + storage-lifecycle E2E PASS on bounded canonical Bybit BTCUSDT
-evidence.
+Wave 7 API & Platform Transport is closed on `implement/wave-7`: ADR-0050 and
+PR #225/#226/#227/#228 complete J02/J04/J05/J06. Issue #222 was closed by
+explicit operator exception during expedited closeout, so this roadmap state
+does not claim an additional dedicated Golden E2E artifact.
 
 No new runtime/product frontier is selected by this closeout. H06, I06-I07,
-J02/J07/J08, RL, live broker execution, client work, second venue and L1/L2/L3
-market depth remain outside this governance closeout. J07 remains `MISSING`;
-Wave 6 completes data-plane/storage prerequisites only.
+J07/J08, RL, live broker execution, second venue and L1/L2/L3 market depth
+remain outside this governance closeout. J07 remains `MISSING`; Wave 7 completes
+the bounded API/client path only.
 
 Roadmap state is still **not concurrent authorization**.
 
@@ -186,7 +187,7 @@ Wave 3  Research / Validation                             COMPLETE
 Wave 4  Strategy / Replay                                 COMPLETE
 Wave 5  Experiment / Supervised ML                       COMPLETE (I01-I05; Golden supervised E2E PASS)
 Wave 6  Live Data Plane                                   COMPLETE (B06,D04,K07,K09 plus credited K02,K03,K04,K05,K06,K08,K10,A10,A11,A16; Golden PASS)
-Wave 7  Runtime / Clients                                 J02 -> thin clients when real client need exists
+Wave 7  Runtime / Clients                                 COMPLETE (J02 -> J04/J05/J06; exceptional Golden waiver)
 Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates
 ```
 
