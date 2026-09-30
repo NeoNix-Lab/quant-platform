@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src"
 TOOLS = ROOT / "tools"
 TESTS = ROOT / "tests"
+CLIENTS = ROOT / "clients"
 OWNERS = {
     "quant_platform": "shared",
     "quant_platform.ordering": "shared",
@@ -310,6 +311,26 @@ def imported_targets(source, filename):
     return targets
 
 
+def client_inventory():
+    if not CLIENTS.exists():
+        return {}
+    return {
+        path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(CLIENTS.rglob("*.py"))
+    }
+
+
+def client_import_violations(clients):
+    errors = []
+    for filename, source in clients.items():
+        for target, line in imported_targets(source, filename):
+            if target.split(".")[0] == "quant_platform":
+                errors.append(f"{filename}:{line}: remote client imports repository runtime -> {target}")
+            if target.startswith(DYNAMIC_CODE_TARGET) or target.split(".")[0] == "importlib":
+                errors.append(f"{filename}:{line}: remote client uses dynamic import machinery -> {target}")
+    return errors
+
+
 def prohibited_script_edges(scripts, layers):
     """Return the exact tool-to-domain and tool-to-tests edges needing debt."""
     domain_edges = set()
@@ -453,6 +474,11 @@ class PackageBoundaryTests(unittest.TestCase):
 
     def test_executable_orchestration_respects_the_application_seam(self):
         self.assertEqual([], script_violations(script_inventory(), script_layers()))
+
+    def test_remote_clients_do_not_import_quant_platform_runtime(self):
+        clients = client_inventory()
+        self.assertIn("clients/tui/market_data_tui.py", clients)
+        self.assertEqual([], client_import_violations(clients))
 
     def test_migration_ledgers_describe_real_unmigrated_modules(self):
         scripts = script_inventory()
