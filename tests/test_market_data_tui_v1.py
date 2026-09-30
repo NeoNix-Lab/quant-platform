@@ -87,6 +87,16 @@ class FakeConnect:
         return json.dumps(self.response)
 
 
+class FailingConnect:
+    def __init__(self, exc):
+        self.exc = exc
+        self.url = None
+
+    def __call__(self, url):
+        self.url = url
+        raise self.exc
+
+
 class MarketDataTuiTests(unittest.TestCase):
     def test_build_request_is_the_j02_consumer_query_shape(self):
         request = market_data_tui.build_request(market_data_tui.build_parser().parse_args(args()))
@@ -142,6 +152,21 @@ class MarketDataTuiTests(unittest.TestCase):
         self.assertIn("error_code=no_coverage", screen)
         self.assertIn("message=the requested interval is not fully covered", screen)
         self.assertIn('context={"interval":"missing"}', screen)
+
+    def test_unreachable_transport_renders_clean_operational_error(self):
+        connector = FailingConnect(ConnectionRefusedError("server refused connection"))
+        stdout = io.StringIO()
+
+        code = market_data_tui.run_market_data_tui(args(), connect=connector, stdout=stdout)
+
+        self.assertEqual(2, code)
+        self.assertEqual("ws://127.0.0.1:8765", connector.url)
+        screen = stdout.getvalue()
+        self.assertIn("status=error", screen)
+        self.assertIn("error_code=connection_failed", screen)
+        self.assertIn("message=unable to reach J02 transport", screen)
+        self.assertIn('"exception_type":"ConnectionRefusedError"', screen)
+        self.assertIn('"url":"ws://127.0.0.1:8765"', screen)
 
 
 if __name__ == "__main__":

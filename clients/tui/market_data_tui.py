@@ -60,9 +60,12 @@ async def fetch_j02_response(
     *,
     connect: Callable[..., Any] = websockets.connect,
 ) -> dict[str, Any]:
-    async with connect(url) as websocket:
-        await websocket.send(json.dumps(dict(request), sort_keys=True, separators=(",", ":")))
-        response = json.loads(await websocket.recv())
+    try:
+        async with connect(url) as websocket:
+            await websocket.send(json.dumps(dict(request), sort_keys=True, separators=(",", ":")))
+            response = json.loads(await websocket.recv())
+    except _connection_exception_types() as exc:
+        return _transport_error_response(url, request, exc)
     if not isinstance(response, dict):
         raise ValueError("J02 response must be a JSON object")
     return response
@@ -128,6 +131,36 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 
 def _sequence(value: Any) -> Sequence[Any]:
     return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)) else ()
+
+
+def _connection_exception_types() -> tuple[type[BaseException], ...]:
+    exception_types: list[type[BaseException]] = [OSError, TimeoutError]
+    websockets_exception = getattr(getattr(websockets, "exceptions", None), "WebSocketException", None)
+    if isinstance(websockets_exception, type) and issubclass(websockets_exception, BaseException):
+        exception_types.append(websockets_exception)
+    return tuple(exception_types)
+
+
+def _transport_error_response(
+    url: str,
+    request: Mapping[str, Any],
+    exc: BaseException,
+) -> dict[str, Any]:
+    return {
+        "schema_version": J02_RESPONSE_SCHEMA_VERSION,
+        "request_id": request.get("request_id"),
+        "status": "error",
+        "error": {
+            "code": "connection_failed",
+            "message": "unable to reach J02 transport",
+            "context": {
+                "url": url,
+                "reason": str(exc),
+                "exception_type": type(exc).__name__,
+            },
+            "request_identity": None,
+        },
+    }
 
 
 def _table(rows: Sequence[Any], *, max_rows: int) -> str:
