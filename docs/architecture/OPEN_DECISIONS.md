@@ -452,9 +452,14 @@ Wait for a real second provider/capability need; no generic plugin framework now
 
 Wait for explicit multi-asset product scope.
 
-### Canonical API transport (`J02`)
+### Canonical API transport (`J02`) — RESOLVED
 
-Consumer API semantics are already frozen. Concrete HTTP/gRPC/Arrow Flight/WebSocket/other transport, serialization, pagination/streaming and runtime host remain deferred until a real remote/client need exists.
+Consumer API semantics are already frozen. ADR-0050 resolves the bounded Wave 7
+transport choice as HTTP JSON over the existing Application-owned Consumer API
+surface. J02/J04/J05/J06 are complete for that bounded API/client path. This
+does not activate J03, J07, J08, broker/live execution, second venue, market
+depth branches or any product runtime beyond the accepted transport/client
+boundary.
 
 ### Paper/shadow and live product runtime (`J07`,`J08`)
 

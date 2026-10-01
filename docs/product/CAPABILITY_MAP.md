@@ -76,11 +76,11 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | RL | Strategic RL contract | OPEN_BLOCKING | MISSING | Strategic RL | I06 | DG-G strategic-RL branch. |
 | RL | Execution RL contract | OPEN_BLOCKING | MISSING | Execution RL | I07 | DG-G execution-RL branch; structurally separate from strategic RL. |
 | Interfaces | Consumer API semantic boundary | FROZEN | COMPLETE | Application/API | J01 | ADR-0020; semantic API is not a DataGateway wrapper and does not imply transport runtime. |
-| Interfaces | Canonical API transport | OPEN_DEFERABLE | MISSING | API Runtime | J02 | Triggered by real remote/client need. |
+| Interfaces | Canonical API transport | RESOLVED | COMPLETE | API Runtime | J02 | ADR-0050; HTTP JSON transport over the frozen Consumer API semantics, implemented in Wave 7. |
 | Runtime | Job runtime | OPEN_BLOCKING | MISSING | Runtime | J03 | DG-G job branch; durable identity/retry/result semantics. |
-| Clients | CLI | RESOLVED | MISSING | Client Layer | J04 | Thin canonical client. |
-| Clients | TUI | RESOLVED | MISSING | Client Layer | J05 | Thin canonical client. |
-| Clients | App UI | RESOLVED | MISSING | Client Layer | J06 | Thin canonical client. |
+| Clients | CLI | RESOLVED | COMPLETE | Client Layer | J04 | Thin canonical CLI client integrated in Wave 7. |
+| Clients | TUI | RESOLVED | COMPLETE | Client Layer | J05 | Thin canonical TUI client integrated in Wave 7. |
+| Clients | App UI | RESOLVED | COMPLETE | Client Layer | J06 | Thin canonical App UI client integrated in Wave 7. |
 | Runtime | Paper/shadow mode | RESOLVED | MISSING | Runtime | J07 | Vertical gate before live operation. |
 | Runtime | Live product mode | RESOLVED | MISSING | Runtime/Operations | J08 | Requires explicit operational authorization; roadmap state is not authorization. |
 | Operations | Provisioning/fixtures/CI | RESOLVED | COMPLETE | Engineering | K01 | Repository validation foundation complete. |
@@ -129,18 +129,19 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Wave 4 Strategy / Replay | COMPLETE | `G01`-`G04` and `H01`-`H05` integrated; G04/H03 frozen by ADR-0045/ADR-0046; PR #161 / issue #146 records Golden V7 deterministic replay PASS. |
 | Wave 5 Experiment / Supervised ML | COMPLETE | I03/I04/I05 integrated by PR #178/#177/#179; PR #180 / issue #174 records Golden supervised E2E PASS with stable projection, run, metric and artifact identities. |
 | Wave 6 Live Consumer Data Plane & Storage Lifecycle | COMPLETE | B06/D04/K07/K09 are frozen and implemented by ADR-0047/0048/0049, PR #204/#205/#208/#209/#211, and Golden proof PR #212. |
+| Wave 7 API & Platform Transport | COMPLETE | J02/J04/J05/J06 are implemented by ADR-0050 and PR #225/#226/#227/#228. Issue #222 is closed by explicit operator exception without claiming an additional Golden proof artifact. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
 
 ## Current frontier
 
-Wave 6 Live Consumer Data Plane & Storage Lifecycle is closed on `implement/wave-6`: ADR-0047/0048/0049 and PR #204/#205/#208/#209/#211 complete B06/D04/K07/K09, and PR #212 / issue #200 records Golden live-consumer + live-candle + storage-lifecycle E2E PASS on bounded canonical Bybit BTCUSDT evidence.
+Wave 7 API & Platform Transport is closed on `implement/wave-7`: ADR-0050 and PR #225/#226/#227/#228 complete J02/J04/J05/J06. Issue #222 was closed by explicit operator exception during expedited closeout, so this state does not claim an additional dedicated Golden E2E artifact.
 
 The DG-B long-gap remediation proposition remains disposed `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` (#110): A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval filled/lossless until an authoritative repair source/path proves the missing support. ADR-0044 carries this forward as accepted fail-closed behavior rather than reopening DG-B.
 
-DG-B has no remaining B06 atom blocker after Wave 6; its only still-disposed proposition is issue #110's long-gap remediation rule. DG-H has no currently identified open atom after K07/K09 completion. DG-G remains open only for I06, I07 and J03; J07 remains missing and is not implemented by the Wave 6 closeout.
+DG-B has no remaining B06 atom blocker after Wave 6; its only still-disposed proposition is issue #110's long-gap remediation rule. DG-H has no currently identified open atom after K07/K09 completion. DG-G remains open only for I06, I07 and J03. DG-I is resolved by Wave 7. J07 remains missing and is not implemented by the Wave 7 closeout.
 
-No new runtime/product frontier is selected by this closeout. J02, J07, J08, clients, RL, broker/live execution, second venue and L1/L2/L3 market depth remain outside the completed Wave 6 scope. Frontier/readiness state is **not concurrent implementation authorization**.
+No new runtime/product frontier is selected by this closeout. J07, J08, RL, broker/live execution, second venue and L1/L2/L3 market depth remain outside the completed Wave 7 scope. Frontier/readiness state is **not concurrent implementation authorization**.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.
