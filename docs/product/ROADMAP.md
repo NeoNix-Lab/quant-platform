@@ -188,10 +188,50 @@ Wave 4  Strategy / Replay                                 COMPLETE
 Wave 5  Experiment / Supervised ML                       COMPLETE (I01-I05; Golden supervised E2E PASS)
 Wave 6  Live Data Plane                                   COMPLETE (B06,D04,K07,K09 plus credited K02,K03,K04,K05,K06,K08,K10,A10,A11,A16; Golden PASS)
 Wave 7  Runtime / Clients                                 COMPLETE (J02 -> J04/J05/J06; exceptional Golden waiver)
-Wave 8  Paper / Live product                             J07 -> J08 after required data/execution/ops gates
+Wave 8  Full Platform API & Client Completeness v1        Strategy/Replay/Validation/Training exposed through
+                                                           Consumer-API-equivalent seams and carried over J02;
+                                                           J04/J05/J06 extended to reach them
+Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL; harvest-audit
+                                                           evidence sources: ml_core (already the Wave 5 legacy
+                                                           baseline), JJJerome/mbt_gym, sadighian/crypto-rl
+Wave 10 Paper / Live product                              J07 -> J08 after required data/execution/ops gates;
+                                                           implementation intends to draw architectural
+                                                           inspiration from nautilus_trader as read-only
+                                                           reference evidence only, never a runtime dependency
 ```
 
 The earlier closed Live Ingest scope was a bounded path through part of Wave 6, not authorization to implement Wave 6 generally. Wave 6 itself is now complete only for the bounded live data-plane/storage lifecycle path described above.
+
+### Post-Wave-7 sequencing: "platform v1.0"
+
+Waves 0-7 are the accepted foundation: canonical data plane, representation,
+research/validation, strategy/replay, supervised ML, live consumer data plane
+and storage lifecycle, and now API transport with thin clients. The operator
+has set an explicit priority order for what comes next, driven by usability
+of what is already built rather than by new capability breadth:
+
+1. **Wave 8 first** — the already-complete Strategy/Replay/Validation/
+   Training engines (Waves 2-5) are only reachable today by writing a Python
+   script against the domain packages directly; there is no Consumer API or
+   client path for any of them. Wave 8 closes that gap the same way Wave 7
+   closed it for market data: a `C02`/`C03`-equivalent seam per domain,
+   carried over the existing J02 transport, reachable from J04/J05/J06.
+2. **Wave 9 second** — `I06`/`I07` remain `OPEN_BLOCKING` under `DG-G` and are
+   independent of Waves 8 and 10 in the capability DAG; a legacy-harvest audit
+   against `ml_core`, `JJJerome/mbt_gym` and `sadighian/crypto-rl` precedes any
+   implementation issue, following the same disposition discipline
+   `ADOPTION_LEDGER.md` already established for Wave 5's supervised-ML harvest.
+3. **Wave 10 last** — `J07`'s own DAG dependencies (`A11`, `H05`, `I05`, `J02`,
+   `K03`) are already satisfied, so it could technically start earlier; it is
+   deliberately sequenced last because it delivers a new capability rather
+   than unlocking use of ones already built. `nautilus_trader` is noted here
+   as the intended architectural reference for this wave's eventual design
+   gate, under the same read-only-evidence discipline as every other
+   third-party/legacy reference this repository has used.
+
+This is a priority order, not authorization: each wave still requires its own
+`SCOPE.md` and, where a decision remains open, its own design gate before any
+implementation issue may start.
 
 ## Producer / storage interpretation
 
