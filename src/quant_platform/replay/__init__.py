@@ -54,6 +54,16 @@ class ReplayError(Exception):
     """Base class for deterministic replay failures."""
 
 
+# ADR-0053: this runtime inherits translate_intent's stateless, per-tick
+# admission behavior verbatim and adds no entry gating of its own -- a
+# feature_provider that keeps an entry signal True across consecutive ticks
+# (rather than True only on the tick the condition first becomes true) will
+# pyramid, admitting one full-size order per tick, not one order total. The
+# ledger is already in scope here (used for risk snapshots and FLAT-side
+# close instructions) but is deliberately not consulted to no-op a repeated
+# entry -- debouncing "is this still the same entry condition" requires
+# knowing the signal's own semantics, which only feature_provider's author
+# has; see ADR-0053 for the full reasoning.
 FeatureProvider = Callable[[TradeRecord, "ReplayContext"], Iterable[StrategyInput]]
 
 
@@ -227,7 +237,15 @@ class ReplayResult:
 
 @dataclass(frozen=True, slots=True)
 class HistoricalReplayRuntime:
-    """H05 runtime that composes DataGateway, Strategy, Execution and Ledger."""
+    """H05 runtime that composes DataGateway, Strategy, Execution and Ledger.
+
+    Pyramiding warning (ADR-0053): ``feature_provider`` is responsible for not
+    re-asserting an entry signal across ticks it does not intend as a new
+    entry. This runtime holds a live ``PortfolioLedger`` and uses it for risk
+    snapshots and FLAT-side close instructions, but does not use it to
+    recognise "already at this target" for LONG/SHORT entries -- a persistent
+    entry signal admits one full-size order per tick, not one order total.
+    """
 
     gateway: Any
     feature_provider: FeatureProvider
