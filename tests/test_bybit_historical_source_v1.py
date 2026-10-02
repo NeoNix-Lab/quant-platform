@@ -558,6 +558,22 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
         }
         self.assertEqual(immutable_owners, {"open_bybit_historical_legacy_source"})
 
+    def _skip_if_process_ignores_directory_mode(self, directory):
+        # A privileged process (root, CAP_DAC_OVERRIDE) writes into a
+        # chmod-ed read-only directory, so the deployed read-only archive
+        # condition cannot be modelled. Probe the real capability instead of
+        # trusting the mode bits, and skip with a stated reason.
+        probe = directory / ".writability-probe"
+        try:
+            probe.touch()
+        except OSError:
+            return
+        probe.unlink()
+        self.skipTest(
+            "process can write into a chmod-ed read-only directory "
+            "(privileged user); the read-only archive precondition cannot be modelled"
+        )
+
     @unittest.skipIf(
         os.name == "nt",
         "models deployed POSIX directory permissions; Windows is development-only",
@@ -579,6 +595,7 @@ class BybitHistoricalLegacySourceAccessTest(unittest.TestCase):
             directory.chmod(original_mode & ~0o222)
             try:
                 self.assertEqual(stat.S_IMODE(directory.stat().st_mode) & 0o222, 0)
+                self._skip_if_process_ignores_directory_mode(directory)
                 with self.assertRaises(BybitHistoricalSourceError) as ordinary_failure:
                     connection = open_bybit_historical_source(database)
                     try:

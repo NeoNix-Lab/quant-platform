@@ -110,7 +110,7 @@ class PressurePolicyDefinition:
                 raise PressurePolicyError(
                     "enabled time-to-full requires rate freshness and pressure/critical thresholds"
                 )
-            rate_age_us = _timedelta_us(
+            _timedelta_us(
                 self.max_rate_observation_age,
                 "max_rate_observation_age",
                 allow_zero=True,

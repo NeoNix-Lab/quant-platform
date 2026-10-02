@@ -29,14 +29,13 @@ a silently dropped record.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
 
 from quant_platform.application.bybit_live import RealServerRestartProofReport
-from quant_platform.data.manifests import ManifestEmission, emit_coverage_manifest
+from quant_platform.data.manifests import emit_coverage_manifest
 from quant_platform.data.models import Instant
 from quant_platform.source_adapters.bybit_live import (
     BYBIT_RECENT_PUBLIC_TRADES_MAPPING_V1,

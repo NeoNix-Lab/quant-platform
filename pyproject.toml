@@ -13,5 +13,38 @@ dependencies = [
   "websockets>=12",
 ]
 
+[project.optional-dependencies]
+# Everything the local suite needs beyond the runtime dependencies.
+# tests/requirements.txt mirrors runtime + this extra for CI; a unit test
+# keeps the two in sync.
+test = [
+  "jsonschema>=4.19",
+  "rfc3339-validator>=0.1.4",
+]
+dev = [
+  "quant-platform[test]",
+  "ruff>=0.16,<0.17",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# The suite is executed as scripts by tools/run_tests.py (the CI authority);
+# this only lets `pytest` collect the same files from the repository root.
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+src = ["src", "tools", "tests"]
+
+[tool.ruff.lint]
+# Explicit, version-independent baseline: syntax errors, pyflakes and the
+# import/statement pycodestyle checks. ruff's built-in default rule set grows
+# between releases, so it is not used as a gate. Widening this list is the
+# ratchet: add a rule family only once its count in `src tools` is zero.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixture generator: terse module-level emit shorthands, output is frozen.
+"tools/genfixtures.py" = ["E731"]

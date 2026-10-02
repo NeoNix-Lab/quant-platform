@@ -131,10 +131,12 @@ quant-platform/
 git clone https://github.com/NeoNix-Lab/quant-platform.git
 cd quant-platform
 
-# Create virtual environment and install test dependencies
+# Create virtual environment and install development dependencies
+# (runtime + test extra + linter, all declared in pyproject.toml)
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\Activate.ps1
-pip install -r tests/requirements.txt
+pip install -e ".[dev]"
+# CI installs the equivalent set from tests/requirements.txt (kept in sync by a test)
 ```
 
 ### Running Verification Checks
