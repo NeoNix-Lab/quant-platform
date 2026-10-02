@@ -285,6 +285,42 @@ class ResultTooLargeTests(unittest.TestCase):
         result = execute_market_data_query(query(), gateway=covered_gateway(self.batches()))
         self.assertEqual(3, result.row_count)
 
+    def test_oversized_query_stops_reading_as_soon_as_the_bound_is_exceeded(self):
+        """Review-caught blocker: the first version of this fix only refused to
+        *return* an oversized result after the scan had already been fully
+        drained -- it did not bound the read itself, so a pathologically large
+        query still cost a full unbounded scan. Proven here by counting the
+        actual batches pulled from the source reader, not just the outcome."""
+        reader = FakeBatchReader({
+            LEFT_PATH: [
+                (trade("2024-01-01T00:10:00Z", "1"),),
+                (trade("2024-01-01T00:11:00Z", "2"),),
+            ],
+            RIGHT_PATH: [
+                (trade("2024-01-01T01:10:00Z", "3"),),
+                (trade("2024-01-01T01:11:00Z", "4"),),
+            ],
+        })
+        instance = DataGateway(
+            FakeCatalog([LEFT, RIGHT]),
+            batch_reader=reader,
+            path_resolver=lambda _root, _dataset_root, rel_path: rel_path,
+            ordering_providers=(BYBIT_ORDERING_PROVIDER,),
+        )
+
+        with self.assertRaises(ConsumerApiError) as caught:
+            execute_market_data_query(query(), gateway=instance, batch_size=1, max_result_rows=1)
+
+        self.assertEqual(ConsumerErrorCode.RESULT_TOO_LARGE, caught.exception.code)
+        self.assertEqual("2", caught.exception.context["row_count"])
+        # Exactly 2 of the 4 available batches were pulled (one to reach the
+        # bound, one more to exceed it) -- RIGHT_PATH's reader was never even
+        # opened (reader.calls records one call per path, regardless of how
+        # many batches that path's generator ultimately yields).
+        self.assertEqual([(LEFT_PATH, 0), (LEFT_PATH, 1)], reader.yields)
+        self.assertEqual(1, len(reader.calls))
+        self.assertEqual(LEFT_PATH, reader.calls[0][0])
+
 
 class CoverageRefusalTests(unittest.TestCase):
     def test_incomplete_strict_coverage_is_no_coverage_not_an_empty_success(self):

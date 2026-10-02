@@ -413,6 +413,25 @@ def execute_market_data_query(
         # below this layer and a future batch surface stays available.
         for batch in scan:
             records.extend(batch)
+            if len(records) > max_result_rows:
+                # Stop reading as soon as the bound is exceeded instead of
+                # draining every remaining batch first: DataScan supports this
+                # explicitly (close() aborts without manufacturing final
+                # provenance), so a pathologically large query costs at most
+                # one batch beyond the bound, not an unbounded full scan.
+                scan.close()
+                raise ConsumerApiError(
+                    ConsumerErrorCode.RESULT_TOO_LARGE,
+                    _MESSAGES[ConsumerErrorCode.RESULT_TOO_LARGE],
+                    context={
+                        "row_count": str(len(records)),
+                        "max_result_rows": str(max_result_rows),
+                        "requested_interval": CoverageInterval(
+                            normalized.start, normalized.end
+                        ).stable_dict(),
+                    },
+                    request_identity=request_identity,
+                )
         metadata = scan.completed_metadata
     except DataGatewayError as exc:
         raise _gateway_phase_error(normalized, request_identity, exc) from exc
@@ -421,18 +440,6 @@ def execute_market_data_query(
         raise ConsumerApiError(
             ConsumerErrorCode.INTEGRITY_FAILURE,
             _MESSAGES[ConsumerErrorCode.INTEGRITY_FAILURE],
-            request_identity=request_identity,
-        )
-
-    if len(records) > max_result_rows:
-        raise ConsumerApiError(
-            ConsumerErrorCode.RESULT_TOO_LARGE,
-            _MESSAGES[ConsumerErrorCode.RESULT_TOO_LARGE],
-            context={
-                "row_count": str(len(records)),
-                "max_result_rows": str(max_result_rows),
-                "requested_interval": CoverageInterval(normalized.start, normalized.end).stable_dict(),
-            },
             request_identity=request_identity,
         )
 
