@@ -293,10 +293,17 @@ def _source_shape_check(config: HarnessConfig, target: Target | None) -> Check:
 
 
 # The historical day-extract query (DAY_EXTRACT_SELECT_SQL) needs exactly
-# this index to avoid a full table scan on a multi-GB SQLite archive (#248):
-# equality columns first (category, symbol), then the range column
-# (trade_time_ms), then the ORDER BY tie-break column (trade_id) so the index
-# alone can also satisfy the sort.
+# this index to avoid a full table scan -- or an equally unbounded temporary
+# sort -- on a multi-GB SQLite archive (#248): equality columns first
+# (category, symbol), then the range column (trade_time_ms), then the
+# ORDER BY tie-break column (trade_id) so the index alone also satisfies the
+# sort. A partial prefix of this index (e.g. just (category, symbol), or
+# (category, symbol, trade_time_ms)) still reports a plan free of "SCAN", but
+# leaves either the range filter or the final sort unindexed -- still
+# effectively unbounded work on a multi-GB archive. This is not, strictly, a
+# SQLite "covering index" (the SELECT also reads trade_time_utc, side, size,
+# price), just the index required to keep this query's range filter and sort
+# both index-satisfied.
 REQUIRED_HISTORICAL_INDEX_COLUMNS = ("category", "symbol", "trade_time_ms", "trade_id")
 
 
@@ -329,11 +336,25 @@ def _query_plan_check(config: HarnessConfig, target: Target | None) -> Check:
         if connection is not None:
             connection.close()
     plan = "; ".join(str(row[-1]) for row in rows)
-    if any(str(row[-1]).strip().upper().startswith("SCAN") for row in rows):
+    details = tuple(str(row[-1]) for row in rows)
+    scans = any(detail.strip().upper().startswith("SCAN") for detail in details)
+    needs_temp_sort = any("TEMP B-TREE" in detail.upper() for detail in details)
+    range_indexed = any(
+        "TRADE_TIME_MS>" in detail.upper() and "TRADE_TIME_MS<" in detail.upper()
+        for detail in details
+    )
+    if scans or needs_temp_sort or not range_indexed:
+        reason = (
+            "a full table SCAN"
+            if scans
+            else "an unindexed sort (USE TEMP B-TREE)"
+            if needs_temp_sort
+            else "an index that does not cover the trade_time_ms range filter"
+        )
         return Check(
             "index",
             False,
-            "query plan uses a full table SCAN instead of a covering index; "
+            f"query plan uses {reason} instead of the required range/order index; "
             f"create one on trades{REQUIRED_HISTORICAL_INDEX_COLUMNS}: {plan}",
         )
     return Check("index", True, plan)

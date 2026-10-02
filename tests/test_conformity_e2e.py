@@ -58,7 +58,7 @@ def _config(
     )
 
 
-def _make_source(path: Path, *, indexed: bool = True) -> None:
+def _make_source(path: Path, *, indexed: bool = True, index_columns: tuple[str, ...] | None = None) -> None:
     connection = sqlite3.connect(path)
     try:
         connection.execute(
@@ -66,9 +66,9 @@ def _make_source(path: Path, *, indexed: bool = True) -> None:
             "trade_time_ms INTEGER, trade_time_utc TEXT, side TEXT, size TEXT, price TEXT)"
         )
         if indexed:
+            columns = index_columns or ("category", "symbol", "trade_time_ms", "trade_id")
             connection.execute(
-                "CREATE INDEX idx_trades_cover ON trades"
-                "(category, symbol, trade_time_ms, trade_id)"
+                f"CREATE INDEX idx_trades_cover ON trades({', '.join(columns)})"
             )
         connection.commit()
     finally:
@@ -1079,7 +1079,12 @@ class ConformityE2ETest(unittest.TestCase):
 
 class HistoricalQueryPlanCheckTest(unittest.TestCase):
     """Regression coverage for #248 (I1): the day-extract query against a
-    multi-GB SQLite archive must use a covering index, not a full table scan."""
+    multi-GB SQLite archive must use an index that satisfies both the
+    trade_time_ms range filter and the ORDER BY -- not a full table scan,
+    and not a partial index that still leaves an unbounded temporary sort
+    or an unindexed range filter (caught in review: a (category, symbol)-only
+    or (category, symbol, trade_time_ms)-only index reports no SCAN but is
+    still effectively unbounded work on a multi-GB archive)."""
 
     def test_indexed_archive_reports_a_search_not_a_scan(self):
         with tempfile.TemporaryDirectory() as holder:
@@ -1112,6 +1117,45 @@ class HistoricalQueryPlanCheckTest(unittest.TestCase):
             self.assertIn("SCAN", index_check.detail)
             for column in app_harness.REQUIRED_HISTORICAL_INDEX_COLUMNS:
                 self.assertIn(column, index_check.detail)
+
+    def test_equality_only_partial_index_still_fails_preflight(self):
+        """A (category, symbol) index reports SEARCH, not SCAN, but leaves the
+        trade_time_ms range filter and the full sort unindexed -- still
+        effectively unbounded work on a multi-GB archive."""
+        with tempfile.TemporaryDirectory() as holder:
+            root = Path(holder)
+            source = root / "source.sqlite"
+            _make_source(source, indexed=True, index_columns=("category", "symbol"))
+            config = _config(root / "storage", source)
+            config.storage_root.mkdir()
+            with _preflight_dependencies():
+                result = harness.collect_preflight(config)
+
+            self.assertFalse(result.passed)
+            index_check = next(check for check in result.checks if check.name == "index")
+            self.assertFalse(index_check.passed)
+            self.assertNotIn("SCAN", index_check.detail)
+            self.assertIn("TEMP B-TREE", index_check.detail.upper())
+
+    def test_range_only_partial_index_still_fails_preflight(self):
+        """A (category, symbol, trade_time_ms) index covers the range filter
+        but still needs a temporary sort for the trade_id tie-break --
+        rejected the same as the equality-only partial index."""
+        with tempfile.TemporaryDirectory() as holder:
+            root = Path(holder)
+            source = root / "source.sqlite"
+            _make_source(
+                source, indexed=True, index_columns=("category", "symbol", "trade_time_ms")
+            )
+            config = _config(root / "storage", source)
+            config.storage_root.mkdir()
+            with _preflight_dependencies():
+                result = harness.collect_preflight(config)
+
+            self.assertFalse(result.passed)
+            index_check = next(check for check in result.checks if check.name == "index")
+            self.assertFalse(index_check.passed)
+            self.assertIn("TEMP B-TREE", index_check.detail.upper())
 
     def test_legacy_source_flag_routes_the_query_plan_check_to_the_legacy_opener(self):
         with tempfile.TemporaryDirectory() as holder:

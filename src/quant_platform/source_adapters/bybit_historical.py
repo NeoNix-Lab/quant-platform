@@ -32,11 +32,12 @@ _UTC_RE = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})"
     r"(?:\.(\d{1,9}))?Z$"
 )
-# The exact day-extract query shape. A covering index on
-# trades(category, symbol, trade_time_ms, trade_id) is required to avoid a
-# full table scan on a multi-GB archive (see #248). Exported so the preflight
-# query-plan check runs against this literal text, not a hand-copied one that
-# could silently drift.
+# The exact day-extract query shape. An index on
+# trades(category, symbol, trade_time_ms, trade_id) is required so both the
+# range filter and the ORDER BY are index-satisfied -- otherwise a multi-GB
+# archive pays for a full table scan or an unbounded temporary sort (see
+# #248). Exported so the preflight query-plan check runs against this literal
+# text, not a hand-copied one that could silently drift.
 DAY_EXTRACT_SELECT_SQL = """
 SELECT category, symbol, trade_id, trade_time_ms, trade_time_utc, side, size, price
   FROM trades
