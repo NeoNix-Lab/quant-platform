@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from .golden_conformity import (
@@ -62,6 +63,7 @@ from quant_platform.source_adapters.bybit import (
 from quant_platform.source_adapters.bybit_historical import (
     BybitHistoricalExtractAccumulator,
     BybitHistoricalSourceError,
+    DAY_EXTRACT_SELECT_SQL,
     SUPPORTED_CATEGORY,
     SUPPORTED_SYMBOL as SUPPORTED_INSTRUMENT,
     SUPPORTED_VENUE,
@@ -290,6 +292,53 @@ def _source_shape_check(config: HarnessConfig, target: Target | None) -> Check:
             connection.close()
 
 
+# The historical day-extract query (DAY_EXTRACT_SELECT_SQL) needs exactly
+# this index to avoid a full table scan on a multi-GB SQLite archive (#248):
+# equality columns first (category, symbol), then the range column
+# (trade_time_ms), then the ORDER BY tie-break column (trade_id) so the index
+# alone can also satisfy the sort.
+REQUIRED_HISTORICAL_INDEX_COLUMNS = ("category", "symbol", "trade_time_ms", "trade_id")
+
+
+def _query_plan_check(config: HarnessConfig, target: Target | None) -> Check:
+    if config.sqlite_path is None:
+        return Check("index", False, "SQLite source is not configured")
+    if not config.sqlite_path.is_file():
+        return Check("index", False, f"SQLite source not found: {config.sqlite_path}")
+    if target is None:
+        return Check("index", False, "cannot check query plan without a valid Golden target")
+    connection = None
+    try:
+        opener = (
+            open_bybit_historical_legacy_source
+            if config.legacy_source
+            else open_bybit_historical_source
+        )
+        connection = opener(config.sqlite_path)
+        # The query-plan row count is bounded by the query's own shape (a handful of
+        # plan steps), never by table row count -- this is not a trade-data read.
+        rows = list(
+            connection.execute(
+                "EXPLAIN QUERY PLAN " + DAY_EXTRACT_SELECT_SQL,
+                (SUPPORTED_CATEGORY, SUPPORTED_INSTRUMENT, target.start_ms, target.end_ms),
+            )
+        )
+    except (sqlite3.Error, BybitHistoricalSourceError) as exc:
+        return Check("index", False, str(exc))
+    finally:
+        if connection is not None:
+            connection.close()
+    plan = "; ".join(str(row[-1]) for row in rows)
+    if any(str(row[-1]).strip().upper().startswith("SCAN") for row in rows):
+        return Check(
+            "index",
+            False,
+            "query plan uses a full table SCAN instead of a covering index; "
+            f"create one on trades{REQUIRED_HISTORICAL_INDEX_COLUMNS}: {plan}",
+        )
+    return Check("index", True, plan)
+
+
 def _catalog_checks(config: HarnessConfig, target: Target | None) -> tuple[Check, ...]:
     if target is None:
         return (
@@ -355,6 +404,7 @@ def collect_preflight(config: HarnessConfig, *, check_rerun: bool = True) -> Pre
         checks.append(Check("golden", False, str(exc)))
 
     checks.append(_source_shape_check(config, target))
+    checks.append(_query_plan_check(config, target))
     checks.append(_storage_check(config.storage_root))
     checks.append(_output_check(target))
     if not isinstance(config.storage_root_id, str) or not config.storage_root_id.strip():
