@@ -595,6 +595,16 @@ Possible concepts:
 
 Execution semantics must be shared between historical replay and live adapters as far as the real venue allows.
 
+`translate_intent` (H01-H03) has no position/ledger state and is stateless
+per call: it does not know whether the caller already holds a
+`DecisionIntent`'s `target_position`, and it does not become a no-op when
+one is already held. **Replaying a persistent entry signal (one that stays
+true across many ticks) admits a new full-size order on every call, not just
+the first — this is intentional, not a defect** (ADR-0053). Gating repeated
+entries (e.g. tracking whether the current entry condition has already been
+acted on) is the caller's responsibility until H04 (portfolio/ledger, issue
+#144) is integrated with this seam.
+
 ---
 
 ## 24. Order
