@@ -58,13 +58,18 @@ def _config(
     )
 
 
-def _make_source(path: Path) -> None:
+def _make_source(path: Path, *, indexed: bool = True, index_columns: tuple[str, ...] | None = None) -> None:
     connection = sqlite3.connect(path)
     try:
         connection.execute(
             "CREATE TABLE trades (category TEXT, symbol TEXT, trade_id TEXT, "
             "trade_time_ms INTEGER, trade_time_utc TEXT, side TEXT, size TEXT, price TEXT)"
         )
+        if indexed:
+            columns = index_columns or ("category", "symbol", "trade_time_ms", "trade_id")
+            connection.execute(
+                f"CREATE INDEX idx_trades_cover ON trades({', '.join(columns)})"
+            )
         connection.commit()
     finally:
         connection.close()
@@ -95,7 +100,9 @@ class ConformityE2ETest(unittest.TestCase):
                 result = harness.collect_preflight(config)
 
             self.assertTrue(result.passed)
-            ordinary.assert_called_once_with(source)
+            # Called twice: once by the source-shape check, once by the query-plan check.
+            self.assertEqual(ordinary.call_count, 2)
+            ordinary.assert_called_with(source)
             legacy.assert_not_called()
 
     def test_explicit_legacy_preflight_uses_only_the_legacy_source_opener(self):
@@ -115,7 +122,9 @@ class ConformityE2ETest(unittest.TestCase):
                 result = harness.collect_preflight(config)
 
             self.assertTrue(result.passed)
-            legacy.assert_called_once_with(source)
+            # Called twice: once by the source-shape check, once by the query-plan check.
+            self.assertEqual(legacy.call_count, 2)
+            legacy.assert_called_with(source)
             ordinary.assert_not_called()
             self.assertFalse((config.storage_root / "canonical").exists())
 
@@ -561,7 +570,12 @@ class ConformityE2ETest(unittest.TestCase):
             source_check = next(check for check in result.checks if check.name == "source")
             self.assertFalse(source_check.passed)
             self.assertIn("controlled legacy open failure", source_check.detail)
-            legacy.assert_called_once_with(source)
+            index_check = next(check for check in result.checks if check.name == "index")
+            self.assertFalse(index_check.passed)
+            self.assertIn("controlled legacy open failure", index_check.detail)
+            # Called twice: once by the source-shape check, once by the query-plan check.
+            self.assertEqual(legacy.call_count, 2)
+            legacy.assert_called_with(source)
             ordinary.assert_not_called()
             self.assertEqual(tuple(config.storage_root.iterdir()), ())
 
@@ -1061,6 +1075,107 @@ class ConformityE2ETest(unittest.TestCase):
             self.assertNotIn("emit_dataset_manifest", text)
             self.assertNotIn("emit_partition_manifest", text)
             self.assertNotIn("emit_coverage_manifest", text)
+
+
+class HistoricalQueryPlanCheckTest(unittest.TestCase):
+    """Regression coverage for #248 (I1): the day-extract query against a
+    multi-GB SQLite archive must use an index that satisfies both the
+    trade_time_ms range filter and the ORDER BY -- not a full table scan,
+    and not a partial index that still leaves an unbounded temporary sort
+    or an unindexed range filter (caught in review: a (category, symbol)-only
+    or (category, symbol, trade_time_ms)-only index reports no SCAN but is
+    still effectively unbounded work on a multi-GB archive)."""
+
+    def test_indexed_archive_reports_a_search_not_a_scan(self):
+        with tempfile.TemporaryDirectory() as holder:
+            root = Path(holder)
+            source = root / "source.sqlite"
+            _make_source(source, indexed=True)
+            config = _config(root / "storage", source)
+            config.storage_root.mkdir()
+            with _preflight_dependencies():
+                result = harness.collect_preflight(config)
+
+            self.assertTrue(result.passed)
+            index_check = next(check for check in result.checks if check.name == "index")
+            self.assertTrue(index_check.passed)
+            self.assertIn("SEARCH", index_check.detail)
+
+    def test_unindexed_archive_fails_preflight_with_the_scan_detected(self):
+        with tempfile.TemporaryDirectory() as holder:
+            root = Path(holder)
+            source = root / "source.sqlite"
+            _make_source(source, indexed=False)
+            config = _config(root / "storage", source)
+            config.storage_root.mkdir()
+            with _preflight_dependencies():
+                result = harness.collect_preflight(config)
+
+            self.assertFalse(result.passed)
+            index_check = next(check for check in result.checks if check.name == "index")
+            self.assertFalse(index_check.passed)
+            self.assertIn("SCAN", index_check.detail)
+            for column in app_harness.REQUIRED_HISTORICAL_INDEX_COLUMNS:
+                self.assertIn(column, index_check.detail)
+
+    def test_equality_only_partial_index_still_fails_preflight(self):
+        """A (category, symbol) index reports SEARCH, not SCAN, but leaves the
+        trade_time_ms range filter and the full sort unindexed -- still
+        effectively unbounded work on a multi-GB archive."""
+        with tempfile.TemporaryDirectory() as holder:
+            root = Path(holder)
+            source = root / "source.sqlite"
+            _make_source(source, indexed=True, index_columns=("category", "symbol"))
+            config = _config(root / "storage", source)
+            config.storage_root.mkdir()
+            with _preflight_dependencies():
+                result = harness.collect_preflight(config)
+
+            self.assertFalse(result.passed)
+            index_check = next(check for check in result.checks if check.name == "index")
+            self.assertFalse(index_check.passed)
+            self.assertNotIn("SCAN", index_check.detail)
+            self.assertIn("TEMP B-TREE", index_check.detail.upper())
+
+    def test_range_only_partial_index_still_fails_preflight(self):
+        """A (category, symbol, trade_time_ms) index covers the range filter
+        but still needs a temporary sort for the trade_id tie-break --
+        rejected the same as the equality-only partial index."""
+        with tempfile.TemporaryDirectory() as holder:
+            root = Path(holder)
+            source = root / "source.sqlite"
+            _make_source(
+                source, indexed=True, index_columns=("category", "symbol", "trade_time_ms")
+            )
+            config = _config(root / "storage", source)
+            config.storage_root.mkdir()
+            with _preflight_dependencies():
+                result = harness.collect_preflight(config)
+
+            self.assertFalse(result.passed)
+            index_check = next(check for check in result.checks if check.name == "index")
+            self.assertFalse(index_check.passed)
+            self.assertIn("TEMP B-TREE", index_check.detail.upper())
+
+    def test_legacy_source_flag_routes_the_query_plan_check_to_the_legacy_opener(self):
+        with tempfile.TemporaryDirectory() as holder:
+            root = Path(holder)
+            source = root / "source.sqlite"
+            _make_source(source, indexed=True)
+            config = _config(root / "storage", source, legacy_source=True)
+            config.storage_root.mkdir()
+            with _preflight_dependencies(), \
+                 patch.object(
+                     app_harness,
+                     "open_bybit_historical_legacy_source",
+                     wraps=app_harness.open_bybit_historical_legacy_source,
+                 ) as legacy, \
+                 patch.object(app_harness, "open_bybit_historical_source") as ordinary:
+                result = harness.collect_preflight(config)
+
+            self.assertTrue(result.passed)
+            self.assertEqual(legacy.call_count, 2)
+            ordinary.assert_not_called()
 
 
 class ConnectCatalogErrorNarrowingTest(unittest.TestCase):
