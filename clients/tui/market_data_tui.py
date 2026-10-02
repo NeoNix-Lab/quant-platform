@@ -25,6 +25,16 @@ J02_RESPONSE_SCHEMA_VERSION = "j02-response-v1"
 J05_TUI_SCREEN_SCHEMA_VERSION = "j05-tui-screen-v1"
 DEFAULT_URL = "ws://127.0.0.1:8765"
 
+# ADR-0050 Amendment 1 (#247): must match J02's own
+# application.api_transport_server.J02_MAX_WIRE_MESSAGE_BYTES exactly. This
+# client cannot import that constant (it must not import quant_platform at
+# all), so the literal is duplicated here by design; a cross-file consistency
+# test (tests/test_api_transport_server_v1.py) keeps the two from drifting.
+# Without this, the websockets library's implicit 1 MiB default silently
+# truncates the connection with a raw ConnectionClosedError on any response
+# over ~3,990 trades.
+J02_MAX_WIRE_MESSAGE_BYTES = 16 * 1024 * 1024
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -61,7 +71,7 @@ async def fetch_j02_response(
     connect: Callable[..., Any] = websockets.connect,
 ) -> dict[str, Any]:
     try:
-        async with connect(url) as websocket:
+        async with connect(url, max_size=J02_MAX_WIRE_MESSAGE_BYTES) as websocket:
             await websocket.send(json.dumps(dict(request), sort_keys=True, separators=(",", ":")))
             response = json.loads(await websocket.recv())
     except _connection_exception_types() as exc:

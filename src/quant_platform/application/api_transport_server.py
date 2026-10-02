@@ -19,6 +19,7 @@ import websockets
 
 from .composition import (
     DEFAULT_MARKET_DATA_BATCH_SIZE,
+    DEFAULT_MAX_RESULT_ROWS,
     MarketDataApplicationConfig,
     compose_market_data_application,
 )
@@ -35,6 +36,18 @@ J02_REQUEST_SCHEMA_VERSION = "j02-request-v1"
 J02_RESPONSE_SCHEMA_VERSION = "j02-response-v1"
 J02_INVALID_REQUEST_MESSAGE = "the request is not valid"
 
+# ADR-0050 Amendment 1 (#247): the wire-level message-size ceiling, set
+# explicitly on both this server (websockets.serve) and the J05 TUI client
+# (clients/tui/market_data_tui.py, which cannot import this constant across
+# the client/quant_platform boundary and must keep its own literal in sync --
+# see tests/test_api_transport_server_v1.py's cross-file consistency check).
+# Sized with headroom above DEFAULT_MAX_RESULT_ROWS's ~12.5 MiB data-array
+# estimate for envelope overhead (coverage/provenance/request fields). This is
+# a defense-in-depth transport ceiling, not the primary guard -- the
+# RESULT_TOO_LARGE refusal in market_data.py is what actually stops an
+# oversized result from ever being built.
+J02_MAX_WIRE_MESSAGE_BYTES = 16 * 1024 * 1024
+
 MarketDataExecutor = Callable[[ConsumerMarketDataQuery], ConsumerMarketDataResult]
 
 
@@ -50,6 +63,7 @@ class ApiTransportServerConfig:
     port: int = 8765
     catalog_dsn: str = ""
     batch_size: int = DEFAULT_MARKET_DATA_BATCH_SIZE
+    max_result_rows: int = DEFAULT_MAX_RESULT_ROWS
     allow_non_loopback: bool = False
 
     def __post_init__(self) -> None:
@@ -65,6 +79,12 @@ class ApiTransportServerConfig:
             or self.batch_size < 1
         ):
             raise ValueError("batch_size must be a positive integer")
+        if (
+            not isinstance(self.max_result_rows, int)
+            or isinstance(self.max_result_rows, bool)
+            or self.max_result_rows < 1
+        ):
+            raise ValueError("max_result_rows must be a positive integer")
         if not isinstance(self.allow_non_loopback, bool):
             raise TypeError("allow_non_loopback must be a boolean")
         if not self.allow_non_loopback and not _is_loopback_bind_host(self.host):
@@ -75,7 +95,11 @@ def compose_market_data_executor(config: ApiTransportServerConfig) -> MarketData
     """Compose the Application service executor used by the J02 server."""
 
     application = compose_market_data_application(
-        MarketDataApplicationConfig(catalog_dsn=config.catalog_dsn, batch_size=config.batch_size)
+        MarketDataApplicationConfig(
+            catalog_dsn=config.catalog_dsn,
+            batch_size=config.batch_size,
+            max_result_rows=config.max_result_rows,
+        )
     )
     return application.execute
 
@@ -220,6 +244,7 @@ async def run_api_transport_server(
         lambda websocket: handle_api_transport_connection(websocket, execute=executor),
         config.host,
         config.port,
+        max_size=J02_MAX_WIRE_MESSAGE_BYTES,
     ):
         if stop_event is None:
             await asyncio.Future()
@@ -261,6 +286,7 @@ def _trade_record_dict(record: Any) -> dict[str, Any]:
 
 __all__ = [
     "ApiTransportServerConfig",
+    "J02_MAX_WIRE_MESSAGE_BYTES",
     "J02_REQUEST_SCHEMA_VERSION",
     "J02_RESPONSE_SCHEMA_VERSION",
     "decode_transport_query",

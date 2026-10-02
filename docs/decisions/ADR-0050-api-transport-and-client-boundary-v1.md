@@ -276,3 +276,100 @@ Closing items 31-35:
   lossless carrier, proven by the semantic-fidelity test, not a reinterpretation.
 - `J03`, `J07`, `J08`, RL, broker/live execution, second venue, and L1/L2/L3
   remain untouched by this ADR, matching `SCOPE.md`'s Out of Scope section.
+
+## Amendment 1 (issue #247) — size limits and auth/TLS disposition
+
+**Date:** 2026-10-02
+
+Independently reproduced during PR #225/#227 review and again while triaging
+issue #247: neither J02's server nor any client declares a response-size
+bound. A full UTC day of BTCUSDT trades is approximately 290 MB JSON-encoded
+(~263 bytes/trade); the J05 TUI client's `websockets.connect` used the
+library's implicit 1 MiB default, so any query over roughly 3,990 trades
+failed client-side with a raw `ConnectionClosedError: 1009 (message too
+big)` rather than a typed, operator-actionable error. This amendment resolves
+the three open items from #247's scope; it does not reopen anything else this
+ADR already decided.
+
+### 1. A documented row-count bound, refused with a typed error -- not pagination
+
+The bound is **50,000 rows** (`quant_platform.application.market_data.DEFAULT_MAX_RESULT_ROWS`),
+≈12.5 MiB of `data` array at the audited ~263 bytes/trade rate. A query whose
+result would exceed it is refused with a new, seventh `ConsumerErrorCode`:
+**`RESULT_TOO_LARGE`**. This amends decision 4's closed question in the
+direction it already anticipated ("If a response's JSON-encoded `data` array
+is large enough to warrant wire chunking... that is transport-level
+framing") by rejecting the chunking path entirely: v1 still needs no
+pagination cursor, and a hard, typed refusal is simpler than inventing wire
+framing for a capability (bounded historical reads of a single reference
+instrument) that does not need to return results this large in the first
+place. An operator hitting this error narrows the requested interval; there
+is no scenario in Wave 7's scope where a single query legitimately needs
+more than 50,000 trade rows.
+
+This amends the "frozen" `ConsumerErrorCode` vocabulary (`application/market_data.py`)
+by addition only -- the six existing codes, their meanings and their
+translation tables are untouched. The check lives in
+`execute_market_data_query` itself (not in J02's transport code), so **J02
+and J04 enforce the identical bound using identical code** -- the same
+symmetry decision 7 already established for business logic, now extended to
+this refusal. The bound is configurable
+(`MarketDataApplicationConfig.max_result_rows`, threaded through
+`ApiTransportServerConfig.max_result_rows` and both CLIs' `--max-result-rows`),
+defaulting to 50,000 everywhere.
+
+### 2. Wire `max_size`: an explicit 16 MiB on both ends of the WebSocket, as defense in depth
+
+J02's `websockets.serve` and J05's `websockets.connect` both now pass
+**`max_size=16 * 1024 * 1024`** explicitly (`J02_MAX_WIRE_MESSAGE_BYTES`),
+replacing the library's implicit 1 MiB default on both sides. This is
+deliberately **not** the primary fix -- decision 1's row-count refusal is
+what actually stops an oversized result from ever being built or sent. The
+wire `max_size` is headroom above the ~12.5 MiB bound for envelope overhead
+(coverage/provenance/request fields), so a conforming response is never
+anywhere near this ceiling; it exists only to turn a hypothetical future bug
+(a bound bypassed or miscalculated) into the same clean `ConnectionClosedError`
+failure mode that exists today, rather than a silent, unbounded one.
+
+**J04 is unaffected**: decision 7 already placed it on the in-process `C03`
+path, not a WebSocket connection, so it has no `max_size` to set -- it
+inherits decision 1's row-count bound directly. **J06 is unaffected for a
+different reason**: the browser `WebSocket` API has no configurable maximum
+message size at all (unlike Python's `websockets` library), so there is no
+equivalent knob to set; it depends entirely on decision 1's server-side
+refusal for protection, which is already sufficient. J05 cannot import
+`J02_MAX_WIRE_MESSAGE_BYTES` across the client/`quant_platform` boundary
+(decision 7), so it carries its own literal `16 * 1024 * 1024`, kept in sync
+with J02's by a dedicated cross-file consistency test rather than by import.
+
+### 3. Authentication and TLS: remain out of scope for v1
+
+No authentication or TLS exists anywhere in the transport, and this
+amendment does not add any. `allow_non_loopback` (added during Wave 7
+review) stops *accidental* non-loopback exposure; it does not, and was never
+meant to, address authentication once an operator deliberately opts in. That
+remains an explicit, documented v1 limitation: **non-loopback deployment of
+J02 is unauthenticated by design until a future ADR resolves authentication**.
+This is not a decision to defer indefinitely without tracking -- it is a
+decision that *this* issue's scope explicitly excludes building that
+infrastructure (`#247`'s own "Out of scope" section), and no implementation
+issue for it exists yet. A loopback-only deployment (the documented default)
+carries no new exposure from this gap.
+
+### Consequences
+
+- `ConsumerErrorCode` now has seven members, not six; every exhaustive
+  switch/translation table over it (`_MESSAGES`, the wire round-trip test
+  iterating `for code in ConsumerErrorCode`) picks up `RESULT_TOO_LARGE`
+  automatically by construction, not by a second hand-maintained list.
+- J02 remains a lossless carrier: `RESULT_TOO_LARGE` crosses the wire through
+  the same generic `ConsumerApiError` handling every other code already used;
+  no transport-layer special case was added for it.
+- The 50,000-row / 16 MiB figures are v1 defaults, not permanent physical
+  constants; revisiting them (e.g. if a future representation kind has a
+  very different bytes-per-row cost) is a config-value change, not another
+  design gate, as long as the "typed refusal, not pagination" shape itself
+  is not what's being revisited.
+- Authentication/TLS for J02 remains a real, tracked gap, not a silent one:
+  non-loopback deployment is unauthenticated by design until a dedicated
+  future ADR addresses it.

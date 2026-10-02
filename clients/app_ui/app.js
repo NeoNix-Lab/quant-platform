@@ -65,6 +65,11 @@
   }
 
   function defaultSocketFactory(url) {
+    // ADR-0050 Amendment 1 (#247): the browser WebSocket API has no
+    // configurable max message size (unlike Python's `websockets` library),
+    // so there is no equivalent of J02/J05's explicit max_size to set here.
+    // The RESULT_TOO_LARGE refusal on the server is what protects this
+    // client from ever receiving an oversized frame in the first place.
     return new WebSocket(url);
   }
 
