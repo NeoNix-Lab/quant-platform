@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 import websockets
 
@@ -23,10 +24,12 @@ from test_application_market_data_result_v1 import (  # noqa: E402
 )
 from test_bounded_datagateway_read_v1 import LEFT, RIGHT, trade  # noqa: E402
 
+import quant_platform.application.api_transport_server as api_transport_server  # noqa: E402
 from quant_platform.application import (  # noqa: E402
     ApiTransportServerConfig,
     ConsumerApiError,
     ConsumerErrorCode,
+    J02_MAX_WIRE_MESSAGE_BYTES,
     J02_REQUEST_SCHEMA_VERSION,
     J02_RESPONSE_SCHEMA_VERSION,
     encode_consumer_result,
@@ -192,6 +195,70 @@ class ApiTransportWebSocketTests(unittest.IsolatedAsyncioTestCase):
             ordered[0][1],
             "independent WebSocket connections must not be serialized by blocking reads",
         )
+
+    async def test_oversized_result_is_refused_with_a_typed_error_over_the_wire(self):
+        """ADR-0050 Amendment 1 (#247): J02 is a lossless carrier -- it adds no
+        special-case code for RESULT_TOO_LARGE; the existing generic
+        ConsumerApiError handling in handle_api_transport_message already
+        carries it, proven here end-to-end over a real WebSocket."""
+        gateway = covered_gateway(batches())
+
+        def execute(query_):
+            return execute_market_data_query(query_, gateway=gateway, max_result_rows=1)
+
+        async with websockets.serve(
+            lambda websocket: handle_api_transport_connection(websocket, execute=execute),
+            "127.0.0.1",
+            0,
+        ) as server:
+            port = server.sockets[0].getsockname()[1]
+            async with websockets.connect(f"ws://127.0.0.1:{port}") as websocket:
+                await websocket.send(json.dumps(request_payload()))
+                response = json.loads(await websocket.recv())
+
+        self.assertEqual("error", response["status"])
+        self.assertEqual("result_too_large", response["error"]["code"])
+        self.assertEqual("2", response["error"]["context"]["row_count"])
+        self.assertEqual("1", response["error"]["context"]["max_result_rows"])
+
+
+class ApiTransportServerMaxSizeTests(unittest.IsolatedAsyncioTestCase):
+    """ADR-0050 Amendment 1 (#247): the server sets an explicit wire max_size
+    rather than relying on the websockets library's implicit 1 MiB default."""
+
+    async def test_run_api_transport_server_passes_the_documented_max_size(self):
+        captured: dict = {}
+
+        class _FakeServerContext:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+        def fake_serve(_handler, _host, _port, **kwargs):
+            captured.update(kwargs)
+            return _FakeServerContext()
+
+        stop_event = asyncio.Event()
+        stop_event.set()
+        with patch.object(api_transport_server.websockets, "serve", fake_serve):
+            await api_transport_server.run_api_transport_server(
+                ApiTransportServerConfig(), stop_event=stop_event, execute=lambda _q: None
+            )
+
+        self.assertEqual(J02_MAX_WIRE_MESSAGE_BYTES, captured.get("max_size"))
+
+    def test_j02_and_j05_agree_on_the_same_literal_wire_max_size(self):
+        """J05 cannot import this constant across the client/quant_platform
+        boundary (ADR-0050 decision 7) and must keep its own literal in sync."""
+        server_source = (
+            ROOT / "src" / "quant_platform" / "application" / "api_transport_server.py"
+        ).read_text(encoding="utf-8")
+        tui_source = (ROOT / "clients" / "tui" / "market_data_tui.py").read_text(encoding="utf-8")
+
+        self.assertIn("J02_MAX_WIRE_MESSAGE_BYTES = 16 * 1024 * 1024", server_source)
+        self.assertIn("J02_MAX_WIRE_MESSAGE_BYTES = 16 * 1024 * 1024", tui_source)
 
 
 if __name__ == "__main__":
