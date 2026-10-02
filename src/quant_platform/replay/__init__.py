@@ -239,12 +239,11 @@ class ReplayResult:
 class HistoricalReplayRuntime:
     """H05 runtime that composes DataGateway, Strategy, Execution and Ledger.
 
-    Pyramiding warning (ADR-0053): ``feature_provider`` is responsible for not
-    re-asserting an entry signal across ticks it does not intend as a new
-    entry. This runtime holds a live ``PortfolioLedger`` and uses it for risk
-    snapshots and FLAT-side close instructions, but does not use it to
-    recognise "already at this target" for LONG/SHORT entries -- a persistent
-    entry signal admits one full-size order per tick, not one order total.
+    Repeated-entry gating is intentionally owned here, not by
+    ``execution.translate_intent()``: H05 already has the live
+    ``PortfolioLedger`` needed to detect that a LONG/SHORT decision is at its
+    target for this replay, while the lower execution seam remains stateless
+    and usable by callers without ledger state.
     """
 
     gateway: Any
@@ -332,6 +331,29 @@ class HistoricalReplayRuntime:
                     admissions.append(_flat_no_position_admission(composition.decision_intent))
                     equity_curve.append(current_snapshot)
                     continue
+                already_at_target = _entry_already_at_target_quantities(
+                    ledger,
+                    record.instrument,
+                    composition.decision_intent,
+                )
+                if already_at_target is not None:
+                    risk_decision = spec.strategy.risk_policy.evaluate(
+                        snapshot=risk_snapshot,
+                        as_of=event_time,
+                        reference_price=reference_price,
+                        target_position=composition.decision_intent.target_position,
+                    )
+                    admissions.append(
+                        _entry_already_at_target_admission(
+                            ledger,
+                            composition.decision_intent,
+                            risk_decision,
+                            current_quantity=already_at_target[0],
+                            target_quantity=already_at_target[1],
+                        )
+                    )
+                    equity_curve.append(current_snapshot)
+                    continue
                 admission = translate_intent(
                     composition.decision_intent,
                     spec.strategy,
@@ -412,6 +434,45 @@ def _flat_no_position_admission(intent: Any) -> dict[str, Any]:
         "reasons": ["no_open_position_to_close"],
         "decision_intent": intent.stable_dict(),
         "order": None,
+    }
+
+
+def _entry_already_at_target_quantities(
+    ledger: PortfolioLedger,
+    instrument: str,
+    intent: Any,
+) -> tuple[Decimal, Decimal] | None:
+    if intent.direction is Direction.FLAT:
+        return None
+    position = ledger.positions.get(instrument)
+    if intent.direction is Direction.LONG:
+        current_quantity = Decimal("0") if position is None else position.long.quantity
+        target_quantity = abs(intent.target_position)
+    else:
+        current_quantity = Decimal("0") if position is None else position.short.quantity
+        target_quantity = abs(intent.target_position)
+    if current_quantity < target_quantity:
+        return None
+    return current_quantity, target_quantity
+
+
+def _entry_already_at_target_admission(
+    ledger: PortfolioLedger,
+    intent: Any,
+    risk_decision: Any,
+    *,
+    current_quantity: Decimal,
+    target_quantity: Decimal,
+) -> dict[str, Any]:
+    return {
+        "outcome": "REFUSED",
+        "reasons": ["already_at_target_position"],
+        "decision_intent": intent.stable_dict(),
+        "order": None,
+        "risk_decision": risk_decision.stable_dict(),
+        "ledger_identity": ledger.identity,
+        "current_quantity": _decimal_string(current_quantity),
+        "target_quantity": _decimal_string(target_quantity),
     }
 
 

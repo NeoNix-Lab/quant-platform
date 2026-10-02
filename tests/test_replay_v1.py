@@ -196,14 +196,7 @@ class ReplayV1Tests(unittest.TestCase):
         self.assertEqual(Decimal("10010"), first.equity_curve[-1].equity)
         self.assertEqual(first.final_ledger.cash, first.final_ledger.mark_to_market_equity({"BTCUSDT": "110"}))
 
-    def test_persistent_entry_signal_pyramids_with_no_runtime_protection(self):
-        """ADR-0053 (#251): found during review of that PR -- the platform's
-        own reference H05 runtime has the exact same gap as bare
-        translate_intent, not just external callers. A feature_provider that
-        keeps signal.entry True across ticks (rather than only the tick it
-        first becomes true) produces one full-size order per tick; the
-        runtime's own PortfolioLedger is in scope but is not consulted to
-        recognise the position is already at target."""
+    def test_persistent_entry_signal_noops_after_reaching_target_position(self):
         records = (
             _record("2026-01-05T15:00:00Z", "100", "t1"),
             _record("2026-01-05T15:00:10Z", "100", "t2"),
@@ -225,12 +218,17 @@ class ReplayV1Tests(unittest.TestCase):
         ).run(_spec())
 
         admitted = [a for a in result.admissions if a["outcome"] == "ADMITTED"]
-        self.assertEqual(3, len(admitted))
-        for admission in admitted:
-            self.assertEqual("BUY", admission["order"]["side"])
-            self.assertEqual(Decimal("1"), Decimal(admission["order"]["quantity"]))
+        refused = [a for a in result.admissions if a["outcome"] == "REFUSED"]
+        self.assertEqual(1, len(admitted))
+        self.assertEqual(2, len(refused))
+        self.assertEqual("BUY", admitted[0]["order"]["side"])
+        self.assertEqual(Decimal("1"), Decimal(admitted[0]["order"]["quantity"]))
+        for admission in refused:
+            self.assertEqual(["already_at_target_position"], admission["reasons"])
+            self.assertEqual("1", admission["current_quantity"])
+            self.assertEqual("1", admission["target_quantity"])
         position = result.final_ledger.positions["BTCUSDT"]
-        self.assertEqual(Decimal("3"), position.long.quantity)
+        self.assertEqual(Decimal("1"), position.long.quantity)
 
     def test_replay_uses_datagateway_scan_not_read(self):
         records = (_record("2026-01-05T15:00:00Z", "100", "t1"),)
