@@ -250,6 +250,12 @@ class StrategyInput:
 
 @dataclass(frozen=True, slots=True)
 class EntryPolicy:
+    """One pre-configured entry direction per policy.
+
+    A two-sided strategy is two StrategySpecs (one LONG, one SHORT), not one
+    two-sided EntryPolicy -- see ADR-0052.
+    """
+
     policy_key: str
     direction: Direction
     signal_key: str

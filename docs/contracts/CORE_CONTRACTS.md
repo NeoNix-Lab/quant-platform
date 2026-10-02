@@ -542,6 +542,17 @@ encode rule/threshold content into, for example, `policy_key` strings on
 `EntryPolicy`/`ExitPolicy`, which are plain governed keys, not
 identity-bearing payloads.
 
+`EntryPolicy.direction` is a single `Direction` (`LONG` or `SHORT`; `FLAT` is
+rejected) — one `StrategySpec` always enters in exactly one pre-configured
+direction and cannot express "go long or short depending on signal" or
+reverse directly in a single decision. **A two-sided strategy is expressed as
+two single-direction `StrategySpec`s run side by side** (ADR-0052), not a
+single two-sided spec. This is intentional, not a gap to work around
+silently: each spec in the pair gets its own `strategy_identity` and
+independent G04 session/cooldown state, and H03's existing execution
+conflict model already resolves the (signal-design-error) case where both
+specs' entries fire in the same decision instant.
+
 ---
 
 ## 22. DecisionIntent
