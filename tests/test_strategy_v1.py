@@ -120,6 +120,28 @@ class StrategyV1Tests(unittest.TestCase):
         self.assertEqual(first.strategy_identity, second.strategy_identity)
         self.assertTrue(first.strategy_identity.startswith("strategy-spec-v1:sha256:"))
 
+    def test_execution_policy_content_change_changes_strategy_identity(self):
+        """ADR-0051 (#249): execution_policy is the intended extension point
+        for consumer-owned signal rule/threshold content specifically because
+        it participates in strategy_identity -- two strategies differing only
+        in that content must never collide on one identity."""
+        first = _spec()
+        second = StrategySpec(
+            strategy_key=first.strategy_key,
+            semantic_version=first.semantic_version,
+            entry_policy=first.entry_policy,
+            exit_policy=first.exit_policy,
+            position_policy=first.position_policy,
+            sizing_policy=first.sizing_policy,
+            risk_policy=first.risk_policy,
+            session_policy=first.session_policy,
+            cooldown_policy=first.cooldown_policy,
+            signal_combination_policy=first.signal_combination_policy,
+            execution_policy=_PolicyStub("execution-policy-different-threshold"),
+        )
+
+        self.assertNotEqual(first.strategy_identity, second.strategy_identity)
+
     def test_strategy_spec_refuses_missing_risk_or_sizing_policy(self):
         spec = _spec()
 
