@@ -527,6 +527,21 @@ Possible components:
 
 A StrategySpec is not reducible to one event trigger.
 
+`EntryPolicy`/`ExitPolicy` reference signals only by `signal_key`: the actual
+rule/threshold logic that decides what a signal key means (comparison
+operators, indicator thresholds, stop-loss/take-profit levels) is
+deliberately outside this contract's ownership. **`execution_policy` is the
+intended extension point for that logic** (ADR-0051): it is typed as the
+generic `IdentityBackedPolicy` interface (`identity: str`,
+`stable_dict() -> Mapping[str, Any]`) specifically so a consumer's own
+rule/threshold payload participates in `strategy_identity` — two strategies
+differing only in thresholds are guaranteed different identities — without
+the platform ever needing to interpret what those thresholds mean. No other
+StrategySpec component is a supported carrier for this; a consumer should not
+encode rule/threshold content into, for example, `policy_key` strings on
+`EntryPolicy`/`ExitPolicy`, which are plain governed keys, not
+identity-bearing payloads.
+
 ---
 
 ## 22. DecisionIntent

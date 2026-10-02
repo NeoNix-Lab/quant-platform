@@ -98,7 +98,13 @@ class CooldownUnavailableReason(StrEnum):
 
 @runtime_checkable
 class IdentityBackedPolicy(Protocol):
-    """Typed policy interface for slots whose semantics are outside #141."""
+    """Typed policy interface for slots whose semantics are outside #141.
+
+    ADR-0051 makes this explicit for ``execution_policy``: it is the intended
+    extension point for consumer-owned signal rule/threshold/exit-level logic
+    that the frozen G01-G04 contract deliberately does not interpret, carried
+    here only so it participates in ``strategy_identity``.
+    """
 
     @property
     def identity(self) -> str:
