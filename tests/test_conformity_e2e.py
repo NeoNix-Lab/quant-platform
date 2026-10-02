@@ -1063,6 +1063,27 @@ class ConformityE2ETest(unittest.TestCase):
             self.assertNotIn("emit_coverage_manifest", text)
 
 
+class ConnectCatalogErrorNarrowingTest(unittest.TestCase):
+    """Regression coverage for #246 (H4): _connect_catalog narrowed from a bare
+    ``except Exception`` to ``except psycopg.Error`` so that programming errors
+    (e.g. a bad call site) are no longer mislabeled as a connection failure."""
+
+    def test_psycopg_connection_failure_is_still_wrapped_as_harness_failure(self):
+        import psycopg
+
+        with patch.object(psycopg, "connect", side_effect=psycopg.OperationalError("connection refused")):
+            with self.assertRaises(app_harness.HarnessFailure) as caught:
+                app_harness._connect_catalog("controlled-dsn")
+        self.assertIn("could not connect to the PostgreSQL catalog", str(caught.exception))
+
+    def test_unrelated_programming_error_is_no_longer_masked(self):
+        import psycopg
+
+        with patch.object(psycopg, "connect", side_effect=TypeError("unexpected keyword argument")):
+            with self.assertRaises(TypeError):
+                app_harness._connect_catalog("controlled-dsn")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

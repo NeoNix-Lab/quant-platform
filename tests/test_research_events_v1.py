@@ -10,6 +10,7 @@ import subprocess
 import sys
 import textwrap
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
@@ -55,6 +56,7 @@ from quant_platform.research import (  # noqa: E402
     ThresholdPredicate,
     detect_events,
 )
+import quant_platform.research.events as events_module  # noqa: E402
 
 
 def observable_id(key: str) -> FeatureDefinitionId:
@@ -569,6 +571,37 @@ class DetectEventsTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(EventDetectionError, "governed canonical bucket-time coordinate shape"):
             detect_events(spec, [multi_ts])
+
+    def test_calendar_invalid_timestamp_passing_shape_regex_fails_closed(self):
+        """Regression coverage for #246 (H4): the support-coordinate's RFC3339
+        shape regex accepts a syntactically well-formed but calendrically
+        invalid date (Feb 30); Instant.parse itself must reject it, and
+        _extract_event_time's narrowed ``except InvalidRequest`` must still
+        wrap that rejection as EventDetectionError."""
+        spec = event_spec()
+        bad_calendar_date = observation(
+            bucket="bar:2024-02-30T10:00:00Z",
+            value=5.0,
+            causal_available_at="2024-03-01T10:00:01Z",
+        )
+        with self.assertRaisesRegex(EventDetectionError, "unparseable timestamp"):
+            detect_events(spec, [bad_calendar_date])
+
+    def test_unrelated_parse_error_is_no_longer_masked(self):
+        """Regression coverage for #246 (H4): an exception type Instant.parse
+        does not actually raise must propagate unwrapped, proving the catch
+        was narrowed rather than left as a bare ``except Exception``."""
+        spec = event_spec()
+        obs = observation(
+            bucket="bar:2024-01-01T08:30:00Z",
+            value=5.0,
+            causal_available_at="2024-01-01T08:30:05Z",
+        )
+        with mock.patch.object(
+            events_module.Instant, "parse", side_effect=TypeError("unexpected parse failure")
+        ):
+            with self.assertRaises(TypeError):
+                detect_events(spec, [obs])
 
     def test_rehydrated_artifact_with_empty_evidence_is_refused(self):
         spec = event_spec()
