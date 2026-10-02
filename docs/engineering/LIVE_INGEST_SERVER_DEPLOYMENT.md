@@ -78,6 +78,12 @@ sudo systemctl cat quant-platform-live-ingest.service
 Before start, inspect `/etc/quant-platform/live-ingest-server.env` and correct
 only deployment-local values. Do not add `PGPASSWORD`.
 
+The unit runs under `ProtectSystem=strict` (the whole filesystem read-only
+except `ReadWritePaths=`). If this deployment's `QP_LIVE_INGEST_STORAGE_ROOT`
+is not `/srv/marketdata`, update `ReadWritePaths=` in the installed unit to
+match before starting the service, or every checkpoint/publish write will
+fail with `EROFS`/permission-denied.
+
 ## Start, Stop, Restart And Status
 
 ```bash
@@ -102,6 +108,9 @@ Expected material evidence:
   checkpoint when one exists;
 - `systemctl stop` sends SIGTERM and the process exits through
   `LIVE_INGEST_SERVER: STOPPED`.
+- no `EROFS` / `Permission denied` entries in the journal: this unit runs
+  under `ProtectSystem=strict`, so a storage-root or checkpoint-path mismatch
+  with `ReadWritePaths=` surfaces here, not as a Python traceback.
 
 ## Readback Proof
 

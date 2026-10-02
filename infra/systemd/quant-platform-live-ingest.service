@@ -1,6 +1,6 @@
 [Unit]
 Description=Quant Platform live-ingest server v1
-Documentation=https://github.com/NeoNix-Lab/quant-platform/blob/governance/ingest-server-production-v1-scope/docs/decisions/ADR-0043-live-ingest-server-composition-v1.md
+Documentation=https://github.com/NeoNix-Lab/quant-platform/blob/main/docs/decisions/ADR-0043-live-ingest-server-composition-v1.md
 After=network-online.target
 Wants=network-online.target
 
@@ -19,8 +19,13 @@ TimeoutStopSec=90s
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=read-only
+ReadWritePaths=/srv/marketdata
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictNamespaces=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]

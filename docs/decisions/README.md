@@ -36,5 +36,13 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0044 | Live-ingest long-gap remediation and explicit-gap state v1 | Accepted |
 | 0045 | Session calendar and cooldown semantics v1 | Accepted |
 | 0046 | Execution conflict and intra-bar fill model v1 | Accepted |
+| 0047 | Live DataGateway cursor semantics v1 | Accepted |
+| 0048 | Storage tier relocation v1 | Accepted |
+| 0049 | Retention/deletion authority v1 | Accepted |
+| 0050 | API transport and client boundary v1 | Accepted |
+| 0051 | StrategySpec rule extension via execution policy v1 | Accepted |
+| 0052 | StrategySpec two-sided exposure via spec pairs v1 | Accepted |
+| 0053 | `translate_intent` caller-gated repeated entries v1 | Accepted |
+| 0054 | A07 historical acquisition day-boundary v1 | Accepted |
 
 See the individual ADR files for context and consequences.
