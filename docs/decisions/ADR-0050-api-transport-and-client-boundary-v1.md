@@ -15,8 +15,8 @@ translation) are frozen and implemented. `quant_platform.application.market_data
 already owns the complete Consumer API surface: `ConsumerMarketDataQuery`,
 `NormalizedMarketDataQuery`, `ConsumerMarketDataResult` (with nested
 `ConsumerCoverage`/`ConsumerProvenance`), `ConsumerApiError` and the six frozen
-`ConsumerErrorCode` values, via `execute_market_data_query`/
-`resolve_market_data_request`.
+`ConsumerErrorCode` values (seven as of Amendment 1 below), via
+`execute_market_data_query`/`resolve_market_data_request`.
 
 Issue #217's own decision questionnaire (posted to the issue as a comment)
 separates what existing authority already answers ("Autorisolto") from what
@@ -129,7 +129,7 @@ Error response:
   "request_id": "<echoed>",
   "status": "error",
   "error": {
-    "code": "<one of the six frozen ConsumerErrorCode values>",
+    "code": "<one of the frozen ConsumerErrorCode values -- six originally, seven as of Amendment 1>",
     "message": "...",
     "context": {},
     "request_identity": "..."
@@ -141,10 +141,11 @@ Error response:
 Every other field is a direct, lossless carry of `ConsumerMarketDataResult`
 or `ConsumerApiError`'s own fields — J02 must not add, drop, rename or
 reinterpret any of them. This closes questionnaire items 5-8: field-level
-semantic fidelity, not best-effort; the six `ConsumerErrorCode` values are
-carried verbatim, never mapped onto transport-specific status codes as the
-canonical signal (a WebSocket close code or similar may exist as operational
-diagnostics but is never authoritative).
+semantic fidelity, not best-effort; every `ConsumerErrorCode` value (six
+originally, seven as of Amendment 1) is carried verbatim, never mapped onto
+transport-specific status codes as the canonical signal (a WebSocket close
+code or similar may exist as operational diagnostics but is never
+authoritative).
 
 ### 4. Pagination and live streaming: none needed for v1; explicitly deferred
 
