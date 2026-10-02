@@ -20,7 +20,7 @@ import re
 from types import MappingProxyType
 from typing import Any
 
-from quant_platform.data.models import CoverageInterval, Instant, InvalidRequest
+from quant_platform.data.models import CoverageInterval, Instant
 from .availability import ValidationCandidate
 
 

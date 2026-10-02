@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -84,7 +83,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     current = get_current_branch()
     integration_base = detect_active_integration_branch()
     print("=" * 60)
-    print(f"Quant Platform Workflow Status")
+    print("Quant Platform Workflow Status")
     print("=" * 60)
     print(f"Current Branch           : {current}")
     print(f"Active Integration Base  : {integration_base}")
@@ -215,7 +214,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         run_cmd(["git", "checkout", "-b", branch_name, base_branch], check=True)
 
     print(f"\n[OK] Switched to branch '{branch_name}'.")
-    print(f"Ready for implementation. When finished, run:\n  python tools/workflow.py pr")
+    print("Ready for implementation. When finished, run:\n  python tools/workflow.py pr")
     return 0
 
 
@@ -295,7 +294,7 @@ def cmd_pr(args: argparse.Namespace) -> int:
 
     pr_url = pr_res.stdout.strip()
     print("\n" + "=" * 60)
-    print(f"[SUCCESS] Pull Request created successfully:")
+    print("[SUCCESS] Pull Request created successfully:")
     print(f"  {pr_url}")
     print("=" * 60)
     return 0
@@ -306,10 +305,10 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", help="Workflow command")
 
     # status
-    p_status = subparsers.add_parser("status", help="Show current workflow, branch, and active base status")
+    subparsers.add_parser("status", help="Show current workflow, branch, and active base status")
 
     # preflight
-    p_preflight = subparsers.add_parser("preflight", help="Run local preflight checks (syntax, boundaries, diff, governance)")
+    subparsers.add_parser("preflight", help="Run local preflight checks (syntax, boundaries, diff, governance)")
 
     # start
     p_start = subparsers.add_parser("start", help="Start work on an issue (creates branch from active integration base)")

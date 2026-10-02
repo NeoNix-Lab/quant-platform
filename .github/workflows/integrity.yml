@@ -20,6 +20,10 @@ jobs:
           python-version: '3.11'
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check -r tests/requirements.txt
+      - name: Install lint tooling
+        run: python -m pip install --disable-pip-version-check "ruff>=0.16,<0.17"
+      - name: Lint baseline (ruff, src and tools)
+        run: ruff check src tools
       - name: Run local Python suite
         run: python tools/run_tests.py
       - name: Validate Markdown links
