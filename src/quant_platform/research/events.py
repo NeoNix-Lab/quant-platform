@@ -95,6 +95,7 @@ from ..features import (
     compute_observation_evidence_digest,
     compute_observation_evidence_fingerprint,
 )
+from ..data.models import InvalidRequest
 from .hypothesis import HypothesisSpecError, HypothesisSpecId
 
 
@@ -511,7 +512,7 @@ def _extract_event_time(observation: FeatureObservation) -> Instant:
     raw_timestamp = match.group(1)
     try:
         candidate = Instant.parse(raw_timestamp)
-    except Exception as exc:
+    except InvalidRequest as exc:
         raise EventDetectionError(
             f"observation {observation.identity} support coordinate {coord!r} contains "
             f"unparseable timestamp {raw_timestamp!r}: {exc}"

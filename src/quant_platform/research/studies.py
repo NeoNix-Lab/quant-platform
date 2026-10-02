@@ -96,6 +96,7 @@ from .events import DetectedEvent, EventSpec
 from .hypothesis import HypothesisSpecError, HypothesisSpecId
 from .outcomes import (
     MarketObservation,
+    OutcomeError,
     OutcomeSpec,
     OutcomeSpecId,
     OutcomeState,
@@ -174,7 +175,7 @@ def _validated_outcome_spec_id(value: Any, field_name: str = "outcome_spec_id") 
     text = _non_empty_text(value, field_name)
     try:
         return str(OutcomeSpecId(text))
-    except Exception as exc:
+    except OutcomeError as exc:
         raise EventStudyError(f"{field_name} must be a valid OutcomeSpecId: {exc}") from exc
 
 

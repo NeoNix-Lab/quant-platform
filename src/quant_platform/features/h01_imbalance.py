@@ -199,6 +199,11 @@ def _require_canonical_diagonal_definition(definition: FeatureDefinition) -> Non
     if not isinstance(definition, FeatureDefinition):
         raise FeatureDefinitionError("definition must be a FeatureDefinition")
     try:
+        # Intentionally broad: the canonical constructor can fail with
+        # FeatureDefinitionError (missing/invalid parameter), decimal.InvalidOperation
+        # (non-numeric ratio), or ValueError/TypeError (bad coercion) depending on
+        # what a caller-supplied definition's parameters contain; all are reported
+        # uniformly as "does not match canonical".
         ratio = _parameter_value(definition, "imbalance_ratio")
         canonical = diagonal_imbalance_definition(imbalance_ratio=ratio)
     except Exception as exc:
@@ -215,6 +220,8 @@ def _require_canonical_stacked_definition(definition: FeatureDefinition) -> None
     if not isinstance(definition, FeatureDefinition):
         raise FeatureDefinitionError("definition must be a FeatureDefinition")
     try:
+        # Intentionally broad: see _require_canonical_diagonal_definition above --
+        # same heterogeneous failure modes, plus int() coercion of stacked_min_levels.
         ratio = _parameter_value(definition, "imbalance_ratio")
         min_levels = int(_parameter_value(definition, "stacked_min_levels"))
         canonical = stacked_imbalance_definition(

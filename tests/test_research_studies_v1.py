@@ -9,12 +9,14 @@ from pathlib import Path
 import sys
 import textwrap
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from quant_platform.features import FeatureDefinitionId, Instant  # noqa: E402
+import quant_platform.research.studies as studies_module  # noqa: E402
 from quant_platform.research import (  # noqa: E402
     AggregateMetrics,
     ComparisonOperator,
@@ -186,6 +188,27 @@ class EventStudySpecIdentityTests(unittest.TestCase):
     def test_rejects_non_outcome_spec_member(self):
         with self.assertRaises(EventStudyError):
             study_spec(outcome_specs=(OUTCOME_SPEC, "not-an-outcome-spec"))
+
+
+class ValidatedOutcomeSpecIdErrorNarrowingTests(unittest.TestCase):
+    """Regression coverage for #246 (H4): _validated_outcome_spec_id narrowed
+    from a bare ``except Exception`` to ``except OutcomeError`` so that an
+    unrelated bug in OutcomeSpecId construction is no longer relabeled as a
+    validation failure."""
+
+    def test_malformed_outcome_spec_id_is_still_wrapped_as_event_study_error(self):
+        with self.assertRaises(EventStudyError) as caught:
+            studies_module._validated_outcome_spec_id("not-a-valid-outcome-spec-id")
+        self.assertIn("must be a valid OutcomeSpecId", str(caught.exception))
+
+    def test_unrelated_construction_error_is_no_longer_masked(self):
+        class _BrokenOutcomeSpecId:
+            def __init__(self, _value):
+                raise TypeError("unexpected constructor failure")
+
+        with mock.patch.object(studies_module, "OutcomeSpecId", _BrokenOutcomeSpecId):
+            with self.assertRaises(TypeError):
+                studies_module._validated_outcome_spec_id("irrelevant")
 
     def test_identity_is_stable_across_independent_processes(self):
         script = textwrap.dedent(

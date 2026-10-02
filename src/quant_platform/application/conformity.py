@@ -228,7 +228,7 @@ def _connect_catalog(dsn: str | None):
         raise HarnessFailure("psycopg is required for catalog operations") from exc
     try:
         return psycopg.connect(dsn) if dsn else psycopg.connect()
-    except Exception as exc:
+    except psycopg.Error as exc:
         raise HarnessFailure("could not connect to the PostgreSQL catalog") from exc
 
 
