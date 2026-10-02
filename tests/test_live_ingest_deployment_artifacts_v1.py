@@ -25,6 +25,32 @@ class LiveIngestDeploymentArtifactTests(unittest.TestCase):
         self.assertNotIn("--max-cycles", text)
         self.assertNotIn("PGPASSWORD", text)
 
+    def test_systemd_unit_documentation_points_at_a_stable_ref(self):
+        text = SERVICE.read_text(encoding="utf-8")
+
+        self.assertIn("Documentation=https://github.com/NeoNix-Lab/quant-platform/blob/main/", text)
+        self.assertNotIn("/blob/governance/", text)
+        self.assertNotIn("/blob/codex/", text)
+        self.assertNotIn("/blob/agent/", text)
+
+    def test_systemd_unit_sandboxing_is_tightened_per_245_h2(self):
+        """Regression coverage for #245 (H2): the unit must use ProtectSystem=strict
+        (not the looser `full`) with an explicit writable exception for the live
+        storage root, plus the four hardening directives the original audit found
+        missing. This proves the unit *file* is correct; acceptance for #245 still
+        requires re-proving the service actually starts, acquires, publishes and
+        checkpoints under this tightened sandboxing on the real homelab host --
+        that step is operator-only and is not covered by this test."""
+        text = SERVICE.read_text(encoding="utf-8")
+
+        self.assertIn("ProtectSystem=strict", text)
+        self.assertNotIn("ProtectSystem=full", text)
+        self.assertIn("ReadWritePaths=/srv/marketdata", text)
+        self.assertIn("PrivateTmp=true", text)
+        self.assertIn("ProtectKernelTunables=true", text)
+        self.assertIn("ProtectControlGroups=true", text)
+        self.assertIn("RestrictNamespaces=true", text)
+
     def test_env_example_is_non_secret_and_complete_for_cli(self):
         text = ENV_EXAMPLE.read_text(encoding="utf-8")
 
