@@ -142,6 +142,51 @@ class StrategyV1Tests(unittest.TestCase):
 
         self.assertNotEqual(first.strategy_identity, second.strategy_identity)
 
+    def test_entry_policy_rejects_flat_direction(self):
+        """ADR-0052 (#250): one EntryPolicy is always exactly one directional
+        side; FLAT is not a valid entry direction (only LONG/SHORT)."""
+        with self.assertRaises(StrategyError):
+            EntryPolicy(
+                policy_key="breakout.entry",
+                direction=Direction.FLAT,
+                signal_key="signal.breakout",
+            )
+
+    def test_direction_has_no_both_value(self):
+        """ADR-0052 (#250): a single EntryPolicy cannot express 'long or short
+        depending on signal' -- Direction has exactly LONG/SHORT/FLAT."""
+        self.assertEqual({"LONG", "SHORT", "FLAT"}, {member.value for member in Direction})
+
+    def test_long_and_short_spec_pair_get_independent_strategy_identities(self):
+        """ADR-0052 (#250): a two-sided strategy is two single-direction
+        StrategySpecs, not one two-sided spec. Proves the pair's own
+        guarantee: specs differing only in entry_policy.direction get
+        different strategy_identity values, hence independent G04
+        session/cooldown state (keyed by strategy_identity)."""
+        long_spec = _spec()
+        short_spec = StrategySpec(
+            strategy_key=long_spec.strategy_key,
+            semantic_version=long_spec.semantic_version,
+            entry_policy=EntryPolicy(
+                policy_key=long_spec.entry_policy.policy_key,
+                direction=Direction.SHORT,
+                signal_key=long_spec.entry_policy.signal_key,
+                confidence=long_spec.entry_policy.confidence,
+            ),
+            exit_policy=long_spec.exit_policy,
+            position_policy=long_spec.position_policy,
+            sizing_policy=long_spec.sizing_policy,
+            risk_policy=long_spec.risk_policy,
+            session_policy=long_spec.session_policy,
+            cooldown_policy=long_spec.cooldown_policy,
+            signal_combination_policy=long_spec.signal_combination_policy,
+            execution_policy=long_spec.execution_policy,
+        )
+
+        self.assertEqual(Direction.LONG, long_spec.entry_policy.direction)
+        self.assertEqual(Direction.SHORT, short_spec.entry_policy.direction)
+        self.assertNotEqual(long_spec.strategy_identity, short_spec.strategy_identity)
+
     def test_strategy_spec_refuses_missing_risk_or_sizing_policy(self):
         spec = _spec()
 
