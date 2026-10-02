@@ -527,6 +527,32 @@ Possible components:
 
 A StrategySpec is not reducible to one event trigger.
 
+`EntryPolicy`/`ExitPolicy` reference signals only by `signal_key`: the actual
+rule/threshold logic that decides what a signal key means (comparison
+operators, indicator thresholds, stop-loss/take-profit levels) is
+deliberately outside this contract's ownership. **`execution_policy` is the
+intended extension point for that logic** (ADR-0051): it is typed as the
+generic `IdentityBackedPolicy` interface (`identity: str`,
+`stable_dict() -> Mapping[str, Any]`) specifically so a consumer's own
+rule/threshold payload participates in `strategy_identity` — two strategies
+differing only in thresholds are guaranteed different identities — without
+the platform ever needing to interpret what those thresholds mean. No other
+StrategySpec component is a supported carrier for this; a consumer should not
+encode rule/threshold content into, for example, `policy_key` strings on
+`EntryPolicy`/`ExitPolicy`, which are plain governed keys, not
+identity-bearing payloads.
+
+`EntryPolicy.direction` is a single `Direction` (`LONG` or `SHORT`; `FLAT` is
+rejected) — one `StrategySpec` always enters in exactly one pre-configured
+direction and cannot express "go long or short depending on signal" or
+reverse directly in a single decision. **A two-sided strategy is expressed as
+two single-direction `StrategySpec`s run side by side** (ADR-0052), not a
+single two-sided spec. This is intentional, not a gap to work around
+silently: each spec in the pair gets its own `strategy_identity` and
+independent G04 session/cooldown state, and H03's existing execution
+conflict model already resolves the (signal-design-error) case where both
+specs' entries fire in the same decision instant.
+
 ---
 
 ## 22. DecisionIntent
@@ -568,6 +594,16 @@ Possible concepts:
 - venue-specific execution constraints.
 
 Execution semantics must be shared between historical replay and live adapters as far as the real venue allows.
+
+`translate_intent` (H01-H03) has no position/ledger state and is stateless
+per call: it does not know whether the caller already holds a
+`DecisionIntent`'s `target_position`, and it does not become a no-op when
+one is already held. **Replaying a persistent entry signal (one that stays
+true across many ticks) admits a new full-size order on every call, not just
+the first — this is intentional, not a defect** (ADR-0053). Gating repeated
+entries (e.g. tracking whether the current entry condition has already been
+acted on) is the caller's responsibility until H04 (portfolio/ledger, issue
+#144) is integrated with this seam.
 
 ---
 

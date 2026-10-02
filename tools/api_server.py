@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.application import (  # noqa: E402
+    DEFAULT_MAX_RESULT_ROWS,
     ApiTransportServerConfig,
     run_api_transport_server,
 )
@@ -48,12 +49,14 @@ async def _run(args: argparse.Namespace) -> int:
         port=args.port,
         catalog_dsn=args.dsn,
         batch_size=args.batch_size,
+        max_result_rows=args.max_result_rows,
         allow_non_loopback=args.allow_non_loopback,
     )
     print("=== J02 API transport server v1 ===")
     print(f"host={config.host}")
     print(f"port={config.port}")
     print(f"batch_size={config.batch_size}")
+    print(f"max_result_rows={config.max_result_rows}")
     await run_api_transport_server(config, stop_event=stop_event)
     print("J02_API_TRANSPORT_SERVER: STOPPED")
     return 0
@@ -65,6 +68,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=int(os.environ.get("QP_API_PORT", "8765")))
     parser.add_argument("--dsn", default=_default_dsn(), help="Catalog DSN; defaults to CATALOG_DSN")
     parser.add_argument("--batch-size", type=int, default=int(os.environ.get("QP_API_BATCH_SIZE", "65536")))
+    parser.add_argument(
+        "--max-result-rows",
+        type=int,
+        default=int(os.environ.get("QP_API_MAX_RESULT_ROWS", str(DEFAULT_MAX_RESULT_ROWS))),
+        help="refuse a query whose result would exceed this many rows (ADR-0050 Amendment 1, #247)",
+    )
     parser.add_argument(
         "--allow-non-loopback",
         action="store_true",

@@ -793,6 +793,44 @@ class TranslateIntentGatingTests(unittest.TestCase):
         self.assertEqual(admission.sizing_decision.size, admission.order.quantity)
         self.assertGreater(admission.order.quantity, Decimal("0"))
 
+    def test_persistent_entry_signal_pyramids_without_an_external_gate(self):
+        """ADR-0053 (#251): translate_intent has no position/ledger awareness
+        and does not recognise 'already at this target'. Replaying the same
+        entry signal across three ticks admits three full-size entry orders,
+        not one -- this is the documented, intentional behavior a caller must
+        gate externally, not a bug."""
+        strategy_spec = spec()
+        tick_times = (
+            OPEN_WEEKDAY_AS_OF,
+            Instant.parse("2026-09-28T15:01:00Z"),
+            Instant.parse("2026-09-28T15:02:00Z"),
+        )
+
+        admissions = [
+            translate_intent(
+                entry_intent(strategy_spec, decision_time=tick_time),
+                strategy_spec,
+                submitted_at=tick_time,
+                reference_price="50000",
+                risk_snapshot=snapshot(observed_at=tick_time),
+                trade_history=eligible_trade_history(tick_time),
+                provenance="test:pyramiding",
+            )
+            for tick_time in tick_times
+        ]
+
+        for admission in admissions:
+            self.assertEqual(AdmissionOutcome.ADMITTED, admission.outcome)
+            self.assertEqual(OrderSide.BUY, admission.order.side)
+            self.assertGreater(admission.order.quantity, Decimal("0"))
+
+        # Three independent orders, each full-sized, not one order reused or
+        # a later call reduced/no-op'd because a target was already reached.
+        quantities = {admission.order.quantity for admission in admissions}
+        self.assertEqual({admissions[0].order.quantity}, quantities)
+        order_ids = {admission.order.order_id for admission in admissions}
+        self.assertEqual(3, len(order_ids))
+
     def test_exit_bypasses_session_cooldown_and_risk_but_requires_explicit_quantity(self):
         strategy_spec = spec(
             cooldown_policy=cooldown_policy(post_loss_cooldown_seconds=3600),

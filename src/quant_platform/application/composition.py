@@ -8,6 +8,7 @@ from ..access.catalog import Catalog
 from ..access.gateway import DataGateway
 from ..source_adapters.bybit import BYBIT_ORDERING_PROVIDER
 from .market_data import (
+    DEFAULT_MAX_RESULT_ROWS,
     ConsumerMarketDataQuery,
     ConsumerMarketDataResult,
     execute_market_data_query,
@@ -23,6 +24,7 @@ class MarketDataApplicationConfig:
 
     catalog_dsn: str = ""
     batch_size: int = DEFAULT_MARKET_DATA_BATCH_SIZE
+    max_result_rows: int = DEFAULT_MAX_RESULT_ROWS
 
     def __post_init__(self) -> None:
         if not isinstance(self.catalog_dsn, str):
@@ -33,6 +35,12 @@ class MarketDataApplicationConfig:
             or self.batch_size < 1
         ):
             raise ValueError("batch_size must be a positive integer")
+        if (
+            not isinstance(self.max_result_rows, int)
+            or isinstance(self.max_result_rows, bool)
+            or self.max_result_rows < 1
+        ):
+            raise ValueError("max_result_rows must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +58,7 @@ class MarketDataApplication:
             query,
             gateway=gateway,
             batch_size=self.config.batch_size,
+            max_result_rows=self.config.max_result_rows,
         )
 
 
@@ -65,6 +74,7 @@ def compose_market_data_application(
 
 __all__ = [
     "DEFAULT_MARKET_DATA_BATCH_SIZE",
+    "DEFAULT_MAX_RESULT_ROWS",
     "MarketDataApplication",
     "MarketDataApplicationConfig",
     "compose_market_data_application",

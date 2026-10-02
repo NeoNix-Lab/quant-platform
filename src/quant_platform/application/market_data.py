@@ -11,7 +11,7 @@ catalog identity, partition identity, storage root or path.  Those are
 resolved here from the requested capability.
 
 C03 adds execution over an *injected* access capability and translation of its
-outcome into either a stable :class:`ConsumerMarketDataResult` or one of the six
+outcome into either a stable :class:`ConsumerMarketDataResult` or one of the
 frozen Consumer API error codes.
 
 Deliberately out of scope: building a gateway, catalog, connection or any
@@ -219,7 +219,12 @@ CONSUMER_QUERY_IDENTITY_DOMAIN = "consumer-market-data-query-v1"
 
 
 class ConsumerErrorCode(str, Enum):
-    """The frozen Consumer API error vocabulary.  This set is closed."""
+    """The frozen Consumer API error vocabulary.
+
+    This set is closed except via an explicit ADR amendment: ADR-0050
+    Amendment 1 (issue #247) added ``RESULT_TOO_LARGE`` to resolve J02's
+    unbounded-response-size defect; it does not reopen any other decision.
+    """
 
     INVALID_REQUEST = "invalid_request"
     UNSUPPORTED_REPRESENTATION = "unsupported_representation"
@@ -227,6 +232,7 @@ class ConsumerErrorCode(str, Enum):
     NO_COVERAGE = "no_coverage"
     SCHEMA_INCOMPATIBLE = "schema_incompatible"
     INTEGRITY_FAILURE = "integrity_failure"
+    RESULT_TOO_LARGE = "result_too_large"
 
 
 class ConsumerApiError(Exception):
@@ -357,7 +363,16 @@ _MESSAGES = {
     ConsumerErrorCode.NO_COVERAGE: "the requested interval is not fully covered",
     ConsumerErrorCode.SCHEMA_INCOMPATIBLE: "the available schema cannot satisfy the request",
     ConsumerErrorCode.INTEGRITY_FAILURE: "the platform cannot produce a trustworthy result",
+    ConsumerErrorCode.RESULT_TOO_LARGE: "the requested interval would return more rows than this API permits in one request",
 }
+
+# ADR-0050 Amendment 1 (#247): the documented v1 bound on one Consumer API
+# result. At the audited ~263 bytes/trade wire encoding, 50_000 rows is
+# ~12.5 MiB of data -- comfortably under J02's 16 MiB wire max_size with
+# headroom for envelope overhead (coverage/provenance/request fields).
+# Shared identically by J02 and J04 (MarketDataApplicationConfig.max_result_rows);
+# changing this value changes both at once by construction.
+DEFAULT_MAX_RESULT_ROWS = 50_000
 
 
 def execute_market_data_query(
@@ -365,6 +380,7 @@ def execute_market_data_query(
     *,
     gateway: Any,
     batch_size: int = 65_536,
+    max_result_rows: int = DEFAULT_MAX_RESULT_ROWS,
 ) -> ConsumerMarketDataResult:
     """Resolve, read and translate one semantic market-data query.
 
@@ -397,6 +413,25 @@ def execute_market_data_query(
         # below this layer and a future batch surface stays available.
         for batch in scan:
             records.extend(batch)
+            if len(records) > max_result_rows:
+                # Stop reading as soon as the bound is exceeded instead of
+                # draining every remaining batch first: DataScan supports this
+                # explicitly (close() aborts without manufacturing final
+                # provenance), so a pathologically large query costs at most
+                # one batch beyond the bound, not an unbounded full scan.
+                scan.close()
+                raise ConsumerApiError(
+                    ConsumerErrorCode.RESULT_TOO_LARGE,
+                    _MESSAGES[ConsumerErrorCode.RESULT_TOO_LARGE],
+                    context={
+                        "row_count": str(len(records)),
+                        "max_result_rows": str(max_result_rows),
+                        "requested_interval": CoverageInterval(
+                            normalized.start, normalized.end
+                        ).stable_dict(),
+                    },
+                    request_identity=request_identity,
+                )
         metadata = scan.completed_metadata
     except DataGatewayError as exc:
         raise _gateway_phase_error(normalized, request_identity, exc) from exc
