@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
+from typing import get_type_hints
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -78,6 +79,11 @@ def _pbo_fixture_panel() -> ComparableTrialPanel:
 
 
 class ComparableTrialPanelTests(unittest.TestCase):
+    def test_observation_identity_annotation_matches_integer_runtime_contract(self):
+        expected = tuple[str | int, ...]
+        for evidence_type in (ComparableTrialPanel, DSRResult, PBOResult):
+            self.assertEqual(expected, get_type_hints(evidence_type)["observation_ids"])
+
     def test_valid_panel_normalizes_order_and_content(self):
         panel = _panel()
         self.assertEqual(("T1", "T2"), panel.trial_ids)
