@@ -223,3 +223,23 @@ At minimum:
 - unified manifest schema for derived datasets;
 - feature catalog tables vs reuse/extension of dataset catalog;
 - live stream catalog/identity semantics.
+
+---
+
+## 13. Server/deck runtime boundary
+
+The homelab server remains the sole authority for canonical datasets, catalog
+resolution, accepted materializations, checkpoints, recovery evidence and
+accepted experiment artifacts.  The GPU deck is a compute consumer for
+replay/training/Omega/notebook work; it cannot mutate canonical storage,
+catalog state, checkpoints, or backups.
+
+Input handoff is by immutable Git code identity plus a server-selected,
+read-only, identity-and-digest-preserving artifact reference or controlled
+export/sync.  A deck result returns only as an immutable evidence bundle to a
+future server-side import/registration seam.  The current J02 WebSocket
+transport is loopback-only by default and lacks authentication/TLS for its
+explicit non-loopback override, so it is not a deck-facing production channel.
+
+See [ADR-0057](../decisions/ADR-0057-server-deck-runtime-topology-v1.md) for
+the operational runbook, security boundary, and the implementation sequencing.
