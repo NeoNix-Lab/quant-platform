@@ -29,6 +29,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+quant_platform = ["py.typed"]
+
 [tool.pytest.ini_options]
 # The suite is executed as scripts by tools/run_tests.py (the CI authority);
 # this only lets `pytest` collect the same files from the repository root.
