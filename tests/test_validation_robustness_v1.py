@@ -320,6 +320,27 @@ class DSRV1Tests(unittest.TestCase):
         self.assertIs(EvaluationStatus.EVALUABLE, result.status)
         self.assertEqual(0.0, result.sr0)
 
+    def test_higher_k_eff_raises_the_benchmark_not_lowers_it(self):
+        """ADR-0037 Amendment 1 (#253): the recommended conservative fallback
+        is k_eff = N precisely because a higher k_eff raises SR0 (harder to
+        beat), not lowers it. Proven here against the real evaluate_dsr_v1
+        path, not a standalone reimplementation of the z_max formula."""
+        trial_ids = tuple(f"T{i}" for i in range(10))
+        panel = _panel(
+            trial_ids=trial_ids,
+            returns={
+                trial_id: (0.01 * (index + 1), 0.02, -0.01, 0.03 - 0.002 * index)
+                for index, trial_id in enumerate(trial_ids)
+            },
+        )
+        low = evaluate_dsr_v1(panel, EffectiveTrialCountEvidence(k_eff=2.0, evidence_id="e:low"))
+        high = evaluate_dsr_v1(panel, EffectiveTrialCountEvidence(k_eff=10.0, evidence_id="e:high"))
+
+        self.assertIs(EvaluationStatus.EVALUABLE, low.status)
+        self.assertIs(EvaluationStatus.EVALUABLE, high.status)
+        self.assertGreater(high.sr0, low.sr0)
+        self.assertLessEqual(high.dsr, low.dsr)
+
     def test_required_trial_sharpe_non_evaluable_propagates(self):
         panel = _panel(
             returns={
