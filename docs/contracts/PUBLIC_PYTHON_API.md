@@ -30,7 +30,7 @@ does not widen those contracts.
 | Import path | Supported v1 purpose |
 | --- | --- |
 | `quant_platform.access` | Historical `DataGateway`, `DataRequest`, `DataSlice`, `DataSliceMetadata`, `CoveragePolicy`, and `LifecyclePolicy`. [DATA_GATEWAY.md](DATA_GATEWAY.md) remains the semantic authority. |
-| `quant_platform.validation` | Availability/purge/embargo classification (`CandidateClassification`, `CandidateClassificationResult`, `Embargo`, `DependencyEvidence`, `ValidationCandidate`, `classify_candidate`); walk-forward primitives (`WalkForwardFold`, `WalkForwardScheduleSpec`, `build_walk_forward_folds`); and F08 DSR-L/PBO (`ComparableTrialPanel`, `EffectiveTrialCountEvidence`, `DSRResult`, `PBOResult`, `evaluate_dsr_v1`, `evaluate_pbo_v1`). |
+| `quant_platform.validation` | Validation temporal inputs (`Instant`, `CoverageInterval`); availability/purge/embargo classification (`CandidateClassification`, `CandidateClassificationResult`, `DependencyCutoffRole`, `DependencyMaturity`, `DependencyLifecycle`, `Embargo`, `DependencyEvidence`, `ValidationCandidate`, `classify_candidate`); walk-forward primitives (`WalkForwardFold`, `WalkForwardScheduleSpec`, `build_walk_forward_folds`); and F08 DSR-L/PBO (`ComparableTrialPanel`, `EffectiveTrialCountEvidence`, `EvaluationStatus`, `DSRResult`, `PBOResult`, `evaluate_dsr_v1`, `evaluate_pbo_v1`). |
 | `quant_platform.replay` | Selected deterministic replay primitives: `ReplaySpec`, `ReplayContext`, `ReplayResult`, `HistoricalReplayRuntime`, `ReplayEngine`, and `ReplayError`. |
 
 Consumers must import from those package paths, not from their implementation
@@ -71,3 +71,13 @@ surface. Additive exports require documentation and an installed-package smoke
 test. Removing or changing a listed import is a future versioned compatibility
 decision. Nothing else is implied public merely because it is importable from a
 source checkout.
+
+## Omega validation bridge phase 1
+
+The phase-1 Omega bridge is governed by
+[ADR-0055](../decisions/ADR-0055-omega-validation-bridge-v1.md). Its
+consumer-facing imports are limited to the documented `quant_platform.validation`
+names above. In particular, the temporal input and dependency enum values are
+public here because they are necessary to construct a `DependencyEvidence`
+honestly; a consumer must not import them from `quant_platform.data.models` or
+`quant_platform.validation.availability`.
