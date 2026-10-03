@@ -64,6 +64,11 @@ are therefore non-portable after a normal package installation. They remain
 test/proof machinery, not supported library functions. This issue documents
 that boundary; it does not move proof code or package fixtures.
 
+[ADR-0056](../decisions/ADR-0056-golden-proof-test-double-boundary-v1.md)
+classifies the Golden modules and their private doubles. A name being re-exported
+by `quant_platform.application` does not override these exclusions or create a
+consumer compatibility promise.
+
 ## Compatibility policy
 
 The listed import paths and exported names are the supported v1 dependency
