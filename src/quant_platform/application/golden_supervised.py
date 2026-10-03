@@ -1,9 +1,11 @@
-"""Wave 5 Golden E2E supervised ML proof composition.
+"""Proof-only Wave 5 Golden E2E supervised ML composition.
 
 This module is an application-owned proof harness for issue #174.  It composes
 the already-governed I04 supervised projection and I05 supervised training
 capabilities over bounded canonical Bybit BTCUSDT fixture evidence, then runs
 the same semantic inputs twice to prove deterministic identities end to end.
+It is fixture-bound proof machinery, not a supported installed-package
+dependency API (ADR-0056).
 """
 
 from __future__ import annotations

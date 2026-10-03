@@ -1,10 +1,13 @@
-"""Application-owned composition for the Wave 4 Golden E2E replay proof (issue #146).
+"""Proof-only application composition for the Wave 4 Golden E2E replay proof (issue #146).
 
 Owns the wiring between a real DataGateway catalog, the minimal breakout
 strategy exercised by this proof, and ``quant_platform.replay``'s runtime --
 so ``tools/golden_replay_e2e.py`` stays a thin CLI that only calls through
 this seam, per ADR-0024 (executable orchestration must not reach directly
 into domain packages).
+
+The policy stubs and feature provider here serve this proof only; they are not
+a supported installed-package dependency API (ADR-0056).
 """
 
 from __future__ import annotations
