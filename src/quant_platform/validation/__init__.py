@@ -1,4 +1,11 @@
-"""Validation-owned temporal schedule, availability/purge/embargo, label and lockbox primitives."""
+"""Validation-owned temporal and robustness primitives.
+
+The names documented in ``PUBLIC_PYTHON_API.md`` are the supported consumer
+surface for constructing validation evidence and evaluating it; imports from
+the implementation submodules remain private.
+"""
+
+from quant_platform.data.models import CoverageInterval, Instant
 
 from .availability import (
     CandidateClassification,
@@ -62,6 +69,7 @@ __all__ = [
     "CandidateClassificationResult",
     "CSCVSplitEvidence",
     "ComparableTrialPanel",
+    "CoverageInterval",
     "DSRResult",
     "DSR_SPEC_VERSION",
     "DependencyCutoffRole",
@@ -71,6 +79,7 @@ __all__ = [
     "EffectiveTrialCountEvidence",
     "Embargo",
     "EvaluationStatus",
+    "Instant",
     "LABEL_DEFINITION_IDENTITY_DOMAIN",
     "LABEL_RESULT_IDENTITY_DOMAIN",
     "LOCKBOX_IDENTITY_DOMAIN",

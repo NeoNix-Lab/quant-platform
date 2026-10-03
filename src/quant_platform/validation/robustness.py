@@ -107,7 +107,7 @@ class ComparableTrialPanel:
 
     population_id: str
     trial_ids: tuple[str, ...]
-    observation_ids: tuple[str, ...]
+    observation_ids: tuple[str | int, ...]
     returns: Mapping[str, tuple[float, ...]]
     return_semantics_id: str
 
@@ -354,7 +354,7 @@ class DSRResult:
     population_id: str
     return_semantics_id: str
     trial_ids: tuple[str, ...]
-    observation_ids: tuple[str, ...]
+    observation_ids: tuple[str | int, ...]
     content_digest: str
     numerical_policy_id: str
     sampling_model: str
@@ -675,7 +675,7 @@ class PBOResult:
     population_id: str
     return_semantics_id: str
     trial_ids: tuple[str, ...]
-    observation_ids: tuple[str, ...]
+    observation_ids: tuple[str | int, ...]
     content_digest: str
     numerical_policy_id: str
     block_count: int
