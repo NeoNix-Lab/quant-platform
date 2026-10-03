@@ -78,7 +78,16 @@ def _python3_shim_dir() -> Path:
     """
     shim_dir = Path(tempfile.mkdtemp())
     shim = shim_dir / "python3"
-    shim.write_text(f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    python_executable = _to_bash_path(Path(sys.executable))
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ -x /usr/bin/python3 ]]; then\n"
+        '  exec /usr/bin/python3 "$@"\n'
+        "fi\n"
+        f'exec "{python_executable}" "$@"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
     shim.chmod(shim.stat().st_mode | stat.S_IEXEC | 0o111)
     return shim_dir
 
@@ -199,11 +208,18 @@ class PromoteMainValidatesBeforeAdvancingTests(unittest.TestCase):
     def _current_sha(self) -> str:
         return _git(["rev-parse", "HEAD"], cwd=self.server_checkout, env=self.env).stdout.strip()
 
+    def test_python3_shim_executes_from_bash(self):
+        shim = _to_bash_path(self.shim_dir / "python3")
+        result = _bash(["-lc", f"{shlex.quote(shim)} --version"], cwd=self.server_checkout, env=self.env)
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def _run_promote(self) -> subprocess.CompletedProcess:
         script = _to_bash_path(PROMOTE_SCRIPT)
-        repo = _to_bash_path(self.server_checkout)
+        shim_dir = _to_bash_path(self.shim_dir)
         command = (
-            f"export QUANT_PLATFORM_REPO={shlex.quote(repo)}; "
+            f"export PATH={shlex.quote(shim_dir)}:\"$PATH\"; "
+            f"export QUANT_PLATFORM_REPO={shlex.quote(self.quant_platform_repo)}; "
             f"export QUANT_PLATFORM_ORIGIN={shlex.quote(self.quant_platform_origin)}; "
             f"exec {shlex.quote(script)}"
         )
