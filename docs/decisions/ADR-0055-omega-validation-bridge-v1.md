@@ -1,6 +1,6 @@
 # ADR-0055 — Omega validation bridge phase 1 v1
 
-**Status:** ACCEPTED  
+**Status:** ACCEPTED
 **Date:** 2026-10-03
 
 ## Context
