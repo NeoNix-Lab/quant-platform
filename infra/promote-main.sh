@@ -81,9 +81,12 @@ fi
 cleanup_validate_dir
 trap - EXIT
 
-# Candidate validated; now advance the operational checkout to the exact
-# commit already validated above (no re-fetch between validation and merge).
-git merge --ff-only origin/main
+# Candidate validated; advance to the exact OID already validated above, not
+# to the mutable origin/main ref -- a remote-tracking ref can still be moved
+# by another process/operator/hook between validation and this merge even
+# with no second fetch in this script, which would promote an unvalidated
+# commit if we re-resolved the ref here instead of pinning to $target.
+git merge --ff-only "$target"
 
 echo "post_promotion_identity:"
 python3 tools/repo_identity.py || {
