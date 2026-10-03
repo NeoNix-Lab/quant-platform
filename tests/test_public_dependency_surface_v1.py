@@ -52,13 +52,35 @@ install_root = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(install_root))
 
 import quant_platform
-from quant_platform.access import DataGateway, DataRequest
-from quant_platform.replay import HistoricalReplayRuntime, ReplayEngine, ReplayError, ReplayResult, ReplaySpec
+from quant_platform.access import (
+    CoveragePolicy,
+    DataGateway,
+    DataRequest,
+    DataSlice,
+    DataSliceMetadata,
+    LifecyclePolicy,
+)
+from quant_platform.replay import (
+    HistoricalReplayRuntime,
+    ReplayContext,
+    ReplayEngine,
+    ReplayError,
+    ReplayResult,
+    ReplaySpec,
+)
 from quant_platform.validation import (
+    CandidateClassification,
+    CandidateClassificationResult,
     ComparableTrialPanel,
+    DSRResult,
     Embargo,
+    DependencyEvidence,
     EffectiveTrialCountEvidence,
+    PBOResult,
     ValidationCandidate,
+    WalkForwardFold,
+    WalkForwardScheduleSpec,
+    build_walk_forward_folds,
     classify_candidate,
     evaluate_dsr_v1,
     evaluate_pbo_v1,
@@ -70,15 +92,28 @@ assert (install_root / "quant_platform" / "py.typed").is_file()
 assert all((
     DataGateway,
     DataRequest,
+    DataSlice,
+    DataSliceMetadata,
+    CoveragePolicy,
+    LifecyclePolicy,
     HistoricalReplayRuntime,
+    ReplayContext,
     ReplayEngine,
     ReplayError,
     ReplayResult,
     ReplaySpec,
     ComparableTrialPanel,
+    CandidateClassification,
+    CandidateClassificationResult,
+    DependencyEvidence,
     Embargo,
     EffectiveTrialCountEvidence,
+    DSRResult,
+    PBOResult,
     ValidationCandidate,
+    WalkForwardFold,
+    WalkForwardScheduleSpec,
+    build_walk_forward_folds,
     classify_candidate,
     evaluate_dsr_v1,
     evaluate_pbo_v1,
