@@ -10,6 +10,7 @@ a passing candidate must be fast-forwarded onto.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -37,19 +38,23 @@ def _require(tool: str) -> None:
 
 
 def _to_bash_path(path: Path) -> str:
-    """Convert a native path to the POSIX form Git Bash/MSYS expects as an
-    argv element. Found in review: MSYS's own path handling for bash's *own*
-    script argument (as opposed to a path embedded inside a quoted command
-    string, which does translate) strips backslashes outright on at least one
-    real Windows checkout -- "D:\\Documents\\...\\x.sh" became the literal,
-    nonexistent "D:Documents...x.sh". Passing an explicit POSIX-style path
-    sidesteps that translation entirely rather than depending on it."""
-    text = str(path)
-    if len(text) >= 2 and text[1] == ":":
-        drive = text[0].lower()
-        rest = text[2:].replace("\\", "/")
-        return f"/{drive}{rest}"
-    return text.replace("\\", "/")
+    """Return the path form understood by the `bash` available on this host.
+
+    The review caught two incompatible Windows bash conventions: Git Bash/MSYS
+    may see a drive path as `/d/...`, while WSL sees the same drive as
+    `/mnt/d/...`. Ask bash itself what the parent directory is, then append the
+    filename as the argv element for the script.
+    """
+    resolved = path.resolve()
+    parent = subprocess.run(
+        ["bash", "-lc", "pwd"],
+        cwd=str(resolved.parent),
+        capture_output=True,
+        text=True,
+    )
+    if parent.returncode != 0 or not parent.stdout.strip():
+        raise unittest.SkipTest(f"bash cannot resolve parent path for {resolved}: {parent.stderr}")
+    return f"{parent.stdout.strip().rstrip('/')}/{resolved.name}"
 
 
 def _bash(args: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
@@ -109,10 +114,12 @@ def _write_candidate_commit_that_pushes_a_sneaky_commit_during_validation(
     local ref at merge time."""
     tools_dir = repo / "tools"
     tools_dir.mkdir(parents=True, exist_ok=True)
+    origin_for_bash = _to_bash_path(origin_bare)
+    server_for_bash = _to_bash_path(server_checkout)
     (tools_dir / "run_tests.py").write_text(
         "import subprocess, sys, tempfile\n"
         "sneaky = tempfile.mkdtemp()\n"
-        f"subprocess.run(['git', 'clone', '-q', {str(origin_bare)!r}, sneaky], check=True)\n"
+        f"subprocess.run(['git', 'clone', '-q', {origin_for_bash!r}, sneaky], check=True)\n"
         "subprocess.run(['git', '-C', sneaky, 'config', 'user.email', 'sneaky@example.invalid'], check=True)\n"
         "subprocess.run(['git', '-C', sneaky, 'config', 'user.name', 'sneaky'], check=True)\n"
         "open(sneaky + '/sneaky.txt', 'w').write('unvalidated concurrent push')\n"
@@ -123,7 +130,7 @@ def _write_candidate_commit_that_pushes_a_sneaky_commit_during_validation(
         # checkout's own* local origin/main ref, as a concurrent hook/fetch
         # would, so a merge that re-resolved origin/main at this point would
         # pick up the unvalidated sneaky commit instead of the validated one.
-        f"subprocess.run(['git', '-C', {str(server_checkout)!r}, 'fetch', 'origin'], check=True)\n"
+        f"subprocess.run(['git', '-C', {server_for_bash!r}, 'fetch', 'origin'], check=True)\n"
         "sys.exit(0)\n",
         encoding="utf-8",
     )
@@ -159,7 +166,27 @@ class PromoteMainValidatesBeforeAdvancingTests(unittest.TestCase):
 
         self.server_checkout = self.holder / "server"
         _git(["clone", "-q", str(self.origin_bare), str(self.server_checkout)], cwd=self.holder, env=self.env)
+        # The test may create the disposable repository with Windows Git and
+        # run the promotion script with WSL Git. Ignore filemode-only noise so
+        # the script's clean-tree guard is testing content changes here.
+        _git(["config", "core.filemode", "false"], cwd=self.server_checkout, env=self.env)
         _git(["checkout", "-q", "main"], cwd=self.server_checkout, env=self.env)
+        _bash(
+            [
+                "-lc",
+                "git config core.filemode false && "
+                "git config core.autocrlf false && "
+                "git config core.eol lf && "
+                "git reset --hard HEAD >/dev/null",
+            ],
+            cwd=self.server_checkout,
+            env=self.env,
+        )
+        _bash(
+            ["-lc", f"git remote set-url origin {shlex.quote(_to_bash_path(self.origin_bare))}"],
+            cwd=self.server_checkout,
+            env=self.env,
+        )
 
         root_result = _bash(["-c", "git rev-parse --show-toplevel"], cwd=self.server_checkout, env=self.env)
         self.quant_platform_repo = root_result.stdout.strip()
@@ -173,7 +200,14 @@ class PromoteMainValidatesBeforeAdvancingTests(unittest.TestCase):
         return _git(["rev-parse", "HEAD"], cwd=self.server_checkout, env=self.env).stdout.strip()
 
     def _run_promote(self) -> subprocess.CompletedProcess:
-        return _bash([_to_bash_path(PROMOTE_SCRIPT)], cwd=self.server_checkout, env=self.env)
+        script = _to_bash_path(PROMOTE_SCRIPT)
+        repo = _to_bash_path(self.server_checkout)
+        command = (
+            f"export QUANT_PLATFORM_REPO={shlex.quote(repo)}; "
+            f"export QUANT_PLATFORM_ORIGIN={shlex.quote(self.quant_platform_origin)}; "
+            f"exec {shlex.quote(script)}"
+        )
+        return _bash(["-lc", command], cwd=self.server_checkout, env=self.env)
 
     def test_failing_candidate_is_rejected_without_moving_the_checkout(self):
         failing_sha = _write_candidate_commit(
