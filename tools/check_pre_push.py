@@ -34,8 +34,8 @@ PROTECTED_GOVERNANCE_FILES = {
 }
 
 
-def run_command(cmd):
-    res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+def run_command(cmd: list[str]) -> tuple[int, str, str]:
+    res = subprocess.run(cmd, capture_output=True, text=True)
     return res.returncode, res.stdout, res.stderr
 
 
@@ -60,14 +60,14 @@ def check_direct_push_to_main(stdin_lines):
 
 def check_syntax_and_formatting():
     # 1. compileall
-    code, out, err = run_command("python -m compileall -q src tests tools")
+    code, out, err = run_command(["python", "-m", "compileall", "-q", "src", "tests", "tools"])
     if code != 0:
         print("[PRE-PUSH ERROR] Python syntax check failed:", file=sys.stderr)
         print(err or out, file=sys.stderr)
         return False
 
     # 2. git diff --check
-    code, out, err = run_command("git diff --check")
+    code, out, err = run_command(["git", "diff", "--check"])
     if code != 0:
         print("[PRE-PUSH ERROR] git diff --check failed (whitespace/conflict markers):", file=sys.stderr)
         print(err or out, file=sys.stderr)
@@ -78,7 +78,7 @@ def check_syntax_and_formatting():
 
 def check_governance_boundary():
     # Get current branch
-    code, branch, _ = run_command("git rev-parse --abbrev-ref HEAD")
+    code, branch, _ = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"])
     branch = branch.strip()
 
     # Governance branches are allowed to edit governance files
@@ -97,14 +97,14 @@ def check_governance_boundary():
     else:
         base = "main"
 
-    merge_base_code, merge_base_out, _ = run_command(f"git merge-base {base} HEAD")
+    merge_base_code, merge_base_out, _ = run_command(["git", "merge-base", base, "HEAD"])
     diff_base = merge_base_out.strip() if merge_base_code == 0 and merge_base_out.strip() else base
 
     # Check changed files against the resolved base, falling back to HEAD~1
     # only if that ref can't be resolved at all (e.g. base not fetched).
-    code, out, _ = run_command(f"git diff --name-only {diff_base}...HEAD")
+    code, out, _ = run_command(["git", "diff", "--name-only", f"{diff_base}...HEAD"])
     if code != 0:
-        code, out, _ = run_command("git diff --name-only HEAD~1")
+        code, out, _ = run_command(["git", "diff", "--name-only", "HEAD~1"])
 
     changed_files = {line.strip().replace("\\", "/") for line in out.splitlines() if line.strip()}
     mutated_protected = changed_files.intersection(PROTECTED_GOVERNANCE_FILES)

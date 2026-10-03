@@ -35,10 +35,10 @@ PROTECTED_GOVERNANCE_FILES = {
 }
 
 
-def run_cmd(cmd: list[str] | str, check: bool = False, capture: bool = True) -> subprocess.CompletedProcess:
-    """Run a shell or list command."""
-    if isinstance(cmd, str):
-        return subprocess.run(cmd, shell=True, capture_output=capture, text=True, cwd=REPO_ROOT, check=check)
+def run_cmd(cmd: list[str], check: bool = False, capture: bool = True) -> subprocess.CompletedProcess:
+    """Run an argv list command without a shell (#240): every caller already
+    passes a list; this signature forces any future call site to keep doing
+    so, rather than silently reintroducing shell string-interpretation."""
     return subprocess.run(cmd, capture_output=capture, text=True, cwd=REPO_ROOT, check=check)
 
 
