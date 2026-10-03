@@ -53,13 +53,37 @@ if [[ -n "$incoming" ]]; then
 else
   echo "incoming_commits: none"
 fi
-git merge --ff-only origin/main
 
-if ! python3 tools/run_tests.py; then
-  echo "promote-main: repository promoted but validation failed; inspect manually; no rollback was attempted" >&2
-  python3 tools/repo_identity.py || true
+# Validate the candidate before moving the operational checkout, in an
+# isolated detached worktree -- a non-destructive, Git-only mechanism that
+# never touches $ROOT. Only once this passes does the real checkout advance.
+validate_dir=$(mktemp -d) || fail "could not create a temporary directory for candidate validation"
+cleanup_validate_dir() {
+  git worktree remove --force "$validate_dir" >/dev/null 2>&1 || rm -rf "$validate_dir"
+}
+trap cleanup_validate_dir EXIT
+
+git worktree add --detach "$validate_dir" "$target" >/dev/null 2>&1 || \
+  fail "could not create a validation worktree for $target"
+
+echo "validating_candidate: $target (isolated worktree: $validate_dir)"
+if ! (cd "$validate_dir" && python3 tools/run_tests.py); then
+  echo "promote-main: FATAL: candidate $target failed validation in an isolated worktree." >&2
+  echo "  operational checkout was NOT moved." >&2
+  echo "  previous_sha (still checked out) = $sha" >&2
+  echo "  target_sha (rejected candidate)  = $target" >&2
+  echo "  next: inspect the candidate manually, e.g.:" >&2
+  echo "    git worktree add --detach /tmp/promote-inspect $target" >&2
+  echo "    cd /tmp/promote-inspect && python3 tools/run_tests.py" >&2
   exit 1
 fi
+
+cleanup_validate_dir
+trap - EXIT
+
+# Candidate validated; now advance the operational checkout to the exact
+# commit already validated above (no re-fetch between validation and merge).
+git merge --ff-only origin/main
 
 echo "post_promotion_identity:"
 python3 tools/repo_identity.py || {
