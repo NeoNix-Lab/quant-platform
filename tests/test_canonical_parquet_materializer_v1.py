@@ -27,7 +27,7 @@ from quant_platform.data.materializer import (  # noqa: E402
     materialize_trade_v1,
     physical_artifact_sha256,
 )
-from quant_platform.data.parquet import _COLUMNS, read_trade_v1  # noqa: E402
+from quant_platform.data.parquet import _COLUMNS, read_trade_v1, scan_trade_v1  # noqa: E402
 from quant_platform.ordering import OrderingProvider  # noqa: E402
 from quant_platform.source_adapters.bybit import (  # noqa: E402
     BybitTradeV1EligibilityError,
@@ -264,6 +264,33 @@ class CanonicalParquetMaterializerV1Tests(unittest.TestCase):
             (self.root / "plain.parquet").read_bytes(),
             (self.root / "compressed.parquet").read_bytes(),
         )
+
+    def test_selected_profile_scans_identical_ordered_rows_across_layouts(self):
+        records = [
+            trade("2024-01-15T00:00:00.1Z", "1"),
+            trade("2024-01-15T00:00:00.2Z", "2", aggressor_side="sell"),
+            trade("2024-01-15T00:00:00.3Z", "3"),
+        ]
+        selected_path = self.root / "selected.parquet"
+        alternate_path = self.root / "alternate.parquet"
+        materialize_bybit_trade_v1(selected_path, records, dataset_identity=IDENTITY)
+        materialize_bybit_trade_v1(
+            alternate_path,
+            records,
+            dataset_identity=IDENTITY,
+            compression="gzip",
+            row_group_size=1,
+        )
+
+        selected_file = pq.ParquetFile(selected_path)
+        try:
+            self.assertEqual(1, selected_file.metadata.num_row_groups)
+            self.assertEqual("ZSTD", selected_file.metadata.row_group(0).column(0).compression)
+        finally:
+            selected_file.close()
+        selected_rows = [row for batch in scan_trade_v1(selected_path, START, END, batch_size=2) for row in batch]
+        alternate_rows = [row for batch in scan_trade_v1(alternate_path, START, END, batch_size=2) for row in batch]
+        self.assertEqual(selected_rows, alternate_rows)
 
     def test_physical_hash_is_exact_file_sha256(self):
         path = self.root / "hash.parquet"
