@@ -502,3 +502,17 @@ supervised evaluation/owned-registration boundary. J11 Replay remains deferred:
 accepted semantic, serializable reference. A later ADR must supply that
 authority before any Replay consumer request can exist. Long-running work is
 admitted through J03, never emulated by a client-held synchronous request.
+
+## 13. Additive transport evolution
+
+ADR-0066 keeps `j02-request-v1`/`j02-response-v1` as one complete exchange,
+including their typed `RESULT_TOO_LARGE` refusal. A later J14 finite-result
+family may frame only an already-produced complete result with a declared
+logical result identity, deterministic chunk indices, per-chunk and complete
+payload digests, and a transfer-local resume token. Frames are never
+application-level pages or a cursor for a new query.
+
+No live Consumer message is defined by that transport decision. Any future live
+family must first have application-owned semantics and, when carrying B06,
+serialize ADR-0047's `LiveStreamCursorV1` and event vocabulary unchanged. A
+finite transfer id must never be treated as a B06 cursor.
