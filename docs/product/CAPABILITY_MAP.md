@@ -41,7 +41,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Representation | CandleDefinition v1 | FROZEN | COMPLETE | Representation | D02 | Accepted semantic contract; runtime is a separate capability. |
 | Representation | Historical Candle computation | FROZEN | COMPLETE | Representation | D03 | On-demand CLOSED candles. |
 | Representation | Incremental/live Candle computation | FROZEN | COMPLETE | Representation | D04 | PR #205 implements incremental/live candle computation; PR #208 composes B06 into D04 with gap-safe watermarking; PR #212 proves the bounded Wave 6 live-candle path. |
-| Representation | Candle materialization identity | OPEN_BLOCKING | MISSING | Representation | D05 | DG-A candle-materialization branch; not a prerequisite of canonical H01. |
+| Representation | Candle materialization identity | FROZEN | MISSING | Representation | D05 | ADR-0059 freezes representation-artifact identity and the replay-input-profile shape; no runtime/materialization/replay access is implemented. Not a prerequisite of canonical H01. |
 | Representation | Footprint representation | FROZEN | COMPLETE | Representation | D06 | FootprintDefinition v1 exact duration/tick-grid/sparse levels/finality; ADR-0027. |
 | Features | Definition/set/artifact separation | FROZEN | COMPLETE | Feature Engine | E01 | Architectural identity separation accepted. |
 | Features | FeatureDefinition v1 | FROZEN | COMPLETE | Feature Engine | E02 | ADR-0026 accepted; runtime semantic foundation implemented. |
@@ -76,7 +76,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | RL | Strategic RL contract | OPEN_BLOCKING | MISSING | Strategic RL | I06 | DG-G strategic-RL branch. |
 | RL | Execution RL contract | OPEN_BLOCKING | MISSING | Execution RL | I07 | DG-G execution-RL branch; structurally separate from strategic RL. |
 | Interfaces | Consumer API semantic boundary | FROZEN | COMPLETE | Application/API | J01 | ADR-0020; semantic API is not a DataGateway wrapper and does not imply transport runtime. |
-| Interfaces | Canonical API transport | RESOLVED | COMPLETE | API Runtime | J02 | ADR-0050; HTTP JSON transport over the frozen Consumer API semantics, implemented in Wave 7. |
+| Interfaces | Canonical API transport | RESOLVED | COMPLETE | API Runtime | J02 | ADR-0050; WebSocket transport over the frozen Consumer API semantics, implemented in Wave 7. Amendment 1 froze a 50,000-row/16 MiB result bound; auth/TLS for non-loopback deployment remains explicitly open (DG-J G1). |
 | Runtime | Job runtime | OPEN_BLOCKING | MISSING | Runtime | J03 | DG-G job branch; durable identity/retry/result semantics. |
 | Clients | CLI | RESOLVED | COMPLETE | Client Layer | J04 | Thin canonical CLI client integrated in Wave 7. |
 | Clients | TUI | RESOLVED | COMPLETE | Client Layer | J05 | Thin canonical TUI client integrated in Wave 7. |
@@ -130,6 +130,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Wave 5 Experiment / Supervised ML | COMPLETE | I03/I04/I05 integrated by PR #178/#177/#179; PR #180 / issue #174 records Golden supervised E2E PASS with stable projection, run, metric and artifact identities. |
 | Wave 6 Live Consumer Data Plane & Storage Lifecycle | COMPLETE | B06/D04/K07/K09 are frozen and implemented by ADR-0047/0048/0049, PR #204/#205/#208/#209/#211, and Golden proof PR #212. |
 | Wave 7 API & Platform Transport | COMPLETE | J02/J04/J05/J06 are implemented by ADR-0050 and PR #225/#226/#227/#228. Issue #222 is closed by explicit operator exception without claiming an additional Golden proof artifact. |
+| Omega external-audit stabilization line (`implement/omega`, tracking #232) | COMPLETE for the audited findings | Not a wave; a post-Wave-7 stabilization line reconciling an external audit from integrating `NeoNix-Lab/omega`. 25 PRs (#254, #256-#278) merged: safety tooling/package hygiene (#254), workflow non-wave integration-branch detection (#256), exception-handling narrowing (#257), SQLite covering-index preflight (#258), systemd hardening (#259), J02 result-size bound (ADR-0050 Am.1, #260), StrategySpec extensions (ADR-0051/52/53, #261-263), A07 day-boundary (ADR-0054, #264), H05 repeated-entry gating (#265-266), `k_eff` permanent disposition (ADR-0037 Am.1, #267), `shell=True` removal (#268), promotion-candidate validation (#269), public dependency surface (#270), Omega validation bridge (ADR-0055, #271), Golden proof/test-double boundary (ADR-0056, #272), server/deck topology (ADR-0057, #273), replay sweep orchestration boundary (ADR-0058, #274), D05 representation-replay input (ADR-0059, #275), canonical replay I/O profile (ADR-0060, #276), replay summary mode (ADR-0061, #277), and replay strategy-identity caching (#278). This governance pass (issue "Omega stabilization-line reconciliation and platform-v1.0 service-topology scope") reconciles the above into governance state; it adds no new code itself. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
@@ -138,10 +139,22 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 
 Wave 7 API & Platform Transport is closed on `implement/wave-7`: ADR-0050 and PR #225/#226/#227/#228 complete J02/J04/J05/J06. Issue #222 was closed by explicit operator exception during expedited closeout, so this state does not claim an additional dedicated Golden E2E artifact.
 
+The post-Wave-7 `implement/omega` stabilization line reconciles an external
+audit (tracking #232) rather than opening a new wave. It is now reconciled
+into governance state (see the checkpoint row above); it resolved eight design
+gates (ADR-0054-0061) and nine implementation/hardening slices, and amended
+ADR-0037 and ADR-0050. It does not select a new runtime/product frontier by
+itself.
+
 The DG-B long-gap remediation proposition remains disposed `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` (#110): A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval filled/lossless until an authoritative repair source/path proves the missing support. ADR-0044 carries this forward as accepted fail-closed behavior rather than reopening DG-B.
 
-DG-B has no remaining B06 atom blocker after Wave 6; its only still-disposed proposition is issue #110's long-gap remediation rule. DG-H has no currently identified open atom after K07/K09 completion. DG-G remains open only for I06, I07 and J03. DG-I is resolved by Wave 7. J07 remains missing and is not implemented by the Wave 7 closeout.
+DG-B has no remaining B06 atom blocker after Wave 6; its only still-disposed proposition is issue #110's long-gap remediation rule. DG-H has no currently identified open atom after K07/K09 completion. DG-G remains open only for I06, I07 and J03. DG-I is resolved by Wave 7, except J02's auth/TLS disposition, which the new DG-J gate G1 covers (see `OPEN_DECISIONS.md`). J07 remains missing and is not implemented by the Wave 7 closeout or the Omega stabilization line.
 
-No new runtime/product frontier is selected by this closeout. J07, J08, RL, broker/live execution, second venue and L1/L2/L3 market depth remain outside the completed Wave 7 scope. Frontier/readiness state is **not concurrent implementation authorization**.
+`SCOPE.md`'s "Wave 8 — Full Platform API & Remote Service Topology v1" projects
+the next bounded scope as design gates `DG-J` G1-G6 first; it is a projection,
+not an authorization, and authorizes no implementation by itself. J07, J08, RL,
+broker/live execution, second venue and L1/L2/L3 market depth remain outside
+both the completed Wave 7 scope and this projection. Frontier/readiness state
+is **not concurrent implementation authorization**.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.
