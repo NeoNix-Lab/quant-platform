@@ -2,6 +2,22 @@
 
 Accepted ADRs are historical records. New decisions supersede old ones; accepted ADRs are not rewritten to hide changed meaning.
 
+## Amendment policy
+
+An accepted ADR may receive a dated, append-only **Amendment** section recording
+a narrower, later decision that does not contradict the original (e.g. ADR-0037
+Amendment 1, ADR-0050 Amendment 1). The original Decision/Context/Consequences
+prose is not rewritten to a new meaning by an amendment.
+
+The one narrow exception: where an amendment changes a fact the original prose
+states as a plain count or claim (for example, "the six frozen `ConsumerErrorCode`
+values" after Amendment 1 added a seventh), the original text may be corrected
+in place with an inline forward-pointer to the amendment that changed it
+("six originally, seven as of Amendment 1"). This is a factual-consistency fix,
+not a reinterpretation of what was decided, and must not be used to change the
+substance of an original decision. A change in substance is a supersession
+(a new ADR number) or a new design gate, never an in-place rewrite.
+
 | ADR | Title | Status |
 |---|---|---|
 | 0001–0015 | Bootstrap architecture decisions | Accepted |
@@ -44,5 +60,12 @@ Accepted ADRs are historical records. New decisions supersede old ones; accepted
 | 0052 | StrategySpec two-sided exposure via spec pairs v1 | Accepted |
 | 0053 | `translate_intent` caller-gated repeated entries v1 | Accepted |
 | 0054 | A07 historical acquisition day-boundary v1 | Accepted |
+| 0055 | Omega validation bridge phase 1 v1 | Accepted |
+| 0056 | Golden proof and test-double boundary v1 | Accepted |
+| 0057 | Server/deck runtime topology and artifact handoff v1 | Accepted |
+| 0058 | Replay sweep orchestration boundary v1 | Accepted |
+| 0059 | D05 materialized representation and replay input v1 | Accepted |
+| 0060 | Canonical replay I/O materialization profile v1 | Accepted |
+| 0061 | Replay summary output mode v1 | Accepted |
 
 See the individual ADR files for context and consequences.

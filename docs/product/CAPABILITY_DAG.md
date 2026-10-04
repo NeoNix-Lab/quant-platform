@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 7 API & Platform Transport complete on `implement/wave-7`**.
+Status: **CANONICAL; Wave 7 API & Platform Transport complete on `implement/wave-7`; Omega stabilization line (tracking #232) reconciled on `implement/omega`; Wave 8 — Full Platform API & Remote Service Topology v1 projected as design gates (`DG-J`), not yet authorized.**
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,21 +10,33 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after Wave 7 closeout:
+Current audited inventory after the Omega stabilization-line reconciliation and
+the Wave 8 projection (recomputed mechanically from the atom tables below, not
+by hand):
 
 ```text
-TOTAL_ATOMS                     = 87
-CLASSIFIED_ATOMS                = 87
+TOTAL_ATOMS                     = 96
+CLASSIFIED_ATOMS                = 96
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 74 / 87 = 85.1%
-OPEN_BLOCKING                   = 6
+SEMANTIC_FROZEN_OR_RESOLVED     = 75 / 96 = 78.1%
+OPEN_BLOCKING                   = 14
 OPEN_DEFERABLE                  = 7
-ROADMAP_DEFINED                 = 74 + 6 + 7 = 87
-ROADMAP_PLANNING_COMPLETENESS   = 87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         = 69 / 87 = 79.3%
+ROADMAP_DEFINED                 = 75 + 14 + 7 = 96
+ROADMAP_PLANNING_COMPLETENESS   = 96 / 96 = 100%
+IMPLEMENTATION_COMPLETE         = 69 / 96 = 71.9%
 ```
 
-The 100% planning score does **not** mean 100% of future semantics are frozen. It means every atom is classified and every unresolved atom proposition has a bounded activation rule. The 85.1% semantic-freeze/resolution score must not be increased by prematurely deciding second-provider, L1/L2/L3, RL or unrelated operational semantics.
+Nine new atoms (`J09`-`J15`, `K12`, `K13`) were added for the Wave 8 projection,
+all `OPEN_BLOCKING`/`MISSING`; `D05`'s decision state moved from
+`OPEN_BLOCKING` to `FROZEN` under ADR-0059 (implementation stays `MISSING`).
+The semantic-freeze/resolution percentage **dropped** from 85.1% to 78.1%
+because nine new, deliberately unresolved atoms entered the count — this is
+not planning regression; it is nine real future decisions becoming visible
+instead of absent. The 100% planning score does **not** mean 100% of future
+semantics are frozen. It means every atom is classified and every unresolved
+atom proposition has a bounded activation rule. This score must not be
+increased by prematurely deciding second-provider, L1/L2/L3, RL, the new
+`DG-J` gates, or unrelated operational semantics.
 
 The selected Live Ingest scope also carried one explicit **scope-level DG-B proposition** that is not a new atom and therefore is not included in the 87-atom counts: remediation of live gaps that exceed the bounded provider reconciliation window. It is now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110) -- see DG-B below -- and remains `OPEN_BLOCKING` as a standing rule for claiming any such gap filled/lossless, while A11/K10 are allowed to record the gap explicitly and continue with a new governed segment.
 
@@ -110,7 +122,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | D02 | CandleDefinition v1 | Representation | A01,D01 | D03,D04 | FROZEN | COMPLETE | Accepted definition/hash/schema semantics; ADR-0021 |
 | D03 | Historical candle computation | Representation | B02,D02 | D05,E03 | FROZEN | COMPLETE | Reproducible CLOSED candles on demand |
 | D04 | Incremental/live candles | Representation | B06,D02 | J07 | FROZEN | COMPLETE | PR #205 implements PARTIAL/CLOSED live candle computation; PR #208 composes B06 into D04; PR #212 Golden proof |
-| D05 | Candle materialization identity | Representation | D02,D03,A02,A03 | research reuse | OPEN_BLOCKING | MISSING | Persisted series binds definition/source/support; DG-A candle-materialization branch |
+| D05 | Candle materialization identity | Representation | D02,D03,A02,A03 | research reuse | FROZEN | MISSING | ADR-0059 freezes representation-artifact identity and replay-input-profile shape; runtime/materialization/replay access not implemented |
 | D06 | Footprint representation | Representation | A01,D01 | E06 | FROZEN | COMPLETE | FootprintDefinition v1 exact duration/tick grid/sparse levels/finality; ADR-0027 |
 
 ### E — Feature
@@ -175,13 +187,20 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
 | J01 | Consumer API semantics | Application/API | D01 | C02,J02 | FROZEN | COMPLETE | Stable semantic selector/result/error boundary; ADR-0020 |
-| J02 | Canonical API transport | API Runtime | C03,real client need | J04-J06 | RESOLVED | COMPLETE | ADR-0050; HTTP JSON transport preserves Consumer API semantics without domain/storage logic |
+| J02 | Canonical API transport | API Runtime | C03,real client need | J04-J06 | RESOLVED | COMPLETE | ADR-0050; WebSocket transport preserves Consumer API semantics without domain/storage logic. Amendment 1 froze a 50,000-row/16 MiB bound; auth/TLS for non-loopback remains open (see J09/DG-J G1) |
 | J03 | Job runtime | Runtime | C03,I02 | long operations | OPEN_BLOCKING | MISSING | Durable identity/retry/result semantics; DG-G job branch |
 | J04 | CLI client | Client Layer | J02 or explicitly bounded in-process C03 | operator workflow | RESOLVED | COMPLETE | Thin client; no quantitative/storage logic |
 | J05 | TUI client | Client Layer | J02 | interactive workflow | RESOLVED | COMPLETE | Same canonical semantics |
 | J06 | App UI | Client Layer | J02 | product workflow | RESOLVED | COMPLETE | Business logic remains behind service boundary |
 | J07 | Paper/shadow mode | Runtime | A11,H05,I05,J02,K03 | J08 | RESOLVED | MISSING | Same decisions, simulated routing, explicit evidence |
 | J08 | Live product mode | Runtime/Operations | J07,K02,K03,K05,K06,K08,K09,K10 | production | RESOLVED | MISSING | Explicit authorization/audit/recovery gates |
+| J09 | Authenticated/TLS transport v1 | API Runtime | J02 | K12,K13,J10-J13,J15 | OPEN_BLOCKING | MISSING | Wave 8 projection, `DG-J` G1; auth/TLS/authorization/least-privilege for non-loopback J02; ADR-0050 Am.1 §3, ADR-0057 §4 |
+| J10 | Strategy Consumer-API seam v1 | Application/API | C03,G01-G04,J02 | J04-J06 extension | OPEN_BLOCKING | MISSING | Wave 8 projection, `DG-J` G4; `C02`/`C03`-shaped seam for Strategy over existing J02 |
+| J11 | Replay Consumer-API seam v1 | Application/API | C03,H05,J02 | J04-J06 extension | OPEN_BLOCKING | MISSING | Wave 8 projection, `DG-J` G4; `C02`/`C03`-shaped seam for deterministic Replay over existing J02 |
+| J12 | Validation Consumer-API seam v1 | Application/API | C03,F06-F08,J02 | J04-J06 extension | OPEN_BLOCKING | MISSING | Wave 8 projection, `DG-J` G4; `C02`/`C03`-shaped seam for Validation over existing J02 |
+| J13 | Training Consumer-API seam v1 | Application/API | C03,I03-I05,J02 | J04-J06 extension | OPEN_BLOCKING | MISSING | Wave 8 projection, `DG-J` G4; `C02`/`C03`-shaped seam for supervised Training over existing J02 |
+| J14 | Streaming/live transport extension v1 | API Runtime | J02 | future live consumer seams | OPEN_BLOCKING | MISSING | Wave 8 projection, `DG-J` G5; chunked/streamed/cursor/live message types, additive per ADR-0050 §1; not required by G1-G4 |
+| J15 | Omega API client adapter v1 | Client Layer | J02,J09,PUBLIC_PYTHON_API.md | first real remote-API client | OPEN_BLOCKING | MISSING | Wave 8 projection, `DG-J` G6; wire-vs-public-Python-API contract, version/compat policy, acceptance proof; ADR-0055 |
 
 ### K — Operations
 
@@ -198,6 +217,8 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | K09 | Retention/deletion authority | Operations | K08 | sustainable live | FROZEN | COMPLETE | ADR-0049; never delete protected/sole recoverable evidence; PR #211 implementation; PR #212 Golden proof |
 | K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | FROZEN | COMPLETE | ADR-0042; PR #114 implements persisted checkpoint/recovery + full hermetic proof matrix; PR #122 closes the bounded real-server restart/deployed checkpoint proof (issues #109, #121) |
 | K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; Wave 4 closeout reconciled by governance issue #147 |
+| K12 | Server-owned admitted-input export/reference v1 | Operations | K02,B01-B04 | deck/consumer-machine compute | OPEN_BLOCKING | MISSING | Wave 8 projection, `DG-J` G3; read-only, identity-and-digest-preserving export/reference so a filesystem path is never an input identity; ADR-0057 §2,§6 |
+| K13 | Governed experiment-result import/registration v1 | Operations | K12,I01,I02 | attributable deck results | OPEN_BLOCKING | MISSING | Wave 8 projection, `DG-J` G3; validates declared input identities/digests before registering a governed result/artifact; ADR-0057 §2-§3,§6 |
 
 ## Dependency integrity
 
@@ -213,15 +234,19 @@ K08/A11/K02/K10 are now complete for the selected first live-ingest path, includ
 
 ## Decision gates
 
-There are now **13 unresolved atom decisions** (6 `OPEN_BLOCKING`, 7 `OPEN_DEFERABLE`) grouped into gate families. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
+There are now **21 unresolved atom decisions** (14 `OPEN_BLOCKING`, 7 `OPEN_DEFERABLE`) grouped into gate families; nine of the fourteen `OPEN_BLOCKING` atoms (`J09`-`J15`, `K12`, `K13`) are the new `DG-J` Wave 8 projection, not yet authorized for implementation. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
 
 A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path.
 
 ### DG-A — Representation / Feature integration
 
-Remaining open atom-specific branch:
-
-- `D05` candle-materialization identity: activate only when persisted Candle results are selected.
+`D05` candle-materialization identity: **semantic decision FROZEN** under
+ADR-0059 (representation-artifact identity; candle support/availability;
+replay-input-profile shape, including the non-interchangeability of tick and
+representation replay absent a future declared bar-close profile).
+Implementation remains `MISSING`: no runtime, materialization, or
+representation-replay access exists. Activate implementation only when
+persisted Candle results are actually selected.
 
 The canonical H01 branch is **RESOLVED** under ADR-0035. `D06` FootprintDefinition v1 is frozen and complete under ADR-0027; `E02` FeatureDefinition v1 is frozen and complete under ADR-0026; `E04` FeatureArtifact v1 is frozen and complete under ADR-0034; E05 is complete; E06 semantic integration is frozen under ADR-0035 and implementation is `COMPLETE`.
 
@@ -289,6 +314,31 @@ boundary. Issue #222 was closed by explicit operator exception during expedited
 Wave 7 closeout, so this section does not claim an additional dedicated Golden
 E2E artifact beyond the merged slice evidence.
 
+ADR-0050 Amendment 1 froze J02's result-size bound and wire `max_size`; it left
+authentication/TLS for non-loopback deployment explicitly open. That gap is
+not reopened here — it is the new `J09`/`DG-J` G1 atom below, which this
+section's `COMPLETE` disposition for J02 does not cover.
+
+### DG-J — Remote Service Topology (Wave 8 design gates) — PROJECTED, not authorized
+
+New gate family for `SCOPE.md`'s "Wave 8 — Full Platform API & Remote Service
+Topology v1" projection. Six gates (`G1`-`G6`, full text in
+`OPEN_DECISIONS.md`) must each resolve through its own ADR before the atom(s)
+it blocks may be implemented:
+
+- **G1** -> `J09` (auth/TLS/authorization for non-loopback J02);
+- **G2** -> activates existing `J03` (job runtime) as a Wave 8 prerequisite, not a new atom;
+- **G3** -> `K12` (admitted-input export/reference), `K13` (governed result import/registration);
+- **G4** -> `J10`-`J13` (per-domain Consumer-API seams: Strategy, Replay, Validation, Training);
+- **G5** -> `J14` (streaming/live transport extension);
+- **G6** -> `J15` (Omega API client adapter).
+
+None of `J09`-`J15`, `K12`, `K13` or the reactivated `J03` prerequisite is
+implemented, scheduled concurrently, or authorized by this listing. Being
+classified here satisfies roadmap-planning completeness; it is not an
+implementation go-ahead. `SCOPE.md` governs activation order and mutation
+policy for whichever gate is opened first.
+
 ## Vertical milestones
 
 | ID | Path | Proposition | State |
@@ -301,7 +351,7 @@ E2E artifact beyond the merged slice evidence.
 | V6 | Research -> Validation | Populations are leakage-safe and labels/censoring are explicit | COMPLETE (`F06` + `F07`) |
 | V7 | Strategy -> Replay | Decision/risk becomes deterministic orders/fills/portfolio replay | COMPLETE (`G01`-`G04` + `H01`-`H05`; ADR-0045/ADR-0046; PR #161/#146 Golden PASS) |
 | V8 | Historical -> Live | Historical and live paths converge under repair/coverage/cursor/recovery/storage guarantees | COMPLETE for bounded data-plane/storage lifecycle path under ADR-0043/ADR-0044/ADR-0047/ADR-0048/ADR-0049 and PR #212; broader live product gates remain open |
-| V9 | Application -> API -> Client | One application semantic implementation serves thin clients | COMPLETE for bounded HTTP JSON transport and thin clients; #222 exceptional Golden waiver |
+| V9 | Application -> API -> Client | One application semantic implementation serves thin clients | COMPLETE for bounded WebSocket transport and thin clients; #222 exceptional Golden waiver |
 | V10 | Paper -> Live | Full canonical stack crosses explicit operational authorization gate | BLOCKED |
 
 ## Execution frontier
@@ -311,10 +361,24 @@ PR #225/#226/#227/#228 complete J02/J04/J05/J06. Issue #222 was closed by
 explicit operator exception during expedited closeout, so this document does
 not claim an additional dedicated Golden E2E artifact.
 
-No new runtime/product frontier is selected by this document. The closeout does
-not activate H06, I06-I07, J07/J08, RL, live broker execution, second venue or
-L1/L2/L3 market depth. J07 remains `MISSING`; Wave 7 completes the bounded
-API/client path only.
+The post-Wave-7 `implement/omega` stabilization line (tracking #232) is now
+reconciled: eight design gates (ADR-0054-0061) and nine implementation/
+hardening slices merged across PR #254, #256-#278, plus amendments to
+ADR-0037 and ADR-0050. It resolves `D05`'s semantics (still `MISSING`
+implementation) and closes several audit findings; it does not select a new
+runtime/product frontier by itself.
+
+`SCOPE.md`'s "Wave 8 — Full Platform API & Remote Service Topology v1"
+projects the next bounded scope as `DG-J` design gates `G1`-`G6` (new atoms
+`J09`-`J15`, `K12`, `K13`, plus reactivating existing `J03`). This is a
+projection, not an authorization: no atom above moves past `OPEN_BLOCKING`/
+`MISSING` until its own gate's ADR is accepted and a dedicated implementation
+issue is opened.
+
+No new runtime/product frontier is authorized by this document. Neither the
+Wave 7 closeout, the Omega stabilization line, nor the Wave 8 projection
+activates H06, I06-I07, J07/J08, RL, live broker execution, second venue or
+L1/L2/L3 market depth. J07 remains `MISSING`.
 
 This is a **frontier, not concurrent authorization**. `SCOPE.md` records the
 closed scope and its exclusions.
@@ -391,7 +455,13 @@ Wave 4  Strategy / Replay                                 COMPLETE (G01-G04,H01-
 Wave 5  Experiment / Supervised ML                       COMPLETE (I01-I05; Golden supervised E2E PASS)
 Wave 6  Live Data Plane                                   COMPLETE (B06,D04,K07,K09 plus credited K02,K03,K04,K05,K06,K08,K10,A10,A11,A16; Golden PASS)
 Wave 7  Runtime / Clients                                 COMPLETE (J02 -> J04/J05/J06; exceptional Golden waiver)
-Wave 8  Paper / Live product                             J07 then J08 after required data/execution/ops gates
+Wave 8  Full Platform API & Remote Service Topology v1    PROJECTED (DG-J gates G1-G6; not yet authorized)
+Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
+Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```
+
+See `ROADMAP.md`'s "Post-Wave-7 sequencing" for the explicit priority rationale
+(usability of existing capabilities first); this is a priority order, not
+concurrent authorization for Wave 9 or Wave 10.
 
 Parallelism is allowed whenever DAG dependencies are satisfied. The closed Live Ingest scope nevertheless preserves the repository rule that governed it: one bounded mutation slice at a time.

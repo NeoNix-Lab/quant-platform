@@ -65,6 +65,33 @@ Resolved architecture includes:
 - K07 storage tier relocation semantics under [ADR-0048](../decisions/ADR-0048-storage-tier-relocation-v1.md);
 - K09 retention/deletion authority semantics under [ADR-0049](../decisions/ADR-0049-retention-deletion-authority-v1.md).
 
+### Resolved via the Omega stabilization line (`implement/omega`, tracking #232)
+
+- A07's one-UTC-day/BTCUSDT-linear acquisition boundary is frozen, permanent and
+  intentional (not a temporary v1 gap) under [ADR-0054](../decisions/ADR-0054-a07-historical-acquisition-day-boundary-v1.md); multi-day/date-range consumers loop day-by-day.
+- F08's `k_eff` effective-trial-count evidence is permanently caller-supplied,
+  never estimated by the platform, under ADR-0037 Amendment 1, which also
+  records the recommended conservative fallback (`k_eff = N`).
+- StrategySpec's `execution_policy` slot is the intended extension point for
+  consumer-owned signal rule/threshold logic (ADR-0051); a two-sided strategy
+  is a pair of single-direction StrategySpecs, not a new two-sided contract
+  (ADR-0052); `translate_intent` stays stateless and caller-gated for repeated
+  entries, both at the `translate_intent` seam and at H05 `HistoricalReplayRuntime`
+  (ADR-0053).
+- J02's result-size bound and wire `max_size` are frozen (ADR-0050 Amendment 1);
+  its authentication/TLS gap remains explicitly open (see above and Wave 8
+  design gate G1).
+- D05's representation-artifact identity and replay-input-profile semantics are
+  frozen (ADR-0059, see DG-A above); implementation remains missing.
+- Server/deck runtime topology, artifact handoff rules and the networked
+  server-to-deck boundary are frozen (ADR-0057); the authenticated/TLS
+  transport this requires is the same open gate as J02's above.
+- The Omega validation bridge's public import surface (ADR-0055), the Golden
+  proof/test-double classification (ADR-0056), the replay sweep orchestration
+  boundary (ADR-0058), the canonical replay I/O profile (ADR-0060), and the
+  replay summary output mode (ADR-0061) are frozen design decisions; none
+  authorizes new runtime implementation by itself.
+
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
 ### Resolved DG-D / C05 configuration semantics
@@ -106,9 +133,21 @@ An `OPEN_DEFERABLE` decision remains deliberately unresolved until its stated re
 
 This family has independent branches.
 
-### Candle materialization (`D05`)
+### Candle materialization (`D05`) — FROZEN (semantics), implementation MISSING
 
-Activate only when persisted Candle results are selected. Resolve how a persisted Candle binds CandleDefinition/Representation identity, source dataset/partition evidence, temporal support and implementation identity.
+ADR-0059 freezes `D05`'s semantic decision: a future `RepresentationArtifact`'s
+identity (representation definition, source dataset/schema/ordering/partitions,
+manifest/content digests, declared output support and required source support,
+output partition identities/digests, implementation identity); candle support/
+availability rules for materialized rows; and the replay-input-profile shape
+(FINAL-only, causally-available rows; tick and representation replay are not
+interchangeable without a future declared bar-close profile proving equivalence).
+
+**This freezes semantics only.** ADR-0059 explicitly excludes D05 runtime,
+two-resolution replay access, and any change to existing tick replay. No
+persisted candle materialization, representation-artifact runtime, or
+representation-replay profile is implemented. Do not read ADR-0059 as
+implementing persisted candles.
 
 `D05` is not a prerequisite of canonical H01 integration.
 
@@ -424,6 +463,65 @@ complete without future attributable repair evidence. This closes the selected
 production-readiness path while preserving issue #110's
 `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition.
 
+## DG-J — Remote Service Topology (Wave 8 design gates)
+
+**Projection only — this section is not an authorization.** `SCOPE.md`'s "Wave 8
+— Full Platform API & Remote Service Topology v1" opens these as the gates that
+must resolve, one ADR at a time, before any implementation issue in that scope.
+None is activated merely by being listed here; each requires its own design-gate
+issue and ADR, per the Decision-gate policy above.
+
+### G1 — Authentication, TLS and authorization for non-loopback J02
+
+Trigger: any consumer-machine/deck access to J02 that is not loopback-only.
+Must resolve an authentication model, TLS, authorization, and least-privilege
+credential scoping consistent with ADR-0057 §4's least-privilege rule (a deck
+credential may read an admitted export/API capability and submit a result
+bundle; it may never write canonical partitions, checkpoints, recovery sets, or
+arbitrary catalog state). Anchors: ADR-0050 Amendment 1 §3; ADR-0057 §4.
+
+### G2 — `J03` job runtime
+
+The existing DG-G `J03` decision (submission identity, lifecycle, progress,
+cancellation, retry/idempotency, result/artifact references, relation to `Run`,
+persistence/recovery, failure model, scheduling, security, observability,
+temporal invariants, API/client boundary — see the DG-G section above) is the
+same open atom; this gate does not reopen or duplicate it, it activates it as a
+prerequisite for data-local server-side jobs reachable through the API.
+Dependencies `C03`/`I02` are already complete.
+
+### G3 — Placement contract: data-local vs. consumer-local, and the wire boundary
+
+Which operations run server-side (data-local) vs. consumer-local, and exactly
+what crosses the wire: an admitted read-only input export/reference in one
+direction, and a governed result/artifact import/registration in the other.
+Must preserve ADR-0057 §1-§3's two-surface authority split (server owns
+canonical data/catalog/accepted artifacts; the consumer machine is a compute
+consumer and result producer, never a second canonical authority) and §6's
+operational runbook. Anchors: ADR-0057 §1-§3, §6.
+
+### G4 — Consumer-API-equivalent seams for Strategy, Replay, Validation, Training
+
+A `C02`/`C03`-shaped seam per domain, carried over the existing J02 transport,
+so these already-complete engines (Waves 2-5) become reachable from J04/J05/J06
+the same way market data already is. Anchors: `ROADMAP.md` Wave 8; the existing
+`C02`/`C03` pattern.
+
+### G5 — Transport evolution for larger/streamed/live results
+
+Chunked or streamed large results, cursors, and future live message types.
+ADR-0050 §1 already frames this as additive new message types on the existing
+WebSocket transport, not a second transport. Anchors: ADR-0050 Amendment 1
+§1-§2; ADR-0047 (the existing live-cursor precedent this would extend to a
+transport-carried shape).
+
+### G6 — Omega client contract
+
+Whether Omega talks to J02's wire contract, the installed-distribution public
+Python API (`PUBLIC_PYTHON_API.md`), or both for different purposes; the
+version/compatibility policy; and the acceptance proof shape. Anchors:
+ADR-0055; `PUBLIC_PYTHON_API.md`.
+
 ## Explicitly deferable decisions
 
 The following are classified and therefore not roadmap unknowns:
@@ -455,11 +553,19 @@ Wait for explicit multi-asset product scope.
 ### Canonical API transport (`J02`) — RESOLVED
 
 Consumer API semantics are already frozen. ADR-0050 resolves the bounded Wave 7
-transport choice as HTTP JSON over the existing Application-owned Consumer API
-surface. J02/J04/J05/J06 are complete for that bounded API/client path. This
-does not activate J03, J07, J08, broker/live execution, second venue, market
-depth branches or any product runtime beyond the accepted transport/client
-boundary.
+transport choice as **WebSocket** (a single unified transport, ADR-0050 §1)
+over the existing Application-owned Consumer API surface. J02/J04/J05/J06 are
+complete for that bounded API/client path. This does not activate J03, J07,
+J08, broker/live execution, second venue, market depth branches or any product
+runtime beyond the accepted transport/client boundary.
+
+ADR-0050 Amendment 1 additionally froze a documented 50,000-row/16 MiB result
+bound (`RESULT_TOO_LARGE`) and an explicit wire `max_size`. **It left
+authentication, TLS and authorization for non-loopback J02 explicitly open** —
+`allow_non_loopback` only prevents accidental exposure; it does not address a
+deliberate non-loopback deployment. This gap remains open; see the Wave 8
+design gate G1 below. ADR-0057 separately forbids using the non-loopback
+override as a deck/consumer-machine handoff channel until that gate resolves.
 
 ### Paper/shadow and live product runtime (`J07`,`J08`)
 
