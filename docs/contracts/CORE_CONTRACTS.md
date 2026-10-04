@@ -752,17 +752,32 @@ Identity must include the semantic inputs needed to prove reproducibility.
 
 Represents long-running asynchronous work.
 
+The durable J03 contract is [ADR-0062](../decisions/ADR-0062-durable-job-runtime-v1.md).
+`job_id` is a deterministic fingerprint of an immutable admitted operation; it
+is not a runtime UUID, path, worker identity, attempt count, or an Experiment
+`RunIdentity`. Re-admission of the same immutable request returns the existing
+Job, while a conflicting record fails closed.
+
 Required concepts:
 
 - `job_id`
 - operation type
-- submitted time
-- started/completed time
-- status
-- progress
-- cancellation state
-- result/artifact references
-- failure/retry metadata
+- immutable admitted request and declared input identities
+- handler/implementation identity and effect-safety declaration
+- durable lifecycle: `ADMITTED`, `QUEUED`, `RUNNING`,
+  `CANCELLATION_REQUESTED`, `RECOVERY_REQUIRED`, `SUCCEEDED`, `FAILED`, or
+  `CANCELLED`
+- attempt identity `(job_id, attempt_no)` and bounded attempt evidence
+- cancellation acknowledgement/effect evidence
+- immutable result/artifact and domain-reference identities
+- explicit terminal reason code and bounded diagnostic/evidence reference
+
+Only `SUCCEEDED`, `FAILED`, and `CANCELLED` are terminal. A process restart
+never treats `RUNNING` as liveness evidence and never silently redispatches it:
+the Job becomes `RECOVERY_REQUIRED` until an explicit, effect-safe recovery
+decision. Automatic retry is prohibited. Job lifecycle storage is distinct from
+I02 Experiment persistence; a Job may reference `RunIdentity` values but does
+not replace their ownership.
 
 ---
 

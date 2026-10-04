@@ -1,16 +1,18 @@
 """Application-service composition seam.
 
 This package owns composition of use cases that coordinate existing
-capabilities without owning their domain semantics.  It is an in-process
-seam: it is not an API, a transport, a runtime host, a job runtime or a
-client.
+capabilities without owning their domain semantics. It is an in-process seam:
+it is not an API, a transport, or a client. It does not yet implement a job
+runtime; ADR-0062 reserves future bounded J03 runtime composition to this
+package without moving Experiment or other domain semantics here.
 
 ASS-01 established ownership and enforcement.  C02 added semantic selector
 resolution for the frozen ``trades@1`` reference representation.  C03 added
 execution over an injected access capability and translation of its outcome
 into a stable consumer result or one of the frozen Consumer API errors.
 C05 adds typed immutable configuration and concrete composition for the current
-market-data application service.  Transport and job runtime remain J02 and J03.
+market-data application service. Transport remains J02; J03 has an accepted
+contract but no production implementation.
 """
 
 from .backup_restore import (
