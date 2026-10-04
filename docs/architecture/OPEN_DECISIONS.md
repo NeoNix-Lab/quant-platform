@@ -368,9 +368,15 @@ Freeze StrategicState/StrategicAction/StrategicReward only when the strategic-RL
 
 Freeze ExecutionState/ExecutionAction/ExecutionReward only when execution RL is selected. It must remain structurally separate from the strategic task.
 
-### Job runtime (`J03`)
+### Job runtime (`J03`) — FROZEN (semantics), implementation MISSING
 
-Before durable long-running operations, freeze submission identity, status/lifecycle, retry/idempotency, result identity and failure semantics. Do not infer transport/process topology from the Job contract.
+ADR-0062 freezes `J03`'s decision: submission identity (deterministic `job_id`
+fingerprint), durable lifecycle (`ADMITTED` through `RECOVERY_REQUIRED`),
+attempt/retry-idempotency rules, result/artifact reference requirements, and
+failure semantics for a server-local, Application-owned Job. It does not infer
+transport/process topology, define a remote worker, or implement Job storage,
+schema, scheduling, or an API — see `DG-J` G2 below. Implementation is tracked
+by the Wave 8 implementation inventory in `SCOPE.md`.
 
 ## DG-H — Operational safety
 
@@ -463,64 +469,82 @@ complete without future attributable repair evidence. This closes the selected
 production-readiness path while preserving issue #110's
 `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition.
 
-## DG-J — Remote Service Topology (Wave 8 design gates)
+## DG-J — Remote Service Topology (Wave 8 design gates) — RESOLVED
 
-**Projection only — this section is not an authorization.** `SCOPE.md`'s "Wave 8
-— Full Platform API & Remote Service Topology v1" opens these as the gates that
-must resolve, one ADR at a time, before any implementation issue in that scope.
-None is activated merely by being listed here; each requires its own design-gate
-issue and ADR, per the Decision-gate policy above.
+All six gates reached a disposition on 2026-10-04 (issues #282-#287, parent
+#281, reconciled by issue #288). `SCOPE.md`'s "Wave 8 — Full Platform API &
+Remote Service Topology v1" records the authorized implementation inventory
+that results; being resolved here is not itself an implementation go-ahead —
+each atom still needs its own implementation issue citing its ADR.
 
-### G1 — Authentication, TLS and authorization for non-loopback J02
+### G1 — Authentication, TLS and authorization for non-loopback J02 — ACCEPTED (ADR-0063)
 
-Trigger: any consumer-machine/deck access to J02 that is not loopback-only.
-Must resolve an authentication model, TLS, authorization, and least-privilege
-credential scoping consistent with ADR-0057 §4's least-privilege rule (a deck
-credential may read an admitted export/API capability and submit a result
-bundle; it may never write canonical partitions, checkpoints, recovery sets, or
-arbitrary catalog state). Anchors: ADR-0050 Amendment 1 §3; ADR-0057 §4.
+Resolved: non-loopback J02 is WSS with TLS 1.3+ and mandatory client-certificate
+mTLS or it refuses to start; the authenticated credential is the exact,
+versioned certificate fingerprint mapped to one `principal_id` and an explicit
+scope set; the only currently defined scope is `j02.market_data.read`
+(read-only, no storage/catalog/Job/admin access). Freezes `J09`. Anchors:
+ADR-0050 Amendment 1 §3; ADR-0057 §4.
 
-### G2 — `J03` job runtime
+### G2 — `J03` job runtime — ACCEPTED (ADR-0062)
 
-The existing DG-G `J03` decision (submission identity, lifecycle, progress,
-cancellation, retry/idempotency, result/artifact references, relation to `Run`,
-persistence/recovery, failure model, scheduling, security, observability,
-temporal invariants, API/client boundary — see the DG-G section above) is the
-same open atom; this gate does not reopen or duplicate it, it activates it as a
-prerequisite for data-local server-side jobs reachable through the API.
-Dependencies `C03`/`I02` are already complete.
+Resolved: a Job is a durable, Application-composed admission record
+(deterministic `job_id` fingerprint over operation kind/handler/admitted
+request/input identities); lifecycle `ADMITTED -> QUEUED -> RUNNING ->
+SUCCEEDED|FAILED|CANCELLED`, with `RECOVERY_REQUIRED` on restart instead of
+inferred liveness; automatic retry is prohibited, explicit retry requires
+proven effect-safety. Activates the existing DG-G `J03` decision as a Wave 8
+prerequisite; it is the same atom, not a new one. Dependencies `C03`/`I02` are
+already complete.
 
-### G3 — Placement contract: data-local vs. consumer-local, and the wire boundary
+### G3 — Placement contract: data-local vs. consumer-local, and the wire boundary — ACCEPTED (ADR-0064)
 
-Which operations run server-side (data-local) vs. consumer-local, and exactly
-what crosses the wire: an admitted read-only input export/reference in one
-direction, and a governed result/artifact import/registration in the other.
-Must preserve ADR-0057 §1-§3's two-surface authority split (server owns
-canonical data/catalog/accepted artifacts; the consumer machine is a compute
-consumer and result producer, never a second canonical authority) and §6's
-operational runbook. Anchors: ADR-0057 §1-§3, §6.
+Resolved: the existing ADR-0057 deck is the sole Wave 8 consumer compute
+surface — no separate third "consumer machine" exists or is introduced. `K12`
+is a sealed, deterministic admitted-input manifest (`admission_id =
+admitted-input-v1:sha256(canonical_payload_v1)`, excluding paths/catalog
+UUIDs). `K13` resolves that admission and verifies every declared input/output
+digest before registering a governed Experiment/Artifact result; a mismatch
+refuses the entire bundle with no mutation. Freezes `K12`, `K13`. Anchors:
+ADR-0057 §1-§3, §6.
 
-### G4 — Consumer-API-equivalent seams for Strategy, Replay, Validation, Training
+### G4 — Consumer-API-equivalent seams for Strategy, Replay, Validation, Training — ACCEPTED, partial (ADR-0065)
 
-A `C02`/`C03`-shaped seam per domain, carried over the existing J02 transport,
-so these already-complete engines (Waves 2-5) become reachable from J04/J05/J06
-the same way market data already is. Anchors: `ROADMAP.md` Wave 8; the existing
-`C02`/`C03` pattern.
+Resolved for three of four domains: `J10` (`strategy-compose-v1` over
+`compose_decision`), `J12` (finite Validation operations: fold building,
+candidate classification, DSR, PBO), and `J13`
+(`supervised-train-evaluate-v1` over `train_evaluate_supervised_baseline`) are
+each a thin, versioned application seam carried over existing J02. **Replay
+(`J11`) is explicitly deferred, not frozen**: `HistoricalReplayRuntime.run()`
+requires an injected `feature_provider` callable with no accepted
+identity-bearing, serializable, server-resolved definition; exposing it as a
+path/module name/callable would invent a new semantic authority. Trigger for
+revisiting: a future ADR that defines that semantic feature/provider reference
+and whether the resulting operation is synchronous or J03-admitted. Anchors:
+`ROADMAP.md` Wave 8; the existing `C02`/`C03` pattern.
 
-### G5 — Transport evolution for larger/streamed/live results
+### G5 — Transport evolution for larger/streamed/live results — ACCEPTED (ADR-0066)
 
-Chunked or streamed large results, cursors, and future live message types.
-ADR-0050 §1 already frames this as additive new message types on the existing
-WebSocket transport, not a second transport. Anchors: ADR-0050 Amendment 1
-§1-§2; ADR-0047 (the existing live-cursor precedent this would extend to a
-transport-carried shape).
+Resolved: J02 v1 remains unchanged; `j14-framed-result-v1` is an additive
+message family that carries only a complete, already-produced finite
+application result, split into digest-verified chunks (RFC 8785 canonical
+JSON, per-chunk and per-transfer SHA-256), with transfer-local (not
+application-level) resume. No live family is defined yet — a future owner must
+first accept the corresponding Consumer request/event/error/ordering/resume
+semantics before any `j14-live-*` family exists. Freezes `J14`. Anchors:
+ADR-0050 Amendment 1 §1-§2; ADR-0047.
 
-### G6 — Omega client contract
+### G6 — Omega client contract — ACCEPTED (ADR-0067)
 
-Whether Omega talks to J02's wire contract, the installed-distribution public
-Python API (`PUBLIC_PYTHON_API.md`), or both for different purposes; the
-version/compatibility policy; and the acceptance proof shape. Anchors:
-ADR-0055; `PUBLIC_PYTHON_API.md`.
+Resolved: Omega's J15 remote client talks only to J02's wire contract
+(`j02-request-v1`/`j02-response-v1`); the public Python API /
+`PUBLIC_PYTHON_API.md` is never a remote-client fallback and must not be mixed
+with or substituted for a J02 session. Compatibility is a wire-family
+commitment (`wire_incompatible` fails closed on any mismatch, never silently
+downgrades). The first and only capability is `j02.market_data.read`. **A
+remote implementation of `J15` is explicitly blocked until `J09` is
+implemented** — this ADR authorizes neither that server work nor an Omega
+adapter by itself. Freezes `J15`. Anchors: ADR-0055; `PUBLIC_PYTHON_API.md`.
 
 ## Explicitly deferable decisions
 
@@ -560,12 +584,23 @@ J08, broker/live execution, second venue, market depth branches or any product
 runtime beyond the accepted transport/client boundary.
 
 ADR-0050 Amendment 1 additionally froze a documented 50,000-row/16 MiB result
-bound (`RESULT_TOO_LARGE`) and an explicit wire `max_size`. **It left
-authentication, TLS and authorization for non-loopback J02 explicitly open** —
-`allow_non_loopback` only prevents accidental exposure; it does not address a
-deliberate non-loopback deployment. This gap remains open; see the Wave 8
-design gate G1 below. ADR-0057 separately forbids using the non-loopback
-override as a deck/consumer-machine handoff channel until that gate resolves.
+bound (`RESULT_TOO_LARGE`) and an explicit wire `max_size`. It left
+authentication, TLS and authorization for non-loopback J02 open at the time;
+**that gap is now frozen (not implemented) under ADR-0063** — see `DG-J` G1 /
+`J09` below. ADR-0057 separately forbids using the non-loopback override as a
+deck/consumer-machine handoff channel until `J09` is actually implemented.
+
+### Replay Consumer-API seam (`J11`)
+
+ADR-0065 §5 explicitly defers this `DG-J` G4 atom rather than freezing it:
+`HistoricalReplayRuntime.run()` requires an injected `feature_provider`
+callable, and there is no accepted, identity-bearing, serializable,
+server-resolved definition for it. Exposing it as a path, module name, opaque
+executable, or client callback would invent a new semantic authority and alter
+Strategy/Replay authority. Trigger: a future ADR that defines that semantic
+feature/provider reference and its provenance/availability contract, and
+chooses whether the resulting operation is synchronously bounded or must be
+admitted through `J03`.
 
 ### Paper/shadow and live product runtime (`J07`,`J08`)
 
