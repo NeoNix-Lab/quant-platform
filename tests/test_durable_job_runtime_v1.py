@@ -89,6 +89,37 @@ class DurableJobRuntimeV1Tests(unittest.TestCase):
         with self.assertRaises(DurableJobConflict):
             store.retry_or_resume(job.job_id)
 
+    def test_terminal_job_allows_one_bounded_diagnostic_evidence_append(self) -> None:
+        store = self.store()
+        job = store.admit(admission(effect_safety=EffectSafety.NO_EFFECT))
+        cancelled = store.transition(
+            job.job_id,
+            JobState.CANCELLED,
+            reason_code="operator_cancelled",
+        )
+        evidence = store.transition(
+            job.job_id,
+            JobState.CANCELLED,
+            reason_code="operator_cancelled",
+            diagnostic_reference="evidence:operator-cancellation-ack",
+        )
+
+        self.assertIsNone(cancelled.diagnostic_reference)
+        self.assertEqual("evidence:operator-cancellation-ack", evidence.diagnostic_reference)
+        self.assertEqual(evidence, store.transition(
+            job.job_id,
+            JobState.CANCELLED,
+            reason_code="operator_cancelled",
+            diagnostic_reference="evidence:operator-cancellation-ack",
+        ))
+        with self.assertRaises(DurableJobConflict):
+            store.transition(
+                job.job_id,
+                JobState.CANCELLED,
+                reason_code="operator_cancelled",
+                diagnostic_reference="evidence:replacement-is-forbidden",
+            )
+
     def test_idempotency_retry_requires_immutable_proof_reference(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires an idempotency"):
             admission(effect_safety=EffectSafety.IDEMPOTENCY_EVIDENCE)

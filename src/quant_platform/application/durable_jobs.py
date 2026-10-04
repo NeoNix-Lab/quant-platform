@@ -196,6 +196,18 @@ class DurableJobStore:
             current = self.get(job_id)
             if current.state == state:
                 if (
+                    current.state in TERMINAL_JOB_STATES
+                    and current.reason_code == reason_code
+                    and current.result_references == tuple(result_references)
+                    and current.diagnostic_reference is None
+                    and diagnostic_reference is not None
+                ):
+                    self.connection.execute(
+                        "UPDATE durable_jobs SET diagnostic_reference = ? WHERE job_id = ?",
+                        (diagnostic_reference, job_id),
+                    )
+                    return self.get(job_id)
+                if (
                     current.reason_code != reason_code
                     or current.result_references != tuple(result_references)
                     or current.diagnostic_reference != diagnostic_reference
