@@ -69,6 +69,10 @@ Live Ingest Server Production Readiness v1          COMPLETE for first producer 
 Wave 4 Strategy / Replay                            COMPLETE (G01-G04,H01-H05; V7 Golden PASS)
 Wave 6 Live Consumer Data Plane & Storage Lifecycle COMPLETE (B06,D04,K07,K09; Golden PASS)
 Wave 7 API & Platform Transport v1              COMPLETE (J02,J04,J05,J06; exceptional Golden waiver)
+Omega external-audit stabilization line         COMPLETE (not a wave; tracking #232; ADR-0054-0061 and
+(implement/omega, PR #254,#256-#278)                ADR-0037/ADR-0050 amendments; see Decision-gate model)
+DG-J Remote Service Topology design gates       RESOLVED (issues #282-#287/#288; ADR-0062-0067; G1-G6;
+(implement/omega, PR #289-#294)                     J11 deferred; Wave 8 implementation inventory authorized)
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
@@ -91,18 +95,25 @@ Completed checkpoints are credited and must not be re-proved absent a concrete i
 ## Roadmap vNext planning state
 
 ```text
-TOTAL_ATOMS                     87
-CLASSIFIED_ATOMS                87
+TOTAL_ATOMS                     96
+CLASSIFIED_ATOMS                96
 UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     74 / 87 = 85.1%
-OPEN_BLOCKING                   6
-OPEN_DEFERABLE                  7
-ROADMAP_DEFINED                 74 + 6 + 7 = 87
-ROADMAP_PLANNING_COMPLETENESS   87 / 87 = 100%
-IMPLEMENTATION_COMPLETE         69 / 87 = 79.3%
+SEMANTIC_FROZEN_OR_RESOLVED     84 / 96 = 87.5%
+OPEN_BLOCKING                   4
+OPEN_DEFERABLE                  8
+ROADMAP_DEFINED                 84 + 4 + 8 = 96
+ROADMAP_PLANNING_COMPLETENESS   96 / 96 = 100%
+IMPLEMENTATION_COMPLETE         69 / 96 = 71.9%
 ```
 
-The 100% planning score means every roadmap atom is classified. It does **not** mean every future semantic choice is frozen.
+Recomputed mechanically from `CAPABILITY_DAG.md`'s atom tables after the
+`DG-J` design-gate reconciliation (issue #288): all six gates reached a
+disposition, moving `J03`, `J09`, `J10`, `J12`, `J13`, `J14`, `J15`, `K12` and
+`K13` from `OPEN_BLOCKING` to `FROZEN` under ADR-0062 through ADR-0067, and
+`J11` from `OPEN_BLOCKING` to `OPEN_DEFERABLE` under ADR-0065 §5's explicit
+deferral. `IMPLEMENTATION_COMPLETE` is unchanged at 71.9% — none of these nine
+atoms is implemented. The 100% planning score means every roadmap atom is
+classified. It does **not** mean every future semantic choice is frozen.
 
 The closed Live Ingest Server Production Readiness v1 scope also carried one scope-level DG-B proposition that is not a new atom and therefore is not included in these counts: remediation of a live gap that exceeds the provider's bounded reconciliation window. The accepted disposition remains `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`: the server may record the explicit non-complete gap and continue with a new governed live segment, but may not claim the missing interval filled/lossless without future attributable repair evidence.
 
@@ -118,20 +129,23 @@ DG-F  Strategy / Execution semantics                RESOLVED / IMPLEMENTED
 DG-G  Experiment / RL / Jobs
 DG-H  Operational safety
 DG-I  API transport / client convergence        RESOLVED / IMPLEMENTED
+DG-J  Remote Service Topology (Wave 8)           RESOLVED / implementation inventory authorized
 ```
 
 Important current boundaries:
 
-- DG-A: `D05` remains independent from completed H01.
+- DG-A: `D05`'s semantics are frozen under ADR-0059 (implementation still `MISSING`); it remains independent from completed H01.
 - DG-B: A10/B04 historical repair is complete; A11 is frozen and implemented; B06 consumer-live cursor is frozen and implemented by Wave 6.
 - DG-B long-gap remediation remains blocking only for claiming an unreconciled interruption filled/lossless. ADR-0044 closes the selected production-readiness path by retaining explicit-gap-only behavior until a future authoritative repair source/path is proven.
 - DG-C: L1 does not activate L2; L3 waits for real feed evidence.
 - DG-E: complete through F08.
 - DG-F: G04 session/cooldown semantics are frozen by ADR-0045; H03 execution-conflict semantics are frozen by ADR-0046; G01-G04/H01-H05 are implementation-complete on `implement/wave-4`.
-- DG-G: the supervised branch I03/I04/I05 is implementation-complete and Golden-proven by Wave 5; remaining unresolved branches are I06 strategic RL, I07 execution RL and J03 job runtime.
+- DG-G: the supervised branch I03/I04/I05 is implementation-complete and Golden-proven by Wave 5; J03's job-runtime decision is now frozen under ADR-0062 (implementation still missing); remaining unresolved branches are I06 strategic RL and I07 execution RL.
 - DG-H: K02/K03/K04/K05/K06/K07/K08/K09/K10 are complete, including K10's real restart proof (PR #122), the supervised live-ingest server operating path proof, and the Wave 6 storage lifecycle proof.
 
-Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension and multi-asset execution — remain open until their evidence trigger exists. Concrete API transport was resolved by ADR-0050 in Wave 7.
+Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension, multi-asset execution, and the Replay Consumer-API seam (`J11`) — remain open until their evidence trigger exists. Concrete API transport was resolved by ADR-0050 in Wave 7; authentication/TLS for non-loopback deployment is now frozen under ADR-0063 (`J09`, implementation still missing).
+
+- DG-J: all six gates resolved (ADR-0062 through ADR-0067); see `docs/architecture/OPEN_DECISIONS.md` for the full G1-G6 disposition text. `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` are frozen and authorized for implementation; `J11` remains `OPEN_DEFERABLE`.
 
 ## Operational dependency direction
 
@@ -155,7 +169,7 @@ V5  Feature -> Research                                  COMPLETE
 V6  Research -> Validation                               COMPLETE
 V7  Strategy -> deterministic Replay                     COMPLETE
 V8  Historical -> Live                                   COMPLETE for the bounded data-plane/storage lifecycle path; broader live product gates remain open
-V9  Application -> API -> Client                         COMPLETE for bounded HTTP JSON transport and thin clients
+V9  Application -> API -> Client                         COMPLETE for bounded WebSocket transport and thin clients
 V10 Paper/Shadow -> Live                                 BLOCKED by runtime/operational gates
 ```
 
@@ -168,10 +182,29 @@ PR #225/#226/#227/#228 complete J02/J04/J05/J06. Issue #222 was closed by
 explicit operator exception during expedited closeout, so this roadmap state
 does not claim an additional dedicated Golden E2E artifact.
 
-No new runtime/product frontier is selected by this closeout. H06, I06-I07,
-J07/J08, RL, live broker execution, second venue and L1/L2/L3 market depth
-remain outside this governance closeout. J07 remains `MISSING`; Wave 7 completes
-the bounded API/client path only.
+The post-Wave-7 `implement/omega` stabilization line (tracking #232) is
+reconciled: eight design gates (ADR-0054-0061) and nine implementation/
+hardening slices (PR #254, #256-#278), plus amendments to ADR-0037 and
+ADR-0050. It resolves `D05`'s semantics (implementation stays `MISSING`) and
+closes the audited findings; it is not a wave and selects no new runtime/
+product frontier by itself.
+
+`SCOPE.md`'s "Wave 8 — Full Platform API & Remote Service Topology v1" design
+gates G1-G6 are now resolved (ADR-0062 through ADR-0067; `J11` deferred under
+ADR-0065 §5). The Wave 8 implementation inventory is authorized: `J03`, `J09`,
+`J10`, `J12`, `J13`, `J14`, `J15`, `K12`, `K13` — each `FROZEN`/`MISSING`, each
+eligible for its own implementation issue citing its ADR. `implement/omega` is
+closed as the bounded `DG-J` design-integration line; it is not reused as the
+Wave 8 implementation branch. The dedicated `implement/wave-8` branch is not
+yet opened: `main`'s current head predates the entire Omega stabilization line
+and all six `DG-J` ADRs, so the intended baseline is ambiguous — this is an
+open maintainer decision recorded in `SCOPE.md`, not resolved by this
+reconciliation.
+
+No new runtime/product frontier is authorized by this closeout or the
+stabilization line. H06, I06-I07, J07/J08, RL, live broker execution, second
+venue and L1/L2/L3 market depth remain outside all of them. J07 remains
+`MISSING`.
 
 Roadmap state is still **not concurrent authorization**.
 
@@ -188,9 +221,17 @@ Wave 4  Strategy / Replay                                 COMPLETE
 Wave 5  Experiment / Supervised ML                       COMPLETE (I01-I05; Golden supervised E2E PASS)
 Wave 6  Live Data Plane                                   COMPLETE (B06,D04,K07,K09 plus credited K02,K03,K04,K05,K06,K08,K10,A10,A11,A16; Golden PASS)
 Wave 7  Runtime / Clients                                 COMPLETE (J02 -> J04/J05/J06; exceptional Golden waiver)
-Wave 8  Full Platform API & Client Completeness v1        Strategy/Replay/Validation/Training exposed through
-                                                           Consumer-API-equivalent seams and carried over J02;
-                                                           J04/J05/J06 extended to reach them
+Wave 8  Full Platform API & Remote Service Topology v1    OPEN -- design gates G1-G6 resolved (ADR-0062-0067).
+                                                           Implementation inventory authorized: J03 (job runtime,
+                                                           G2), J09 (auth/TLS for non-loopback J02, G1), J10/J12/
+                                                           J13 (Strategy/Validation/Training Consumer-API seams,
+                                                           G4; J11 Replay seam explicitly deferred), K12/K13
+                                                           (admitted-input/result handoff, G3), J14 (transport
+                                                           evolution, G5), J15 (Omega client adapter, G6; blocked
+                                                           on J09). implement/omega is closed as the bounded
+                                                           design-integration line; the implementation branch
+                                                           implement/wave-8 is not yet opened pending a maintainer
+                                                           baseline decision. See SCOPE.md.
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL; harvest-audit
                                                            evidence sources: ml_core (already the Wave 5 legacy
                                                            baseline), JJJerome/mbt_gym, sadighian/crypto-rl

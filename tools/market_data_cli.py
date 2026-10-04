@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.application import (  # noqa: E402
+    DEFAULT_MAX_RESULT_ROWS,
     ConsumerApiError,
     ConsumerMarketDataQuery,
     ConsumerMarketDataResult,
@@ -43,6 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end", required=True, help="UTC RFC 3339 interval end")
     parser.add_argument("--dsn", default=os.environ.get("CATALOG_DSN", ""), help="Catalog DSN; defaults to CATALOG_DSN")
     parser.add_argument("--batch-size", type=int, default=int(os.environ.get("QP_CLI_BATCH_SIZE", "65536")))
+    parser.add_argument(
+        "--max-result-rows",
+        type=int,
+        default=int(os.environ.get("QP_CLI_MAX_RESULT_ROWS", str(DEFAULT_MAX_RESULT_ROWS))),
+        help="refuse a query whose result would exceed this many rows (ADR-0050 Amendment 1, #247)",
+    )
     return parser
 
 
@@ -85,7 +92,11 @@ def run_market_data_cli(
     executor = execute
     if executor is None:
         application = compose_market_data_application(
-            MarketDataApplicationConfig(catalog_dsn=args.dsn, batch_size=args.batch_size)
+            MarketDataApplicationConfig(
+                catalog_dsn=args.dsn,
+                batch_size=args.batch_size,
+                max_result_rows=args.max_result_rows,
+            )
         )
         executor = application.execute
 

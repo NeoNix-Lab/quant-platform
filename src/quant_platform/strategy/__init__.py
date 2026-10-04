@@ -98,7 +98,13 @@ class CooldownUnavailableReason(StrEnum):
 
 @runtime_checkable
 class IdentityBackedPolicy(Protocol):
-    """Typed policy interface for slots whose semantics are outside #141."""
+    """Typed policy interface for slots whose semantics are outside #141.
+
+    ADR-0051 makes this explicit for ``execution_policy``: it is the intended
+    extension point for consumer-owned signal rule/threshold/exit-level logic
+    that the frozen G01-G04 contract deliberately does not interpret, carried
+    here only so it participates in ``strategy_identity``.
+    """
 
     @property
     def identity(self) -> str:
@@ -244,6 +250,12 @@ class StrategyInput:
 
 @dataclass(frozen=True, slots=True)
 class EntryPolicy:
+    """One pre-configured entry direction per policy.
+
+    A two-sided strategy is two StrategySpecs (one LONG, one SHORT), not one
+    two-sided EntryPolicy -- see ADR-0052.
+    """
+
     policy_key: str
     direction: Direction
     signal_key: str
@@ -1156,6 +1168,8 @@ class StrategySpec:
     signal_combination_policy: SignalCombinationPolicy
     execution_policy: ExecutionPolicy
     notes: str | None = field(default=None, compare=False)
+    _cached_strategy_identity: str = field(init=False, repr=False, compare=False)
+    _cached_policy_identities: Mapping[str, str] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "strategy_key", _key(self.strategy_key, "strategy_key"))
@@ -1175,6 +1189,12 @@ class StrategySpec:
         _policy_payload(self.execution_policy, "execution_policy")
         if self.notes is not None:
             object.__setattr__(self, "notes", _non_empty_text(self.notes, "notes"))
+        object.__setattr__(self, "_cached_policy_identities", MappingProxyType(_policy_identities_uncached(self)))
+        object.__setattr__(
+            self,
+            "_cached_strategy_identity",
+            f"{STRATEGY_SPEC_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(self.canonical_payload())}",
+        )
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
@@ -1195,7 +1215,8 @@ class StrategySpec:
 
     @property
     def strategy_identity(self) -> str:
-        return f"{STRATEGY_SPEC_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(self.canonical_payload())}"
+        """Cached identity of this immutable strategy definition."""
+        return self._cached_strategy_identity
 
     @property
     def identity(self) -> str:
@@ -1737,6 +1758,10 @@ def _enforce_availability_floor(inputs: Iterable[StrategyInput], decision_time: 
 
 
 def _policy_identities(spec: StrategySpec) -> dict[str, str]:
+    return dict(spec._cached_policy_identities)
+
+
+def _policy_identities_uncached(spec: StrategySpec) -> dict[str, str]:
     return {
         "entry_policy": spec.entry_policy.identity,
         "exit_policy": spec.exit_policy.identity,

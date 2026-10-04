@@ -107,7 +107,7 @@ class ComparableTrialPanel:
 
     population_id: str
     trial_ids: tuple[str, ...]
-    observation_ids: tuple[str, ...]
+    observation_ids: tuple[str | int, ...]
     returns: Mapping[str, tuple[float, ...]]
     return_semantics_id: str
 
@@ -324,6 +324,14 @@ class EffectiveTrialCountEvidence:
 
     F08 does not estimate trial independence; ``k_eff`` and the opaque
     ``evidence_id`` that justifies it are bound into the result identity.
+    This is permanent, not a placeholder for a future estimator (ADR-0037
+    Amendment 1, #253).
+
+    Recommended conservative fallback with no principled independence
+    estimate: ``k_eff = N`` (the nominal trial count). A higher ``k_eff``
+    raises the search-adjusted benchmark ``SR0``, making significance
+    *harder* to achieve, not easier -- understating ``k_eff`` is the
+    dangerous direction to be wrong in.
     """
 
     k_eff: float
@@ -346,7 +354,7 @@ class DSRResult:
     population_id: str
     return_semantics_id: str
     trial_ids: tuple[str, ...]
-    observation_ids: tuple[str, ...]
+    observation_ids: tuple[str | int, ...]
     content_digest: str
     numerical_policy_id: str
     sampling_model: str
@@ -667,7 +675,7 @@ class PBOResult:
     population_id: str
     return_semantics_id: str
     trial_ids: tuple[str, ...]
-    observation_ids: tuple[str, ...]
+    observation_ids: tuple[str | int, ...]
     content_digest: str
     numerical_policy_id: str
     block_count: int

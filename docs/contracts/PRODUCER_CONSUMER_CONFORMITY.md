@@ -489,6 +489,23 @@ The following remain producer/performance policy, explicitly not semantic:
 A future writer may change any of these without a contract version increase,
 as long as §9.1's semantic table and §7.2's ordering invariants hold.
 
+### 9.3 Selected replay I/O profile v1
+
+For new `trade-v1` replay/research materialization, the selected operational
+profile is the current writer/reader behavior: Parquet v2.6 with `zstd`
+compression, `65,536` rows per row group, all canonical columns, and
+sequential `DataGateway.scan()` batches defaulting to `65,536` rows. The
+reader projects only canonical columns, uses one batch and fragment read-ahead,
+and disables reader threads. These are selected physical defaults, not new
+semantic fields or a change to the §9.2 tunability boundary.
+
+Replacing an artifact with another compression or row-group layout changes its
+exact file hash and requires the normal replacement artifact's publication and
+certification evidence. It does not change canonical content identity when the
+same ordered `trade-v1` rows round-trip under §9.1. A different profile for a
+large historical materialization requires a new measured decision; see
+[ADR-0060](../decisions/ADR-0060-canonical-replay-io-materialization-profile-v1.md).
+
 ## 10. Bybit BTCUSDT first-vertical eligibility profile (resolves B9)
 
 ### 10.1 The conflict this resolves

@@ -69,9 +69,11 @@ class FakeConnect:
         self.response = response
         self.url = None
         self.sent = []
+        self.kwargs = None
 
-    def __call__(self, url):
+    def __call__(self, url, **kwargs):
         self.url = url
+        self.kwargs = kwargs
         return self
 
     async def __aenter__(self):
@@ -92,7 +94,7 @@ class FailingConnect:
         self.exc = exc
         self.url = None
 
-    def __call__(self, url):
+    def __call__(self, url, **kwargs):
         self.url = url
         raise self.exc
 
@@ -120,6 +122,9 @@ class MarketDataTuiTests(unittest.TestCase):
 
         self.assertEqual(0, code)
         self.assertEqual("ws://127.0.0.1:8765", connector.url)
+        self.assertEqual(
+            market_data_tui.J02_MAX_WIRE_MESSAGE_BYTES, connector.kwargs.get("max_size")
+        )
         self.assertEqual("j02-request-v1", connector.sent[0]["schema_version"])
         screen = stdout.getvalue()
         self.assertIn("Quant Platform Market Data TUI", screen)

@@ -7,7 +7,7 @@ never opens a Parquet file and never scans a storage root.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any
 
 from .models import (
     CatalogDataset,

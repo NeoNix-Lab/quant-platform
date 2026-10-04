@@ -394,6 +394,23 @@ cancellation or progress reporting. It also does not require every future
 market-data representation to be asynchronous; the application service owns
 the boundedness decision under the capability's contract.
 
+### 8.1 Non-loopback J02 security
+
+The current loopback J02 listener remains a local-only deployment. Any future
+non-loopback J02 listener is governed by
+[ADR-0063](../decisions/ADR-0063-remote-j02-security-v1.md): it must use TLS
+1.3 mutual TLS, validate the server endpoint and client certificate, and map the
+exact client credential fingerprint to an explicit principal and scope before
+decoding a Consumer API request. The only scope defined now is
+`j02.market_data.read`; it grants no canonical storage, catalog, checkpoint,
+backup, publication, Job, or administrative authority.
+
+Authentication and authorization failure occur outside the Consumer API result
+envelope and must not reinterpret a `ConsumerErrorCode`. A remote listener may
+not fall back to plaintext or an unauthenticated WebSocket session. This is a
+future implementation contract; it does not change current loopback behavior or
+add a remote endpoint.
+
 ## 9. Versioning and evolution
 
 The following version domains remain distinct:
@@ -467,3 +484,55 @@ Explicit non-goals for this milestone are FastAPI, React, TUI, CLI commands,
 candle/footprint/book builders, L1/L2/L3 implementation, Feature Engine,
 Research Engine, Job Runtime, authentication, deployment, schema migration,
 DataGateway generalization and legacy CoreApp/API porting.
+
+## 12. Domain capability seam extensions
+
+ADR-0065 defines the accepted application seam discipline for the future
+Strategy, Replay, Validation, and Training Consumer-API capabilities. Requests
+carry only existing immutable semantic payloads and content identities; paths,
+catalog UUIDs, repository handles, callable import names, and client-selected
+locators are never consumer semantics. Application owns normalization,
+governed resolution, invocation, and stable error translation; transport and
+clients do not reinterpret domain behavior.
+
+The accepted J10 Strategy seam is `compose_decision`; J12 consists only of its
+existing finite fold/classification/DSR/PBO operations; and J13 is the existing
+supervised evaluation/owned-registration boundary. J11 Replay remains deferred:
+`HistoricalReplayRuntime` requires a `feature_provider` callable that has no
+accepted semantic, serializable reference. A later ADR must supply that
+authority before any Replay consumer request can exist. Long-running work is
+admitted through J03, never emulated by a client-held synchronous request.
+
+## 13. Additive transport evolution
+
+ADR-0066 keeps `j02-request-v1`/`j02-response-v1` as one complete exchange,
+including their typed `RESULT_TOO_LARGE` refusal. A later J14 finite-result
+family may frame only an already-produced complete result with a declared
+logical result identity, deterministic chunk indices, per-chunk and complete
+payload digests, and a transfer-local resume token. The result bytes and the
+named transfer-id preimage use RFC 8785 JSON Canonicalization Scheme encoded as
+UTF-8; SHA-256 digests are lowercase hexadecimal. Frames are never
+application-level pages or a cursor for a new query.
+
+No live Consumer message is defined by that transport decision. Any future live
+family must first have application-owned semantics and, when carrying B06,
+serialize ADR-0047's `LiveStreamCursorV1` and event vocabulary unchanged. A
+finite transfer id must never be treated as a B06 cursor.
+
+## 14. Omega J15 remote client contract
+
+ADR-0067 freezes Omega J15 as a remote J02 consumer only.  Its initial
+operation sends `j02-request-v1` and accepts `j02-response-v1` for the C03
+market-data read admitted by `j02.market_data.read`.  The supported public
+Python API and ADR-0055's local validation bridge are package dependencies,
+not an alternate remote-client boundary: no local fallback, mixed execution,
+wire-family downgrade, or remote compatibility decision based on
+`quant_platform.__version__` or `PLATFORM_PIN` is permitted.
+
+An unexpected J02 version or unadmitted message family is a local typed
+`wire_incompatible` failure, distinct from a losslessly carried
+`ConsumerApiError`.  TLS, mTLS, and scope denial are a local typed
+`remote_security_failure` before Consumer API processing; a J15 client cannot
+fall back to plaintext or infer an unavailable capability.  Omega renders
+server-issued request identities, provenance, coverage, results, and errors;
+it never owns canonical data, catalog state, or accepted-artifact identity.

@@ -2,20 +2,23 @@
 """Canonical workflow helper for quant-platform.
 
 Automates the Staged Integration Branch strategy:
-  main -> implement/<wave> -> agent/issue-<num>-<slug> -> PR into implement/<wave> -> main
+  main -> implement/<name> -> agent/issue-<num>-<slug> -> PR into implement/<name> -> main
+
+The integration branch is any ``implement/<name>`` (``implement/wave-7``,
+``implement/omega``, ...). It is detected from the current HEAD's ancestry;
+pass ``--base`` to override.
 
 Commands:
   python tools/workflow.py status
   python tools/workflow.py start <issue_number> [--base <branch>]
-  python tools/workflow.py preflight
-  python tools/workflow.py pr [--draft] [--title <title>]
+  python tools/workflow.py preflight [--base <branch>]
+  python tools/workflow.py pr [--draft] [--title <title>] [--base <branch>]
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -32,10 +35,10 @@ PROTECTED_GOVERNANCE_FILES = {
 }
 
 
-def run_cmd(cmd: list[str] | str, check: bool = False, capture: bool = True) -> subprocess.CompletedProcess:
-    """Run a shell or list command."""
-    if isinstance(cmd, str):
-        return subprocess.run(cmd, shell=True, capture_output=capture, text=True, cwd=REPO_ROOT, check=check)
+def run_cmd(cmd: list[str], check: bool = False, capture: bool = True) -> subprocess.CompletedProcess:
+    """Run an argv list command without a shell (#240): every caller already
+    passes a list; this signature forces any future call site to keep doing
+    so, rather than silently reintroducing shell string-interpretation."""
     return subprocess.run(cmd, capture_output=capture, text=True, cwd=REPO_ROOT, check=check)
 
 
@@ -44,26 +47,105 @@ def get_current_branch() -> str:
     return res.stdout.strip()
 
 
+INTEGRATION_BRANCH_PATTERN = re.compile(r"(?:remotes/origin/)?(implement/[A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def parse_integration_branches(branch_listing: str) -> list[str]:
+    """Return the sorted unique ``implement/<name>`` branches in ``git branch -a`` output."""
+    names: set[str] = set()
+    for line in branch_listing.splitlines():
+        cleaned = line.strip().lstrip("*+").strip()
+        match = INTEGRATION_BRANCH_PATTERN.fullmatch(cleaned)
+        if match:
+            names.add(match.group(1))
+    return sorted(names)
+
+
+def choose_integration_branch(
+    candidates: list[str],
+    distance: dict[str, int | None],
+    recency: dict[str, int],
+) -> str:
+    """Pick the integration branch the current HEAD was cut from.
+
+    Closest by ancestry first (fewest commits on HEAD since the merge-base; a
+    branch with no merge-base ranks last), then the most recently updated tip,
+    then the name. ``main`` when there is no candidate.
+    """
+    if not candidates:
+        return "main"
+
+    def rank(name: str) -> tuple[bool, int, int, str]:
+        steps = distance.get(name)
+        return (steps is None, steps or 0, -recency.get(name, 0), name)
+
+    return min(candidates, key=rank)
+
+
+def resolve_ref(name: str) -> str | None:
+    """Return the ref to compare against for a branch name.
+
+    Both the local branch and ``origin/<name>`` may exist and either can be
+    stale (a local ``main`` that was never fast-forwarded makes every
+    governance file that landed since look like this branch's change). When
+    both exist, use the one HEAD descends from most closely; ``origin/<name>``
+    wins ties.
+    """
+    existing = [
+        ref
+        for ref in (f"origin/{name}", name)
+        if run_cmd(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]).returncode == 0
+    ]
+    if not existing:
+        return None
+
+    def commits_ahead(ref: str) -> int:
+        count = run_cmd(["git", "rev-list", "--count", f"{ref}..HEAD"]).stdout.strip()
+        return int(count) if count.isdigit() else 0
+
+    return min(existing, key=commits_ahead)
+
+
 def detect_active_integration_branch() -> str:
-    """Detect the active implement/* wave branch. Defaults to implement/wave-4 if active."""
-    # Check SCOPE.md or local/remote branches
-    res = run_cmd(["git", "branch", "-a"])
-    branches = res.stdout.splitlines()
+    """Detect the ``implement/<name>`` integration branch the current HEAD was cut from."""
+    candidates = parse_integration_branches(run_cmd(["git", "branch", "-a"]).stdout)
+    distance: dict[str, int | None] = {}
+    recency: dict[str, int] = {}
+    for name in candidates:
+        ref = resolve_ref(name)
+        if ref is None:
+            continue
+        stamp = run_cmd(["git", "log", "-1", "--format=%ct", ref]).stdout.strip()
+        recency[name] = int(stamp) if stamp.isdigit() else 0
+        merge_base = run_cmd(["git", "merge-base", ref, "HEAD"])
+        if merge_base.returncode != 0 or not merge_base.stdout.strip():
+            distance[name] = None
+            continue
+        count = run_cmd(["git", "rev-list", "--count", f"{merge_base.stdout.strip()}..HEAD"]).stdout.strip()
+        distance[name] = int(count) if count.isdigit() else None
+    return choose_integration_branch([name for name in candidates if name in recency], distance, recency)
 
-    # Look for active implement/wave-* branches
-    wave_branches = []
-    for b in branches:
-        b_clean = b.strip().replace("*", "").replace("+", "").strip()
-        m = re.search(r'(?:remotes/origin/)?(implement/wave-\d+)', b_clean)
-        if m:
-            wave_branches.append(m.group(1))
 
-    if wave_branches:
-        # Sort and take highest wave number
-        unique = sorted(set(wave_branches), key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', x)])
-        return unique[-1]
+def governance_violations(current_branch: str, base: str | None = None) -> set[str]:
+    """Protected governance files this branch changed since it left its base.
 
-    return "main"
+    ``base`` defaults to the detected integration branch on an issue branch and
+    to ``main`` otherwise.
+    """
+    if not base:
+        base = detect_active_integration_branch() if re.search(r"issue-\d+", current_branch) else "main"
+    ref = resolve_ref(base) or base
+
+    # Compute merge-base so we only inspect commits introduced on this branch
+    mb_res = run_cmd(["git", "merge-base", ref, "HEAD"])
+    mb = mb_res.stdout.strip() if mb_res.returncode == 0 and mb_res.stdout.strip() else ref
+
+    diff_res = run_cmd(["git", "diff", "--name-only", f"{mb}...HEAD"])
+    if diff_res.returncode != 0:
+        diff_res = run_cmd(["git", "diff", "--name-only", "HEAD~1"])
+
+    changed = {line.strip().replace("\\", "/") for line in diff_res.stdout.splitlines() if line.strip()}
+    return changed.intersection(PROTECTED_GOVERNANCE_FILES)
 
 
 def slugify(text: str) -> str:
@@ -84,7 +166,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     current = get_current_branch()
     integration_base = detect_active_integration_branch()
     print("=" * 60)
-    print(f"Quant Platform Workflow Status")
+    print("Quant Platform Workflow Status")
     print("=" * 60)
     print(f"Current Branch           : {current}")
     print(f"Active Integration Base  : {integration_base}")
@@ -149,21 +231,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         print(f"OK ({current_branch} branch)")
         return 0
 
-    if re.search(r'issue-\d+', current_branch):
-        base = detect_active_integration_branch()
-    else:
-        base = "main"
-
-    # Compute merge-base so we only inspect commits introduced on this branch
-    mb_res = run_cmd(["git", "merge-base", base, "HEAD"])
-    mb = mb_res.stdout.strip() if mb_res.returncode == 0 and mb_res.stdout.strip() else base
-
-    diff_res = run_cmd(["git", "diff", "--name-only", f"{mb}...HEAD"])
-    if diff_res.returncode != 0:
-        diff_res = run_cmd(["git", "diff", "--name-only", "HEAD~1"])
-
-    changed = {line.strip().replace("\\", "/") for line in diff_res.stdout.splitlines() if line.strip()}
-    violated = changed.intersection(PROTECTED_GOVERNANCE_FILES)
+    violated = governance_violations(current_branch, getattr(args, "base", "") or None)
     if violated:
         print("FAIL")
         print(f"      [VIOLATION] Branch '{current_branch}' modified protected governance files:")
@@ -215,7 +283,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         run_cmd(["git", "checkout", "-b", branch_name, base_branch], check=True)
 
     print(f"\n[OK] Switched to branch '{branch_name}'.")
-    print(f"Ready for implementation. When finished, run:\n  python tools/workflow.py pr")
+    print("Ready for implementation. When finished, run:\n  python tools/workflow.py pr")
     return 0
 
 
@@ -295,7 +363,7 @@ def cmd_pr(args: argparse.Namespace) -> int:
 
     pr_url = pr_res.stdout.strip()
     print("\n" + "=" * 60)
-    print(f"[SUCCESS] Pull Request created successfully:")
+    print("[SUCCESS] Pull Request created successfully:")
     print(f"  {pr_url}")
     print("=" * 60)
     return 0
@@ -306,10 +374,11 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", help="Workflow command")
 
     # status
-    p_status = subparsers.add_parser("status", help="Show current workflow, branch, and active base status")
+    subparsers.add_parser("status", help="Show current workflow, branch, and active base status")
 
     # preflight
     p_preflight = subparsers.add_parser("preflight", help="Run local preflight checks (syntax, boundaries, diff, governance)")
+    p_preflight.add_argument("--base", type=str, default="", help="Base branch for the governance check (default: detected implement/*)")
 
     # start
     p_start = subparsers.add_parser("start", help="Start work on an issue (creates branch from active integration base)")

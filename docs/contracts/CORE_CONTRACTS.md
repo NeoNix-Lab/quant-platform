@@ -527,6 +527,32 @@ Possible components:
 
 A StrategySpec is not reducible to one event trigger.
 
+`EntryPolicy`/`ExitPolicy` reference signals only by `signal_key`: the actual
+rule/threshold logic that decides what a signal key means (comparison
+operators, indicator thresholds, stop-loss/take-profit levels) is
+deliberately outside this contract's ownership. **`execution_policy` is the
+intended extension point for that logic** (ADR-0051): it is typed as the
+generic `IdentityBackedPolicy` interface (`identity: str`,
+`stable_dict() -> Mapping[str, Any]`) specifically so a consumer's own
+rule/threshold payload participates in `strategy_identity` — two strategies
+differing only in thresholds are guaranteed different identities — without
+the platform ever needing to interpret what those thresholds mean. No other
+StrategySpec component is a supported carrier for this; a consumer should not
+encode rule/threshold content into, for example, `policy_key` strings on
+`EntryPolicy`/`ExitPolicy`, which are plain governed keys, not
+identity-bearing payloads.
+
+`EntryPolicy.direction` is a single `Direction` (`LONG` or `SHORT`; `FLAT` is
+rejected) — one `StrategySpec` always enters in exactly one pre-configured
+direction and cannot express "go long or short depending on signal" or
+reverse directly in a single decision. **A two-sided strategy is expressed as
+two single-direction `StrategySpec`s run side by side** (ADR-0052), not a
+single two-sided spec. This is intentional, not a gap to work around
+silently: each spec in the pair gets its own `strategy_identity` and
+independent G04 session/cooldown state, and H03's existing execution
+conflict model already resolves the (signal-design-error) case where both
+specs' entries fire in the same decision instant.
+
 ---
 
 ## 22. DecisionIntent
@@ -568,6 +594,16 @@ Possible concepts:
 - venue-specific execution constraints.
 
 Execution semantics must be shared between historical replay and live adapters as far as the real venue allows.
+
+`translate_intent` (H01-H03) has no position/ledger state and is stateless
+per call: it does not know whether the caller already holds a
+`DecisionIntent`'s `target_position`, and it does not become a no-op when
+one is already held. **Replaying a persistent entry signal (one that stays
+true across many ticks) admits a new full-size order on every call, not just
+the first — this is intentional, not a defect** (ADR-0053). Gating repeated
+entries (e.g. tracking whether the current entry condition has already been
+acted on) is the caller's responsibility until H04 (portfolio/ledger, issue
+#144) is integrated with this seam.
 
 ---
 
@@ -635,6 +671,13 @@ Responsibilities:
 
 Ledger semantics must be deterministic under historical replay.
 
+Materialized representation replay is permitted only through a declared
+FINAL artifact identity with exact source/output support and causal
+availability evidence.  A CLOSED bar becomes consumable no earlier than its
+bucket end.  Tick-level and bar-level replay are comparable only under an
+explicit common bar-close profile; neither may silently substitute for the
+other. See [ADR-0059](../decisions/ADR-0059-d05-materialized-representation-replay-input-v1.md).
+
 ---
 
 ## 28. Study
@@ -681,6 +724,12 @@ Required concepts:
 
 A single logical run must not acquire separate incompatible identities in different subsystems.
 
+Independent replay attempts may execute in parallel only when each attempt
+preserves one complete stateful replay and a declared `RunIdentity`. Temporal
+sharding of a replay is not a Run optimization: it changes the state universe.
+Workers must record failed/aborted attempts rather than omitting them from
+trial accounting. See [ADR-0058](../decisions/ADR-0058-replay-sweep-orchestration-boundary-v1.md).
+
 ---
 
 ## 31. ArtifactIdentity
@@ -703,17 +752,32 @@ Identity must include the semantic inputs needed to prove reproducibility.
 
 Represents long-running asynchronous work.
 
+The durable J03 contract is [ADR-0062](../decisions/ADR-0062-durable-job-runtime-v1.md).
+`job_id` is a deterministic fingerprint of an immutable admitted operation; it
+is not a runtime UUID, path, worker identity, attempt count, or an Experiment
+`RunIdentity`. Re-admission of the same immutable request returns the existing
+Job, while a conflicting record fails closed.
+
 Required concepts:
 
 - `job_id`
 - operation type
-- submitted time
-- started/completed time
-- status
-- progress
-- cancellation state
-- result/artifact references
-- failure/retry metadata
+- immutable admitted request and declared input identities
+- handler/implementation identity and effect-safety declaration
+- durable lifecycle: `ADMITTED`, `QUEUED`, `RUNNING`,
+  `CANCELLATION_REQUESTED`, `RECOVERY_REQUIRED`, `SUCCEEDED`, `FAILED`, or
+  `CANCELLED`
+- attempt identity `(job_id, attempt_no)` and bounded attempt evidence
+- cancellation acknowledgement/effect evidence
+- immutable result/artifact and domain-reference identities
+- explicit terminal reason code and bounded diagnostic/evidence reference
+
+Only `SUCCEEDED`, `FAILED`, and `CANCELLED` are terminal. A process restart
+never treats `RUNNING` as liveness evidence and never silently redispatches it:
+the Job becomes `RECOVERY_REQUIRED` until an explicit, effect-safe recovery
+decision. Automatic retry is prohibited. Job lifecycle storage is distinct from
+I02 Experiment persistence; a Job may reference `RunIdentity` values but does
+not replace their ownership.
 
 ---
 

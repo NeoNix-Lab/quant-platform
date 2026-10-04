@@ -431,3 +431,60 @@ This ADR does not define or authorize:
 This governance-only freeze is tracked by issue #97. No runtime tests are added
 in this decision scope. The pinned vectors in this ADR become the minimum
 required implementation evidence for the later F08 runtime issue.
+
+## Amendment 1 (issue #253) — caller-supplied `k_eff` is the permanent v1 answer, not a placeholder
+
+**Date:** 2026-10-03
+
+Design gate issue #253 (materialized from #232 U6; raised externally via
+`NeoNix-Lab/omega#15` U6). Section 5.3 already requires `K_eff` as explicit
+caller-supplied evidence and already excludes "effective-trial estimation
+algorithms" from this ADR's authority. Confirmed directly in
+`validation/robustness.py`: `EffectiveTrialCountEvidence` is a pure evidence
+container (`k_eff: float`, `evidence_id: str`) with no estimation logic
+anywhere in the module, matching the ADR exactly. The question this gate
+closes is not "should `k_eff` be caller-supplied" (already decided) but
+"is that a temporary v1 gap pending a future estimator, or the intended,
+permanent boundary" — because the former reads as an open TODO and the
+latter does not.
+
+### Decision
+
+**Caller-supplied `k_eff` is the intended, permanent answer, not a v1
+placeholder awaiting a future estimator.** No estimation algorithm is added
+to F08, now or by implication of a future "v2."
+
+A concrete effective-trial-count estimation method (clustering, spectral/
+eigenvalue methods on the trial correlation matrix, or other approaches from
+the DSR/PBO literature this ADR already cites) remains possible in principle,
+but is explicitly **not** a natural extension of this ADR the way, say, a new
+`ConsumerErrorCode` was a natural extension of ADR-0050: it requires choosing
+among competing statistical methodologies with real tradeoffs, each
+defensible, none obviously canonical — exactly the kind of choice issue #253
+itself flags as needing "its own statistical-methodology review, likely its
+own design gate given the literature choice involved." This gate is not
+qualified to make that choice responsibly in passing, and does not attempt
+to.
+
+**Recommended conservative fallback:** a caller with no principled
+independence estimate should supply `k_eff = N` (the nominal trial count) --
+assuming full independence across all attempted trials is the search-adjusted
+benchmark `SR0` at its *highest* (hardest to beat), not its lowest, because a
+larger effective trial count widens the expected-maximum null `z_max` (s.5.4).
+Understating `k_eff` relative to the true number of independent attempts
+produces an artificially lenient benchmark and overstates significance;
+`k_eff = N` is therefore the safe default in the absence of a better estimate,
+never the dangerous direction to be wrong in. This mirrors the fallback the
+Omega consumer already uses in production.
+
+### Consequences
+
+- No code or contract change: `EffectiveTrialCountEvidence`, `DSRResult` and
+  every DSR/PBO formula in this ADR are unchanged.
+- `EffectiveTrialCountEvidence`'s own docstring (`validation/robustness.py`)
+  is amended to state the recommended conservative fallback, so a caller
+  reading the type directly does not have to find this ADR first.
+- A future design gate proposing a concrete estimator must address this
+  Amendment directly (it would narrow, not just add to, what this ADR
+  permanently decided here) and must resolve a specific literature/method
+  choice, not merely "whether" to estimate.

@@ -502,3 +502,31 @@ The implementation must have independent tests showing that:
 - ordinary valid reads do not require rehashing immutable content, while a
   separately implemented strict verification mode detects mismatches;
 - duplicate or conflicting catalog/manifests fail loudly.
+
+## 13. Server/deck admitted-input handoff
+
+ADR-0064 governs a future server-owned handoff of DataGateway-resolved canonical
+input to the existing deck compute surface. Before delivery, K12 seals an
+immutable admitted-input manifest containing the relevant logical dataset or
+artifact identities, natural partitions, schema identity/version/hash, manifest
+and content hashes, declared coverage, request/result identities, and required
+definition/implementation/Git identity. Its `admission_id` is a canonical
+fingerprint of those stable fields.
+
+The future K12 implementation canonicalizes exactly those v1 stable fields,
+then derives `manifest_digest` and its domain-prefixed `admission_id`. Neither
+derived field participates in the payload being digested, so no self-referential
+identity is admitted.
+
+An export path, storage-root id, catalog UUID, transport URL, delivery attempt,
+or deck-local location is an operational locator and never an admitted-input
+identity. The deck verifies delivered bytes against the sealed manifest and
+records the exact `admission_id` plus manifest digest. A partial, expired, or
+digest-mismatched transfer is unusable and fail-closed; it cannot be repaired by
+substituting a nearby dataset or a new path.
+
+K13 can register a deck-produced result only after it compares the bundle's
+declared admission/digest evidence with the authoritative sealed manifest. A
+mismatch refuses the entire registration without catalog or Experiment mutation.
+The future import registers a new governed Artifact through its owning boundary;
+it never replaces canonical input data or a previously accepted result.

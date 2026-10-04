@@ -15,7 +15,7 @@ from .manifests import (
     _validate_dataset_document,
     _validate_partition_document,
 )
-from .models import DatasetIdentity, Instant
+from .models import DatasetIdentity
 from .publication_eligibility_catalog import (
     PublicationEligibilityCatalog,
     PublicationEligibilityRefusal,

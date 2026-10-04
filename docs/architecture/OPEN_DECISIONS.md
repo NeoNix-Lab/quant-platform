@@ -65,6 +65,33 @@ Resolved architecture includes:
 - K07 storage tier relocation semantics under [ADR-0048](../decisions/ADR-0048-storage-tier-relocation-v1.md);
 - K09 retention/deletion authority semantics under [ADR-0049](../decisions/ADR-0049-retention-deletion-authority-v1.md).
 
+### Resolved via the Omega stabilization line (`implement/omega`, tracking #232)
+
+- A07's one-UTC-day/BTCUSDT-linear acquisition boundary is frozen, permanent and
+  intentional (not a temporary v1 gap) under [ADR-0054](../decisions/ADR-0054-a07-historical-acquisition-day-boundary-v1.md); multi-day/date-range consumers loop day-by-day.
+- F08's `k_eff` effective-trial-count evidence is permanently caller-supplied,
+  never estimated by the platform, under ADR-0037 Amendment 1, which also
+  records the recommended conservative fallback (`k_eff = N`).
+- StrategySpec's `execution_policy` slot is the intended extension point for
+  consumer-owned signal rule/threshold logic (ADR-0051); a two-sided strategy
+  is a pair of single-direction StrategySpecs, not a new two-sided contract
+  (ADR-0052); `translate_intent` stays stateless and caller-gated for repeated
+  entries, both at the `translate_intent` seam and at H05 `HistoricalReplayRuntime`
+  (ADR-0053).
+- J02's result-size bound and wire `max_size` are frozen (ADR-0050 Amendment 1);
+  its authentication/TLS gap remains explicitly open (see above and Wave 8
+  design gate G1).
+- D05's representation-artifact identity and replay-input-profile semantics are
+  frozen (ADR-0059, see DG-A above); implementation remains missing.
+- Server/deck runtime topology, artifact handoff rules and the networked
+  server-to-deck boundary are frozen (ADR-0057); the authenticated/TLS
+  transport this requires is the same open gate as J02's above.
+- The Omega validation bridge's public import surface (ADR-0055), the Golden
+  proof/test-double classification (ADR-0056), the replay sweep orchestration
+  boundary (ADR-0058), the canonical replay I/O profile (ADR-0060), and the
+  replay summary output mode (ADR-0061) are frozen design decisions; none
+  authorizes new runtime implementation by itself.
+
 Legacy repositories remain evidence/reference only and are never runtime dependencies.
 
 ### Resolved DG-D / C05 configuration semantics
@@ -106,9 +133,21 @@ An `OPEN_DEFERABLE` decision remains deliberately unresolved until its stated re
 
 This family has independent branches.
 
-### Candle materialization (`D05`)
+### Candle materialization (`D05`) — FROZEN (semantics), implementation MISSING
 
-Activate only when persisted Candle results are selected. Resolve how a persisted Candle binds CandleDefinition/Representation identity, source dataset/partition evidence, temporal support and implementation identity.
+ADR-0059 freezes `D05`'s semantic decision: a future `RepresentationArtifact`'s
+identity (representation definition, source dataset/schema/ordering/partitions,
+manifest/content digests, declared output support and required source support,
+output partition identities/digests, implementation identity); candle support/
+availability rules for materialized rows; and the replay-input-profile shape
+(FINAL-only, causally-available rows; tick and representation replay are not
+interchangeable without a future declared bar-close profile proving equivalence).
+
+**This freezes semantics only.** ADR-0059 explicitly excludes D05 runtime,
+two-resolution replay access, and any change to existing tick replay. No
+persisted candle materialization, representation-artifact runtime, or
+representation-replay profile is implemented. Do not read ADR-0059 as
+implementing persisted candles.
 
 `D05` is not a prerequisite of canonical H01 integration.
 
@@ -329,9 +368,15 @@ Freeze StrategicState/StrategicAction/StrategicReward only when the strategic-RL
 
 Freeze ExecutionState/ExecutionAction/ExecutionReward only when execution RL is selected. It must remain structurally separate from the strategic task.
 
-### Job runtime (`J03`)
+### Job runtime (`J03`) — FROZEN (semantics), implementation MISSING
 
-Before durable long-running operations, freeze submission identity, status/lifecycle, retry/idempotency, result identity and failure semantics. Do not infer transport/process topology from the Job contract.
+ADR-0062 freezes `J03`'s decision: submission identity (deterministic `job_id`
+fingerprint), durable lifecycle (`ADMITTED` through `RECOVERY_REQUIRED`),
+attempt/retry-idempotency rules, result/artifact reference requirements, and
+failure semantics for a server-local, Application-owned Job. It does not infer
+transport/process topology, define a remote worker, or implement Job storage,
+schema, scheduling, or an API — see `DG-J` G2 below. Implementation is tracked
+by the Wave 8 implementation inventory in `SCOPE.md`.
 
 ## DG-H — Operational safety
 
@@ -424,6 +469,83 @@ complete without future attributable repair evidence. This closes the selected
 production-readiness path while preserving issue #110's
 `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition.
 
+## DG-J — Remote Service Topology (Wave 8 design gates) — RESOLVED
+
+All six gates reached a disposition on 2026-10-04 (issues #282-#287, parent
+#281, reconciled by issue #288). `SCOPE.md`'s "Wave 8 — Full Platform API &
+Remote Service Topology v1" records the authorized implementation inventory
+that results; being resolved here is not itself an implementation go-ahead —
+each atom still needs its own implementation issue citing its ADR.
+
+### G1 — Authentication, TLS and authorization for non-loopback J02 — ACCEPTED (ADR-0063)
+
+Resolved: non-loopback J02 is WSS with TLS 1.3+ and mandatory client-certificate
+mTLS or it refuses to start; the authenticated credential is the exact,
+versioned certificate fingerprint mapped to one `principal_id` and an explicit
+scope set; the only currently defined scope is `j02.market_data.read`
+(read-only, no storage/catalog/Job/admin access). Freezes `J09`. Anchors:
+ADR-0050 Amendment 1 §3; ADR-0057 §4.
+
+### G2 — `J03` job runtime — ACCEPTED (ADR-0062)
+
+Resolved: a Job is a durable, Application-composed admission record
+(deterministic `job_id` fingerprint over operation kind/handler/admitted
+request/input identities); lifecycle `ADMITTED -> QUEUED -> RUNNING ->
+SUCCEEDED|FAILED|CANCELLED`, with `RECOVERY_REQUIRED` on restart instead of
+inferred liveness; automatic retry is prohibited, explicit retry requires
+proven effect-safety. Activates the existing DG-G `J03` decision as a Wave 8
+prerequisite; it is the same atom, not a new one. Dependencies `C03`/`I02` are
+already complete.
+
+### G3 — Placement contract: data-local vs. consumer-local, and the wire boundary — ACCEPTED (ADR-0064)
+
+Resolved: the existing ADR-0057 deck is the sole Wave 8 consumer compute
+surface — no separate third "consumer machine" exists or is introduced. `K12`
+is a sealed, deterministic admitted-input manifest (`admission_id =
+admitted-input-v1:sha256(canonical_payload_v1)`, excluding paths/catalog
+UUIDs). `K13` resolves that admission and verifies every declared input/output
+digest before registering a governed Experiment/Artifact result; a mismatch
+refuses the entire bundle with no mutation. Freezes `K12`, `K13`. Anchors:
+ADR-0057 §1-§3, §6.
+
+### G4 — Consumer-API-equivalent seams for Strategy, Replay, Validation, Training — ACCEPTED, partial (ADR-0065)
+
+Resolved for three of four domains: `J10` (`strategy-compose-v1` over
+`compose_decision`), `J12` (finite Validation operations: fold building,
+candidate classification, DSR, PBO), and `J13`
+(`supervised-train-evaluate-v1` over `train_evaluate_supervised_baseline`) are
+each a thin, versioned application seam carried over existing J02. **Replay
+(`J11`) is explicitly deferred, not frozen**: `HistoricalReplayRuntime.run()`
+requires an injected `feature_provider` callable with no accepted
+identity-bearing, serializable, server-resolved definition; exposing it as a
+path/module name/callable would invent a new semantic authority. Trigger for
+revisiting: a future ADR that defines that semantic feature/provider reference
+and whether the resulting operation is synchronous or J03-admitted. Anchors:
+`ROADMAP.md` Wave 8; the existing `C02`/`C03` pattern.
+
+### G5 — Transport evolution for larger/streamed/live results — ACCEPTED (ADR-0066)
+
+Resolved: J02 v1 remains unchanged; `j14-framed-result-v1` is an additive
+message family that carries only a complete, already-produced finite
+application result, split into digest-verified chunks (RFC 8785 canonical
+JSON, per-chunk and per-transfer SHA-256), with transfer-local (not
+application-level) resume. No live family is defined yet — a future owner must
+first accept the corresponding Consumer request/event/error/ordering/resume
+semantics before any `j14-live-*` family exists. Freezes `J14`. Anchors:
+ADR-0050 Amendment 1 §1-§2; ADR-0047.
+
+### G6 — Omega client contract — ACCEPTED (ADR-0067)
+
+Resolved: Omega's J15 remote client talks only to J02's wire contract
+(`j02-request-v1`/`j02-response-v1`); the public Python API /
+`PUBLIC_PYTHON_API.md` is never a remote-client fallback and must not be mixed
+with or substituted for a J02 session. Compatibility is a wire-family
+commitment (`wire_incompatible` fails closed on any mismatch, never silently
+downgrades). The first and only capability is `j02.market_data.read`. **A
+remote implementation of `J15` is explicitly blocked until `J09` is
+implemented** — this ADR authorizes neither that server work nor an Omega
+adapter by itself. Freezes `J15`. Anchors: ADR-0055; `PUBLIC_PYTHON_API.md`.
+
 ## Explicitly deferable decisions
 
 The following are classified and therefore not roadmap unknowns:
@@ -455,11 +577,30 @@ Wait for explicit multi-asset product scope.
 ### Canonical API transport (`J02`) — RESOLVED
 
 Consumer API semantics are already frozen. ADR-0050 resolves the bounded Wave 7
-transport choice as HTTP JSON over the existing Application-owned Consumer API
-surface. J02/J04/J05/J06 are complete for that bounded API/client path. This
-does not activate J03, J07, J08, broker/live execution, second venue, market
-depth branches or any product runtime beyond the accepted transport/client
-boundary.
+transport choice as **WebSocket** (a single unified transport, ADR-0050 §1)
+over the existing Application-owned Consumer API surface. J02/J04/J05/J06 are
+complete for that bounded API/client path. This does not activate J03, J07,
+J08, broker/live execution, second venue, market depth branches or any product
+runtime beyond the accepted transport/client boundary.
+
+ADR-0050 Amendment 1 additionally froze a documented 50,000-row/16 MiB result
+bound (`RESULT_TOO_LARGE`) and an explicit wire `max_size`. It left
+authentication, TLS and authorization for non-loopback J02 open at the time;
+**that gap is now frozen (not implemented) under ADR-0063** — see `DG-J` G1 /
+`J09` below. ADR-0057 separately forbids using the non-loopback override as a
+deck/consumer-machine handoff channel until `J09` is actually implemented.
+
+### Replay Consumer-API seam (`J11`)
+
+ADR-0065 §5 explicitly defers this `DG-J` G4 atom rather than freezing it:
+`HistoricalReplayRuntime.run()` requires an injected `feature_provider`
+callable, and there is no accepted, identity-bearing, serializable,
+server-resolved definition for it. Exposing it as a path, module name, opaque
+executable, or client callback would invent a new semantic authority and alter
+Strategy/Replay authority. Trigger: a future ADR that defines that semantic
+feature/provider reference and its provenance/availability contract, and
+chooses whether the resulting operation is synchronously bounded or must be
+admitted through `J03`.
 
 ### Paper/shadow and live product runtime (`J07`,`J08`)
 

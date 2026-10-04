@@ -2,7 +2,7 @@
 """C03 -- ASS-02 result and error translation for trades@1.
 
 Proves that a semantic query executed against an injected access capability
-yields either the stable consumer envelope or one of the six frozen Consumer
+yields either the stable consumer envelope or one of the frozen Consumer
 API errors, with no catalog, storage, path, policy or raw-exception detail
 crossing the boundary.
 
@@ -247,6 +247,81 @@ class SuccessfulResultTests(unittest.TestCase):
                 self.assertNotIn(fragment, value, f"{fragment} leaked via {value!r}")
 
 
+class ResultTooLargeTests(unittest.TestCase):
+    """ADR-0050 Amendment 1 (#247): refuse a result over max_result_rows with a
+    typed error, rather than returning an arbitrarily large ConsumerMarketDataResult
+    that J02 would then try to serialize into an oversized wire frame."""
+
+    def batches(self):
+        return {
+            LEFT_PATH: [(trade("2024-01-01T00:10:00Z", "1"), trade("2024-01-01T00:20:00Z", "2"))],
+            RIGHT_PATH: [(trade("2024-01-01T01:10:00Z", "3"),)],
+        }
+
+    def test_documented_v1_default_is_50_000(self):
+        from quant_platform.application import DEFAULT_MAX_RESULT_ROWS
+
+        self.assertEqual(50_000, DEFAULT_MAX_RESULT_ROWS)
+
+    def test_result_over_the_bound_is_refused_with_a_typed_error(self):
+        with self.assertRaises(ConsumerApiError) as caught:
+            execute_market_data_query(
+                query(), gateway=covered_gateway(self.batches()), max_result_rows=2
+            )
+        self.assertEqual(ConsumerErrorCode.RESULT_TOO_LARGE, caught.exception.code)
+        self.assertEqual("3", caught.exception.context["row_count"])
+        self.assertEqual("2", caught.exception.context["max_result_rows"])
+        self.assertIn("requested_interval", caught.exception.context)
+        # Resolution succeeded, so the consumer identity exists.
+        self.assertIsNotNone(caught.exception.request_identity)
+
+    def test_result_exactly_at_the_bound_succeeds(self):
+        result = execute_market_data_query(
+            query(), gateway=covered_gateway(self.batches()), max_result_rows=3
+        )
+        self.assertEqual(3, result.row_count)
+
+    def test_default_bound_does_not_refuse_an_ordinary_small_result(self):
+        result = execute_market_data_query(query(), gateway=covered_gateway(self.batches()))
+        self.assertEqual(3, result.row_count)
+
+    def test_oversized_query_stops_reading_as_soon_as_the_bound_is_exceeded(self):
+        """Review-caught blocker: the first version of this fix only refused to
+        *return* an oversized result after the scan had already been fully
+        drained -- it did not bound the read itself, so a pathologically large
+        query still cost a full unbounded scan. Proven here by counting the
+        actual batches pulled from the source reader, not just the outcome."""
+        reader = FakeBatchReader({
+            LEFT_PATH: [
+                (trade("2024-01-01T00:10:00Z", "1"),),
+                (trade("2024-01-01T00:11:00Z", "2"),),
+            ],
+            RIGHT_PATH: [
+                (trade("2024-01-01T01:10:00Z", "3"),),
+                (trade("2024-01-01T01:11:00Z", "4"),),
+            ],
+        })
+        instance = DataGateway(
+            FakeCatalog([LEFT, RIGHT]),
+            batch_reader=reader,
+            path_resolver=lambda _root, _dataset_root, rel_path: rel_path,
+            ordering_providers=(BYBIT_ORDERING_PROVIDER,),
+        )
+
+        with self.assertRaises(ConsumerApiError) as caught:
+            execute_market_data_query(query(), gateway=instance, batch_size=1, max_result_rows=1)
+
+        self.assertEqual(ConsumerErrorCode.RESULT_TOO_LARGE, caught.exception.code)
+        self.assertEqual("2", caught.exception.context["row_count"])
+        # Exactly 2 of the 4 available batches were pulled (one to reach the
+        # bound, one more to exceed it) -- RIGHT_PATH's reader was never even
+        # opened (reader.calls records one call per path, regardless of how
+        # many batches that path's generator ultimately yields).
+        self.assertEqual([(LEFT_PATH, 0), (LEFT_PATH, 1)], reader.yields)
+        self.assertEqual(1, len(reader.calls))
+        self.assertEqual(LEFT_PATH, reader.calls[0][0])
+
+
 class CoverageRefusalTests(unittest.TestCase):
     def test_incomplete_strict_coverage_is_no_coverage_not_an_empty_success(self):
         with self.assertRaises(ConsumerApiError) as caught:
@@ -346,11 +421,13 @@ class ErrorTranslationTests(unittest.TestCase):
                 # Resolution succeeded, so the consumer identity exists.
                 self.assertIsNotNone(caught.exception.request_identity)
 
-    def test_all_six_codes_remain_distinguishable(self):
+    def test_all_seven_codes_remain_distinguishable(self):
+        """Seven, not six: ADR-0050 Amendment 1 (#247) added RESULT_TOO_LARGE."""
         self.assertEqual(
             {
                 "invalid_request", "unsupported_representation", "source_not_found",
                 "no_coverage", "schema_incompatible", "integrity_failure",
+                "result_too_large",
             },
             {code.value for code in ConsumerErrorCode},
         )

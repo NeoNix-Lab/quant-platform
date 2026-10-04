@@ -127,7 +127,7 @@ ALLOWED = {
     },
 }
 SHARED_STDLIB = {
-    "__future__", "collections", "dataclasses", "datetime", "hashlib",
+    "__future__", "collections", "dataclasses", "datetime", "hashlib", "importlib",
     "json", "re", "typing",
 }
 ACCESS_MODELS = {
@@ -178,7 +178,7 @@ TYPE_CHECKING. Star/dynamic imports are refused rather than silently untracked.
                 graph[module].add(target)
             elif owner == "shared" and target.split(".")[0] not in SHARED_STDLIB:
                 errors.append(f"{module}:{line}: shared imports non-pure dependency {target}")
-            if target.split(".")[0] == "importlib":
+            if target.split(".")[0] == "importlib" and target != "importlib.metadata":
                 errors.append(f"{module}:{line}: dynamic import machinery is not a declared seam")
             if target.split(".")[0] in {"tools", "tests"}:
                 errors.append(f"{module}:{line}: runtime depends on {target}")

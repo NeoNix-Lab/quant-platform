@@ -72,11 +72,33 @@ python tools/run_tests.py
 # 3. Markdown reference and link validation
 python tools/check_markdown_links.py
 
-# 4. Whitespace and merge conflict markers check
-git diff --check origin/implement/wave-4...HEAD
+# 4. Lint baseline (requires `pip install -e ".[dev]"`)
+ruff check src tools
+
+# 5. Whitespace and merge conflict markers check
+git diff --check origin/<integration-branch>...HEAD
 ```
 
-All 7 GitHub Actions CI checks must be green before a Pull Request is eligible for review and merge.
+All GitHub Actions CI checks must be green before a Pull Request is eligible for review and merge.
+
+### Lint and type baseline
+
+The lint gate is deliberately small and explicit: `ruff check src tools` with the rule families
+selected in `pyproject.toml` (`E4`, `E7`, `E9`, `F`). The count is **zero** and CI keeps it there.
+ruff's built-in default rule set changes between releases, so it is not used as a gate and the
+ruff version is bounded in `pyproject.toml`.
+
+Baselines recorded when the gate was introduced (not enforced; they may only go down):
+
+| Check | Command | Baseline |
+|---|---|---|
+| Same ruff rule set on tests | `ruff check tests` | 150 findings (mostly `E702`, `E402`) |
+| Type check | `python -m mypy src --ignore-missing-imports` | 303 errors in 37 files |
+
+Ratchet plan: widen `select` one rule family at a time, only after its count in `src tools` is zero;
+land the mechanical auto-fixes for a family as their own behavior-neutral change. Type-checking is
+not in CI yet; it needs its own slice because most findings are in proof code and test doubles
+shipped inside `src` (see the golden proof-code boundary audit).
 
 ---
 

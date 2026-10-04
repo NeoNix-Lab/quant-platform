@@ -1,6 +1,5 @@
 """Install repository git hooks."""
 
-import os
 import sys
 from pathlib import Path
 

@@ -1,16 +1,18 @@
 """Application-service composition seam.
 
 This package owns composition of use cases that coordinate existing
-capabilities without owning their domain semantics.  It is an in-process
-seam: it is not an API, a transport, a runtime host, a job runtime or a
-client.
+capabilities without owning their domain semantics. It is an in-process seam:
+it is not an API, a transport, or a client. It does not yet implement a job
+runtime; ADR-0062 reserves future bounded J03 runtime composition to this
+package without moving Experiment or other domain semantics here.
 
 ASS-01 established ownership and enforcement.  C02 added semantic selector
 resolution for the frozen ``trades@1`` reference representation.  C03 added
 execution over an injected access capability and translation of its outcome
-into a stable consumer result or one of the six frozen Consumer API errors.
+into a stable consumer result or one of the frozen Consumer API errors.
 C05 adds typed immutable configuration and concrete composition for the current
-market-data application service.  Transport and job runtime remain J02 and J03.
+market-data application service. Transport remains J02; J03 has an accepted
+contract but no production implementation.
 """
 
 from .backup_restore import (
@@ -28,6 +30,7 @@ from .backup_restore import (
 )
 from .composition import (
     DEFAULT_MARKET_DATA_BATCH_SIZE,
+    DEFAULT_MAX_RESULT_ROWS,
     MarketDataApplication,
     MarketDataApplicationConfig,
     compose_market_data_application,
@@ -95,6 +98,7 @@ from .market_data import (
 )
 from .api_transport_server import (
     ApiTransportServerConfig,
+    J02_MAX_WIRE_MESSAGE_BYTES,
     J02_REQUEST_SCHEMA_VERSION,
     J02_RESPONSE_SCHEMA_VERSION,
     decode_transport_query,
@@ -159,6 +163,7 @@ __all__ = [
     "CANONICAL_FIELD_ORDER",
     "DEFAULT_LIVE_CANDLE_BATCH_SIZE",
     "DEFAULT_MARKET_DATA_BATCH_SIZE",
+    "DEFAULT_MAX_RESULT_ROWS",
     "ApplicationRequestError",
     "ApiTransportServerConfig",
     "Check",
@@ -180,6 +185,7 @@ __all__ = [
     "ImportError_",
     "ImportReport",
     "InMemoryRetentionDeletionAuditStore",
+    "J02_MAX_WIRE_MESSAGE_BYTES",
     "J02_REQUEST_SCHEMA_VERSION",
     "J02_RESPONSE_SCHEMA_VERSION",
     "MarketDataApplication",

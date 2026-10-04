@@ -14,7 +14,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Data | Declared coverage | FROZEN | COMPLETE | Data Plane | A04 | Coverage is explicit and distinct from observed row bounds. |
 | Data | Catalog/schema bootstrap | RESOLVED | COMPLETE | Data Plane/Engineering | A05 | Repository schema bytes authoritative; conflicts fail closed. |
 | Data | Canonical Parquet materialization | FROZEN | COMPLETE | Producer | A06 | First historical vertical proven. |
-| Data | Historical Bybit acquisition | FROZEN | PARTIAL | Source/Producer | A07 | Narrow reference vertical exists; not a general ingest runtime. |
+| Data | Historical Bybit acquisition | FROZEN | PARTIAL | Source/Producer | A07 | One-UTC-day BTCUSDT-linear v1 profile; multi-day/date-range consumers loop day-by-day. ADR-0054; not a general ingest runtime. |
 | Data | S13 certification | FROZEN | COMPLETE | Producer | A08 | Durable authoritative quality evidence. |
 | Data | S14 publication/eligibility | FROZEN | COMPLETE | Producer | A09 | First vertical catalog publication proven. |
 | Data | Backfill/repair | FROZEN | COMPLETE | Data Plane | A10 | ADR-0033; deterministic repair-intent/candidate/atomic-cutover foundation. |
@@ -41,7 +41,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Representation | CandleDefinition v1 | FROZEN | COMPLETE | Representation | D02 | Accepted semantic contract; runtime is a separate capability. |
 | Representation | Historical Candle computation | FROZEN | COMPLETE | Representation | D03 | On-demand CLOSED candles. |
 | Representation | Incremental/live Candle computation | FROZEN | COMPLETE | Representation | D04 | PR #205 implements incremental/live candle computation; PR #208 composes B06 into D04 with gap-safe watermarking; PR #212 proves the bounded Wave 6 live-candle path. |
-| Representation | Candle materialization identity | OPEN_BLOCKING | MISSING | Representation | D05 | DG-A candle-materialization branch; not a prerequisite of canonical H01. |
+| Representation | Candle materialization identity | FROZEN | MISSING | Representation | D05 | ADR-0059 freezes representation-artifact identity and the replay-input-profile shape; no runtime/materialization/replay access is implemented. Not a prerequisite of canonical H01. |
 | Representation | Footprint representation | FROZEN | COMPLETE | Representation | D06 | FootprintDefinition v1 exact duration/tick-grid/sparse levels/finality; ADR-0027. |
 | Features | Definition/set/artifact separation | FROZEN | COMPLETE | Feature Engine | E01 | Architectural identity separation accepted. |
 | Features | FeatureDefinition v1 | FROZEN | COMPLETE | Feature Engine | E02 | ADR-0026 accepted; runtime semantic foundation implemented. |
@@ -76,13 +76,20 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | RL | Strategic RL contract | OPEN_BLOCKING | MISSING | Strategic RL | I06 | DG-G strategic-RL branch. |
 | RL | Execution RL contract | OPEN_BLOCKING | MISSING | Execution RL | I07 | DG-G execution-RL branch; structurally separate from strategic RL. |
 | Interfaces | Consumer API semantic boundary | FROZEN | COMPLETE | Application/API | J01 | ADR-0020; semantic API is not a DataGateway wrapper and does not imply transport runtime. |
-| Interfaces | Canonical API transport | RESOLVED | COMPLETE | API Runtime | J02 | ADR-0050; HTTP JSON transport over the frozen Consumer API semantics, implemented in Wave 7. |
-| Runtime | Job runtime | OPEN_BLOCKING | MISSING | Runtime | J03 | DG-G job branch; durable identity/retry/result semantics. |
+| Interfaces | Canonical API transport | RESOLVED | COMPLETE | API Runtime | J02 | ADR-0050; WebSocket transport over the frozen Consumer API semantics, implemented in Wave 7. Amendment 1 froze a 50,000-row/16 MiB result bound; auth/TLS for non-loopback deployment remains explicitly open (DG-J G1). |
+| Runtime | Job runtime | FROZEN | MISSING | Runtime | J03 | ADR-0062 freezes durable admission/lifecycle/retry-idempotency/result semantics for a server-local Application-owned Job; implementation not started (Wave 8 inventory). |
 | Clients | CLI | RESOLVED | COMPLETE | Client Layer | J04 | Thin canonical CLI client integrated in Wave 7. |
 | Clients | TUI | RESOLVED | COMPLETE | Client Layer | J05 | Thin canonical TUI client integrated in Wave 7. |
 | Clients | App UI | RESOLVED | COMPLETE | Client Layer | J06 | Thin canonical App UI client integrated in Wave 7. |
 | Runtime | Paper/shadow mode | RESOLVED | MISSING | Runtime | J07 | Vertical gate before live operation. |
 | Runtime | Live product mode | RESOLVED | MISSING | Runtime/Operations | J08 | Requires explicit operational authorization; roadmap state is not authorization. |
+| Interfaces | Authenticated/TLS transport v1 | FROZEN | MISSING | API Runtime | J09 | ADR-0063; WSS+mTLS 1.3, exact-fingerprint principal mapping, `j02.market_data.read` least-privilege scope for non-loopback J02. Wave 8 inventory. |
+| Interfaces | Strategy Consumer-API seam v1 | FROZEN | MISSING | Application/API | J10 | ADR-0065 §2; `strategy-compose-v1` seam over existing `compose_decision`. Wave 8 inventory. |
+| Interfaces | Replay Consumer-API seam v1 | OPEN_DEFERABLE | MISSING | Application/API | J11 | ADR-0065 §5 explicitly defers: no accepted identity for `HistoricalReplayRuntime`'s `feature_provider` callable yet. |
+| Interfaces | Validation Consumer-API seam v1 | FROZEN | MISSING | Application/API | J12 | ADR-0065 §3; finite Validation-operation seam (folds, classification, DSR, PBO). Wave 8 inventory. |
+| Interfaces | Training Consumer-API seam v1 | FROZEN | MISSING | Application/API | J13 | ADR-0065 §4; `supervised-train-evaluate-v1` seam over `train_evaluate_supervised_baseline`. Wave 8 inventory. |
+| Interfaces | Streaming/live transport extension v1 | FROZEN | MISSING | API Runtime | J14 | ADR-0066; additive `j14-framed-result-v1` finite chunked-result framing; no live family defined yet. Wave 8 inventory. |
+| Clients | Omega API client adapter v1 | FROZEN | MISSING | Client Layer | J15 | ADR-0067; J02 is the sole remote boundary; blocked on `J09` implementation. Wave 8 inventory. |
 | Operations | Provisioning/fixtures/CI | RESOLVED | COMPLETE | Engineering | K01 | Repository validation foundation complete. |
 | Operations | Server/runtime identity | FROZEN | COMPLETE | Operations | K02 | ADR-0041; real-server proof in PR #113 verified non-root least privilege, minimum catalog rights, physical storage topology, and backup-authority separation. |
 | Operations | Observability | RESOLVED | COMPLETE | Operations | K03 | Minimum externally observable health/provenance/failure transitions. |
@@ -94,6 +101,8 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Retention/deletion authority | FROZEN | COMPLETE | Operations | K09 | ADR-0049 freezes retention/deletion authority; PR #211 implements governed deletion and PR #212 proves the bounded Wave 6 storage lifecycle path. |
 | Operations | Checkpoint/recovery | FROZEN | COMPLETE | Operations/Data Plane | K10 | ADR-0042; PR #114 implements persisted checkpoint/recovery and the full hermetic proof matrix; PR #122 supplies the bounded real-server restart/deployed checkpoint-path proof (`K10_REAL_RESTART_PROOF: PASS`). |
 | Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Canonical authority reconciled through Wave 4 closeout by governance issue #147. |
+| Operations | Server-owned admitted-input export/reference v1 | FROZEN | MISSING | Operations | K12 | ADR-0064; sealed, deterministic `AdmittedInputManifestV1`/`admission_id` excludes paths/catalog UUIDs; the deck is the sole consumer surface. Networked exposure needs `J09`. Wave 8 inventory. |
+| Operations | Governed experiment-result import/registration v1 | FROZEN | MISSING | Operations | K13 | ADR-0064 §3; resolves the K12 admission and verifies every declared input/output digest before registering a governed result. Wave 8 inventory. |
 
 ## Gate / evidence state
 
@@ -130,6 +139,8 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Wave 5 Experiment / Supervised ML | COMPLETE | I03/I04/I05 integrated by PR #178/#177/#179; PR #180 / issue #174 records Golden supervised E2E PASS with stable projection, run, metric and artifact identities. |
 | Wave 6 Live Consumer Data Plane & Storage Lifecycle | COMPLETE | B06/D04/K07/K09 are frozen and implemented by ADR-0047/0048/0049, PR #204/#205/#208/#209/#211, and Golden proof PR #212. |
 | Wave 7 API & Platform Transport | COMPLETE | J02/J04/J05/J06 are implemented by ADR-0050 and PR #225/#226/#227/#228. Issue #222 is closed by explicit operator exception without claiming an additional Golden proof artifact. |
+| Omega external-audit stabilization line (`implement/omega`, tracking #232) | COMPLETE for the audited findings | Not a wave; a post-Wave-7 stabilization line reconciling an external audit from integrating `NeoNix-Lab/omega`. 25 PRs (#254, #256-#278) merged: safety tooling/package hygiene (#254), workflow non-wave integration-branch detection (#256), exception-handling narrowing (#257), SQLite covering-index preflight (#258), systemd hardening (#259), J02 result-size bound (ADR-0050 Am.1, #260), StrategySpec extensions (ADR-0051/52/53, #261-263), A07 day-boundary (ADR-0054, #264), H05 repeated-entry gating (#265-266), `k_eff` permanent disposition (ADR-0037 Am.1, #267), `shell=True` removal (#268), promotion-candidate validation (#269), public dependency surface (#270), Omega validation bridge (ADR-0055, #271), Golden proof/test-double boundary (ADR-0056, #272), server/deck topology (ADR-0057, #273), replay sweep orchestration boundary (ADR-0058, #274), D05 representation-replay input (ADR-0059, #275), canonical replay I/O profile (ADR-0060, #276), replay summary mode (ADR-0061, #277), and replay strategy-identity caching (#278). This governance pass (issue "Omega stabilization-line reconciliation and platform-v1.0 service-topology scope") reconciles the above into governance state; it adds no new code itself. |
+| `DG-J` Remote Service Topology design-gate line (issues #282-#287, parent #281) | RESOLVED for all six gates | Six design-gate issues on `implement/omega` each produced one ACCEPTED ADR: G1/`J09` (ADR-0063, #283/PR #290), G2/`J03` (ADR-0062, #282/PR #289), G3/`K12`+`K13` (ADR-0064, #284/PR #291), G4/`J10`,`J12`,`J13` (ADR-0065, #285/PR #292; `J11` explicitly deferred), G5/`J14` (ADR-0066, #286/PR #293), G6/`J15` (ADR-0067, #287/PR #294). Issue #288 reconciles these outcomes into governance state and authorizes the Wave 8 implementation inventory; `implement/omega` is closed as the bounded design-integration line for this scope. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
@@ -138,10 +149,28 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 
 Wave 7 API & Platform Transport is closed on `implement/wave-7`: ADR-0050 and PR #225/#226/#227/#228 complete J02/J04/J05/J06. Issue #222 was closed by explicit operator exception during expedited closeout, so this state does not claim an additional dedicated Golden E2E artifact.
 
+The post-Wave-7 `implement/omega` stabilization line reconciles an external
+audit (tracking #232) rather than opening a new wave. It is now reconciled
+into governance state (see the checkpoint row above); it resolved eight design
+gates (ADR-0054-0061) and nine implementation/hardening slices, and amended
+ADR-0037 and ADR-0050. It does not select a new runtime/product frontier by
+itself.
+
 The DG-B long-gap remediation proposition remains disposed `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` (#110): A11 may record an explicit non-complete interval and continue, but the project may not claim such an interval filled/lossless until an authoritative repair source/path proves the missing support. ADR-0044 carries this forward as accepted fail-closed behavior rather than reopening DG-B.
 
-DG-B has no remaining B06 atom blocker after Wave 6; its only still-disposed proposition is issue #110's long-gap remediation rule. DG-H has no currently identified open atom after K07/K09 completion. DG-G remains open only for I06, I07 and J03. DG-I is resolved by Wave 7. J07 remains missing and is not implemented by the Wave 7 closeout.
+DG-B has no remaining B06 atom blocker after Wave 6; its only still-disposed proposition is issue #110's long-gap remediation rule. DG-H has no currently identified open atom after K07/K09 completion. DG-G remains open only for I06 and I07 (J03 is now frozen under ADR-0062). DG-I is resolved by Wave 7; J02's auth/TLS disposition is now frozen under ADR-0063 (`J09`, implementation still missing). J07 remains missing and is not implemented by the Wave 7 closeout or the Omega stabilization line.
 
-No new runtime/product frontier is selected by this closeout. J07, J08, RL, broker/live execution, second venue and L1/L2/L3 market depth remain outside the completed Wave 7 scope. Frontier/readiness state is **not concurrent implementation authorization**.
+`SCOPE.md`'s "Wave 8 — Full Platform API & Remote Service Topology v1" design
+gates `DG-J` G1-G6 are now resolved (ADR-0062 through ADR-0067; `J11` deferred
+under ADR-0065 §5). The Wave 8 implementation inventory is authorized: `J03`,
+`J09`, `J10`, `J12`, `J13`, `J14`, `J15`, `K12`, `K13` (each `FROZEN`/`MISSING`).
+`implement/omega` is closed as the bounded design-integration line for this
+scope; it is not reused as the Wave 8 implementation branch. The dedicated
+`implement/wave-8` branch is not yet opened — `main`'s current head predates
+the entire Omega stabilization line and these six ADRs, so the baseline is an
+open maintainer decision recorded in `SCOPE.md`. J07, J08, RL, broker/live
+execution, second venue and L1/L2/L3 market depth remain outside both the
+completed Wave 7 scope and this resolution. Frontier/readiness state is **not
+concurrent implementation authorization**.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.

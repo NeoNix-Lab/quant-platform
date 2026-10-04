@@ -1,4 +1,8 @@
-"""Wave 6 Golden E2E proof composition.
+"""Proof-only Wave 6 Golden E2E composition.
+
+The private in-memory doubles below are bounded proof support, not reusable
+catalog, reader, or relocation implementations and not a supported
+installed-package dependency API (ADR-0056).
 
 This module composes the already-implemented Wave 6 capabilities without
 owning their domain semantics:

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Application support for observing bounded Golden Conformity scans.
+"""Proof-only application support for observing bounded Golden Conformity scans.
 
 This module observes an existing ``DataScan``.  It does not implement a
 conformity gate, publication, certification, ordering, coverage, hashing, or
 any other producer-side business rule.
+
+Its fixture-bound helpers are application proof machinery, not a supported
+installed-package dependency API (ADR-0056).
 """
 
 from __future__ import annotations

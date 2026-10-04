@@ -31,7 +31,6 @@ from ..strategy import (
     CooldownDecisionUnavailable,
     DecisionIntent,
     Direction,
-    NoDecision,
     RiskDecision,
     RiskSnapshot,
     SessionDecision,
@@ -822,6 +821,16 @@ def translate_intent(
     Order type is fixed to ``MARKET`` in v1: ``StrategySpec.execution_policy``
     is still the generic identity-backed slot (unresolved concrete type), so
     no price-policy signal is available yet to pick a different order type.
+
+    **Pyramiding warning (ADR-0053):** this function has no awareness of
+    whether the caller already holds ``intent.target_position``. Calling it
+    once per tick for a persistent entry signal (one that stays true across
+    many ticks, not just the tick it first became true) admits a brand-new
+    full-size order on *every* call, not just the first -- it does not
+    recognise "already at this target" and become a no-op. A caller that
+    replays a signal across ticks is responsible for gating repeated entries
+    itself (e.g. tracking whether it has already acted on the current entry
+    condition before calling this function again).
     """
 
     if not isinstance(intent, DecisionIntent):

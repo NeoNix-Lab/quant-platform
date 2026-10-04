@@ -8,13 +8,22 @@ from decimal import Decimal
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.data.models import DatasetIdentity, Instant, TradeRecord
 from quant_platform.execution import FeeSchedule
-from quant_platform.replay import HistoricalReplayRuntime, ReplayContext, ReplayError, ReplaySpec
+import quant_platform.strategy as strategy_module
+from quant_platform.replay import (
+    HistoricalReplayRuntime,
+    ReplayContext,
+    ReplayError,
+    ReplayOutputConfig,
+    ReplayOutputMode,
+    ReplaySpec,
+)
 from quant_platform.strategy import (
     CapitalRiskPolicy,
     CooldownPolicyDefinition,
@@ -195,6 +204,99 @@ class ReplayV1Tests(unittest.TestCase):
         self.assertEqual(Decimal("10"), first.final_ledger.realized_pnl_total)
         self.assertEqual(Decimal("10010"), first.equity_curve[-1].equity)
         self.assertEqual(first.final_ledger.cash, first.final_ledger.mark_to_market_equity({"BTCUSDT": "110"}))
+
+    def test_replay_caches_strategy_and_policy_identities_per_immutable_spec(self):
+        original_fingerprint = strategy_module._canonical_fingerprint
+        strategy_identity_hashes = 0
+
+        def count_strategy_identity_hashes(payload):
+            nonlocal strategy_identity_hashes
+            if payload.get("identity_type") == "strategy-spec":
+                strategy_identity_hashes += 1
+            return original_fingerprint(payload)
+
+        with patch.object(strategy_module, "_canonical_fingerprint", count_strategy_identity_hashes):
+            strategy = dataclass_replace(_strategy())
+            spec = dataclass_replace(_spec(), strategy=strategy)
+            expected = strategy.strategy_identity
+            hashes_after_construction = strategy_identity_hashes
+            result = HistoricalReplayRuntime(
+                _GatewaySpy(
+                    (
+                        _record("2026-01-05T15:00:00Z", "100", "t1"),
+                        _record("2026-01-05T15:00:10Z", "100", "t2"),
+                        _record("2026-01-05T15:00:20Z", "100", "t3"),
+                    )
+                ),
+                _features,
+            ).run(spec)
+
+        self.assertEqual(expected, strategy.strategy_identity)
+        self.assertEqual(spec.identity, result.spec_identity)
+        self.assertGreater(hashes_after_construction, 0)
+        self.assertEqual(hashes_after_construction, strategy_identity_hashes)
+
+    def test_summary_mode_preserves_accounting_and_digest_without_retaining_trace(self):
+        records = (
+            _record("2026-01-05T15:00:00Z", "100", "t1"),
+            _record("2026-01-05T15:01:00Z", "110", "t2"),
+        )
+
+        full = HistoricalReplayRuntime(_GatewaySpy(records), _features).run(_spec())
+        summary = HistoricalReplayRuntime(_GatewaySpy(records), _features).run(
+            _spec(), output=ReplayOutputConfig(ReplayOutputMode.SUMMARY)
+        )
+        repeated_summary = HistoricalReplayRuntime(_GatewaySpy(records), _features).run(
+            _spec(), output=ReplayOutputConfig(ReplayOutputMode.SUMMARY)
+        )
+
+        self.assertEqual(full.final_ledger.stable_dict(), summary.final_ledger.stable_dict())
+        self.assertEqual(full.summary.digest, summary.summary.digest)
+        self.assertEqual(summary.summary.digest, repeated_summary.summary.digest)
+        self.assertEqual(len(full.decisions), summary.summary.decision_count)
+        self.assertEqual(len(full.admissions), summary.summary.admission_count)
+        self.assertEqual(len(full.equity_curve), summary.summary.equity_snapshot_count)
+        self.assertEqual(len(full.orders), summary.summary.order_count)
+        self.assertEqual(len(full.fills), summary.summary.fill_count)
+        self.assertEqual((), summary.decisions)
+        self.assertEqual((), summary.admissions)
+        self.assertEqual((), summary.equity_curve)
+        self.assertEqual((), summary.orders)
+        self.assertEqual((), summary.fills)
+
+    def test_persistent_entry_signal_noops_after_reaching_target_position(self):
+        records = (
+            _record("2026-01-05T15:00:00Z", "100", "t1"),
+            _record("2026-01-05T15:00:10Z", "100", "t2"),
+            _record("2026-01-05T15:00:20Z", "100", "t3"),
+        )
+
+        def persistent_entry_features(record, context):
+            return (
+                StrategyInput(
+                    key="signal.entry",
+                    value=True,
+                    available_at=record.exchange_ts,
+                    provenance="test:persistent-entry",
+                ),
+            )
+
+        result = HistoricalReplayRuntime(
+            _GatewaySpy(records), persistent_entry_features
+        ).run(_spec())
+
+        admitted = [a for a in result.admissions if a["outcome"] == "ADMITTED"]
+        refused = [a for a in result.admissions if a["outcome"] == "REFUSED"]
+        self.assertEqual(1, len(admitted))
+        self.assertEqual(2, len(refused))
+        self.assertEqual("BUY", admitted[0]["order"]["side"])
+        self.assertEqual(Decimal("1"), Decimal(admitted[0]["order"]["quantity"]))
+        for admission in refused:
+            self.assertEqual(["already_at_target_position"], admission["reasons"])
+            self.assertEqual("1", admission["current_quantity"])
+            self.assertEqual("1", admission["target_quantity"])
+        position = result.final_ledger.positions["BTCUSDT"]
+        self.assertEqual(Decimal("1"), position.long.quantity)
 
     def test_replay_uses_datagateway_scan_not_read(self):
         records = (_record("2026-01-05T15:00:00Z", "100", "t1"),)
