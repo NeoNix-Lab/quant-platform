@@ -30,19 +30,6 @@ class StrategyComposeRequest:
     decision_time: Instant | str
     instrument: str
 
-    def __post_init__(self) -> None:
-        if not isinstance(self.strategy_spec, StrategySpec):
-            raise TypeError("strategy_spec must be a StrategySpec")
-        if self.strategy_identity != self.strategy_spec.strategy_identity:
-            raise ValueError("strategy_identity must match strategy_spec")
-        if isinstance(self.inputs, (str, bytes)) or not isinstance(self.inputs, tuple):
-            raise TypeError("inputs must be a tuple of StrategyInput")
-        if any(not isinstance(item, StrategyInput) for item in self.inputs):
-            raise TypeError("inputs must contain StrategyInput values")
-        object.__setattr__(self, "decision_time", Instant.parse(self.decision_time))
-        if not isinstance(self.instrument, str) or not self.instrument.strip():
-            raise ValueError("instrument must be a non-empty string")
-
     def canonical_payload(self) -> dict[str, object]:
         return {
             "identity_domain": STRATEGY_COMPOSE_REQUEST_IDENTITY_DOMAIN,
@@ -64,19 +51,18 @@ class StrategyComposeRequest:
 def execute_strategy_compose(request: StrategyComposeRequest) -> StrategyCompositionResult:
     """Compose a decision and translate semantic refusal without exposing domain errors."""
     try:
-        if not isinstance(request, StrategyComposeRequest):
-            raise TypeError("request must be a StrategyComposeRequest")
-        if any(item.available_at > request.decision_time for item in request.inputs):
+        normalized = _normalize_request(request)
+        if any(item.available_at > normalized.decision_time for item in normalized.inputs):
             raise ConsumerApiError(
                 ConsumerErrorCode.NO_COVERAGE,
                 "the requested interval is not fully covered",
-                request_identity=request.request_identity,
+                request_identity=normalized.request_identity,
             )
         return compose_decision(
-            request.strategy_spec,
-            request.inputs,
-            decision_time=request.decision_time,
-            instrument=request.instrument,
+            normalized.strategy_spec,
+            normalized.inputs,
+            decision_time=normalized.decision_time,
+            instrument=normalized.instrument,
         )
     except ConsumerApiError:
         raise
@@ -84,8 +70,30 @@ def execute_strategy_compose(request: StrategyComposeRequest) -> StrategyComposi
         raise ConsumerApiError(
             ConsumerErrorCode.INVALID_REQUEST,
             "the request is not valid",
-            request_identity=request.request_identity if isinstance(request, StrategyComposeRequest) else None,
+            request_identity=None,
         ) from exc
+
+
+def _normalize_request(request: StrategyComposeRequest) -> StrategyComposeRequest:
+    if not isinstance(request, StrategyComposeRequest):
+        raise TypeError("request must be a StrategyComposeRequest")
+    if not isinstance(request.strategy_spec, StrategySpec):
+        raise TypeError("strategy_spec must be a StrategySpec")
+    if request.strategy_identity != request.strategy_spec.strategy_identity:
+        raise ValueError("strategy_identity must match strategy_spec")
+    if isinstance(request.inputs, (str, bytes)) or not isinstance(request.inputs, tuple):
+        raise TypeError("inputs must be a tuple of StrategyInput")
+    if any(not isinstance(item, StrategyInput) for item in request.inputs):
+        raise TypeError("inputs must contain StrategyInput values")
+    if not isinstance(request.instrument, str) or not request.instrument.strip():
+        raise ValueError("instrument must be a non-empty string")
+    return StrategyComposeRequest(
+        strategy_spec=request.strategy_spec,
+        strategy_identity=request.strategy_identity,
+        inputs=request.inputs,
+        decision_time=Instant.parse(request.decision_time),
+        instrument=request.instrument,
+    )
 
 
 __all__ = [

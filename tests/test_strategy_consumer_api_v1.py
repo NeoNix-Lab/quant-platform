@@ -45,14 +45,16 @@ class StrategyConsumerApiV1Tests(unittest.TestCase):
 
     def test_invalid_semantic_input_is_a_stable_consumer_error(self) -> None:
         spec = minimal_breakout_strategy()
-        with self.assertRaisesRegex(ValueError, "must match strategy_spec"):
-            StrategyComposeRequest(
-                strategy_spec=spec,
-                strategy_identity="strategy-spec-v1:sha256:" + "0" * 64,
-                inputs=(),
-                decision_time=DECISION_TIME,
-                instrument="BTCUSDT",
-            )
+        mismatched = StrategyComposeRequest(
+            strategy_spec=spec,
+            strategy_identity="strategy-spec-v1:sha256:" + "0" * 64,
+            inputs=(),
+            decision_time=DECISION_TIME,
+            instrument="BTCUSDT",
+        )
+        with self.assertRaises(ConsumerApiError) as caught:
+            execute_strategy_compose(mismatched)
+        self.assertEqual(ConsumerErrorCode.INVALID_REQUEST, caught.exception.code)
         with self.assertRaises(ConsumerApiError) as caught:
             execute_strategy_compose(object())  # type: ignore[arg-type]
         self.assertEqual(ConsumerErrorCode.INVALID_REQUEST, caught.exception.code)
