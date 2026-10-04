@@ -4,6 +4,10 @@ This module owns transport composition only.  It carries the already-frozen
 ``ConsumerMarketDataQuery`` / ``ConsumerMarketDataResult`` / ``ConsumerApiError``
 surface over JSON WebSocket messages, and delegates all business behavior to
 ``quant_platform.application.market_data``.
+
+The current listener is local-only. ADR-0063 defines the future non-loopback
+requirement (TLS 1.3 mutual TLS plus principal/scope authorization before JSON
+decoding); this module does not implement that remote-security contract yet.
 """
 
 from __future__ import annotations
