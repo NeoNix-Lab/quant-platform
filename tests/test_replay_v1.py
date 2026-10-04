@@ -8,12 +8,14 @@ from decimal import Decimal
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.data.models import DatasetIdentity, Instant, TradeRecord
 from quant_platform.execution import FeeSchedule
+import quant_platform.strategy as strategy_module
 from quant_platform.replay import (
     HistoricalReplayRuntime,
     ReplayContext,
@@ -202,6 +204,37 @@ class ReplayV1Tests(unittest.TestCase):
         self.assertEqual(Decimal("10"), first.final_ledger.realized_pnl_total)
         self.assertEqual(Decimal("10010"), first.equity_curve[-1].equity)
         self.assertEqual(first.final_ledger.cash, first.final_ledger.mark_to_market_equity({"BTCUSDT": "110"}))
+
+    def test_replay_caches_strategy_and_policy_identities_per_immutable_spec(self):
+        original_fingerprint = strategy_module._canonical_fingerprint
+        strategy_identity_hashes = 0
+
+        def count_strategy_identity_hashes(payload):
+            nonlocal strategy_identity_hashes
+            if payload.get("identity_type") == "strategy-spec":
+                strategy_identity_hashes += 1
+            return original_fingerprint(payload)
+
+        with patch.object(strategy_module, "_canonical_fingerprint", count_strategy_identity_hashes):
+            strategy = dataclass_replace(_strategy())
+            spec = dataclass_replace(_spec(), strategy=strategy)
+            expected = strategy.strategy_identity
+            hashes_after_construction = strategy_identity_hashes
+            result = HistoricalReplayRuntime(
+                _GatewaySpy(
+                    (
+                        _record("2026-01-05T15:00:00Z", "100", "t1"),
+                        _record("2026-01-05T15:00:10Z", "100", "t2"),
+                        _record("2026-01-05T15:00:20Z", "100", "t3"),
+                    )
+                ),
+                _features,
+            ).run(spec)
+
+        self.assertEqual(expected, strategy.strategy_identity)
+        self.assertEqual(spec.identity, result.spec_identity)
+        self.assertGreater(hashes_after_construction, 0)
+        self.assertEqual(hashes_after_construction, strategy_identity_hashes)
 
     def test_summary_mode_preserves_accounting_and_digest_without_retaining_trace(self):
         records = (
