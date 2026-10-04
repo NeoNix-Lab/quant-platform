@@ -394,6 +394,23 @@ cancellation or progress reporting. It also does not require every future
 market-data representation to be asynchronous; the application service owns
 the boundedness decision under the capability's contract.
 
+### 8.1 Non-loopback J02 security
+
+The current loopback J02 listener remains a local-only deployment. Any future
+non-loopback J02 listener is governed by
+[ADR-0063](../decisions/ADR-0063-remote-j02-security-v1.md): it must use TLS
+1.3 mutual TLS, validate the server endpoint and client certificate, and map the
+exact client credential fingerprint to an explicit principal and scope before
+decoding a Consumer API request. The only scope defined now is
+`j02.market_data.read`; it grants no canonical storage, catalog, checkpoint,
+backup, publication, Job, or administrative authority.
+
+Authentication and authorization failure occur outside the Consumer API result
+envelope and must not reinterpret a `ConsumerErrorCode`. A remote listener may
+not fall back to plaintext or an unauthenticated WebSocket session. This is a
+future implementation contract; it does not change current loopback behavior or
+add a remote endpoint.
+
 ## 9. Versioning and evolution
 
 The following version domains remain distinct:
