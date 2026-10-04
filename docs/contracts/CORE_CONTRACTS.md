@@ -671,6 +671,13 @@ Responsibilities:
 
 Ledger semantics must be deterministic under historical replay.
 
+Materialized representation replay is permitted only through a declared
+FINAL artifact identity with exact source/output support and causal
+availability evidence.  A CLOSED bar becomes consumable no earlier than its
+bucket end.  Tick-level and bar-level replay are comparable only under an
+explicit common bar-close profile; neither may silently substitute for the
+other. See [ADR-0059](../decisions/ADR-0059-d05-materialized-representation-replay-input-v1.md).
+
 ---
 
 ## 28. Study
