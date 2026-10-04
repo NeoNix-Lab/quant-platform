@@ -4,7 +4,7 @@ Status: **OPEN — design gates first. No implementation is authorized by this d
 
 Scope kind: **design-gate sequencing scope**, not a bounded implementation scope. Each gate below (`G1`-`G6`) requires its own ADR before any implementation issue against the atom(s) it blocks may open.
 
-Target integration branch for design-gate issues: **`implement/omega`** (the current active stabilization/integration line, head `01c6a75` at scope-opening), until an actual implementation atom's slice is ready, at which point a dedicated `implement/wave-8` branch opens from `main` per `AGENTS.md`'s standard Macro Wave convention. This document does not itself authorize opening that branch.
+Target integration branch for design-gate issues: **`implement/omega`** (the current active stabilization/integration line, head `01c6a75` at scope-opening). For this scope, `implement/omega` is explicitly bounded to **DG-J design integration only** through G1-G6; it is not the Wave 8 implementation branch. After the gates are resolved and a governance-designated reconciliation records their actual dispositions, a dedicated `implement/wave-8` branch opens from current `main` per `AGENTS.md`'s standard Macro Wave convention. This document does not itself authorize opening that branch.
 
 ---
 
@@ -21,11 +21,11 @@ This scope opens after:
 ```text
 Wave 7 promotion: main @ 5c8d9af (merge commit), tag wave-7-api-platform-transport-v1 @ 73d5f7b2
 Omega stabilization line (tracking #232) reconciled into governance state
-  by the governance issue that authored this document
-  (25 PRs merged on implement/omega: #254, #256-#278)
+  under governance authority #280
+  (24 PRs merged on implement/omega: #254, #256-#278)
 ```
 
-No implementation atom in this scope requires a `main` promotion first; design-gate issues work against `implement/omega` directly.
+No implementation atom in this scope requires a `main` promotion first; design-gate issues work against `implement/omega` directly. Implementation atoms remain unauthorized until their gate ADR is accepted and the post-gates governance reconciliation has opened the dedicated Wave 8 implementation line.
 
 ---
 
@@ -66,6 +66,7 @@ Basis: ADR-0057 (the server is the single authority for canonical data and accep
 Read before opening any design-gate issue against this scope:
 
 - `AGENTS.md`
+- governance issue #280
 - `docs/product/ROADMAP.md` ("Post-Wave-7 sequencing: platform v1.0"; Decision-gate model; Execution waves)
 - `docs/product/CAPABILITY_DAG.md` (`DG-J` section; atoms `J09`-`J15`, `K12`, `K13`; reactivated `J03`)
 - `docs/architecture/OPEN_DECISIONS.md` (`DG-J` — Remote Service Topology, full G1-G6 text)
