@@ -14,7 +14,14 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.data.models import DatasetIdentity, Instant, TradeRecord
 from quant_platform.execution import FeeSchedule
-from quant_platform.replay import HistoricalReplayRuntime, ReplayContext, ReplayError, ReplaySpec
+from quant_platform.replay import (
+    HistoricalReplayRuntime,
+    ReplayContext,
+    ReplayError,
+    ReplayOutputConfig,
+    ReplayOutputMode,
+    ReplaySpec,
+)
 from quant_platform.strategy import (
     CapitalRiskPolicy,
     CooldownPolicyDefinition,
@@ -195,6 +202,34 @@ class ReplayV1Tests(unittest.TestCase):
         self.assertEqual(Decimal("10"), first.final_ledger.realized_pnl_total)
         self.assertEqual(Decimal("10010"), first.equity_curve[-1].equity)
         self.assertEqual(first.final_ledger.cash, first.final_ledger.mark_to_market_equity({"BTCUSDT": "110"}))
+
+    def test_summary_mode_preserves_accounting_and_digest_without_retaining_trace(self):
+        records = (
+            _record("2026-01-05T15:00:00Z", "100", "t1"),
+            _record("2026-01-05T15:01:00Z", "110", "t2"),
+        )
+
+        full = HistoricalReplayRuntime(_GatewaySpy(records), _features).run(_spec())
+        summary = HistoricalReplayRuntime(_GatewaySpy(records), _features).run(
+            _spec(), output=ReplayOutputConfig(ReplayOutputMode.SUMMARY)
+        )
+        repeated_summary = HistoricalReplayRuntime(_GatewaySpy(records), _features).run(
+            _spec(), output=ReplayOutputConfig(ReplayOutputMode.SUMMARY)
+        )
+
+        self.assertEqual(full.final_ledger.stable_dict(), summary.final_ledger.stable_dict())
+        self.assertEqual(full.summary.digest, summary.summary.digest)
+        self.assertEqual(summary.summary.digest, repeated_summary.summary.digest)
+        self.assertEqual(len(full.decisions), summary.summary.decision_count)
+        self.assertEqual(len(full.admissions), summary.summary.admission_count)
+        self.assertEqual(len(full.equity_curve), summary.summary.equity_snapshot_count)
+        self.assertEqual(len(full.orders), summary.summary.order_count)
+        self.assertEqual(len(full.fills), summary.summary.fill_count)
+        self.assertEqual((), summary.decisions)
+        self.assertEqual((), summary.admissions)
+        self.assertEqual((), summary.equity_curve)
+        self.assertEqual((), summary.orders)
+        self.assertEqual((), summary.fills)
 
     def test_persistent_entry_signal_noops_after_reaching_target_position(self):
         records = (
