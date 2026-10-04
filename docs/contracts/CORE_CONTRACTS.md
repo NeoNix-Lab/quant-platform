@@ -717,6 +717,12 @@ Required concepts:
 
 A single logical run must not acquire separate incompatible identities in different subsystems.
 
+Independent replay attempts may execute in parallel only when each attempt
+preserves one complete stateful replay and a declared `RunIdentity`. Temporal
+sharding of a replay is not a Run optimization: it changes the state universe.
+Workers must record failed/aborted attempts rather than omitting them from
+trial accounting. See [ADR-0058](../decisions/ADR-0058-replay-sweep-orchestration-boundary-v1.md).
+
 ---
 
 ## 31. ArtifactIdentity
