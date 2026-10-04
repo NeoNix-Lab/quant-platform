@@ -67,5 +67,6 @@ substance of an original decision. A change in substance is a supersession
 | 0059 | D05 materialized representation and replay input v1 | Accepted |
 | 0060 | Canonical replay I/O materialization profile v1 | Accepted |
 | 0061 | Replay summary output mode v1 | Accepted |
+| 0062 | Durable job runtime v1 | Accepted |
 
 See the individual ADR files for context and consequences.
