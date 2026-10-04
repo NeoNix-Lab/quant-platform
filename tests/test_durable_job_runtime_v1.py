@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
-from quant_platform.application.durable_jobs import (
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from quant_platform.application.durable_jobs import (  # noqa: E402
     DurableJobConflict,
     DurableJobStore,
     EffectSafety,
@@ -14,7 +19,11 @@ from quant_platform.application.durable_jobs import (
 )
 
 
-def admission(*, effect_safety: EffectSafety = EffectSafety.PURE_REPLAYABLE) -> JobAdmission:
+def admission(
+    *,
+    effect_safety: EffectSafety = EffectSafety.PURE_REPLAYABLE,
+    effect_safety_proof_reference: str | None = None,
+) -> JobAdmission:
     return JobAdmission(
         operation_kind="supervised-train-evaluate-v1",
         contract_version="v1",
@@ -23,6 +32,7 @@ def admission(*, effect_safety: EffectSafety = EffectSafety.PURE_REPLAYABLE) -> 
         canonical_parameters={"fold": 2, "seed": 7},
         input_identities=("dataset:sha256:aaa", "policy:sha256:bbb"),
         effect_safety=effect_safety,
+        effect_safety_proof_reference=effect_safety_proof_reference,
     )
 
 
@@ -78,6 +88,23 @@ class DurableJobRuntimeV1Tests(unittest.TestCase):
         self.assertEqual((1, 2), tuple(item.attempt_no for item in store.attempts(job.job_id)))
         with self.assertRaises(DurableJobConflict):
             store.retry_or_resume(job.job_id)
+
+    def test_idempotency_retry_requires_immutable_proof_reference(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires an idempotency"):
+            admission(effect_safety=EffectSafety.IDEMPOTENCY_EVIDENCE)
+
+        store = self.store()
+        job = store.admit(
+            admission(
+                effect_safety=EffectSafety.IDEMPOTENCY_EVIDENCE,
+                effect_safety_proof_reference="idempotency-key:training-request-123",
+            )
+        )
+        store.transition(job.job_id, JobState.QUEUED)
+        store.transition(job.job_id, JobState.RUNNING)
+        store.recover_after_restart()
+
+        self.assertEqual(JobState.QUEUED, store.retry_or_resume(job.job_id).state)
 
 
 if __name__ == "__main__":

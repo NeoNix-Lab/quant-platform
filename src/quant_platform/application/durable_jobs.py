@@ -74,6 +74,7 @@ class JobAdmission:
     canonical_parameters: Mapping[str, Any]
     input_identities: tuple[str, ...]
     effect_safety: EffectSafety
+    effect_safety_proof_reference: str | None = None
 
     def __post_init__(self) -> None:
         for field in ("operation_kind", "contract_version", "implementation_identity", "request_identity"):
@@ -87,6 +88,21 @@ class JobAdmission:
             raise ValueError("input_identities must be unique")
         if not isinstance(self.effect_safety, EffectSafety):
             raise TypeError("effect_safety must be an EffectSafety")
+        _bounded_optional_text(self.effect_safety_proof_reference, "effect_safety_proof_reference")
+        if (
+            self.effect_safety == EffectSafety.IDEMPOTENCY_EVIDENCE
+            and self.effect_safety_proof_reference is None
+        ):
+            raise ValueError(
+                "IDEMPOTENCY_EVIDENCE requires an idempotency or durable-effect proof reference"
+            )
+        if (
+            self.effect_safety != EffectSafety.IDEMPOTENCY_EVIDENCE
+            and self.effect_safety_proof_reference is not None
+        ):
+            raise ValueError(
+                "effect_safety_proof_reference is only valid for IDEMPOTENCY_EVIDENCE"
+            )
         _canonical_json(self.payload())
 
     def payload(self) -> dict[str, Any]:
@@ -98,6 +114,7 @@ class JobAdmission:
             "canonical_parameters": dict(self.canonical_parameters),
             "input_identities": sorted(self.input_identities),
             "effect_safety": self.effect_safety.value,
+            "effect_safety_proof_reference": self.effect_safety_proof_reference,
         }
 
     @property
@@ -235,11 +252,11 @@ class DurableJobStore:
         return tuple(recovered)
 
     def retry_or_resume(self, job_id: str) -> JobRecord:
-        """Explicitly queue a recovered Job only when its admitted effect is safe."""
+        """Explicitly queue a recovered Job only with admitted effect-safety proof."""
         current = self.get(job_id)
         if current.state != JobState.RECOVERY_REQUIRED:
             raise DurableJobConflict("retry or resume requires RECOVERY_REQUIRED")
-        if current.admission.effect_safety not in frozenset(EffectSafety):
+        if not _has_effect_safety_proof(current.admission):
             raise DurableJobConflict("handler effect safety proof is unavailable")
         return self.transition(job_id, JobState.QUEUED)
 
@@ -273,6 +290,7 @@ def _job_record(row: Any) -> JobRecord:
         implementation_identity=payload["implementation_identity"], request_identity=payload["request_identity"],
         canonical_parameters=payload["canonical_parameters"], input_identities=tuple(payload["input_identities"]),
         effect_safety=EffectSafety(payload["effect_safety"]),
+        effect_safety_proof_reference=payload.get("effect_safety_proof_reference"),
     )
     return JobRecord(
         job_id=str(row[0]), admission=admission, state=JobState(str(row[2])), reason_code=row[3],
@@ -283,6 +301,17 @@ def _job_record(row: Any) -> JobRecord:
 def _bounded_optional_text(value: str | None, field: str) -> None:
     if value is not None and (not isinstance(value, str) or not value.strip() or len(value) > 512):
         raise ValueError(f"{field} must be a bounded non-empty string when supplied")
+
+
+def _has_effect_safety_proof(admission: JobAdmission) -> bool:
+    """Return whether the immutable admission contains a permitted retry proof."""
+    return admission.effect_safety in frozenset({
+        EffectSafety.NO_EFFECT,
+        EffectSafety.PURE_REPLAYABLE,
+    }) or (
+        admission.effect_safety == EffectSafety.IDEMPOTENCY_EVIDENCE
+        and admission.effect_safety_proof_reference is not None
+    )
 
 
 def _canonical_json(value: Any) -> str:
