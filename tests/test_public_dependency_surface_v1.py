@@ -65,7 +65,10 @@ from quant_platform.replay import (
     ReplayContext,
     ReplayEngine,
     ReplayError,
+    ReplayOutputConfig,
+    ReplayOutputMode,
     ReplayResult,
+    ReplaySummary,
     ReplaySpec,
 )
 from quant_platform.validation import (
@@ -106,7 +109,10 @@ assert all((
     ReplayContext,
     ReplayEngine,
     ReplayError,
+    ReplayOutputConfig,
+    ReplayOutputMode,
     ReplayResult,
+    ReplaySummary,
     ReplaySpec,
     ComparableTrialPanel,
     CandidateClassification,

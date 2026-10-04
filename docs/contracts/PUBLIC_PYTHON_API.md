@@ -31,7 +31,7 @@ does not widen those contracts.
 | --- | --- |
 | `quant_platform.access` | Historical `DataGateway`, `DataRequest`, `DataSlice`, `DataSliceMetadata`, `CoveragePolicy`, and `LifecyclePolicy`. [DATA_GATEWAY.md](DATA_GATEWAY.md) remains the semantic authority. |
 | `quant_platform.validation` | Validation temporal inputs (`Instant`, `CoverageInterval`); availability/purge/embargo classification (`CandidateClassification`, `CandidateClassificationResult`, `DependencyCutoffRole`, `DependencyMaturity`, `DependencyLifecycle`, `Embargo`, `DependencyEvidence`, `ValidationCandidate`, `classify_candidate`); walk-forward primitives (`WalkForwardFold`, `WalkForwardScheduleSpec`, `build_walk_forward_folds`); and F08 DSR-L/PBO (`ComparableTrialPanel`, `EffectiveTrialCountEvidence`, `EvaluationStatus`, `DSRResult`, `PBOResult`, `evaluate_dsr_v1`, `evaluate_pbo_v1`). |
-| `quant_platform.replay` | Selected deterministic replay primitives: `ReplaySpec`, `ReplayContext`, `ReplayResult`, `HistoricalReplayRuntime`, `ReplayEngine`, and `ReplayError`. |
+| `quant_platform.replay` | Selected deterministic replay primitives: `ReplaySpec`, `ReplayContext`, `ReplayOutputConfig`, `ReplayOutputMode`, `ReplaySummary`, `ReplayResult`, `HistoricalReplayRuntime`, `ReplayEngine`, and `ReplayError`. Output retention is separate from `ReplaySpec` identity: `FULL_TRACE` is the compatibility default and `SUMMARY` retains only final accounting plus deterministic aggregate evidence. |
 
 Consumers must import from those package paths, not from their implementation
 submodules. For example:

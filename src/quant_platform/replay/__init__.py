@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 import hashlib
 import json
 from types import MappingProxyType
@@ -52,6 +53,26 @@ REPLAY_RISK_SNAPSHOT_IDENTITY_DOMAIN = "replay-risk-snapshot-v1"
 
 class ReplayError(Exception):
     """Base class for deterministic replay failures."""
+
+
+class ReplayOutputMode(str, Enum):
+    """Retained replay evidence detail, separate from replay semantics."""
+
+    FULL_TRACE = "full_trace"
+    SUMMARY = "summary"
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayOutputConfig:
+    """Output-retention policy; it is deliberately excluded from ReplaySpec identity."""
+
+    mode: ReplayOutputMode | str = ReplayOutputMode.FULL_TRACE
+
+    def __post_init__(self) -> None:
+        try:
+            object.__setattr__(self, "mode", ReplayOutputMode(self.mode))
+        except (TypeError, ValueError) as exc:
+            raise ReplayError("mode must be a ReplayOutputMode") from exc
 
 
 # ADR-0053: this runtime inherits translate_intent's stateless, per-tick
@@ -184,6 +205,43 @@ class EquitySnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplaySummary:
+    """Constant-size deterministic evidence for either replay output mode."""
+
+    spec_identity: str
+    decision_count: int
+    admission_count: int
+    equity_snapshot_count: int
+    order_count: int
+    fill_count: int
+    digest: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "spec_identity", _identity_text(self.spec_identity, "spec_identity"))
+        for field in (
+            "decision_count",
+            "admission_count",
+            "equity_snapshot_count",
+            "order_count",
+            "fill_count",
+        ):
+            if type(getattr(self, field)) is not int or getattr(self, field) < 0:
+                raise ReplayError(f"{field} must be a non-negative integer")
+        object.__setattr__(self, "digest", _identity_text(self.digest, "digest"))
+
+    def stable_dict(self) -> dict[str, Any]:
+        return {
+            "spec_identity": self.spec_identity,
+            "decision_count": self.decision_count,
+            "admission_count": self.admission_count,
+            "equity_snapshot_count": self.equity_snapshot_count,
+            "order_count": self.order_count,
+            "fill_count": self.fill_count,
+            "digest": self.digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ReplayResult:
     spec_identity: str
     final_ledger: PortfolioLedger
@@ -193,6 +251,7 @@ class ReplayResult:
     orders: tuple[Order, ...]
     fills: tuple[Fill, ...]
     data_metadata: DataSliceMetadata | None
+    summary: ReplaySummary
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "spec_identity", _identity_text(self.spec_identity, "spec_identity"))
@@ -211,6 +270,8 @@ class ReplayResult:
             raise ReplayError("fills must contain Fill values")
         if self.data_metadata is not None and not isinstance(self.data_metadata, DataSliceMetadata):
             raise ReplayError("data_metadata must be DataSliceMetadata")
+        if not isinstance(self.summary, ReplaySummary):
+            raise ReplayError("summary must be a ReplaySummary")
 
     def stable_dict(self) -> dict[str, Any]:
         return {
@@ -249,13 +310,18 @@ class HistoricalReplayRuntime:
     gateway: Any
     feature_provider: FeatureProvider
 
-    def run(self, spec: ReplaySpec) -> ReplayResult:
+    def run(self, spec: ReplaySpec, *, output: ReplayOutputConfig | None = None) -> ReplayResult:
+        """Run unchanged replay semantics with independently selected output retention."""
         if not isinstance(spec, ReplaySpec):
             raise ReplayError("spec must be a ReplaySpec")
         if not callable(self.feature_provider):
             raise ReplayError("feature_provider must be callable")
         if not hasattr(self.gateway, "scan") or not callable(self.gateway.scan):
             raise ReplayError("gateway must expose scan()")
+        if output is None:
+            output = ReplayOutputConfig()
+        if not isinstance(output, ReplayOutputConfig):
+            raise ReplayError("output must be a ReplayOutputConfig")
 
         ledger = PortfolioLedger.open(initial_capital=spec.initial_capital, as_of=spec.start)
         peak_equity = ledger.book_equity
@@ -265,6 +331,12 @@ class HistoricalReplayRuntime:
         decisions: list[dict[str, Any]] = []
         admissions: list[dict[str, Any]] = []
         equity_curve: list[EquitySnapshot] = []
+        summary = _ReplaySummaryAccumulator(spec.identity)
+
+        def capture(kind: str, value: Any, retained: list[Any]) -> None:
+            summary.record(kind, value)
+            if output.mode is ReplayOutputMode.FULL_TRACE:
+                retained.append(value)
         last_event_time: Instant | None = None
 
         scan = self.gateway.scan(spec.data_request(), batch_size=spec.batch_size)
@@ -308,9 +380,9 @@ class HistoricalReplayRuntime:
                     decision_time=event_time,
                     instrument=record.instrument,
                 )
-                decisions.append(_composition_trace(composition))
+                capture("decision", _composition_trace(composition), decisions)
                 if composition.decision_intent is None:
-                    equity_curve.append(current_snapshot)
+                    capture("equity_snapshot", current_snapshot, equity_curve)
                     continue
 
                 reference_price = _decimal(record.price, "record.price", allow_zero=False)
@@ -328,8 +400,12 @@ class HistoricalReplayRuntime:
                     composition.decision_intent.direction,
                 )
                 if composition.decision_intent.direction is Direction.FLAT and close_quantity is None:
-                    admissions.append(_flat_no_position_admission(composition.decision_intent))
-                    equity_curve.append(current_snapshot)
+                    capture(
+                        "admission",
+                        _flat_no_position_admission(composition.decision_intent),
+                        admissions,
+                    )
+                    capture("equity_snapshot", current_snapshot, equity_curve)
                     continue
                 already_at_target = _entry_already_at_target_quantities(
                     ledger,
@@ -343,16 +419,18 @@ class HistoricalReplayRuntime:
                         reference_price=reference_price,
                         target_position=composition.decision_intent.target_position,
                     )
-                    admissions.append(
+                    capture(
+                        "admission",
                         _entry_already_at_target_admission(
                             ledger,
                             composition.decision_intent,
                             risk_decision,
                             current_quantity=already_at_target[0],
                             target_quantity=already_at_target[1],
-                        )
+                        ),
+                        admissions,
                     )
-                    equity_curve.append(current_snapshot)
+                    capture("equity_snapshot", current_snapshot, equity_curve)
                     continue
                 admission = translate_intent(
                     composition.decision_intent,
@@ -365,9 +443,9 @@ class HistoricalReplayRuntime:
                     close_side=close_side,
                     close_quantity=close_quantity,
                 )
-                admissions.append(admission.stable_dict())
+                capture("admission", admission.stable_dict(), admissions)
                 if admission.order is None:
-                    equity_curve.append(current_snapshot)
+                    capture("equity_snapshot", current_snapshot, equity_curve)
                     continue
 
                 acknowledged = admission.order.acknowledge()
@@ -384,8 +462,8 @@ class HistoricalReplayRuntime:
                 filled_order = acknowledged.apply_fill(fill)
                 ledger_before = ledger
                 ledger = ledger.apply_fill(fill, acknowledged)
-                orders.append(filled_order)
-                fills.append(fill)
+                capture("order", filled_order, orders)
+                capture("fill", fill, fills)
                 closed = _closed_outcome(
                     before=ledger_before,
                     after=ledger,
@@ -395,7 +473,7 @@ class HistoricalReplayRuntime:
                 if closed is not None:
                     outcomes = (*outcomes, closed)
                 snapshot = _equity_snapshot(ledger, record)
-                equity_curve.append(snapshot)
+                capture("equity_snapshot", snapshot, equity_curve)
                 if snapshot.equity > peak_equity:
                     peak_equity = snapshot.equity
 
@@ -409,10 +487,53 @@ class HistoricalReplayRuntime:
             orders=tuple(orders),
             fills=tuple(fills),
             data_metadata=metadata,
+            summary=summary.complete(ledger, metadata),
         )
 
 
 ReplayEngine = HistoricalReplayRuntime
+
+
+class _ReplaySummaryAccumulator:
+    def __init__(self, spec_identity: str) -> None:
+        self._spec_identity = spec_identity
+        self._stream = hashlib.sha256()
+        self._counts = {
+            "decision": 0,
+            "admission": 0,
+            "equity_snapshot": 0,
+            "order": 0,
+            "fill": 0,
+        }
+
+    def record(self, kind: str, value: Any) -> None:
+        if kind not in self._counts:
+            raise ReplayError(f"unsupported replay summary event: {kind}")
+        if isinstance(value, (EquitySnapshot, Order, Fill)):
+            value = value.stable_dict()
+        self._stream.update(_canonical_json({"kind": kind, "value": value}).encode("utf-8"))
+        self._stream.update(b"\n")
+        self._counts[kind] += 1
+
+    def complete(self, ledger: PortfolioLedger, metadata: DataSliceMetadata | None) -> ReplaySummary:
+        payload = {
+            "identity_domain": "replay-summary-v1",
+            "spec_identity": self._spec_identity,
+            "event_stream_sha256": self._stream.hexdigest(),
+            "counts": self._counts,
+            "final_ledger": ledger.stable_dict(),
+            "data_metadata": None if metadata is None else _metadata_dict(metadata),
+        }
+        digest = f"replay-summary-v1:sha256:{_canonical_fingerprint(payload)}"
+        return ReplaySummary(
+            spec_identity=self._spec_identity,
+            decision_count=self._counts["decision"],
+            admission_count=self._counts["admission"],
+            equity_snapshot_count=self._counts["equity_snapshot"],
+            order_count=self._counts["order"],
+            fill_count=self._counts["fill"],
+            digest=digest,
+        )
 
 
 def _close_instruction(ledger: PortfolioLedger, instrument: str, direction: Direction) -> tuple[OrderSide | None, Decimal | None]:
@@ -724,6 +845,9 @@ __all__ = [
     "ReplayContext",
     "ReplayEngine",
     "ReplayError",
+    "ReplayOutputConfig",
+    "ReplayOutputMode",
     "ReplayResult",
+    "ReplaySummary",
     "ReplaySpec",
 ]
