@@ -518,3 +518,21 @@ No live Consumer message is defined by that transport decision. Any future live
 family must first have application-owned semantics and, when carrying B06,
 serialize ADR-0047's `LiveStreamCursorV1` and event vocabulary unchanged. A
 finite transfer id must never be treated as a B06 cursor.
+
+## 14. Omega J15 remote client contract
+
+ADR-0067 freezes Omega J15 as a remote J02 consumer only.  Its initial
+operation sends `j02-request-v1` and accepts `j02-response-v1` for the C03
+market-data read admitted by `j02.market_data.read`.  The supported public
+Python API and ADR-0055's local validation bridge are package dependencies,
+not an alternate remote-client boundary: no local fallback, mixed execution,
+wire-family downgrade, or remote compatibility decision based on
+`quant_platform.__version__` or `PLATFORM_PIN` is permitted.
+
+An unexpected J02 version or unadmitted message family is a local typed
+`wire_incompatible` failure, distinct from a losslessly carried
+`ConsumerApiError`.  TLS, mTLS, and scope denial are a local typed
+`remote_security_failure` before Consumer API processing; a J15 client cannot
+fall back to plaintext or infer an unavailable capability.  Omega renders
+server-issued request identities, provenance, coverage, results, and errors;
+it never owns canonical data, catalog state, or accepted-artifact identity.
