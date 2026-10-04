@@ -40,7 +40,7 @@ No handoff, local cache, or retry creates a replica canonical store.
 K12 is a future server-owned capability. It resolves an explicitly requested
 logical input against server authority, then persists one immutable
 `AdmittedInputManifestV1` before any bytes or read-only reference are delivered.
-Its deterministic `admission_id` is the canonical fingerprint of this manifest;
+Its deterministic `admission_id` identifies a non-recursive canonical payload;
 it excludes absolute paths, storage-root ids, catalog UUIDs, transport URLs,
 delivery attempts, and deck-local locations.
 
@@ -51,7 +51,15 @@ The manifest includes, as applicable:
   and content hashes, declared coverage, and result/request identities;
 - representation/feature definition and implementation identities, immutable Git
   commit or release tag, and the requested operation/profile identity; and
-- the manifest's own canonical digest and an explicit `SEALED` state.
+- an explicit `SEALED` state.
+
+`canonical_payload_v1` is exactly the preceding enumerated immutable fields,
+serialized as canonical JSON with a fixed v1 field schema. K12 computes
+`manifest_digest = sha256(canonical_payload_v1)` and derives
+`admission_id = admitted-input-v1:<manifest_digest>`. Neither
+`manifest_digest` nor `admission_id` participates in the canonical payload;
+they are derived, attributable fields carried beside it. This makes the digest
+and admission identity deterministic without a self-referential hash.
 
 K12 may deliver a server-selected read-only export bundle or an opaque
 server-controlled read-only reference. That delivery locator is an operational

@@ -513,6 +513,11 @@ and content hashes, declared coverage, request/result identities, and required
 definition/implementation/Git identity. Its `admission_id` is a canonical
 fingerprint of those stable fields.
 
+The future K12 implementation canonicalizes exactly those v1 stable fields,
+then derives `manifest_digest` and its domain-prefixed `admission_id`. Neither
+derived field participates in the payload being digested, so no self-referential
+identity is admitted.
+
 An export path, storage-root id, catalog UUID, transport URL, delivery attempt,
 or deck-local location is an operational locator and never an admitted-input
 identity. The deck verifies delivered bytes against the sealed manifest and

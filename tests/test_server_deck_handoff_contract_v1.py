@@ -19,6 +19,9 @@ class ServerDeckHandoffContractV1Tests(unittest.TestCase):
             "`AdmittedInputManifestV1`",
             "`admission_id`",
             "excludes absolute paths, storage-root ids, catalog UUIDs",
+            "`manifest_digest = sha256(canonical_payload_v1)`",
+            "Neither\n"
+            "`manifest_digest` nor `admission_id` participates in the canonical payload",
             "Only `SEALED` evidence is admissible",
             "refuses the entire\n"
             "bundle with no catalog or Experiment mutation",
@@ -32,4 +35,5 @@ class ServerDeckHandoffContractV1Tests(unittest.TestCase):
 
         self.assertIn("ADR-0064 governs", contract)
         self.assertIn("never an admitted-input\nidentity", contract)
+        self.assertIn("Neither\nderived field participates in the payload being digested", contract)
         self.assertIn("without catalog or Experiment mutation", contract)
