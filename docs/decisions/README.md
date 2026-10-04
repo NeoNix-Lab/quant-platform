@@ -70,5 +70,6 @@ substance of an original decision. A change in substance is a supersession
 | 0062 | Durable job runtime v1 | Accepted |
 | 0063 | Remote J02 security v1 | Accepted |
 | 0064 | Server/deck admitted handoff v1 | Accepted |
+| 0065 | Consumer API seams v1 | Accepted |
 
 See the individual ADR files for context and consequences.

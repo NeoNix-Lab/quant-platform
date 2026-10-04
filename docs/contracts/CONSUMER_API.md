@@ -484,3 +484,21 @@ Explicit non-goals for this milestone are FastAPI, React, TUI, CLI commands,
 candle/footprint/book builders, L1/L2/L3 implementation, Feature Engine,
 Research Engine, Job Runtime, authentication, deployment, schema migration,
 DataGateway generalization and legacy CoreApp/API porting.
+
+## 12. Domain capability seam extensions
+
+ADR-0065 defines the accepted application seam discipline for the future
+Strategy, Replay, Validation, and Training Consumer-API capabilities. Requests
+carry only existing immutable semantic payloads and content identities; paths,
+catalog UUIDs, repository handles, callable import names, and client-selected
+locators are never consumer semantics. Application owns normalization,
+governed resolution, invocation, and stable error translation; transport and
+clients do not reinterpret domain behavior.
+
+The accepted J10 Strategy seam is `compose_decision`; J12 consists only of its
+existing finite fold/classification/DSR/PBO operations; and J13 is the existing
+supervised evaluation/owned-registration boundary. J11 Replay remains deferred:
+`HistoricalReplayRuntime` requires a `feature_provider` callable that has no
+accepted semantic, serializable reference. A later ADR must supply that
+authority before any Replay consumer request can exist. Long-running work is
+admitted through J03, never emulated by a client-held synchronous request.
