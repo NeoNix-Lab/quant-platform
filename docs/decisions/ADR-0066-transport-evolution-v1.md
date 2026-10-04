@@ -38,19 +38,27 @@ family/version requires a new family version.
 
 `j14-framed-result-v1` may carry only a complete, already-produced finite
 application result whose owning application contract declares a stable logical
-result identity. It first canonicalizes the exact JSON result bytes, computes
-their `payload_sha256`, and defines:
+result identity. It serializes the complete application result with RFC 8785
+JSON Canonicalization Scheme and encodes that serialization as UTF-8 bytes.
+`payload_sha256` is the lowercase hexadecimal SHA-256 digest of exactly those
+canonical result bytes. It then defines `transfer_id` as the lowercase
+hexadecimal SHA-256 digest of the UTF-8 RFC 8785 serialization of this named
+preimage object:
 
-```text
-transfer_id = sha256(message_family, schema_version,
-                     logical_result_identity, payload_sha256)
+```json
+{
+  "logical_result_identity": "<existing application identity>",
+  "message_family": "j14-framed-result-v1",
+  "payload_sha256": "<lowercase 64-hex digest>",
+  "schema_version": "j14-framed-result-v1"
+}
 ```
 
-The server splits those canonical bytes at deterministic offsets no larger than
+The server splits those exact canonical result bytes at deterministic offsets no larger than
 the configured frame payload bound (which remains below the negotiated
 WebSocket message bound). Every frame carries `transfer_id`, the logical result
 identity, `payload_sha256`, zero-based `chunk_index`, immutable `chunk_count`,
-and the chunk's own SHA-256. A receiver accepts a result only after it has every
+and the chunk's lowercase hexadecimal SHA-256. A receiver accepts a result only after it has every
 unique index, verifies every chunk and the reassembled payload digest, then
 parses the complete application result. It must not expose a partial frame set
 as a partial page or interpret individual chunks as domain records.

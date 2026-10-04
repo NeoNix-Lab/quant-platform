@@ -509,7 +509,9 @@ ADR-0066 keeps `j02-request-v1`/`j02-response-v1` as one complete exchange,
 including their typed `RESULT_TOO_LARGE` refusal. A later J14 finite-result
 family may frame only an already-produced complete result with a declared
 logical result identity, deterministic chunk indices, per-chunk and complete
-payload digests, and a transfer-local resume token. Frames are never
+payload digests, and a transfer-local resume token. The result bytes and the
+named transfer-id preimage use RFC 8785 JSON Canonicalization Scheme encoded as
+UTF-8; SHA-256 digests are lowercase hexadecimal. Frames are never
 application-level pages or a cursor for a new query.
 
 No live Consumer message is defined by that transport decision. Any future live
