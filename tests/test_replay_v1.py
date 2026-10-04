@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.data.models import DatasetIdentity, Instant, TradeRecord
 from quant_platform.execution import FeeSchedule
+import quant_platform.strategy as strategy_module
 from quant_platform.replay import (
     HistoricalReplayRuntime,
     ReplayContext,
@@ -49,6 +50,19 @@ class _PolicyStub:
 
     def stable_dict(self):
         return {"policy_type": self.label, "identity": self.identity}
+
+
+class _CountingExecutionPolicy:
+    def __init__(self) -> None:
+        self.identity_calls = 0
+
+    @property
+    def identity(self) -> str:
+        self.identity_calls += 1
+        return "replay_execution_policy:sha256:" + ("b" * 64)
+
+    def stable_dict(self):
+        return {"policy_type": "counting_execution_policy", "identity": self.identity}
 
 
 class _Scan:
@@ -202,6 +216,31 @@ class ReplayV1Tests(unittest.TestCase):
         self.assertEqual(Decimal("10"), first.final_ledger.realized_pnl_total)
         self.assertEqual(Decimal("10010"), first.equity_curve[-1].equity)
         self.assertEqual(first.final_ledger.cash, first.final_ledger.mark_to_market_equity({"BTCUSDT": "110"}))
+
+    def test_replay_caches_strategy_and_policy_identities_per_immutable_spec(self):
+        policy = _CountingExecutionPolicy()
+        strategy = dataclass_replace(_strategy(), execution_policy=policy)
+        spec = dataclass_replace(_spec(), strategy=strategy)
+        expected = "strategy-spec-v1:sha256:" + strategy_module._canonical_fingerprint(strategy.canonical_payload())
+        calls_after_construction = policy.identity_calls
+
+        result = HistoricalReplayRuntime(
+            _GatewaySpy(
+                (
+                    _record("2026-01-05T15:00:00Z", "100", "t1"),
+                    _record("2026-01-05T15:00:10Z", "100", "t2"),
+                    _record("2026-01-05T15:00:20Z", "100", "t3"),
+                )
+            ),
+            _features,
+        ).run(spec)
+
+        self.assertEqual(expected, strategy.strategy_identity)
+        self.assertEqual(spec.identity, result.spec_identity)
+        # The replay start/end and this assertion each serialize the spec;
+        # each serialization asks the external policy for identity twice. No
+        # additional per-tick identity access is permitted by composition.
+        self.assertEqual(calls_after_construction + 6, policy.identity_calls)
 
     def test_summary_mode_preserves_accounting_and_digest_without_retaining_trace(self):
         records = (
