@@ -68,8 +68,8 @@ class ApiTransportEncodingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ApiTransportServerConfig(host="0.0.0.0")
 
-        config = ApiTransportServerConfig(host="0.0.0.0", allow_non_loopback=True)
-        self.assertEqual("0.0.0.0", config.host)
+        with self.assertRaises(ValueError):
+            ApiTransportServerConfig(host="0.0.0.0", allow_non_loopback=True)
 
     def test_success_response_is_lossless_consumer_result_payload(self):
         gateway = covered_gateway(batches())
