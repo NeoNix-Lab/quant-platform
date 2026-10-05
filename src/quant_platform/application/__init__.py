@@ -149,6 +149,14 @@ from .validation_consumer import (
     execute_validation_evaluate_dsr,
     execute_validation_evaluate_pbo,
 )
+from .training_consumer import (
+    MAX_SYNC_TRAINING_TEST_SAMPLES,
+    MAX_SYNC_TRAINING_WORK,
+    SUPERVISED_TRAIN_EVALUATE_REQUEST_IDENTITY_DOMAIN,
+    SupervisedTrainEvaluateRequest,
+    SupervisedTrainingConsumerService,
+    execute_supervised_train_evaluate,
+)
 from .api_transport_server import (
     ApiTransportServerConfig,
     J02_MAX_WIRE_MESSAGE_BYTES,
@@ -281,6 +289,8 @@ __all__ = [
     "MarketDataApplicationConfig",
     "MAX_SYNC_PBO_BLOCK_COUNT",
     "MAX_SYNC_PBO_WORK",
+    "MAX_SYNC_TRAINING_TEST_SAMPLES",
+    "MAX_SYNC_TRAINING_WORK",
     "LiveCandleStreamReport",
     "MinimalBreakoutFeatureProvider",
     "NoOpExecutionPolicy",
@@ -312,7 +322,10 @@ __all__ = [
     "SUPPORTED_VENUE",
     "ScanObservation",
     "STRATEGY_COMPOSE_REQUEST_IDENTITY_DOMAIN",
+    "SUPERVISED_TRAIN_EVALUATE_REQUEST_IDENTITY_DOMAIN",
     "StrategyComposeRequest",
+    "SupervisedTrainEvaluateRequest",
+    "SupervisedTrainingConsumerService",
     "VALIDATION_BUILD_FOLDS_REQUEST_IDENTITY_DOMAIN",
     "VALIDATION_CLASSIFY_CANDIDATE_REQUEST_IDENTITY_DOMAIN",
     "VALIDATION_EVALUATE_DSR_REQUEST_IDENTITY_DOMAIN",
@@ -346,6 +359,7 @@ __all__ = [
     "evaluate_h01_imbalance",
     "execute_market_data_query",
     "execute_strategy_compose",
+    "execute_supervised_train_evaluate",
     "execute_validation_build_folds",
     "execute_validation_classify_candidate",
     "execute_validation_evaluate_dsr",

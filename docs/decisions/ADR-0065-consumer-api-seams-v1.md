@@ -169,6 +169,44 @@ design gate.  Until then, PBO outside the synchronous domain remains available
 only as the in-process Validation library operation, not through the J12
 Consumer-API seam.
 
+## Amendment 2 (issue #302) — bounded synchronous supervised training
+
+**Date:** 2026-10-05
+
+The existing `train_evaluate_supervised_baseline` is a deterministic single
+pass over an already-built immutable `SupervisedProjection`; it has no epochs
+or search loop.  Its cost nevertheless grows with the sample and feature
+dimensions carried by that request, so this amendment makes its synchronous
+domain explicit rather than relying on a J02 wire failure as a resource bound.
+
+Section 4 is amended only for synchronous execution:
+
+- `MAX_SYNC_TRAINING_WORK = 20_000`, where work is
+  `(train_samples + test_samples) * feature_count`;
+- `MAX_SYNC_TRAINING_TEST_SAMPLES = 5_000`.
+
+The issue #302 measurements are a non-portable verification aid, not a runtime
+guarantee: the established baseline measured approximately 0.15--0.3 ms per
+sample-feature, about 135 bytes per test prediction in the result, and roughly
+660--790 bytes per sample-feature in a canonical request.  The bounds are
+therefore independently admitted before execution; a J02 wire limit is not a
+resource-control substitute.
+
+After existing request type checks and before calling the trainer, a request
+outside either limit is refused as `invalid_request` with stable reason
+`training_sync_budget_exceeded`.  No training math, result payload, result
+identity, error-code vocabulary, or Experiment identity changes.  Within the
+bound, J13 invokes only the existing trainer and returns its exact
+`SupervisedTrainingRunResult`.
+
+The server may optionally register that result only through its owned
+`ExperimentRepository` and the existing `record_supervised_training_run`
+boundary; the request carries no repository, connection, path, or locator.
+Registration is an idempotent Experiment-record operation, not J03 dispatch.
+Training beyond the synchronous domain remains the in-process Learning library
+operation until a separate J03 training dispatch/result-materialization design
+gate is accepted.  This amendment neither implements nor invokes J03.
+
 ## Acceptance evidence
 
 `StrategySpec`, `StrategyInput`, `DecisionIntent`, and `NoDecision` provide the
