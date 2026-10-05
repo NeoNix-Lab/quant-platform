@@ -37,6 +37,24 @@ class GovernedResultRefused(GovernedResultImportError):
 
 
 @dataclass(frozen=True, slots=True)
+class ResultOutputContractV1:
+    """One server-owned K13 output role and schema admissibility rule."""
+
+    artifact_role: str
+    artifact_kind: str
+    artifact_schema_version: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "artifact_role", _non_empty_text(self.artifact_role, "artifact_role"))
+        object.__setattr__(self, "artifact_kind", _non_empty_text(self.artifact_kind, "artifact_kind"))
+        object.__setattr__(
+            self,
+            "artifact_schema_version",
+            _non_empty_text(self.artifact_schema_version, "artifact_schema_version"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ResultOutputEvidenceV1:
     """One deck output, with its claimed checksum and non-authoritative locator."""
 
@@ -221,6 +239,7 @@ class GovernedResultImportService:
         experiments: ExperimentRepository,
         evidence_store: GovernedResultEvidenceStore,
         verify_output_checksum: Callable[[ResultOutputEvidenceV1], str],
+        output_contracts: Sequence[ResultOutputContractV1],
     ) -> None:
         if not isinstance(admitted_inputs, AdmittedInputStore):
             raise TypeError("admitted_inputs must be an AdmittedInputStore")
@@ -230,15 +249,27 @@ class GovernedResultImportService:
             raise TypeError("evidence_store must be a GovernedResultEvidenceStore")
         if not callable(verify_output_checksum):
             raise TypeError("verify_output_checksum must be callable")
+        contracts = tuple(output_contracts)
+        if not contracts:
+            raise ValueError("output_contracts must not be empty")
+        by_role: dict[str, ResultOutputContractV1] = {}
+        for index, contract in enumerate(contracts):
+            if not isinstance(contract, ResultOutputContractV1):
+                raise TypeError(f"output_contracts[{index}] must be a ResultOutputContractV1")
+            if contract.artifact_role in by_role:
+                raise ValueError("output_contracts must not contain duplicate artifact roles")
+            by_role[contract.artifact_role] = contract
         self.admitted_inputs = admitted_inputs
         self.experiments = experiments
         self.evidence_store = evidence_store
         self.verify_output_checksum = verify_output_checksum
+        self.output_contracts = by_role
 
     def import_result(self, bundle: GovernedResultBundleV1) -> GovernedResultRegistration:
         if not isinstance(bundle, GovernedResultBundleV1):
             raise TypeError("bundle must be a GovernedResultBundleV1")
-        self._validate_admission(bundle)
+        admission = self._validate_admission(bundle)
+        self._validate_run_compatibility(bundle.run_identity, admission)
         self._validate_outputs(bundle)
         self.evidence_store.assert_admissible(bundle)
         try:
@@ -256,7 +287,7 @@ class GovernedResultImportService:
         self.evidence_store.record(bundle)
         return GovernedResultRegistration(bundle.bundle_digest, run_record)
 
-    def _validate_admission(self, bundle: GovernedResultBundleV1) -> None:
+    def _validate_admission(self, bundle: GovernedResultBundleV1) -> AdmittedInputManifestV1:
         try:
             record = self.admitted_inputs.get(bundle.admission_id)
         except AdmittedInputError as error:
@@ -269,9 +300,39 @@ class GovernedResultImportService:
             raise GovernedResultRefused("declared input evidence does not match admitted input")
         if bundle.deck_code_identity != record.manifest.git_identity:
             raise GovernedResultRefused("deck code identity does not match admitted input")
+        return record.manifest
+
+    def _validate_run_compatibility(self, run: RunIdentity, manifest: AdmittedInputManifestV1) -> None:
+        run_spec = run.run_spec_identity
+        if run_spec.code_identity.identity != manifest.git_identity:
+            raise GovernedResultRefused("RunIdentity code identity does not match admitted input")
+        data_identities = {reference.identity for reference in run_spec.data_identities}
+        if not set(manifest.logical_input_identities).issubset(data_identities):
+            raise GovernedResultRefused("RunIdentity data identities do not cover admitted input")
+        declared_definitions = set(manifest.definition_identities)
+        run_references = {
+            reference.identity
+            for reference in (
+                *run_spec.feature_identities,
+                *run_spec.research_label_identities,
+                *run_spec.strategy_policy_execution_identities,
+                *((run_spec.validation_identity,) if run_spec.validation_identity is not None else ()),
+                *((run_spec.environment_identity,) if run_spec.environment_identity is not None else ()),
+            )
+        }
+        if not declared_definitions.issubset(run_references):
+            raise GovernedResultRefused("RunIdentity definition identities do not cover admitted input")
 
     def _validate_outputs(self, bundle: GovernedResultBundleV1) -> None:
         for output in bundle.outputs:
+            artifact = output.registration.identity
+            contract = self.output_contracts.get(artifact.artifact_role)
+            content = artifact.artifact_content_identity
+            if contract is None or (
+                content.artifact_kind != contract.artifact_kind
+                or content.artifact_schema_version != contract.artifact_schema_version
+            ):
+                raise GovernedResultRefused("output role or schema is not admitted")
             try:
                 verified = self.verify_output_checksum(output)
             except Exception as error:
@@ -315,5 +376,6 @@ __all__ = [
     "GovernedResultImportService",
     "GovernedResultRefused",
     "GovernedResultRegistration",
+    "ResultOutputContractV1",
     "ResultOutputEvidenceV1",
 ]

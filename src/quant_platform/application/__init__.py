@@ -64,6 +64,7 @@ from .governed_result_import import (
     GovernedResultImportService,
     GovernedResultRefused,
     GovernedResultRegistration,
+    ResultOutputContractV1,
     ResultOutputEvidenceV1,
 )
 from .bybit_import import (
@@ -220,6 +221,7 @@ __all__ = [
     "GovernedResultImportService",
     "GovernedResultRefused",
     "GovernedResultRegistration",
+    "ResultOutputContractV1",
     "ResultOutputEvidenceV1",
     "DurableJobConflict",
     "DurableJobError",

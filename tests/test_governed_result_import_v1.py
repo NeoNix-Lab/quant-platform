@@ -15,6 +15,7 @@ from quant_platform.application.governed_result_import import (  # noqa: E402
     GovernedResultEvidenceStore,
     GovernedResultImportService,
     GovernedResultRefused,
+    ResultOutputContractV1,
     ResultOutputEvidenceV1,
 )
 from quant_platform.experiments import (  # noqa: E402
@@ -53,7 +54,13 @@ def manifest(*, request: str = "request-v1:alpha") -> AdmittedInputManifestV1:
     )
 
 
-def run(execution_id: str = "deck-run-1") -> RunIdentity:
+def run(
+    execution_id: str = "deck-run-1",
+    *,
+    code_identity: str = "git:abc123",
+    data_identity: str = "dataset-v1:BTCUSDT",
+    definition_identity: str = "definition-v1:trades",
+) -> RunIdentity:
     study = StudyIdentity(
         "study-v1",
         IdentityReference("research", "research-v1:alpha"),
@@ -64,18 +71,26 @@ def run(execution_id: str = "deck-run-1") -> RunIdentity:
     return RunIdentity(
         RunSpecIdentity(
             trial,
-            IdentityReference("code", "git:abc123"),
-            data_identities=(IdentityReference("dataset", "dataset-v1:BTCUSDT"),),
+            IdentityReference("code", code_identity),
+            data_identities=(IdentityReference("dataset", data_identity),),
+            feature_identities=(IdentityReference("definition", definition_identity),),
             run_configuration={"seed": 7},
         ),
         execution_id,
     )
 
 
-def output(identity: RunIdentity, checksum: str = "sha256:" + "a" * 64) -> ResultOutputEvidenceV1:
-    content = ArtifactContentIdentity("metrics", "metrics-v1", checksum)
+def output(
+    identity: RunIdentity,
+    checksum: str = "sha256:" + "a" * 64,
+    *,
+    role: str = "metrics",
+    kind: str = "metrics",
+    schema: str = "metrics-v1",
+) -> ResultOutputEvidenceV1:
+    content = ArtifactContentIdentity(kind, schema, checksum)
     return ResultOutputEvidenceV1(
-        ArtifactRegistration(ArtifactIdentity(identity, "metrics", content), {"uri": "deck://result/metrics"}),
+        ArtifactRegistration(ArtifactIdentity(identity, role, content), {"uri": "deck://result/metrics"}),
         checksum,
     )
 
@@ -90,6 +105,7 @@ class GovernedResultImportV1Tests(unittest.TestCase):
             self.experiments,
             self.evidence,
             lambda evidence: evidence.content_checksum,
+            (ResultOutputContractV1("metrics", "metrics", "metrics-v1"),),
         )
 
     def delivered_manifest(self) -> AdmittedInputManifestV1:
@@ -189,10 +205,47 @@ class GovernedResultImportV1Tests(unittest.TestCase):
             self.experiments,
             self.evidence,
             lambda evidence: "sha256:" + "f" * 64,
+            (ResultOutputContractV1("metrics", "metrics", "metrics-v1"),),
         )
         with self.assertRaisesRegex(GovernedResultRefused, "output checksum"):
             refusing_service.import_result(bundle)
         self.assertEqual((), self.experiments.list_runs_for_run_spec(bundle.run_identity.run_spec_identity))
+
+    def test_refuses_incompatible_run_or_unknown_output_before_experiment_mutation(self) -> None:
+        consumed = self.delivered_manifest()
+        incompatible_run = run("incompatible-code", code_identity="git:evil")
+        incompatible_bundle = self.bundle(incompatible_run, consumed=consumed)
+        with self.assertRaisesRegex(GovernedResultRefused, "RunIdentity code identity"):
+            self.service.import_result(incompatible_bundle)
+        self.assertEqual((), self.experiments.list_runs_for_run_spec(incompatible_run.run_spec_identity))
+
+        unknown_run = run("unknown-output")
+        unknown_bundle = GovernedResultBundleV1(
+            consumed.admission_id,
+            consumed.manifest_digest,
+            consumed,
+            consumed.git_identity or "",
+            {},
+            {},
+            None,
+            unknown_run,
+            (output(unknown_run, role="unknown-role", kind="unknown", schema="unknown-schema-v9"),),
+        )
+        with self.assertRaisesRegex(GovernedResultRefused, "output role or schema"):
+            self.service.import_result(unknown_bundle)
+        self.assertEqual((), self.experiments.list_runs_for_run_spec(unknown_run.run_spec_identity))
+
+    def test_refuses_run_missing_admitted_data_or_definition_identity(self) -> None:
+        consumed = self.delivered_manifest()
+        missing_data = run("missing-data", data_identity="dataset-v1:other")
+        with self.assertRaisesRegex(GovernedResultRefused, "RunIdentity data identities"):
+            self.service.import_result(self.bundle(missing_data, consumed=consumed))
+        self.assertEqual((), self.experiments.list_runs_for_run_spec(missing_data.run_spec_identity))
+
+        missing_definition = run("missing-definition", definition_identity="definition-v1:other")
+        with self.assertRaisesRegex(GovernedResultRefused, "RunIdentity definition identities"):
+            self.service.import_result(self.bundle(missing_definition, consumed=consumed))
+        self.assertEqual((), self.experiments.list_runs_for_run_spec(missing_definition.run_spec_identity))
 
     def test_new_computation_requires_and_registers_a_distinct_run_identity(self) -> None:
         consumed = self.delivered_manifest()
