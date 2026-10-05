@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +12,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.application.market_data import ConsumerApiError, ConsumerErrorCode  # noqa: E402
 from quant_platform.application.validation_consumer import (  # noqa: E402
+    MAX_SYNC_PBO_BLOCK_COUNT,
+    MAX_SYNC_PBO_WORK,
     ValidationBuildFoldsRequest,
     ValidationClassifyCandidateRequest,
     ValidationEvaluateDsrRequest,
@@ -28,6 +32,7 @@ from quant_platform.validation import (  # noqa: E402
     ValidationCandidate,
     WalkForwardScheduleSpec,
     build_walk_forward_folds,
+    evaluate_pbo_v1,
 )
 
 
@@ -35,12 +40,17 @@ def schedule() -> WalkForwardScheduleSpec:
     return WalkForwardScheduleSpec("2024-01-01T00:00:00Z", 10, 3, 1)
 
 
-def panel() -> ComparableTrialPanel:
+def panel(*, trial_count: int = 2, observation_count: int = 4) -> ComparableTrialPanel:
+    trial_ids = tuple(f"trial-{index}" for index in range(trial_count))
+    observation_ids = tuple(f"observation-{index}" for index in range(observation_count))
     return ComparableTrialPanel(
         population_id="population-v1:alpha",
-        trial_ids=("A", "B"),
-        observation_ids=("o1", "o2", "o3", "o4"),
-        returns={"A": (0.01, 0.02, -0.01, 0.03), "B": (0.0, 0.01, 0.02, -0.02)},
+        trial_ids=trial_ids,
+        observation_ids=observation_ids,
+        returns={
+            trial_id: tuple((index % 5 - 2) / 100 for index in range(observation_count))
+            for trial_id in trial_ids
+        },
         return_semantics_id="returns-v1",
     )
 
@@ -90,6 +100,35 @@ class ValidationConsumerV1Tests(unittest.TestCase):
         )
         self.assertIs(EvaluationStatus.NON_EVALUABLE, result.status)
         self.assertEqual("observation_count_below_4", result.reason)
+
+    def test_pbo_at_the_synchronous_limit_preserves_the_domain_result_and_identity(self) -> None:
+        request = ValidationEvaluatePboRequest(panel(observation_count=MAX_SYNC_PBO_BLOCK_COUNT), MAX_SYNC_PBO_BLOCK_COUNT)
+
+        result = execute_validation_evaluate_pbo(request)
+
+        self.assertEqual(evaluate_pbo_v1(request.panel, request.block_count), result)
+        self.assertLess(
+            len(json.dumps(result.canonical_payload(), separators=(",", ":")).encode("utf-8")),
+            16 * 1024 * 1024,
+        )
+
+    def test_pbo_over_block_or_work_budget_is_refused_before_evaluation(self) -> None:
+        oversized_block_request = ValidationEvaluatePboRequest(panel(observation_count=18), 18)
+        oversized_work_request = ValidationEvaluatePboRequest(panel(trial_count=100, observation_count=1200), 12)
+
+        for request in (oversized_block_request, ValidationEvaluatePboRequest(panel(observation_count=30), 30), oversized_work_request):
+            with self.subTest(block_count=request.block_count, trials=request.panel.trial_count, observations=request.panel.observation_count):
+                with patch("quant_platform.application.validation_consumer.evaluate_pbo_v1") as evaluator:
+                    with self.assertRaises(ConsumerApiError) as error:
+                        execute_validation_evaluate_pbo(request)
+                self.assertIs(ConsumerErrorCode.INVALID_REQUEST, error.exception.code)
+                self.assertEqual("pbo_sync_budget_exceeded", error.exception.context["reason"])
+                self.assertEqual(request.request_identity, error.exception.request_identity)
+                evaluator.assert_not_called()
+
+    def test_pbo_budget_constants_cover_the_boundary(self) -> None:
+        self.assertEqual(16, MAX_SYNC_PBO_BLOCK_COUNT)
+        self.assertEqual(5_000_000, MAX_SYNC_PBO_WORK)
 
 
 if __name__ == "__main__":

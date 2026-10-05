@@ -134,6 +134,8 @@ from .strategy_consumer import (
     execute_strategy_compose,
 )
 from .validation_consumer import (
+    MAX_SYNC_PBO_BLOCK_COUNT,
+    MAX_SYNC_PBO_WORK,
     VALIDATION_BUILD_FOLDS_REQUEST_IDENTITY_DOMAIN,
     VALIDATION_CLASSIFY_CANDIDATE_REQUEST_IDENTITY_DOMAIN,
     VALIDATION_EVALUATE_DSR_REQUEST_IDENTITY_DOMAIN,
@@ -277,6 +279,8 @@ __all__ = [
     "RemoteJ02SecurityEvidenceLog",
     "MarketDataApplication",
     "MarketDataApplicationConfig",
+    "MAX_SYNC_PBO_BLOCK_COUNT",
+    "MAX_SYNC_PBO_WORK",
     "LiveCandleStreamReport",
     "MinimalBreakoutFeatureProvider",
     "NoOpExecutionPolicy",
