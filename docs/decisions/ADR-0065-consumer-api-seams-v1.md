@@ -132,6 +132,43 @@ Only then may a J11 implementation define its request/result/error envelope.
 - changes to frozen DataGateway, domain, identity, Experiment, or Artifact
   contracts.
 
+## Amendment 1 (issue #301) — bounded synchronous PBO
+
+**Date:** 2026-10-05
+
+Review of the J12 implementation found that the existing complete-CSCV
+evaluator materializes every split.  Its cost therefore grows with both the
+number of splits and the panel dimensions: `C(b, b/2) * trial_count *
+observation_count`.  In the reviewed baseline, 30 blocks imply
+`C(30,15) = 155117520` splits before iteration; a block-count limit alone
+would not bound large panels.  Such requests require the separate J03
+dispatch/result-materialization decision and are not synchronously executable
+through J12.
+
+Section 3 is amended only for the synchronous PBO request domain:
+
+- `MAX_SYNC_PBO_BLOCK_COUNT = 16` (at most 12,870 CSCV splits);
+- `MAX_SYNC_PBO_WORK = 5_000_000`, where work is
+  `C(b, b/2) * trial_count * observation_count`.
+
+After existing request type checks and before calling the evaluator, a request
+outside either bound is refused as `invalid_request` with stable reason
+`pbo_sync_budget_exceeded`.  No `ConsumerErrorCode`, sampling rule, PBO
+formula, `PBOResult` payload, or identity changes.  A request within the bound
+continues to invoke the existing evaluator unchanged and preserves its exact
+result evidence.  The largest admitted result must remain below J02's 16 MiB
+wire bound; the implementation proof serializes the 16-block boundary vector.
+On the implementation environment, the 16-block/10-trial/16-observation
+boundary vector produced 12,870 splits in 1.233 seconds with a 1,585,427-byte
+canonical JSON result.  This is verification evidence, not a portable timing
+guarantee; the semantic work bound is authoritative.
+
+This amendment does not define J03 PBO dispatch, durable result
+materialization/retrieval, or a new transport message.  Those remain a separate
+design gate.  Until then, PBO outside the synchronous domain remains available
+only as the in-process Validation library operation, not through the J12
+Consumer-API seam.
+
 ## Acceptance evidence
 
 `StrategySpec`, `StrategyInput`, `DecisionIntent`, and `NoDecision` provide the
