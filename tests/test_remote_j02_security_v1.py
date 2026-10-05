@@ -67,9 +67,11 @@ class _Transport:
 
 
 class _Socket:
-    def __init__(self, certificate_der: bytes | None):
+    def __init__(self, certificate_der: bytes | None, *, on_next=None):
         self.transport = _Transport(certificate_der)
         self.close_calls: list[tuple[int, str]] = []
+        self.on_next = on_next
+        self._yielded = False
 
     async def close(self, *, code: int, reason: str) -> None:
         self.close_calls.append((code, reason))
@@ -78,6 +80,10 @@ class _Socket:
         return self
 
     async def __anext__(self):
+        if not self._yielded and self.on_next is not None:
+            self._yielded = True
+            self.on_next()
+            return "ignored-after-revocation"
         raise StopAsyncIteration
 
 
@@ -122,6 +128,27 @@ class RemoteJ02SecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("deck-a", evidence.principal_id)
         self.assertEqual("TLSv1.3", evidence.tls_version)
         self.assertEqual("TLS_AES_256_GCM_SHA384", evidence.tls_cipher)
+
+    async def test_active_session_revocation_closes_before_any_subsequent_decode(self) -> None:
+        principals = {certificate_fingerprint(CERTIFICATE_DER): RemoteJ02Principal(
+            "deck-a", frozenset({J02_MARKET_DATA_READ_SCOPE})
+        )}
+        configuration = RemoteJ02SecurityConfig(
+            "server.pem", "server-key.pem", "client-ca.pem", "trust-v1", "policy-v1",
+            principals, RemoteJ02SecurityEvidenceLog(),
+        )
+        socket = _Socket(
+            CERTIFICATE_DER,
+            on_next=lambda: principals.__setitem__(
+                certificate_fingerprint(CERTIFICATE_DER),
+                RemoteJ02Principal("deck-a", frozenset({J02_MARKET_DATA_READ_SCOPE}), revoked=True),
+            ),
+        )
+        with patch.object(transport, "handle_api_transport_message") as decode:
+            await handle_api_transport_connection(socket, execute=MagicMock(), remote_security=configuration)
+
+        decode.assert_not_called()
+        self.assertEqual([(1008, "policy denied")], socket.close_calls)
 
 
 class RemoteJ02TlsConfigurationTests(unittest.TestCase):

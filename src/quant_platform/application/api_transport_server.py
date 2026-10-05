@@ -347,6 +347,10 @@ async def handle_api_transport_connection(
         return
 
     async for message in websocket:
+        # Revocation and policy removal take effect at every request boundary;
+        # an already-open socket must not retain a prior authorization grant.
+        if remote_security is not None and not await _authorize_remote_connection(websocket, remote_security):
+            return
         response = await asyncio.to_thread(handle_api_transport_message, message, execute=execute)
         await websocket.send(response)
 
