@@ -108,6 +108,11 @@ from .market_data import (
     execute_market_data_query,
     resolve_market_data_request,
 )
+from .strategy_consumer import (
+    STRATEGY_COMPOSE_REQUEST_IDENTITY_DOMAIN,
+    StrategyComposeRequest,
+    execute_strategy_compose,
+)
 from .api_transport_server import (
     ApiTransportServerConfig,
     J02_MAX_WIRE_MESSAGE_BYTES,
@@ -241,6 +246,8 @@ __all__ = [
     "SUPPORTED_INSTRUMENT",
     "SUPPORTED_VENUE",
     "ScanObservation",
+    "STRATEGY_COMPOSE_REQUEST_IDENTITY_DOMAIN",
+    "StrategyComposeRequest",
     "Target",
     "TERMINAL_JOB_STATES",
     "TradeStats",
@@ -265,6 +272,7 @@ __all__ = [
     "encode_record",
     "evaluate_h01_imbalance",
     "execute_market_data_query",
+    "execute_strategy_compose",
     "decode_transport_query",
     "encode_consumer_error",
     "encode_consumer_result",
