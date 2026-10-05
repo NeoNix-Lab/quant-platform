@@ -131,7 +131,7 @@ ALLOWED = {
 }
 SHARED_STDLIB = {
     "__future__", "collections", "dataclasses", "datetime", "hashlib", "importlib",
-    "json", "re", "typing",
+    "json", "re", "typing", "datetime", "secrets", "ssl",
 }
 ACCESS_MODELS = {
     "CatalogDataset", "CatalogPartition", "DataRequest", "DataSlice",
