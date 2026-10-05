@@ -343,13 +343,18 @@ async def handle_api_transport_connection(
 ) -> None:
     """Serve sequential J02 request/response exchanges on one WebSocket."""
 
-    if remote_security is not None and not await _authorize_remote_connection(websocket, remote_security):
+    session_id = secrets.token_hex(16)
+    if remote_security is not None and not await _authorize_remote_connection(
+        websocket, remote_security, session_id=session_id
+    ):
         return
 
     async for message in websocket:
         # Revocation and policy removal take effect at every request boundary;
         # an already-open socket must not retain a prior authorization grant.
-        if remote_security is not None and not await _authorize_remote_connection(websocket, remote_security):
+        if remote_security is not None and not await _authorize_remote_connection(
+            websocket, remote_security, session_id=session_id
+        ):
             return
         response = await asyncio.to_thread(handle_api_transport_message, message, execute=execute)
         await websocket.send(response)
@@ -389,9 +394,10 @@ def _message_text(message: str | bytes) -> str:
     raise TypeError("WebSocket messages must be text or UTF-8 bytes")
 
 
-async def _authorize_remote_connection(websocket: Any, security: RemoteJ02SecurityConfig) -> bool:
+async def _authorize_remote_connection(
+    websocket: Any, security: RemoteJ02SecurityConfig, *, session_id: str
+) -> bool:
     """Authorize an already TLS-authenticated peer before JSON decoding starts."""
-    session_id = secrets.token_hex(16)
     ssl_object = websocket.transport.get_extra_info("ssl_object")
     certificate_der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
     fingerprint = certificate_fingerprint(certificate_der) if certificate_der else None

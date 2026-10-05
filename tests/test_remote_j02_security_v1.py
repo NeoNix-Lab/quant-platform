@@ -67,11 +67,12 @@ class _Transport:
 
 
 class _Socket:
-    def __init__(self, certificate_der: bytes | None, *, on_next=None):
+    def __init__(self, certificate_der: bytes | None, *, on_next=None, message_count: int = 0):
         self.transport = _Transport(certificate_der)
         self.close_calls: list[tuple[int, str]] = []
         self.on_next = on_next
         self._yielded = False
+        self._messages_remaining = message_count
 
     async def close(self, *, code: int, reason: str) -> None:
         self.close_calls.append((code, reason))
@@ -80,11 +81,17 @@ class _Socket:
         return self
 
     async def __anext__(self):
+        if self._messages_remaining:
+            self._messages_remaining -= 1
+            return "message"
         if not self._yielded and self.on_next is not None:
             self._yielded = True
             self.on_next()
             return "ignored-after-revocation"
         raise StopAsyncIteration
+
+    async def send(self, _message: str) -> None:
+        return None
 
 
 class RemoteJ02SecurityTests(unittest.IsolatedAsyncioTestCase):
@@ -149,6 +156,15 @@ class RemoteJ02SecurityTests(unittest.IsolatedAsyncioTestCase):
 
         decode.assert_not_called()
         self.assertEqual([(1008, "policy denied")], socket.close_calls)
+
+    async def test_reauthorization_evidence_keeps_one_session_id_per_connection(self) -> None:
+        configuration = security()
+        socket = _Socket(CERTIFICATE_DER, message_count=2)
+        with patch.object(transport, "handle_api_transport_message", return_value="response") as decode:
+            await handle_api_transport_connection(socket, execute=MagicMock(), remote_security=configuration)
+
+        self.assertEqual(2, decode.call_count)
+        self.assertEqual(1, len({event.session_id for event in configuration.evidence_log.events}))
 
 
 class RemoteJ02TlsConfigurationTests(unittest.TestCase):
