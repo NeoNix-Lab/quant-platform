@@ -106,7 +106,15 @@ class AdmittedInputManifestV1Tests(unittest.TestCase):
     def test_expired_admission_cannot_be_revived(self) -> None:
         store = self.store()
         admitted = store.admit(manifest())
-        expired = store.expire(admitted.admission_id)
+
+        with self.assertRaisesRegex(AdmittedInputConflict, "DELIVERY_PENDING"):
+            store.expire(admitted.admission_id)
+        sealed = store.seal(admitted.admission_id)
+        with self.assertRaisesRegex(AdmittedInputConflict, "DELIVERY_PENDING"):
+            store.expire(sealed.admission_id)
+
+        pending = store.begin_delivery(sealed.admission_id)
+        expired = store.expire(pending.admission_id)
 
         self.assertEqual(AdmittedInputState.EXPIRED, expired.state)
         with self.assertRaises(AdmittedInputExpired):

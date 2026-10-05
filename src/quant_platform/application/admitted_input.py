@@ -229,8 +229,8 @@ class AdmittedInputStore:
 
     def expire(self, admission_id: str) -> AdmittedInputRecord:
         current = self.get(admission_id)
-        if current.state in {AdmittedInputState.DELIVERED, AdmittedInputState.EXPIRED}:
-            raise AdmittedInputConflict("delivered or expired admission cannot expire")
+        if current.state != AdmittedInputState.DELIVERY_PENDING:
+            raise AdmittedInputConflict("expiry requires DELIVERY_PENDING")
         with self.connection:
             self.connection.execute(
                 "UPDATE admitted_inputs SET state = ? WHERE admission_id = ?",
