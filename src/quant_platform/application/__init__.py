@@ -57,6 +57,16 @@ from .admitted_input import (
     AdmittedInputState,
     AdmittedInputStore,
 )
+from .governed_result_import import (
+    GovernedResultBundleV1,
+    GovernedResultEvidenceStore,
+    GovernedResultImportError,
+    GovernedResultImportService,
+    GovernedResultRefused,
+    GovernedResultRegistration,
+    ResultOutputContractV1,
+    ResultOutputEvidenceV1,
+)
 from .bybit_import import (
     CANONICAL_FIELD_ORDER,
     ImportError_,
@@ -205,6 +215,14 @@ __all__ = [
     "AdmittedInputRecord",
     "AdmittedInputState",
     "AdmittedInputStore",
+    "GovernedResultBundleV1",
+    "GovernedResultEvidenceStore",
+    "GovernedResultImportError",
+    "GovernedResultImportService",
+    "GovernedResultRefused",
+    "GovernedResultRegistration",
+    "ResultOutputContractV1",
+    "ResultOutputEvidenceV1",
     "DurableJobConflict",
     "DurableJobError",
     "DurableJobNotFound",

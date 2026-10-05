@@ -84,6 +84,7 @@ OWNERS = {
     "quant_platform.source_adapters.bybit_live": "source",
     "quant_platform.application": "application",
     "quant_platform.application.admitted_input": "application",
+    "quant_platform.application.governed_result_import": "application",
     "quant_platform.application.api_transport_server": "application",
     "quant_platform.application.backup_restore": "application",
     "quant_platform.application.bybit_import": "application",
