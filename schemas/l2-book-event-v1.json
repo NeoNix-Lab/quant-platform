@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:market-platform:schema:l2-book-event-v1",
+  "title": "l2-book-event-v1",
+  "description": "Aggregated L2 book snapshot or delta. This schema represents price-level state only; it never carries order identifiers, queue position, or MBO/L3 semantics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "venue",
+    "market_type",
+    "instrument",
+    "native_symbol",
+    "source_channel",
+    "acquisition_mode",
+    "event_type",
+    "exchange_ts",
+    "bids",
+    "asks"
+  ],
+  "properties": {
+    "venue": { "$ref": "#/$defs/identifier" },
+    "market_type": { "enum": ["spot", "linear_perp", "inverse_perp", "futures"] },
+    "instrument": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "native_symbol": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "source_channel": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "acquisition_mode": { "enum": ["historical_archive", "live_websocket", "rest_snapshot"] },
+    "event_type": { "enum": ["snapshot", "delta"] },
+    "exchange_ts": { "$ref": "#/$defs/utc_timestamp" },
+    "provider_ts": {
+      "anyOf": [{ "$ref": "#/$defs/utc_timestamp" }, { "type": "null" }]
+    },
+    "receive_ts": {
+      "anyOf": [{ "$ref": "#/$defs/utc_timestamp" }, { "type": "null" }]
+    },
+    "source_depth_limit": { "type": ["integer", "null"], "minimum": 1 },
+    "native_sequence": { "type": ["string", "null"], "minLength": 1 },
+    "native_prev_sequence": { "type": ["string", "null"], "minLength": 1 },
+    "native_update_id": { "type": ["string", "null"], "minLength": 1 },
+    "continuity_token": { "type": ["string", "null"], "minLength": 1 },
+    "bids": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/level_change" }
+    },
+    "asks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/level_change" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+([_-][a-z0-9]+)*$"
+    },
+    "utc_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "decimal": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*(\\.[0-9]+)?|0\\.[0-9]+)$"
+    },
+    "positive_decimal": {
+      "type": "string",
+      "pattern": "^([1-9][0-9]*(\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+    },
+    "digit_string": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "level_change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["side", "price", "size", "action"],
+      "properties": {
+        "side": { "enum": ["bid", "ask"] },
+        "price": { "$ref": "#/$defs/positive_decimal" },
+        "size": { "$ref": "#/$defs/decimal" },
+        "action": { "enum": ["upsert", "delete"] },
+        "order_count": {
+          "anyOf": [{ "$ref": "#/$defs/digit_string" }, { "type": "null" }]
+        }
+      }
+    }
+  }
+}
