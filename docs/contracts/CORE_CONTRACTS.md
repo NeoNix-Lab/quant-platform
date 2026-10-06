@@ -155,6 +155,26 @@ Invariants:
 - reconstruction validity must be checkable;
 - add/cancel/replenishment features are only claimed when the source semantics support them.
 
+Normalized v1 contract:
+
+- `L2BookEventV1` is the cross-venue canonical event for aggregated L2 data.
+- One event is either `event_type=snapshot` or `event_type=delta`.
+- Historical archives and live websocket ingestion use the same logical event;
+  they differ only by `acquisition_mode` (`historical_archive`,
+  `live_websocket`, or `rest_snapshot`).
+- `bids` and `asks` are ordered sequences of `L2LevelChangeV1`.
+- `L2LevelChangeV1` has `side`, `price`, `size`, `action` and optional
+  `order_count`.
+- `action=delete` is represented only as `size="0"`; `action=upsert` requires
+  a strictly positive aggregate size.
+- `native_sequence`, `native_prev_sequence`, `native_update_id`,
+  `continuity_token`, `source_depth_limit`, `provider_ts` and `receive_ts` are
+  evidence/reconstruction metadata, not derived features.
+- `order_count` is allowed only when the venue supplies aggregate count at that
+  price level. It is not an order identifier and does not make the event L3.
+- L2 adapters must reject or leave out-of-scope venue feeds whose semantics are
+  order-level/MBO rather than aggregate-price-level L2.
+
 ---
 
 ## 8. L3OrderEvent
