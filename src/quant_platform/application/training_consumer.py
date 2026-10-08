@@ -67,6 +67,11 @@ class SupervisedTrainingConsumerService:
     def execute(self, request: SupervisedTrainEvaluateRequest) -> SupervisedTrainingRunResult:
         try:
             _normalize_request(request)
+        except (LearningError, SupervisedTrainingError, TypeError, ValueError) as error:
+            raise _invalid_request(error) from error
+
+        try:
+            _require_request_provenance(request)
             _require_synchronous_training_budget(request)
             result = train_evaluate_supervised_baseline(
                 projection=request.projection,
@@ -76,7 +81,7 @@ class SupervisedTrainingConsumerService:
         except ConsumerApiError:
             raise
         except (LearningError, SupervisedTrainingError, TypeError, ValueError) as error:
-            raise _invalid_request(error) from error
+            raise _invalid_request(error, request_identity=request.request_identity) from error
 
         if self._repository is not None:
             try:
@@ -106,6 +111,19 @@ def _normalize_request(request: SupervisedTrainEvaluateRequest) -> None:
         raise TypeError("request must carry a SupervisedTrainingPolicy")
 
 
+def _require_request_provenance(request: SupervisedTrainEvaluateRequest) -> None:
+    run_spec = request.run_identity.run_spec_identity
+    projection_identities = {
+        reference.identity
+        for reference in run_spec.data_identities
+        if reference.identity_kind == "supervised-projection"
+    }
+    if request.projection.identity not in projection_identities:
+        raise ValueError("run identity does not reference the supplied supervised projection")
+    if run_spec.code_identity.identity != request.policy.implementation_code_identity:
+        raise ValueError("run identity code does not match the supplied training policy")
+
+
 def _require_synchronous_training_budget(request: SupervisedTrainEvaluateRequest) -> None:
     train_count = len(request.projection.samples_for_side(ProjectionSide.TRAIN))
     test_count = len(request.projection.samples_for_side(ProjectionSide.TEST))
@@ -123,8 +141,12 @@ def _training_sync_budget_error(request: SupervisedTrainEvaluateRequest) -> Cons
     )
 
 
-def _invalid_request(error: Exception) -> ConsumerApiError:
-    return ConsumerApiError(ConsumerErrorCode.INVALID_REQUEST, "the request is not valid")
+def _invalid_request(error: Exception, *, request_identity: str | None = None) -> ConsumerApiError:
+    return ConsumerApiError(
+        ConsumerErrorCode.INVALID_REQUEST,
+        "the request is not valid",
+        request_identity=request_identity,
+    )
 
 
 __all__ = [

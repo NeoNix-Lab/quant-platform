@@ -23,7 +23,7 @@ from quant_platform.application.training_consumer import (  # noqa: E402
     SupervisedTrainingConsumerService,
     execute_supervised_train_evaluate,
 )
-from quant_platform.experiments import ExperimentRepository, RunState  # noqa: E402
+from quant_platform.experiments import ExperimentRepository, IdentityReference, RunState  # noqa: E402
 from quant_platform.learning import (  # noqa: E402
     ProjectionSide,
     SupervisedTrainingPolicy,
@@ -93,6 +93,41 @@ class TrainingConsumerV1Tests(unittest.TestCase):
                 policy=request.policy,
                 repository=ExperimentRepository(FakeConnection()),
             )
+
+    def test_provenance_mismatches_are_refused_before_training_or_registration(self) -> None:
+        request = request_for(projection())
+        projection_mismatch = replace(
+            request,
+            run_identity=replace(
+                request.run_identity,
+                run_spec_identity=replace(
+                    request.run_identity.run_spec_identity,
+                    data_identities=(
+                        IdentityReference(
+                            "supervised-projection",
+                            "supervised-projection-v1:sha256:" + "0" * 64,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        policy_mismatch = replace(
+            request,
+            policy=SupervisedTrainingPolicy("i05.centroid", 1, "different-code-ref"),
+        )
+        service = SupervisedTrainingConsumerService(ExperimentRepository(FakeConnection()))
+
+        for mismatched_request in (projection_mismatch, policy_mismatch):
+            with self.subTest(request_identity=mismatched_request.request_identity):
+                with patch("quant_platform.application.training_consumer.train_evaluate_supervised_baseline") as trainer, patch(
+                    "quant_platform.application.training_consumer.record_supervised_training_run"
+                ) as registrar:
+                    with self.assertRaises(ConsumerApiError) as error:
+                        service.execute(mismatched_request)
+                self.assertIs(ConsumerErrorCode.INVALID_REQUEST, error.exception.code)
+                self.assertEqual(mismatched_request.request_identity, error.exception.request_identity)
+                trainer.assert_not_called()
+                registrar.assert_not_called()
 
     def test_over_budget_requests_are_refused_before_training_or_registration(self) -> None:
         over_test_samples = request_for(expanded_projection(train_count=2, test_count=MAX_SYNC_TRAINING_TEST_SAMPLES + 1))
