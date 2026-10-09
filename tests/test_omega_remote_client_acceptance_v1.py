@@ -86,6 +86,50 @@ def _self_signed_ca(cwd: Path, *, key: str, out: str, cn: str) -> None:
     _run_openssl(["req", "-x509", "-new", "-key", key, "-days", "3", "-out", out, "-subj", f"/CN={cn}"], cwd=cwd)
 
 
+def _back_dated_certificate(
+    cwd: Path, *, csr: str, ca_cert: str, ca_key: str, out: str, not_before: str, not_after: str
+) -> None:
+    """Sign ``csr`` with an explicit, possibly-already-expired validity window.
+
+    ``x509 -req``'s ``-not_before``/``-not_after`` flags only exist from
+    OpenSSL 3.1 onward (CI's ubuntu-24.04 runner ships 3.0.13 and rejects
+    them with "x509: Use -help for summary."); ``ca``'s ``-startdate``/
+    ``-enddate`` do the same thing and have been stable since OpenSSL 0.9.x,
+    so that path is used here instead.
+    """
+    index = cwd / f"{out}.index"
+    serial = cwd / f"{out}.serial"
+    config = cwd / f"{out}.cnf"
+    index.write_text("", encoding="utf-8")
+    serial.write_text("1000\n", encoding="utf-8")
+    config.write_text(
+        "[ca]\n"
+        "default_ca = CA_default\n"
+        "[CA_default]\n"
+        f"database = {index.name}\n"
+        f"serial = {serial.name}\n"
+        "new_certs_dir = .\n"
+        f"certificate = {ca_cert}\n"
+        f"private_key = {ca_key}\n"
+        "default_md = sha256\n"
+        "policy = policy_anything\n"
+        "email_in_dn = no\n"
+        "copy_extensions = none\n"
+        "unique_subject = no\n"
+        "[policy_anything]\n"
+        "commonName = optional\n",
+        encoding="utf-8",
+    )
+    _run_openssl(
+        [
+            "ca", "-batch", "-notext", "-config", config.name,
+            "-in", csr, "-out", out,
+            "-startdate", not_before, "-enddate", not_after,
+        ],
+        cwd=cwd,
+    )
+
+
 def _signed_certificate(
     cwd: Path,
     *,
@@ -100,11 +144,13 @@ def _signed_certificate(
     not_after: str | None = None,
 ) -> None:
     _run_openssl(["req", "-new", "-key", key, "-out", csr, "-subj", f"/CN={cn}"], cwd=cwd)
-    args = ["x509", "-req", "-in", csr, "-CA", ca_cert, "-CAkey", ca_key, "-CAcreateserial", "-out", out]
     if not_before is not None and not_after is not None:
-        args += ["-not_before", not_before, "-not_after", not_after]
-    else:
-        args += ["-days", "3"]
+        _back_dated_certificate(
+            cwd, csr=csr, ca_cert=ca_cert, ca_key=ca_key, out=out,
+            not_before=not_before, not_after=not_after,
+        )
+        return
+    args = ["x509", "-req", "-in", csr, "-CA", ca_cert, "-CAkey", ca_key, "-CAcreateserial", "-out", out, "-days", "3"]
     if extfile is not None:
         args += ["-extfile", extfile]
     _run_openssl(args, cwd=cwd)
