@@ -1,10 +1,10 @@
 # Scope: Wave 8 - Full Platform API & Remote Service Topology v1
 
-Status: **Design gates CLOSED (G1-G6 each ACCEPTED, or explicitly `OPEN_DEFERABLE` with a recorded evidence trigger). The Wave 8 implementation inventory is AUTHORIZED below. Opening the dedicated `implement/wave-8` branch is NOT yet done — see "Wave 8 implementation branch — baseline pending" below.**
+Status: **Design gates CLOSED (G1-G6 each ACCEPTED, or explicitly `OPEN_DEFERABLE` with a recorded evidence trigger). The Wave 8 implementation inventory is AUTHORIZED below. `implement/wave-8` is OPEN (branched from `main` @ `30c48094`, after PR #305 promoted `implement/omega` into `main`). Implementation issues #296-#304 may now start, respecting each one's own sequencing note.**
 
-Scope kind: this document now has two parts. Part A (closed) was the design-gate sequencing scope; it is preserved below for the audit trail. Part B (new) is the authorized implementation inventory and the one open branch-baseline question that gates opening `implement/wave-8`.
+Scope kind: this document now has two parts. Part A (closed) was the design-gate sequencing scope; it is preserved below for the audit trail. Part B (closed) authorized the implementation inventory and resolved the branch-baseline question; `implement/wave-8` is the active integration branch for all Wave 8 implementation issues.
 
-`implement/omega` is **CLOSED** as the bounded `DG-J` design-integration line (head `f79f1313` at closeout). No further design-gate or implementation issue targets it.
+`implement/omega` is **CLOSED** as the bounded `DG-J` design-integration line (head `f79f1313` at design-gate closeout). It was then promoted into `main` by PR #305 (merge commit `30c48094`, tag `omega-stabilization-dgj-v1`) so that `implement/wave-8` could branch from `main` carrying the governance state it depends on. No further design-gate or implementation issue targets `implement/omega`.
 
 ---
 
@@ -57,25 +57,25 @@ Nine implementation issues are opened by this reconciliation, one per authorized
 
 ---
 
-## Wave 8 implementation branch — baseline pending (open maintainer decision)
+## Wave 8 implementation branch — baseline resolved, branch OPEN
 
-`AGENTS.md`'s Macro Wave convention branches `implement/<wave>` from `main`. Checking this mechanically at reconciliation time:
+The prior reconciliation (issue #288/PR #295) found `implement/omega` 61 commits ahead of `main` and flagged the resulting baseline ambiguity as an open maintainer decision between two options: (1) promote `implement/omega` into `main` first, or (2) branch `implement/wave-8` directly from `implement/omega`.
+
+Option 2 was attempted first and found **mechanically blocked**: the repository's own pre-push governance-boundary check (`tools/check_pre_push.py`) compares any branch that is not `governance/`/`admin/`/`issue-N`-named against `main`; a `implement/wave-8` rooted in `implement/omega` would always show the governance files as "changed" relative to `main` and fail to push.
+
+The maintainer selected **Option 1**. Executed as follows:
 
 ```text
-main HEAD                 = 60065771 (merge PR #230, 2026-10-01) -- unchanged since before Wave 7 closeout
-implement/omega HEAD      = f79f1313 (merge PR #294, 2026-10-04)
+tag omega-stabilization-dgj-v1  @ f79f1313 (implement/omega tip at DG-J closeout)
+PR #305 "[closeout] Promote Omega stabilization line and DG-J gates into main"
+  implement/omega -> main, merge commit 30c48094
+main HEAD (post-promotion)      = 30c48094
+implement/wave-8                = branched from main @ 30c48094, pushed clean
 ```
 
-`implement/omega` is 61 commits ahead of `main` and 0 behind. Those 61 commits include the entire Omega stabilization line (ADR-0054-0061, PR #254/#256-#278), the Wave 7-closeout governance reconciliation (PR #279), and all six `DG-J` gates (ADR-0062-0067, PR #289-#294) — **including the very ADRs that authorize this scope's implementation inventory above.** `AGENTS.md` has no defined promotion mechanism for `implement/omega`: "Wave Promotion: Only the final wave closeout PR promotes `implement/<wave>` into `main`" applies to macro wave branches, and `implement/omega` is explicitly not a wave (it is a stabilization/design-gate line).
+This mirrors the Wave 7 promotion pattern exactly (tag `wave-7-api-platform-transport-v1` @ `73d5f7b2` -> merge commit `5c8d9af`), applied to a non-wave stabilization line for the first time. `implement/wave-8` now exists and carries the full governance state (including this document) that its own implementation issues depend on.
 
-Branching `implement/wave-8` from `main`'s current head today would produce an implementation branch that is **missing the ADRs it is supposed to implement**. This is exactly the stop condition this governance issue names: "if `main`/`implement/omega` state has diverged such that the intended baseline is ambiguous." It has.
-
-This reconciliation does **not** resolve this by itself. Two concrete options exist for the maintainer to choose between (neither is defaulted here):
-
-1. **Promote `implement/omega` into `main` first**, via some closeout mechanism analogous to Wave 7's tag + merge (`wave-7-api-platform-transport-v1` @ `73d5f7b2` -> `5c8d9af`), then branch `implement/wave-8` from the resulting new `main` head. This keeps `AGENTS.md`'s "branched from `main`" convention literally true, but requires defining a promotion mechanism for a non-wave stabilization line that does not currently exist.
-2. **Branch `implement/wave-8` directly from `implement/omega`'s current head** (`f79f1313`), treating it as the de facto new baseline since it is the actual current state of `main`'s intended lineage. This needs no new promotion mechanism, but means `implement/wave-8` is not literally "branched from `main`" at the moment it opens.
-
-Until the maintainer picks one, **`implement/wave-8` is not created by this reconciliation.** The nine implementation issues above exist and are fully specified; their branch target is left as `implement/wave-8` (TBD) and none should be started before that branch exists.
+**Implementation issues #296-#304 may now start**, respecting each one's own sequencing note (`J15`/#304 still holds for `J09`/#297; `K13`/#299 still holds for `K12`/#298).
 
 ---
 
@@ -153,7 +153,7 @@ Real transport, not in-process test doubles (ADR-0056 applies). This vertical is
 ## Mutation policy
 
 - Each implementation issue produces code/tests for exactly one atom from Part B's table; it does not implement a second atom "while in there."
-- Branch `agent/issue-<N>-<slug>` (or `codex/issue-<N>-<slug>`) from `implement/wave-8` once that branch exists. Do not branch from or target `implement/omega` (closed) or `main` directly.
+- Branch `agent/issue-<N>-<slug>` (or `codex/issue-<N>-<slug>`) from `implement/wave-8`. Do not branch from or target `implement/omega` (closed) or `main` directly.
 - Do not mutate `SCOPE.md`, `ROADMAP.md`, `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md` or `OPEN_DECISIONS.md` as part of ordinary implementation work (`AGENTS.md` Governance boundary); only a governance-designated issue may, at the next reconciliation.
 - `J15`'s implementation issue carries an explicit start gate: HOLD until `J09`'s implementation issue is merged.
 - `K13`'s implementation issue carries an explicit start gate: HOLD until `K12`'s implementation issue is merged.
@@ -164,7 +164,7 @@ Real transport, not in-process test doubles (ADR-0056 applies). This vertical is
 
 Part A's exit criteria are **met**: G1-G6 are each `ACCEPTED` or explicitly `OPEN_DEFERABLE` with a recorded trigger (`J11`), and this governance-designated issue (#288) reconciled `CAPABILITY_DAG.md`/`CAPABILITY_MAP.md`/`ROADMAP.md`/`OPEN_DECISIONS.md` to the gates' actual resolutions.
 
-Part B remains open until: the maintainer resolves the branch-baseline question above, `implement/wave-8` opens, and each of the nine implementation issues is implemented and proven against its ADR. Golden E2E and Wave 8 closeout are defined only after that inventory is actually built.
+Part B's branch-baseline question is **resolved** and `implement/wave-8` is **open** (see above). Part B itself remains open until each of the nine implementation issues is implemented and proven against its ADR. Golden E2E and Wave 8 closeout are defined only after that inventory is actually built.
 
 ---
 
@@ -190,5 +190,4 @@ Stop and report rather than implement or decide unilaterally if:
 - an implementation issue cannot satisfy its cited ADR without weakening an already-accepted ADR (ADR-0050, ADR-0055, ADR-0057, ADR-0062 through ADR-0067, or any other);
 - an implementation issue is proposed for `J11` before its own design-gate ADR is accepted;
 - `J15` implementation work starts before `J09`'s implementation issue is merged, or `K13` before `K12`'s;
-- **the `main`/`implement/omega` baseline question above remains unresolved and someone attempts to open `implement/wave-8` by guessing one of the two options instead of the maintainer deciding** — this is the one standing escalation this reconciliation itself could not close;
 - a later issue would require implementing code to answer a design question (that is a design-gate issue's job, never concurrent with implementation).

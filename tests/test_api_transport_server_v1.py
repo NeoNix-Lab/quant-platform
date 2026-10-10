@@ -68,8 +68,8 @@ class ApiTransportEncodingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ApiTransportServerConfig(host="0.0.0.0")
 
-        config = ApiTransportServerConfig(host="0.0.0.0", allow_non_loopback=True)
-        self.assertEqual("0.0.0.0", config.host)
+        with self.assertRaises(ValueError):
+            ApiTransportServerConfig(host="0.0.0.0", allow_non_loopback=True)
 
     def test_success_response_is_lossless_consumer_result_payload(self):
         gateway = covered_gateway(batches())
@@ -250,15 +250,18 @@ class ApiTransportServerMaxSizeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(J02_MAX_WIRE_MESSAGE_BYTES, captured.get("max_size"))
 
     def test_j02_and_j05_agree_on_the_same_literal_wire_max_size(self):
-        """J05 cannot import this constant across the client/quant_platform
-        boundary (ADR-0050 decision 7) and must keep its own literal in sync."""
+        """J05/J15 cannot import this constant across the client/quant_platform
+        boundary (ADR-0050 decision 7, ADR-0067 s1) and must keep their own
+        literal in sync."""
         server_source = (
             ROOT / "src" / "quant_platform" / "application" / "api_transport_server.py"
         ).read_text(encoding="utf-8")
         tui_source = (ROOT / "clients" / "tui" / "market_data_tui.py").read_text(encoding="utf-8")
+        omega_source = (ROOT / "clients" / "omega" / "j15_remote_client.py").read_text(encoding="utf-8")
 
         self.assertIn("J02_MAX_WIRE_MESSAGE_BYTES = 16 * 1024 * 1024", server_source)
         self.assertIn("J02_MAX_WIRE_MESSAGE_BYTES = 16 * 1024 * 1024", tui_source)
+        self.assertIn("J02_MAX_WIRE_MESSAGE_BYTES = 16 * 1024 * 1024", omega_source)
 
 
 if __name__ == "__main__":

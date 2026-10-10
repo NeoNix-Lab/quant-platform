@@ -82,13 +82,17 @@ OWNERS = {
     "quant_platform.source_adapters.bybit": "source",
     "quant_platform.source_adapters.bybit_historical": "source",
     "quant_platform.source_adapters.bybit_live": "source",
+    "quant_platform.source_adapters.l2": "source",
     "quant_platform.application": "application",
+    "quant_platform.application.admitted_input": "application",
+    "quant_platform.application.governed_result_import": "application",
     "quant_platform.application.api_transport_server": "application",
     "quant_platform.application.backup_restore": "application",
     "quant_platform.application.bybit_import": "application",
     "quant_platform.application.bybit_live": "application",
     "quant_platform.application.composition": "application",
     "quant_platform.application.conformity": "application",
+    "quant_platform.application.durable_jobs": "application",
     "quant_platform.application.golden_conformity": "application",
     "quant_platform.application.golden_replay": "application",
     "quant_platform.application.golden_supervised": "application",
@@ -98,7 +102,11 @@ OWNERS = {
     "quant_platform.application.live_ingest_server": "application",
     "quant_platform.application.market_data": "application",
     "quant_platform.application.retention_deletion": "application",
+    "quant_platform.application.framed_result_transport": "application",
     "quant_platform.application.storage_relocation": "application",
+    "quant_platform.application.strategy_consumer": "application",
+    "quant_platform.application.training_consumer": "application",
+    "quant_platform.application.validation_consumer": "application",
     "quant_platform.application.wave6_golden": "application",
 }
 ALLOWED = {
@@ -128,7 +136,7 @@ ALLOWED = {
 }
 SHARED_STDLIB = {
     "__future__", "collections", "dataclasses", "datetime", "hashlib", "importlib",
-    "json", "re", "typing",
+    "json", "re", "typing", "datetime", "secrets", "ssl",
 }
 ACCESS_MODELS = {
     "CatalogDataset", "CatalogPartition", "DataRequest", "DataSlice",

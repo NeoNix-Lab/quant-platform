@@ -684,6 +684,7 @@ class FrozenContractsAreNotMutatedInPlace(unittest.TestCase):
             "coverage-manifest-v1.json",
             "dataset-manifest-v1.json",
             "dataset-manifest-v2.json",
+            "l2-book-event-v1.json",
             "partition-manifest-v1.json",
             "trade-v1.json",
         }
