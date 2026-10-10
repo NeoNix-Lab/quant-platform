@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from fractions import Fraction
 from pathlib import Path
+import random
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -39,6 +41,7 @@ from quant_platform.validation import (
     WalkForwardFold,
     evaluate_label,
 )
+from quant_platform.validation.labels import as_training_dependency_evidence
 
 
 FEATURE_ID_A = "feature-definition-v1:sha256:" + "a" * 64
@@ -154,6 +157,59 @@ def candidate(
     )
 
 
+def _baseline_sample_uniqueness_weights(candidates: tuple[SupervisedSampleCandidate, ...]) -> dict[str, str]:
+    """Pre-#314 oracle retained only to prove exact sweep equivalence."""
+    intervals: dict[str, CoverageInterval] = {}
+    for item in candidates:
+        target = as_training_dependency_evidence(item.label)
+        if target.support is None or target.support.start >= target.support.end:
+            intervals[item.sample_id] = CoverageInterval(item.decision_time, item.decision_time)
+        else:
+            intervals[item.sample_id] = target.support
+
+    weights: dict[str, str] = {}
+    for sample_id, sample_interval in intervals.items():
+        duration = sample_interval.end.epoch_ns - sample_interval.start.epoch_ns
+        if duration <= 0:
+            weights[sample_id] = "1"
+            continue
+        boundaries = {sample_interval.start.epoch_ns, sample_interval.end.epoch_ns}
+        for other in intervals.values():
+            if other.start < sample_interval.end and sample_interval.start < other.end:
+                boundaries.add(max(sample_interval.start.epoch_ns, other.start.epoch_ns))
+                boundaries.add(min(sample_interval.end.epoch_ns, other.end.epoch_ns))
+        total = Fraction(0, 1)
+        ordered = sorted(boundaries)
+        for left, right in zip(ordered, ordered[1:]):
+            concurrency = sum(
+                1
+                for other in intervals.values()
+                if other.start.epoch_ns <= left and right <= other.end.epoch_ns
+            )
+            if concurrency <= 0:
+                raise LearningError("sample uniqueness interval has zero concurrency")
+            total += Fraction(right - left, duration) * Fraction(1, concurrency)
+        weights[sample_id] = str(total.numerator) if total.denominator == 1 else f"{total.numerator}/{total.denominator}"
+    return weights
+
+
+def _uniqueness_candidate(sample_id: str, *, start_ns: int, end_ns: int) -> SupervisedSampleCandidate:
+    start = Instant(start_ns).isoformat()
+    end = Instant(end_ns).isoformat()
+    return candidate(
+        sample_id,
+        start,
+        features=(
+            feature(
+                FEATURE_ID_A,
+                observation_identity=f"uniqueness-{sample_id}",
+                support=("2026-01-01T00:00:00Z", start),
+            ),
+        ),
+        target=label(sample_id[-1], horizon=(start, end), causal_available_at=end),
+    )
+
+
 class SupervisedInputV1Tests(unittest.TestCase):
     def test_admitted_projection_is_deterministic_and_ordered(self):
         later = candidate("sample-b", "2026-01-01T00:20:00Z")
@@ -183,7 +239,10 @@ class SupervisedInputV1Tests(unittest.TestCase):
         self.assertEqual(("sample-a", "sample-b"), tuple(sample.sample_id for sample in first.samples))
         self.assertEqual(ProjectionSide.TRAIN, first.samples[0].side)
         self.assertEqual(first.stable_dict(), second.stable_dict())
-        self.assertTrue(first.identity.startswith("supervised-projection-v1:sha256:"))
+        self.assertEqual(
+            "supervised-projection-v1:sha256:8b2df408204eb1a2318e452d7b81721fae32bbd7f5a6788ed605ae66985df187",
+            first.identity,
+        )
         self.assertEqual((FEATURE_ID_A,), first.feature_schema)
         self.assertEqual((("1",), ("1",)), first.feature_matrix())
         self.assertEqual(("1/100", "1/100"), first.target_vector())
@@ -439,6 +498,43 @@ class SupervisedInputV1Tests(unittest.TestCase):
             {"sample-e": "1"},
             _sample_uniqueness_weights((zero_duration_candidate,)),
         )
+
+    def test_sample_uniqueness_sweep_matches_baseline_oracle_for_randomized_intervals(self):
+        origin = instant("2026-01-01T00:00:01Z").epoch_ns
+        random_source = random.Random(314)
+        for case in range(12):
+            candidates = []
+            for index in range(24):
+                start = origin + random_source.randrange(0, 3_600) * 1_000_000_000
+                candidates.append(
+                    _uniqueness_candidate(
+                        f"random-{case}-{index}",
+                        start_ns=start,
+                        end_ns=start + random_source.randrange(1, 300) * 1_000_000_000,
+                    )
+                )
+            candidates = tuple(candidates)
+            self.assertEqual(
+                _baseline_sample_uniqueness_weights(candidates),
+                _sample_uniqueness_weights(candidates),
+            )
+
+    def test_sample_uniqueness_sweep_sorts_boundaries_once_for_many_samples(self):
+        origin = instant("2026-01-01T00:00:01Z").epoch_ns
+        candidates = tuple(
+            _uniqueness_candidate(
+                f"sample-{index}",
+                start_ns=origin + index * 2_000_000_000,
+                end_ns=origin + (index * 2 + 1) * 1_000_000_000,
+            )
+            for index in range(128)
+        )
+
+        with patch("builtins.sorted", wraps=sorted) as sorted_boundaries:
+            weights = _sample_uniqueness_weights(candidates)
+
+        self.assertEqual(128, len(weights))
+        self.assertLessEqual(sorted_boundaries.call_count, 2)
 
 
 if __name__ == "__main__":

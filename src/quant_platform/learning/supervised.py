@@ -563,29 +563,36 @@ def _sample_uniqueness_weights(candidates: tuple[SupervisedSampleCandidate, ...]
             intervals[candidate.sample_id] = target.support
 
     weights: dict[str, str] = {}
+    totals: dict[str, Fraction] = {}
+    events: dict[int, list[tuple[str, int | None]]] = {}
     for sample_id, interval in intervals.items():
         duration = interval.end.epoch_ns - interval.start.epoch_ns
         if duration <= 0:
             weights[sample_id] = "1"
             continue
-        boundaries = {interval.start.epoch_ns, interval.end.epoch_ns}
-        for other in intervals.values():
-            if other.start < interval.end and interval.start < other.end:
-                boundaries.add(max(interval.start.epoch_ns, other.start.epoch_ns))
-                boundaries.add(min(interval.end.epoch_ns, other.end.epoch_ns))
-        ordered = sorted(boundaries)
-        total = Fraction(0, 1)
-        for left, right in zip(ordered, ordered[1:]):
-            if left == right:
-                continue
-            concurrency = sum(
-                1
-                for other in intervals.values()
-                if other.start.epoch_ns <= left and right <= other.end.epoch_ns
-            )
-            if concurrency <= 0:
-                raise LearningError("sample uniqueness interval has zero concurrency")
-            total += Fraction(right - left, duration) * Fraction(1, concurrency)
+        totals[sample_id] = Fraction(0, 1)
+        events.setdefault(interval.start.epoch_ns, []).append((sample_id, duration))
+        events.setdefault(interval.end.epoch_ns, []).append((sample_id, None))
+
+    active: dict[str, int] = {}
+    boundaries = sorted(events)
+    for left, right in zip(boundaries, boundaries[1:]):
+        for sample_id, duration in events[left]:
+            if duration is None:
+                active.pop(sample_id, None)
+        for sample_id, duration in events[left]:
+            if duration is not None:
+                active[sample_id] = duration
+        if left == right:
+            continue
+        concurrency = len(active)
+        if concurrency <= 0:
+            continue
+        segment = right - left
+        for sample_id, duration in active.items():
+            totals[sample_id] += Fraction(segment, duration * concurrency)
+
+    for sample_id, total in totals.items():
         weights[sample_id] = _fraction_to_text(total)
     return weights
 

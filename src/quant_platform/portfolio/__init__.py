@@ -515,6 +515,7 @@ class PortfolioLedger:
     transactions: tuple[LedgerTransaction, ...]
     updated_at: Instant
     consumed_fill_ids: tuple[str, ...] = ()
+    _identity_cache: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "initial_capital", _decimal(self.initial_capital, "initial_capital", allow_zero=False))
@@ -699,7 +700,11 @@ class PortfolioLedger:
 
     @property
     def identity(self) -> str:
-        return f"{LEDGER_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(self.stable_dict())}"
+        identity = self._identity_cache
+        if identity is None:
+            identity = f"{LEDGER_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(self.stable_dict())}"
+            object.__setattr__(self, "_identity_cache", identity)
+        return identity
 
 
 __all__ = [
