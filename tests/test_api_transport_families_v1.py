@@ -64,6 +64,7 @@ class Socket(_Socket):
         super().__init__(CERTIFICATE_DER)
         self.messages = iter(messages)
         self.responses = []
+        self.wire_responses = []
         self.on_message = on_message
 
     async def __anext__(self):
@@ -76,6 +77,7 @@ class Socket(_Socket):
         return message
 
     async def send(self, message):
+        self.wire_responses.append(message)
         self.responses.append(json.loads(message))
 
 
@@ -272,6 +274,96 @@ class FamilyResponseAndBodyTests(unittest.IsolatedAsyncioTestCase):
 
     async def exchange(self, handlers, **overrides):
         return await self.exchange_text(json.dumps(envelope(**overrides)), handlers)
+
+    async def test_non_finite_result_and_error_context_are_typed_integrity_failures(self):
+        def reject_constant(value):
+            raise ValueError(f"non-JSON constant: {value}")
+
+        for value in (float("nan"), float("inf"), -float("inf")):
+            for location in ("result", "executor error", "decoder error"):
+                with self.subTest(value=value, location=location):
+                    handlers, decoder, executor = route()
+                    if location == "result":
+                        executor.side_effect = lambda request: {"nested": [{"value": value}]}
+                    else:
+                        error = transport.ConsumerApiError(
+                            transport.ConsumerErrorCode.INVALID_REQUEST, "error",
+                            context={"nested": [{"value": value}]},
+                        )
+                        (decoder if location == "decoder error" else executor).side_effect = error
+                    socket, _ = await self.exchange(handlers)
+                    response = json.loads(socket.wire_responses[0], parse_constant=reject_constant)
+                    self.assertEqual("integrity_failure", response["error"]["code"])
+                    self.assertEqual("opaque-request-id", response["request_id"])
+
+    async def test_reflected_unknown_family_cannot_exceed_the_wire_bound(self):
+        payload = envelope(message_family="x" * (transport.J02_MAX_WIRE_MESSAGE_BYTES // 2 + 1))
+        text = json.dumps(payload)
+        self.assertLess(len(text.encode("utf-8")), transport.J02_MAX_WIRE_MESSAGE_BYTES)
+        socket, _ = await self.exchange_text(text, {})
+        self.assertLessEqual(
+            len(socket.wire_responses[0].encode("utf-8")), transport.J02_MAX_WIRE_MESSAGE_BYTES,
+        )
+        self.assertEqual("result_too_large", socket.responses[0]["error"]["code"])
+
+    async def test_oversized_failure_envelope_is_also_bounded(self):
+        handlers, _, executor = route()
+        executor.side_effect = lambda request: {"blob": "x" * transport.J02_MAX_WIRE_MESSAGE_BYTES}
+        # UTF-8 input fits, but ASCII canonical escaping expands the echoed ID.
+        text = json.dumps(envelope(request_id="é" * (transport.J02_MAX_WIRE_MESSAGE_BYTES // 3)), ensure_ascii=False)
+        self.assertLess(len(text.encode("utf-8")), transport.J02_MAX_WIRE_MESSAGE_BYTES)
+        socket, _ = await self.exchange_text(text, handlers)
+        self.assertLessEqual(
+            len(socket.wire_responses[0].encode("utf-8")), transport.J02_MAX_WIRE_MESSAGE_BYTES,
+        )
+        self.assertEqual("result_too_large", socket.responses[0]["error"]["code"])
+        self.assertEqual(FAMILY, socket.responses[0]["message_family"])
+        self.assertEqual(RESPONSE_VERSION, socket.responses[0]["schema_version"])
+        self.assertIsNone(socket.responses[0]["request_id"])
+
+    async def test_unsupported_headers_have_bounded_payload_free_security_evidence(self):
+        configuration = security(principal=transport.RemoteJ02Principal("peer", frozenset({SCOPE})))
+        configuration.evidence_log._max_events = 2
+        handlers, decoder, executor = route()
+        messages = [json.dumps(envelope(**header)) for header in (
+            {"message_family": "secret-unknown"}, {"schema_version": "secret-version"},
+            {"operation": []},
+        )]
+        socket = Socket(messages)
+        await transport.handle_api_transport_connection(
+            socket, execute=MagicMock(), remote_security=configuration, family_handlers=handlers,
+        )
+        self.assertEqual(3, len(socket.responses))
+        self.assertEqual(2, len(configuration.evidence_log.events))
+        for event in configuration.evidence_log.events:
+            self.assertEqual("authenticated_connection", event.requested_scope)
+            self.assertEqual("unsupported_message_header", event.terminal_close_reason)
+            self.assertEqual("allow", event.decision)
+            self.assertNotIn("secret", repr(event))
+        decoder.assert_not_called()
+        executor.assert_not_called()
+
+    async def test_training_registration_requires_both_grants_with_the_hook(self):
+        family = "j02-training-v1"
+        handlers, decoder, executor, hook = self.additional_route()
+        handler = next(iter(handlers.values()))
+        handler = transport.J02FamilyHandler(
+            "j02.training.evaluate", family + "-response-v1", decoder, executor,
+            additional_scopes=hook,
+        )
+        handlers = {(family, family + "-request-v1", "train_evaluate"): handler}
+        text = json.dumps(envelope(
+            message_family=family, schema_version=family + "-request-v1",
+            operation="train_evaluate", request={"register": True},
+        ))
+        socket, _ = await self.exchange_text(text, handlers, frozenset({"j02.training.evaluate"}))
+        self.assertEqual([(1008, "policy denied")], socket.close_calls)
+        executor.assert_not_called()
+        socket, _ = await self.exchange_text(
+            text, handlers, frozenset({"j02.training.evaluate", "j02.training.register"}),
+        )
+        self.assertEqual("ok", socket.responses[0]["status"])
+        executor.assert_called_once()
 
     # -- P2: nothing escapes after the handler ---------------------------------
 
@@ -482,6 +574,35 @@ class FamilyResponseAndBodyTests(unittest.IsolatedAsyncioTestCase):
 
 class FamilyCompositionTests(unittest.IsolatedAsyncioTestCase):
     """P1 and the startup-time composition findings."""
+
+    async def test_training_route_without_additional_scope_hook_fails_closed(self):
+        family = "j02-training-v1"
+        decoder = MagicMock(side_effect=lambda body: dict(body))
+        executor = MagicMock(side_effect=lambda request: request)
+        handler = transport.J02FamilyHandler(
+            "j02.training.evaluate", family + "-response-v1", decoder, executor,
+        )
+        handlers = {(family, family + "-request-v1", "train_evaluate"): handler}
+        configuration = security(principal=transport.RemoteJ02Principal(
+            "peer", frozenset({"j02.training.evaluate"}),
+        ))
+        socket = Socket([json.dumps(envelope(
+            message_family=family, schema_version=family + "-request-v1",
+            operation="train_evaluate", request={"register": True},
+        ))])
+        with self.assertRaisesRegex(ValueError, "additional_scopes"):
+            await transport.handle_api_transport_connection(
+                socket, execute=MagicMock(), remote_security=configuration, family_handlers=handlers,
+            )
+        with patch.object(transport.websockets, "serve") as serve:
+            with self.assertRaisesRegex(ValueError, "additional_scopes"):
+                await transport.run_api_transport_server(
+                    transport.ApiTransportServerConfig(remote_security=configuration),
+                    execute=MagicMock(), family_handlers=handlers,
+                )
+            serve.assert_not_called()
+        decoder.assert_not_called()
+        executor.assert_not_called()
 
     async def test_family_routes_are_refused_without_remote_security(self):
         handlers, decoder, executor = route()

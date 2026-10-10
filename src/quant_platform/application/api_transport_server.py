@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import math
 import secrets
 import ssl
 from typing import Any
@@ -411,15 +412,26 @@ def handle_api_transport_message(
     original = response
     while True:
         try:
+            if family:
+                _require_finite_family_json(response)
             encoded = canonical_bytes(response, profile="sorted-compact-ascii-v1", allow_nan=True)
-            if family and response is original and len(encoded) > J02_MAX_WIRE_MESSAGE_BYTES:
+            if family and len(encoded) > J02_MAX_WIRE_MESSAGE_BYTES:
                 raise _ResponseTooLarge
             return encoded.decode("utf-8")
         except _ResponseTooLarge:
             # J02 v1 has RESULT_TOO_LARGE for this; a 1009 close is not typed.
+            reflected = dict(response)
+            if response is not original:
+                if response.get("request_id") is not None:
+                    reflected["request_id"] = None
+                else:
+                    reflected = {}
             response = _family_failure(
-                original, ConsumerErrorCode.RESULT_TOO_LARGE, _RESULT_TOO_LARGE_MESSAGE,
+                reflected,
+                ConsumerErrorCode.RESULT_TOO_LARGE, _RESULT_TOO_LARGE_MESSAGE,
             )
+            # If reflected headers overflow the failure, drop the ID first,
+            # retaining the family/version when they fit, then other headers.
         except Exception:
             # Only a family result is server-composed arbitrary data; v1 keeps
             # its existing behavior for frozen Consumer API types.
@@ -432,6 +444,19 @@ def handle_api_transport_message(
 
 class _ResponseTooLarge(Exception):
     pass
+
+
+def _require_finite_family_json(value: Any) -> None:
+    """Reject non-JSON numbers without changing the frozen v1 encoder profile."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("family responses require finite JSON numbers")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _require_finite_family_json(key)
+            _require_finite_family_json(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _require_finite_family_json(item)
 
 
 def _build_direct_family_response(
@@ -511,6 +536,10 @@ def _validate_family_routes(
             raise ValueError("family route must preserve its declared header scope and version")
         if route.response_schema_version != f"{family}-response-v1":
             raise ValueError("family route response_schema_version must be <family>-response-v1")
+        if family == "j02-training-v1" and route.additional_scopes is None:
+            # ADR-0069 section 3: the codec must declare the body-dependent
+            # register grant. Missing that hook must not silently grant it.
+            raise ValueError("training routes require an additional_scopes hook")
 
 
 async def handle_api_transport_connection(
@@ -557,6 +586,14 @@ async def handle_api_transport_connection(
         if required_scope is not None and remote_security is not None:
             if not await _authorize_remote_connection(
                 websocket, remote_security, session_id=session_id, required_scope=required_scope
+            ):
+                return
+        elif parsed.family and remote_security is not None:
+            # An unsupported header has no operation grant to audit. Record
+            # only authenticated connection evidence, never request payload.
+            if not await _authorize_remote_connection(
+                websocket, remote_security, session_id=session_id, required_scope=None,
+                unsupported_header=True,
             ):
                 return
         if not parsed.family:
@@ -771,6 +808,7 @@ async def _authorize_remote_connection(
     websocket: Any, security: RemoteJ02SecurityConfig, *, session_id: str,
     required_scope: str | None = J02_MARKET_DATA_READ_SCOPE,
     record_allow: bool = True,
+    unsupported_header: bool = False,
 ) -> bool:
     """Authorize an already TLS-authenticated peer before JSON decoding starts."""
     ssl_object = websocket.transport.get_extra_info("ssl_object")
@@ -792,6 +830,7 @@ async def _authorize_remote_connection(
         await websocket.close(code=1008, reason="policy denied")
     elif not record_allow or (
         required_scope is None and J02_MARKET_DATA_READ_SCOPE not in principal.scopes
+        and not unsupported_header
     ):
         # An allowed recheck, or the scope-less admission of a family-only
         # principal, grants no operation: the per-request scope row is the
@@ -810,9 +849,15 @@ async def _authorize_remote_connection(
             # A connection admission is not an operation grant: it keeps the
             # legacy admission label, and family-only peers record their real
             # requested scope at the message boundary.
-            requested_scope=required_scope or J02_MARKET_DATA_READ_SCOPE,
+            requested_scope=(
+                "authenticated_connection" if unsupported_header
+                else required_scope or J02_MARKET_DATA_READ_SCOPE
+            ),
             decision="allow" if allowed else "deny",
-            terminal_close_reason="application_session_authorized" if allowed else "policy_denied",
+            terminal_close_reason=(
+                "unsupported_message_header" if allowed and unsupported_header
+                else "application_session_authorized" if allowed else "policy_denied"
+            ),
         )
     )
     return allowed
