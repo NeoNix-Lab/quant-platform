@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 import hashlib
-import json
 from typing import Any, Iterable
 
 from ..data.models import (
@@ -19,6 +18,7 @@ from ..data.models import (
     TradeRecord,
     _identifier,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 class LifecyclePolicy(str, Enum):
@@ -372,7 +372,7 @@ LiveStreamEvent = LiveTradeEvent | LiveSessionEvent | LiveGapEvent
 
 
 def _fingerprint(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    encoded = canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=True)
     return hashlib.sha256(encoded).hexdigest()
 
 

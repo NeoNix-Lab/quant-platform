@@ -34,7 +34,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 import hashlib
-import json
 import re
 from typing import Any
 
@@ -45,6 +44,7 @@ from .pressure import (
     PressureRestrictions,
     PressureState,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 PROTECTION_UNIT_IDENTITY_DOMAIN = "protection-unit-identity-v1"
@@ -980,13 +980,7 @@ def _enum(enum_type: Any, value: Any, field_name: str) -> Any:
 
 
 def _canonical_json(payload: Any) -> str:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
+    return canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 def _canonical_fingerprint(payload: Any) -> str:

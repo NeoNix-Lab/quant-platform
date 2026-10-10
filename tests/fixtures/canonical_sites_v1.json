@@ -1,0 +1,979 @@
+{
+  "baseline": "731ae97d9fecda2bd8550da289c62c7d439b5750",
+  "sites": [
+    {
+      "path": "src/quant_platform/access/models.py",
+      "ordinal": 1,
+      "scope": "_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "value"
+    },
+    {
+      "path": "src/quant_platform/application/admitted_input.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "value"
+    },
+    {
+      "path": "src/quant_platform/application/api_transport_server.py",
+      "ordinal": 1,
+      "scope": "handle_api_transport_message",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "response"
+    },
+    {
+      "path": "src/quant_platform/application/backup_restore.py",
+      "ordinal": 1,
+      "scope": "_canonical_document_sha256",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "document"
+    },
+    {
+      "path": "src/quant_platform/application/backup_restore.py",
+      "ordinal": 2,
+      "scope": "_atomic_write_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "document"
+    },
+    {
+      "path": "src/quant_platform/application/bybit_import.py",
+      "ordinal": 1,
+      "scope": "encode_record",
+      "profile": "ordered-compact-ascii-line-v1",
+      "options": {
+        "ensure_ascii": true,
+        "separators": [
+          ",",
+          ":"
+        ]
+      },
+      "argument_expression": "ordered"
+    },
+    {
+      "path": "src/quant_platform/application/durable_jobs.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "value"
+    },
+    {
+      "path": "src/quant_platform/application/framed_result_transport.py",
+      "ordinal": 1,
+      "scope": "frame_complete_result",
+      "profile": "rfc8785-v1",
+      "options": {},
+      "argument_expression": "result"
+    },
+    {
+      "path": "src/quant_platform/application/framed_result_transport.py",
+      "ordinal": 2,
+      "scope": "_transfer_id",
+      "profile": "rfc8785-v1",
+      "options": {},
+      "argument_expression": "{\n                \"logical_result_identity\": logical_result_identity,\n                \"message_family\": J14_MESSAGE_FAMILY,\n                \"payload_sha256\": payload_sha256,\n                \"schema_version\": J14_SCHEMA_VERSION,\n            }"
+    },
+    {
+      "path": "src/quant_platform/application/golden_supervised.py",
+      "ordinal": 1,
+      "scope": "_sha256",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/application/governed_result_import.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "value"
+    },
+    {
+      "path": "src/quant_platform/application/h01_composition.py",
+      "ordinal": 1,
+      "scope": "bucket_observation_identity",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/application/live_gap_orchestration.py",
+      "ordinal": 1,
+      "scope": "_start_key_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ]
+      },
+      "argument_expression": "key.stable_dict()"
+    },
+    {
+      "path": "src/quant_platform/application/market_data.py",
+      "ordinal": 1,
+      "scope": "NormalizedMarketDataQuery.request_identity",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "self.stable_dict()"
+    },
+    {
+      "path": "src/quant_platform/application/strategy_consumer.py",
+      "ordinal": 1,
+      "scope": "StrategyComposeRequest.request_identity",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "self.canonical_payload()"
+    },
+    {
+      "path": "src/quant_platform/application/training_consumer.py",
+      "ordinal": 1,
+      "scope": "SupervisedTrainEvaluateRequest.request_identity",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "self.canonical_payload()"
+    },
+    {
+      "path": "src/quant_platform/application/validation_consumer.py",
+      "ordinal": 1,
+      "scope": "_request_identity",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/application/wave6_golden.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/data/manifests.py",
+      "ordinal": 1,
+      "scope": "_persist_manifest",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "document"
+    },
+    {
+      "path": "src/quant_platform/data/models.py",
+      "ordinal": 1,
+      "scope": "l2_book_event_identity_v1",
+      "profile": "sorted-compact-utf8-v1",
+      "options": {
+        "ensure_ascii": false,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "sort_keys": true
+      },
+      "argument_expression": "event.stable_dict()"
+    },
+    {
+      "path": "src/quant_platform/data/publication_catalog.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "value"
+    },
+    {
+      "path": "src/quant_platform/data/quality_lifecycle.py",
+      "ordinal": 1,
+      "scope": "semantic_assessment_signature",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/data/quality_lifecycle.py",
+      "ordinal": 2,
+      "scope": "_json_key",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "_normalize(value)"
+    },
+    {
+      "path": "src/quant_platform/data/repair.py",
+      "ordinal": 1,
+      "scope": "write_convergence_provenance",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "provenance.stable_dict()"
+    },
+    {
+      "path": "src/quant_platform/data/repair.py",
+      "ordinal": 2,
+      "scope": "_canonical_hash",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/execution/__init__.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "_canonical_value(payload)"
+    },
+    {
+      "path": "src/quant_platform/experiments/accounting.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "_canonical_value(payload)"
+    },
+    {
+      "path": "src/quant_platform/experiments/identities.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/experiments/persistence.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "value"
+    },
+    {
+      "path": "src/quant_platform/features/artifacts.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/features/artifacts.py",
+      "ordinal": 2,
+      "scope": "_canonical_key",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/features/definitions.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/features/definitions.py",
+      "ordinal": 2,
+      "scope": "_stable_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "allow_nan": false
+      },
+      "argument_expression": "value"
+    },
+    {
+      "path": "src/quant_platform/features/definitions.py",
+      "ordinal": 3,
+      "scope": "FeatureDefinition.canonical_utf8_serialization",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "self.canonical_payload()"
+    },
+    {
+      "path": "src/quant_platform/learning/supervised.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "_canonical_value(payload)"
+    },
+    {
+      "path": "src/quant_platform/learning/training.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "_canonical_value(payload)"
+    },
+    {
+      "path": "src/quant_platform/operations/checkpoint.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/operations/pressure.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/operations/protection.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/operations/recovery.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/operations/relocation.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/operations/retention.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/portfolio/__init__.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "_canonical_value(payload)"
+    },
+    {
+      "path": "src/quant_platform/replay/__init__.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "_canonical_value(payload)"
+    },
+    {
+      "path": "src/quant_platform/representation/candles.py",
+      "ordinal": 1,
+      "scope": "CandleDefinitionV1.canonical_utf8_serialization",
+      "profile": "sorted-compact-utf8-v1",
+      "options": {
+        "ensure_ascii": false,
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ]
+      },
+      "argument_expression": "self.canonical_payload"
+    },
+    {
+      "path": "src/quant_platform/representation/candles.py",
+      "ordinal": 2,
+      "scope": "_result_identity",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/representation/footprints.py",
+      "ordinal": 1,
+      "scope": "FootprintDefinitionV1.canonical_utf8_serialization",
+      "profile": "sorted-compact-utf8-v1",
+      "options": {
+        "ensure_ascii": false,
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ]
+      },
+      "argument_expression": "self.canonical_payload"
+    },
+    {
+      "path": "src/quant_platform/representation/footprints.py",
+      "ordinal": 2,
+      "scope": "_result_identity",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/research/events.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/research/events.py",
+      "ordinal": 2,
+      "scope": "EventSpec.canonical_utf8_serialization",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "self.canonical_payload()"
+    },
+    {
+      "path": "src/quant_platform/research/hypothesis.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/research/hypothesis.py",
+      "ordinal": 2,
+      "scope": "HypothesisSpec.canonical_utf8_serialization",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "self.canonical_payload()"
+    },
+    {
+      "path": "src/quant_platform/research/outcomes.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/research/outcomes.py",
+      "ordinal": 2,
+      "scope": "OutcomeSpec.canonical_utf8_serialization",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "self.canonical_payload()"
+    },
+    {
+      "path": "src/quant_platform/research/studies.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/research/studies.py",
+      "ordinal": 2,
+      "scope": "EventStudySpec.canonical_utf8_serialization",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "self.canonical_payload()"
+    },
+    {
+      "path": "src/quant_platform/research/studies.py",
+      "ordinal": 3,
+      "scope": "ParameterSweepSpec.canonical_utf8_serialization",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "self.canonical_payload()"
+    },
+    {
+      "path": "src/quant_platform/source_adapters/bybit_live.py",
+      "ordinal": 1,
+      "scope": "_stable_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true
+      },
+      "argument_expression": "document"
+    },
+    {
+      "path": "src/quant_platform/strategy/__init__.py",
+      "ordinal": 1,
+      "scope": "_canonical_json",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "_canonical_value(payload)"
+    },
+    {
+      "path": "src/quant_platform/validation/labels.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/validation/lockbox.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    },
+    {
+      "path": "src/quant_platform/validation/robustness.py",
+      "ordinal": 1,
+      "scope": "_canonical_fingerprint",
+      "profile": "sorted-compact-ascii-v1",
+      "options": {
+        "sort_keys": true,
+        "separators": [
+          ",",
+          ":"
+        ],
+        "ensure_ascii": true,
+        "allow_nan": false
+      },
+      "argument_expression": "payload"
+    }
+  ],
+  "raw_exceptions": [
+    [
+      "src/quant_platform/application/bybit_live.py",
+      "json.dumps({\"op\": \"subscribe\", \"args\": [SUPPORTED_TOPIC]})"
+    ],
+    [
+      "src/quant_platform/application/live_gap_orchestration.py",
+      "json.dumps(\n        {\n            \"state\": GAP_RECORDED_NON_COMPLETE,\n            \"repair_state\": evaluation.interval_state,\n            \"repair_source\": evaluation.source_id,\n            \"reason\": interval.reason,\n            \"last_durable_key\": interval.start_key.stable_dict(),\n            \"recent_window_records\": interval.recent_window_records,\n            \"buffered_ws_records\": interval.buffered_ws_records,\n            \"evaluation_reasons\": list(evaluation.reasons),\n        },\n        sort_keys=True,\n    )"
+    ],
+    [
+      "src/quant_platform/application/retention_deletion.py",
+      "json.dumps(decision.candidate.stable_dict(), sort_keys=True)"
+    ],
+    [
+      "src/quant_platform/application/retention_deletion.py",
+      "json.dumps(decision.stable_dict(), sort_keys=True)"
+    ],
+    [
+      "src/quant_platform/application/retention_deletion.py",
+      "json.dumps(result.stable_dict(), sort_keys=True)"
+    ],
+    [
+      "src/quant_platform/application/storage_relocation.py",
+      "json.dumps(record.dataset_identity.stable_dict(), sort_keys=True)"
+    ]
+  ]
+}

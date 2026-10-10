@@ -124,13 +124,13 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from fractions import Fraction
 import hashlib
-import json
 import re
 from types import MappingProxyType
 from typing import Any, ClassVar
 
 from ..features import Instant
 from .events import DetectedEvent
+from quant_platform.canonical import canonical_bytes
 
 
 OUTCOME_SPEC_IDENTITY_DOMAIN = "outcome-spec-v1"
@@ -187,13 +187,7 @@ def _semantic_version(value: Any, field_name: str = "semantic_version") -> str:
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -429,13 +423,7 @@ class OutcomeSpec:
 
     @property
     def canonical_utf8_serialization(self) -> str:
-        return json.dumps(
-            self.canonical_payload(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
+        return canonical_bytes(self.canonical_payload(), profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
     @property
     def spec_id(self) -> OutcomeSpecId:

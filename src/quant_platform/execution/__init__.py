@@ -20,7 +20,6 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 import hashlib
-import json
 import re
 from types import MappingProxyType
 from typing import Any
@@ -39,6 +38,7 @@ from ..strategy import (
     StrategySpec,
     TradeHistoryEvidence,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 ORDER_IDENTITY_DOMAIN = "order-v1"
@@ -201,13 +201,7 @@ def _canonical_value(value: Any) -> Any:
 
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
-    return json.dumps(
-        _canonical_value(payload),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
+    return canonical_bytes(_canonical_value(payload), profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import json
 from typing import Any
 
+from quant_platform.canonical import canonical_bytes
 from quant_platform.experiments import ExperimentRepository
 from quant_platform.learning import (
     LearningError,
@@ -50,9 +50,7 @@ class SupervisedTrainEvaluateRequest:
 
     @property
     def request_identity(self) -> str:
-        encoded = json.dumps(
-            self.canonical_payload(), sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
-        ).encode("utf-8")
+        encoded = canonical_bytes(self.canonical_payload(), profile="sorted-compact-ascii-v1", allow_nan=False)
         return f"{SUPERVISED_TRAIN_EVALUATE_REQUEST_IDENTITY_DOMAIN}:sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 

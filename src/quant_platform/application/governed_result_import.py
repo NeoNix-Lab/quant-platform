@@ -16,6 +16,7 @@ import json
 import sqlite3
 from typing import Any
 
+from quant_platform.canonical import canonical_bytes
 from quant_platform.experiments.accounting import TrialAttemptResult, record_trial_attempt
 from quant_platform.experiments.identities import RunIdentity
 from quant_platform.experiments.persistence import ArtifactRegistration, ExperimentRepository, RunRecord, RunState
@@ -366,7 +367,7 @@ def _json_value(value: Any, field: str) -> Any:
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 __all__ = [

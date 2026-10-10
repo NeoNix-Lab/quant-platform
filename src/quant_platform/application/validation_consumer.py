@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import json
 import math
 from typing import Any
 
+from quant_platform.canonical import canonical_bytes
 from quant_platform.data.models import InvalidRequest
 from quant_platform.validation import (
     CandidateClassificationResult,
@@ -196,7 +196,7 @@ def _candidate_payload(candidate: ValidationCandidate) -> dict[str, Any]:
 
 
 def _request_identity(domain: str, payload: dict[str, Any]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return f"{domain}:sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 

@@ -29,7 +29,6 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from fractions import Fraction
 import hashlib
-import json
 import re
 from typing import Any
 
@@ -43,6 +42,7 @@ from .definitions import (
     OutputContract,
     OutputValueKind,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 FEATURE_ARTIFACT_IDENTITY_DOMAIN = "feature-artifact-v1"
@@ -91,9 +91,7 @@ def _positive_int(value: Any, field_name: str) -> int:
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -102,7 +100,7 @@ def _canonical_key(payload: Mapping[str, Any]) -> str:
     ordering, so caller-supplied collections canonicalize regardless of the
     order they were passed in."""
 
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=True).decode("utf-8")
 
 
 # ---------------------------------------------------------------------------

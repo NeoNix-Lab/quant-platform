@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-import json
 from typing import Any, Mapping, Sequence
 
 from .identities import (
@@ -20,6 +19,7 @@ from .identities import (
     StudyIdentity,
     TrialIdentity,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 class ExperimentPersistenceError(RuntimeError):
@@ -474,7 +474,7 @@ def _normalize_failure_details(value: Mapping[str, Any] | None) -> Mapping[str, 
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 def _jsonb(value: Any) -> Any:

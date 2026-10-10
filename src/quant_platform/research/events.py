@@ -79,7 +79,6 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 import hashlib
-import json
 import re
 from types import MappingProxyType
 from typing import Any, ClassVar
@@ -97,6 +96,7 @@ from ..features import (
 )
 from ..data.models import InvalidRequest
 from .hypothesis import HypothesisSpecError, HypothesisSpecId
+from quant_platform.canonical import canonical_bytes
 
 
 EVENT_SPEC_IDENTITY_DOMAIN = "event-spec-v1"
@@ -140,13 +140,7 @@ def _semantic_version(value: Any, field_name: str = "semantic_version") -> str:
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -347,13 +341,7 @@ class EventSpec:
 
     @property
     def canonical_utf8_serialization(self) -> str:
-        return json.dumps(
-            self.canonical_payload(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
+        return canonical_bytes(self.canonical_payload(), profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
     @property
     def spec_id(self) -> EventSpecId:

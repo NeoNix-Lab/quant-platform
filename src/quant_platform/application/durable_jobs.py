@@ -16,6 +16,8 @@ import json
 import sqlite3
 from typing import Any
 
+from quant_platform.canonical import canonical_bytes
+
 
 class DurableJobError(RuntimeError):
     """Base class for durable Job admission and lifecycle refusals."""
@@ -327,7 +329,7 @@ def _has_effect_safety_proof(admission: JobAdmission) -> bool:
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 __all__ = [

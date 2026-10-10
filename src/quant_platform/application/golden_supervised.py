@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from quant_platform.canonical import canonical_bytes
 from quant_platform.data.models import CoverageInterval, DatasetIdentity, Instant
 from quant_platform.experiments import (
     ComparisonProtocolIdentity,
@@ -384,13 +385,7 @@ def _source_evidence_identity(payload: dict[str, Any]) -> str:
 
 
 def _sha256(payload: Any) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 

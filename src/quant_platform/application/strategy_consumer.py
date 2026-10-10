@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import json
 
 from ..data.models import Instant
 from ..strategy import (
@@ -15,6 +14,7 @@ from ..strategy import (
     compose_decision,
 )
 from .market_data import ConsumerApiError, ConsumerErrorCode
+from quant_platform.canonical import canonical_bytes
 
 
 STRATEGY_COMPOSE_REQUEST_IDENTITY_DOMAIN = "strategy-compose-request-v1"
@@ -42,9 +42,7 @@ class StrategyComposeRequest:
 
     @property
     def request_identity(self) -> str:
-        payload = json.dumps(
-            self.canonical_payload(), sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        ).encode("utf-8")
+        payload = canonical_bytes(self.canonical_payload(), profile="sorted-compact-ascii-v1", allow_nan=True)
         return f"{STRATEGY_COMPOSE_REQUEST_IDENTITY_DOMAIN}:sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
