@@ -12,11 +12,11 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 import hashlib
-import json
 import re
 from typing import Any, ClassVar
 
 from ..data.models import Instant
+from quant_platform.canonical import canonical_bytes
 
 
 FEATURE_DEFINITION_IDENTITY_DOMAIN = "feature-definition-v1"
@@ -160,18 +160,12 @@ def _enum(enum_type: Any, value: Any, field: str) -> Any:
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 
 def _stable_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 @dataclass(frozen=True, slots=True)
@@ -690,13 +684,7 @@ class FeatureDefinition:
 
     @property
     def canonical_utf8_serialization(self) -> str:
-        return json.dumps(
-            self.canonical_payload(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
+        return canonical_bytes(self.canonical_payload(), profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
     @property
     def definition_id(self) -> FeatureDefinitionId:

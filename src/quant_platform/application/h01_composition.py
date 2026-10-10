@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import json
 from typing import Any, Sequence
 
 from ..features.artifacts import (
@@ -38,6 +37,7 @@ from ..features.h01_imbalance import (
     stacked_imbalance_definition,
 )
 from ..representation.footprints import FootprintBucket, HistoricalFootprintResult
+from quant_platform.canonical import canonical_bytes
 
 
 BUCKET_OBSERVATION_IDENTITY_DOMAIN = "h01-footprint-bucket-v1"
@@ -82,7 +82,7 @@ def bucket_observation_identity(footprint_result: HistoricalFootprintResult, buc
         "bucket_end": bucket.bucket_end.isoformat(),
     }
     digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=True)
     ).hexdigest()
     return f"{BUCKET_OBSERVATION_IDENTITY_DOMAIN}:sha256:{digest}"
 

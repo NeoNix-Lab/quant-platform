@@ -38,6 +38,7 @@ from .market_data import (
     ConsumerMarketDataResult,
     RepresentationRef,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 J02_REQUEST_SCHEMA_VERSION = "j02-request-v1"
@@ -332,7 +333,7 @@ def handle_api_transport_message(message: str | bytes, *, execute: MarketDataExe
                 "request_identity": None,
             },
         }
-    return json.dumps(response, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return canonical_bytes(response, profile="sorted-compact-ascii-v1", allow_nan=True).decode("utf-8")
 
 
 async def handle_api_transport_connection(

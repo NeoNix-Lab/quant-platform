@@ -34,6 +34,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from quant_platform.canonical import canonical_bytes
 from quant_platform.application.bybit_live import RealServerRestartProofReport
 from quant_platform.data.manifests import emit_coverage_manifest
 from quant_platform.data.models import Instant
@@ -369,7 +370,7 @@ def _coverage_tag(instant: Instant) -> str:
 
 
 def _start_key_fingerprint(key: TradeKeyBoundary) -> str:
-    payload = json.dumps(key.stable_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload = canonical_bytes(key.stable_dict(), profile="sorted-compact-ascii-v1", allow_nan=True)
     return hashlib.sha256(payload).hexdigest()[:16]
 
 

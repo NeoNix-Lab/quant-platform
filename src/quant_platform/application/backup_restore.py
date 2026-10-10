@@ -80,6 +80,7 @@ from ..operations.recovery import (
     RecoverySetV1,
     recovery_set_from_canonical_payload,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 RECOVERY_MANIFEST_FILENAME = "recovery-manifest.json"
@@ -1042,9 +1043,7 @@ def _sha256_file(path: str | Path) -> str:
 
 
 def _canonical_document_sha256(document: Mapping[str, Any]) -> str:
-    payload = json.dumps(
-        document, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("utf-8")
+    payload = canonical_bytes(document, profile="sorted-compact-ascii-v1", allow_nan=True)
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -1112,9 +1111,7 @@ def _atomic_copy(source: Path, destination: Path) -> Path:
 
 
 def _atomic_write_json(path: Path, document: Mapping[str, Any]) -> Path:
-    payload = json.dumps(
-        document, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("utf-8")
+    payload = canonical_bytes(document, profile="sorted-compact-ascii-v1", allow_nan=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     os.close(fd)

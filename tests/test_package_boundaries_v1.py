@@ -22,6 +22,7 @@ TESTS = ROOT / "tests"
 CLIENTS = ROOT / "clients"
 OWNERS = {
     "quant_platform": "shared",
+    "quant_platform.canonical": "shared",
     "quant_platform.ordering": "shared",
     "quant_platform.data": "shared",
     "quant_platform.data.models": "shared",
@@ -184,8 +185,13 @@ TYPE_CHECKING. Star/dynamic imports are refused rather than silently untracked.
                     name for name in packages if target.startswith(name + ".")
                 )
                 graph[module].add(target)
-            elif owner == "shared" and target.split(".")[0] not in SHARED_STDLIB:
+            elif (
+                owner == "shared" and target.split(".")[0] not in SHARED_STDLIB
+                and not (module == "quant_platform.canonical" and target == "rfc8785")
+            ):
                 errors.append(f"{module}:{line}: shared imports non-pure dependency {target}")
+            if target.split(".")[0] == "rfc8785" and module != "quant_platform.canonical":
+                errors.append(f"{module}:{line}: RFC 8785 must use the declared canonical profile")
             if target.split(".")[0] == "importlib" and target != "importlib.metadata":
                 errors.append(f"{module}:{line}: dynamic import machinery is not a declared seam")
             if target.split(".")[0] in {"tools", "tests"}:
@@ -463,6 +469,19 @@ class PackageBoundaryTests(unittest.TestCase):
         self.assertTrue(any("quant_platform.data (shared) -> forbidden" in error for error in errors))
         self.assertIn("quant_platform.data", graph["quant_platform.access.gateway"])
 
+    def test_rfc8785_dependency_is_exactly_the_canonical_module(self):
+        sources, packages = source_inventory()
+        _, errors = dependency_graph(sources, packages)
+        self.assertEqual([], errors)
+        for module in ("quant_platform.data.models", "quant_platform.application.market_data"):
+            with self.subTest(module=module):
+                _, errors = dependency_graph({**sources, module: "import rfc8785"}, packages)
+                self.assertTrue(any("RFC 8785 must use" in error for error in errors))
+        _, errors = dependency_graph(
+            {**sources, "quant_platform.canonical": "import requests"}, packages
+        )
+        self.assertTrue(any("shared imports non-pure" in error for error in errors))
+
     def test_cycle_detector_rejects_a_reverse_owner_edge(self):
         graph = {
             "quant_platform.access.gateway": {"quant_platform.data.models"},
@@ -585,6 +604,7 @@ class PackageBoundaryTests(unittest.TestCase):
     def test_shared_imports_do_not_load_access_or_producer_runtimes(self):
         # Fresh isolated processes prevent previous test imports from hiding eager loads.
         for statement in (
+            "from quant_platform.canonical import canonical_bytes",
             "import quant_platform.data.models",
             "from quant_platform.data import Instant, CanonicalContentHashV1",
             "from quant_platform.ordering import OrderingProvider",

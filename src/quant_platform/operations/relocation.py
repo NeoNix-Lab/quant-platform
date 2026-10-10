@@ -11,13 +11,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import StrEnum
 import hashlib
-import json
 import re
 from typing import Any
 
 from ..data.models import DatasetIdentity, Instant
 from .pressure import PressureDecision, PressureDecisionUnavailable, PressureState
 from .protection import ProtectionAssessment, ProtectionState
+from quant_platform.canonical import canonical_bytes
 
 
 RELOCATION_RECORD_V1_SCHEMA_VERSION = "relocation-record-v1"
@@ -382,7 +382,7 @@ def _canonical_fingerprint(payload: dict[str, Any]) -> str:
 
 
 def _canonical_json(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=True).decode("utf-8")
 
 
 def _phase(value: RelocationPhase | str) -> RelocationPhase:

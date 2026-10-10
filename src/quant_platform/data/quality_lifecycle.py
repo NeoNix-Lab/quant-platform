@@ -9,10 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 import hashlib
-import json
 from typing import Any, Mapping, Sequence
 
 from .models import DatasetIdentity, Instant, NaturalPartitionIdentity
+from quant_platform.canonical import canonical_bytes
 
 
 QUALITY_LIFECYCLE_CODE_ID = "quant-platform/a16-quality-lifecycle-v1"
@@ -483,7 +483,7 @@ def semantic_assessment_signature(suite: str, status: str, metrics: Any, violati
         "violations": _normalize(violations),
         "code_ref": code_ref.strip(),
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    return hashlib.sha256(canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=True)).hexdigest()
 
 
 def _validate_supersession_graph(assessments: Mapping[str, SelectedQualityAssessment]) -> None:
@@ -524,7 +524,7 @@ def _set_values(value: Any) -> frozenset[Any]:
 
 
 def _json_key(value: Any) -> str:
-    return json.dumps(_normalize(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return canonical_bytes(_normalize(value), profile="sorted-compact-ascii-v1", allow_nan=True).decode("utf-8")
 
 
 def _identity(document: Mapping[str, Any]) -> DatasetIdentity:

@@ -12,10 +12,10 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, localcontext
 from enum import StrEnum
 import hashlib
-import json
 from typing import Any, Mapping
 
 from .capacity import CapacityObservation, CapacityUnavailable
+from quant_platform.canonical import canonical_bytes
 
 
 PRESSURE_POLICY_DEFINITION_V1_VERSION = "1"
@@ -749,13 +749,7 @@ def _storage_root_id_from(capacity: Any, rate: Any) -> str | None:
 
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
+    return canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:

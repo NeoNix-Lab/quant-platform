@@ -10,7 +10,7 @@ import json
 import time
 from typing import Any
 
-import rfc8785
+from quant_platform.canonical import canonical_bytes
 
 
 J14_MESSAGE_FAMILY = "j14-framed-result-v1"
@@ -156,7 +156,7 @@ def frame_complete_result(
     """RFC 8785 serialize one complete result into deterministic J14 frames."""
     if not isinstance(logical_result_identity, str) or not logical_result_identity:
         raise ValueError("logical_result_identity must be a non-empty string")
-    payload = rfc8785.dumps(result)
+    payload = canonical_bytes(result, profile="rfc8785-v1")
     payload_sha256 = _digest(payload)
     transfer_id = _transfer_id(logical_result_identity, payload_sha256)
     chunks = tuple(
@@ -274,13 +274,14 @@ class FramedResultReceiver:
 
 def _transfer_id(logical_result_identity: str, payload_sha256: str) -> str:
     return _digest(
-        rfc8785.dumps(
+        canonical_bytes(
             {
                 "logical_result_identity": logical_result_identity,
                 "message_family": J14_MESSAGE_FAMILY,
                 "payload_sha256": payload_sha256,
                 "schema_version": J14_SCHEMA_VERSION,
-            }
+            },
+            profile="rfc8785-v1",
         )
     )
 

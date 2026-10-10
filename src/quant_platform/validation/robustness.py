@@ -22,11 +22,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from itertools import combinations
 import hashlib
-import json
 import math
 from statistics import NormalDist
 from types import MappingProxyType
 from typing import Any
+
+from quant_platform.canonical import canonical_bytes
 
 
 DSR_SPEC_VERSION = "dsr-l-v1"
@@ -69,13 +70,7 @@ def _finite_float(value: Any, field_name: str) -> float:
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 

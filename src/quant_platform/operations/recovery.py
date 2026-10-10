@@ -33,12 +33,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
-import json
 import re
 from typing import Any
 
 from ..data.models import CoverageInterval, DatasetIdentity, Instant, NaturalPartitionIdentity
 from .protection import PROTECTION_UNIT_IDENTITY_DOMAIN
+from quant_platform.canonical import canonical_bytes
 
 
 RECOVERY_SET_IDENTITY_DOMAIN = "recovery-set-v1"
@@ -311,13 +311,7 @@ def _non_empty_text(value: Any, field_name: str) -> str:
 
 
 def _canonical_json(payload: Any) -> str:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
+    return canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 def _canonical_fingerprint(payload: Any) -> str:

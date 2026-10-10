@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
-import json
 import re
 from typing import Any, Iterable
 
@@ -24,6 +23,7 @@ from ..data.models import (
     TradeRecord,
 )
 from ..ordering import TRADES_CANONICAL_TOTAL_ORDER_V1
+from quant_platform.canonical import canonical_bytes
 
 
 CANDLE_DEFINITION_V1_VERSION = 1
@@ -184,12 +184,7 @@ class CandleDefinitionV1:
 
     @property
     def canonical_utf8_serialization(self) -> str:
-        return json.dumps(
-            self.canonical_payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        return canonical_bytes(self.canonical_payload, profile="sorted-compact-utf8-v1", allow_nan=True).decode("utf-8")
 
     @property
     def definition_identity(self) -> str:
@@ -867,7 +862,7 @@ def _result_identity(
         "returned_record_bounds": returned_bounds.stable_dict() if returned_bounds else None,
     }
     digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=True)
     ).hexdigest()
     return f"{CANDLE_RESULT_FINGERPRINT_V1_DOMAIN}:sha256:{digest}"
 
