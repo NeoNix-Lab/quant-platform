@@ -1,8 +1,8 @@
 # Scope: Wave 8 - Full Platform API & Remote Service Topology v1
 
-Status: **Design gates CLOSED (G1-G6 each ACCEPTED, or explicitly `OPEN_DEFERABLE` with a recorded evidence trigger). The Wave 8 implementation inventory is AUTHORIZED below. `implement/wave-8` is OPEN (branched from `main` @ `30c48094`, after PR #305 promoted `implement/omega` into `main`). Implementation issues #296-#304 may now start, respecting each one's own sequencing note.**
+Status: **CLOSED — operator closeout (issue #327, 2026-10-10). All nine Part B atoms are implemented and promoted to `main` (PR #322 `implement/wave-8` -> `main`; PR #326 `implement/wave-8.1` -> `main`; `main` @ `cf1c510`). No Wave 8 Golden E2E proof artifact is claimed (see Closeout result).**
 
-Scope kind: this document now has two parts. Part A (closed) was the design-gate sequencing scope; it is preserved below for the audit trail. Part B (closed) authorized the implementation inventory and resolved the branch-baseline question; `implement/wave-8` is the active integration branch for all Wave 8 implementation issues.
+Scope kind: this document has three parts. Part A (closed) was the design-gate sequencing scope. Part B (closed) authorized the implementation inventory and resolved the branch-baseline question. The Closeout result below records what was actually built and promoted, and what is explicitly not claimed. `implement/wave-8` and `implement/wave-8.1` are closed integration branches; no further issue targets them.
 
 `implement/omega` is **CLOSED** as the bounded `DG-J` design-integration line (head `f79f1313` at design-gate closeout). It was then promoted into `main` by PR #305 (merge commit `30c48094`, tag `omega-stabilization-dgj-v1`) so that `implement/wave-8` could branch from `main` carrying the governance state it depends on. No further design-gate or implementation issue targets `implement/omega`.
 
@@ -11,6 +11,54 @@ Scope kind: this document now has two parts. Part A (closed) was the design-gate
 ## Historical scope archive
 
 This file previously recorded **Wave 7 — API & Platform Transport v1** (CLOSED — exceptional operator closeout; `implement/wave-7` governance-closeout tip `73d5f7b2`, tag `wave-7-api-platform-transport-v1`, merged to `main` by `5c8d9af`), and then **this same Wave 8 scope while its design gates (G1-G6) were still open** (governance issue #280/PR #279). That content is fully preserved in git history (`git log -- SCOPE.md`) and is not duplicated here. `SCOPE.md` is overwritten in place for each governance reconciliation; no wave's scope has ever been copied aside to a separate archived file, and this one is not an exception.
+
+---
+
+## Closeout result (issue #327)
+
+Closed by explicit maintainer direction on 2026-10-10 ("effettua il close out del ramo già mergiato") after every Part B implementation issue was merged and promoted to `main`.
+
+```text
+Wave 8 integration branch: implement/wave-8 (from main @ 30c48094)
+implement/wave-8 head at promotion: 2a8ed1b15e9fb61d92a5ee141109980323e03158
+Promotion to main: PR #322 (merge b5df0f8)
+Follow-up integration branch: implement/wave-8.1 (from main @ b5df0f8)
+implement/wave-8.1 head at promotion: f1aa0f1a23c1f950405de2f0b12b32a8df428c0d
+Promotion to main: PR #326 (merge cf1c510)
+
+J03 durable job runtime            issue #296  PR #307
+J10 Strategy seam                   issue #300  PR #308
+K12 admitted-input manifest         issue #298  PR #309
+J09 authenticated/TLS J02           issue #297  PR #310
+K13 governed result import          issue #299  PR #311
+J12 Validation seam                 issue #301  PR #312
+J13 Training seam                   issue #302  PR #315
+J14 framed result transport         issue #303  PR #320
+J15 Omega remote client             issue #304  PR #321
+Owner-accepted extra: replay ledger identity cost       issue #313  PR #323 (implement/wave-8.1)
+Owner-accepted extra: sub-quadratic uniqueness weights  issue #314  PR #324 (implement/wave-8.1)
+Emergency slice outside the inventory: A14 L2 groundwork  issue #316  PR #317
+```
+
+What each atom is credited for (exactly its implementation issue's acceptance, nothing broader):
+
+| Atom | Credited as `COMPLETE` for | Explicitly not claimed |
+|---|---|---|
+| `J03` | ADR-0062 durable admission record, deterministic `job_id`, §3 lifecycle, attempt evidence, no automatic retry, effect-safe explicit retry, restart -> `RECOVERY_REQUIRED` (`application/durable_jobs.py`) | handler dispatch, worker process, PostgreSQL store, client submission/status API (DG-K P02/P04a/P04b/P05b) |
+| `J09` | ADR-0063 WSS/TLS 1.3/mTLS non-loopback J02, fingerprint -> principal -> scope mapping, `j02.market_data.read`, security evidence | any scope beyond `j02.market_data.read`; a production non-loopback deployment runbook |
+| `J10`, `J12`, `J13` | ADR-0065 seams as **in-process application seams** (`application/strategy_consumer.py`, `validation_consumer.py`, `training_consumer.py`), including Amendment 1/2 synchronous bounds | reachability over J02: no wire message or remote scope exists. Owner decision 2026-10-08 assigns this to DG-K P05 (#318) |
+| `J14` | ADR-0066 `j14-framed-result-v1` framing, RFC 8785 canonicalization, per-chunk and transfer digests, transfer-local resume, bounded retention (`application/framed_result_transport.py`) | dispatch of J14 frames by the J02 server; any live family |
+| `J15` | ADR-0067 Omega remote client outside `src/quant_platform` (`clients/omega`), `j02.market_data.read` only, `wire_incompatible`, `remote_security_failure` | capabilities beyond market data; J14 support |
+| `K12` | ADR-0064 §2 sealed `AdmittedInputManifestV1`, `admission_id`, delivery state machine (`application/admitted_input.py`) | physical transfer of admitted bytes to the deck; a deck-side reader |
+| `K13` | ADR-0064 §3 full-bundle refusal, idempotent re-submission, distinct identity for new computations (`application/governed_result_import.py`) | one atomic transaction across the Experiment write (PostgreSQL) and the evidence record (SQLite); DG-K P02 must establish it |
+
+`#313` and `#314` were owner-accepted Wave 8 work outside the nine-atom inventory. Both changed performance only and preserve every existing identity (their acceptance required bit-identical identities). They were integrated through an ad-hoc `implement/wave-8.1` branch cut from `main` after PR #322, which `AGENTS.md`'s branching section does not describe; this closeout records it rather than renaming history.
+
+`#316`/PR #317 added the `l2-book-event-v1` schema, `L2BookEvent` identity and pure venue adapters as an operator-requested emergency slice. It is **groundwork only**: `A14` stays `OPEN_BLOCKING`/`MISSING` under DG-C because no accepted ADR resolves its snapshot/increment/gap semantics, and acquisition, publication and live wiring were out of #316's own scope. Governance finding for the next DG-C decision: a versioned L2 schema now exists in code without an accepted ADR; DG-C must either ratify it by ADR or supersede it.
+
+**Golden proof.** No Wave 8 Golden E2E issue was ever opened (Part B deferred it until the inventory was built). Like Wave 7 (#222), this closeout claims **no** Golden proof artifact. The "Proposed vertical" below remains a target, not a result; it cannot be attempted remotely until DG-K P05 wires the seams onto J02.
+
+**Next.** DG-K Process Topology v1 (#318 governance, #319 design gate) is the next scope; its start gate was this closeout.
 
 ---
 
@@ -35,7 +83,7 @@ This exits Part A's own exit criteria (see the original wording preserved in git
 
 ## Part B — Authorized Wave 8 implementation inventory
 
-Each atom below has an `ACCEPTED` governing ADR and is therefore eligible for its own implementation issue. **None is implemented yet.** `J11` is excluded — it has no accepted contract (see Part A, G4).
+Each atom below had an `ACCEPTED` governing ADR and received its own implementation issue. **All nine are now implemented and on `main`** within the bounds recorded in the Closeout result above. `J11` was excluded — it has no accepted contract (see Part A, G4).
 
 | Atom | Capability | Governing ADR | Sequencing note |
 |---|---|---|---|
@@ -53,11 +101,11 @@ Each atom below has an `ACCEPTED` governing ADR and is therefore eligible for it
 
 ### Minimum justified implementation issues
 
-Nine implementation issues are opened by this reconciliation, one per authorized atom above (`J03`, `J09`, `K12`, `K13`, `J10`, `J12`, `J13`, `J14`, `J15`). No Golden E2E or Wave 8 closeout issue is created yet — per this governance issue's own acceptance criterion, that proof is defined only once the implementation inventory above is actually built, not speculatively now. Each issue cites its governing ADR and this document, and targets `implement/wave-8` once that branch exists (see below); none may branch from or target `implement/omega`, which is closed.
+Nine implementation issues were opened by reconciliation #288, one per authorized atom above (`J03`, `J09`, `K12`, `K13`, `J10`, `J12`, `J13`, `J14`, `J15`). No Golden E2E issue was created at that time — that proof was to be defined only once the implementation inventory was actually built — and none was created before the operator closeout (#327). Each issue cited its governing ADR and this document, and targeted `implement/wave-8`.
 
 ---
 
-## Wave 8 implementation branch — baseline resolved, branch OPEN
+## Wave 8 implementation branch — baseline resolved, branch CLOSED
 
 The prior reconciliation (issue #288/PR #295) found `implement/omega` 61 commits ahead of `main` and flagged the resulting baseline ambiguity as an open maintainer decision between two options: (1) promote `implement/omega` into `main` first, or (2) branch `implement/wave-8` directly from `implement/omega`.
 
@@ -75,7 +123,7 @@ implement/wave-8                = branched from main @ 30c48094, pushed clean
 
 This mirrors the Wave 7 promotion pattern exactly (tag `wave-7-api-platform-transport-v1` @ `73d5f7b2` -> merge commit `5c8d9af`), applied to a non-wave stabilization line for the first time. `implement/wave-8` now exists and carries the full governance state (including this document) that its own implementation issues depend on.
 
-**Implementation issues #296-#304 may now start**, respecting each one's own sequencing note (`J15`/#304 still holds for `J09`/#297; `K13`/#299 still holds for `K12`/#298).
+Implementation issues #296-#304 were then executed in their declared sequence (`J15` after `J09`, `K13` after `K12`) and promoted to `main` by PR #322. `implement/wave-8` is closed.
 
 ---
 
@@ -130,7 +178,7 @@ Credit, do not reimplement or re-prove absent invalidating evidence: `C01`-`C05`
 
 ---
 
-## Proposed vertical for this scope's eventual Golden proof (not authorized yet)
+## Proposed vertical for a future Golden proof (not attempted; not claimed)
 
 From Omega, through the API only:
 
@@ -143,14 +191,16 @@ Real transport, not in-process test doubles (ADR-0056 applies). This vertical is
 
 ## Explicit non-claims
 
-- Nothing in this document marks any atom `COMPLETE`. `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` are `FROZEN`/`MISSING` — decided, not built. `J11` is `OPEN_DEFERABLE`/`MISSING` — neither decided nor built.
-- `J07`/`J08` (paper/live, Wave 10), `I06`/`I07` (RL, Wave 9), `A13`/`A14` (L1/L2), second venue and multi-asset execution are untouched by this scope.
-- This document does not create `implement/wave-8`. It authorizes the implementation inventory and leaves the branch-baseline decision to the maintainer (see above).
-- This scope's existence is not concurrent authorization for any implementation issue to merge code — each issue proves its own atom against its cited ADR.
+- `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` are `FROZEN`/`COMPLETE` only within the bounds in the Closeout result table; nothing in its "Explicitly not claimed" column is complete.
+- `J10`/`J12`/`J13` are not reachable over J02. `ROADMAP.md`'s original Wave 8 intent ("carried over the existing J02 transport") is now owned by DG-K P05 (#318).
+- `J11` remains `OPEN_DEFERABLE`/`MISSING` — neither decided nor built.
+- No Wave 8 Golden E2E proof artifact exists or is claimed.
+- `J07`/`J08` (paper/live, Wave 10), `I06`/`I07` (RL, Wave 9), `A13`-`A15` (L1/L2/L3; `A14` groundwork only, see above), second venue and multi-asset execution are untouched by this scope's completion.
+- Closing this scope authorizes no new implementation by itself; DG-K needs its own governance issue (#318) first.
 
 ---
 
-## Mutation policy
+## Mutation policy (historical, as applied during Wave 8)
 
 - Each implementation issue produces code/tests for exactly one atom from Part B's table; it does not implement a second atom "while in there."
 - Branch `agent/issue-<N>-<slug>` (or `codex/issue-<N>-<slug>`) from `implement/wave-8`. Do not branch from or target `implement/omega` (closed) or `main` directly.
@@ -162,15 +212,15 @@ Real transport, not in-process test doubles (ADR-0056 applies). This vertical is
 
 ## Exit criteria for this scope
 
-Part A's exit criteria are **met**: G1-G6 are each `ACCEPTED` or explicitly `OPEN_DEFERABLE` with a recorded trigger (`J11`), and this governance-designated issue (#288) reconciled `CAPABILITY_DAG.md`/`CAPABILITY_MAP.md`/`ROADMAP.md`/`OPEN_DECISIONS.md` to the gates' actual resolutions.
+Part A's exit criteria are **met**: G1-G6 are each `ACCEPTED` or explicitly `OPEN_DEFERABLE` with a recorded trigger (`J11`), reconciled by #288.
 
-Part B's branch-baseline question is **resolved** and `implement/wave-8` is **open** (see above). Part B itself remains open until each of the nine implementation issues is implemented and proven against its ADR. Golden E2E and Wave 8 closeout are defined only after that inventory is actually built.
+Part B's exit criteria are **met** by operator closeout (#327): each of the nine implementation issues is implemented, merged and promoted to `main` (PR #322, #326), within the bounds recorded above. The Golden E2E criterion is not met and is not claimed; it was closed by explicit maintainer direction, as for Wave 7.
 
 ---
 
 ## Out of Scope
 
-Do not pull into any Wave 8 implementation issue:
+Historical record of what Wave 8 excluded (still not claimed by this closeout):
 
 - `J07`/`J08` (paper/shadow, live product mode — now Wave 10) and any live/broker execution;
 - `I06`/`I07` (Strategic/Execution RL — now Wave 9);
@@ -183,7 +233,7 @@ Do not pull into any Wave 8 implementation issue:
 
 ---
 
-## Stop / Escalation Conditions
+## Stop / Escalation Conditions (historical, as applied during Wave 8)
 
 Stop and report rather than implement or decide unilaterally if:
 
