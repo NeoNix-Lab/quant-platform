@@ -14,7 +14,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='value', ctx=Load())"
+      "argument_expression": "value"
     },
     {
       "path": "src/quant_platform/application/admitted_input.py",
@@ -30,7 +30,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='value', ctx=Load())"
+      "argument_expression": "value"
     },
     {
       "path": "src/quant_platform/application/api_transport_server.py",
@@ -45,7 +45,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='response', ctx=Load())"
+      "argument_expression": "response"
     },
     {
       "path": "src/quant_platform/application/backup_restore.py",
@@ -60,7 +60,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='document', ctx=Load())"
+      "argument_expression": "document"
     },
     {
       "path": "src/quant_platform/application/backup_restore.py",
@@ -75,7 +75,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='document', ctx=Load())"
+      "argument_expression": "document"
     },
     {
       "path": "src/quant_platform/application/bybit_import.py",
@@ -89,7 +89,7 @@
           ":"
         ]
       },
-      "argument_ast": "Name(id='ordered', ctx=Load())"
+      "argument_expression": "ordered"
     },
     {
       "path": "src/quant_platform/application/durable_jobs.py",
@@ -105,7 +105,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='value', ctx=Load())"
+      "argument_expression": "value"
     },
     {
       "path": "src/quant_platform/application/framed_result_transport.py",
@@ -113,7 +113,7 @@
       "scope": "frame_complete_result",
       "profile": "rfc8785-v1",
       "options": {},
-      "argument_ast": "Name(id='result', ctx=Load())"
+      "argument_expression": "result"
     },
     {
       "path": "src/quant_platform/application/framed_result_transport.py",
@@ -121,7 +121,7 @@
       "scope": "_transfer_id",
       "profile": "rfc8785-v1",
       "options": {},
-      "argument_ast": "Dict(keys=[Constant(value='logical_result_identity'), Constant(value='message_family'), Constant(value='payload_sha256'), Constant(value='schema_version')], values=[Name(id='logical_result_identity', ctx=Load()), Name(id='J14_MESSAGE_FAMILY', ctx=Load()), Name(id='payload_sha256', ctx=Load()), Name(id='J14_SCHEMA_VERSION', ctx=Load())])"
+      "argument_expression": "{\n                \"logical_result_identity\": logical_result_identity,\n                \"message_family\": J14_MESSAGE_FAMILY,\n                \"payload_sha256\": payload_sha256,\n                \"schema_version\": J14_SCHEMA_VERSION,\n            }"
     },
     {
       "path": "src/quant_platform/application/golden_supervised.py",
@@ -137,7 +137,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/application/governed_result_import.py",
@@ -153,7 +153,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='value', ctx=Load())"
+      "argument_expression": "value"
     },
     {
       "path": "src/quant_platform/application/h01_composition.py",
@@ -168,7 +168,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/application/live_gap_orchestration.py",
@@ -182,7 +182,7 @@
           ":"
         ]
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='key', ctx=Load()), attr='stable_dict', ctx=Load()))"
+      "argument_expression": "key.stable_dict()"
     },
     {
       "path": "src/quant_platform/application/market_data.py",
@@ -197,7 +197,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='stable_dict', ctx=Load()))"
+      "argument_expression": "self.stable_dict()"
     },
     {
       "path": "src/quant_platform/application/strategy_consumer.py",
@@ -212,7 +212,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load()))"
+      "argument_expression": "self.canonical_payload()"
     },
     {
       "path": "src/quant_platform/application/training_consumer.py",
@@ -228,7 +228,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load()))"
+      "argument_expression": "self.canonical_payload()"
     },
     {
       "path": "src/quant_platform/application/validation_consumer.py",
@@ -244,7 +244,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/application/wave6_golden.py",
@@ -259,7 +259,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/data/manifests.py",
@@ -274,7 +274,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='document', ctx=Load())"
+      "argument_expression": "document"
     },
     {
       "path": "src/quant_platform/data/models.py",
@@ -289,7 +289,7 @@
         ],
         "sort_keys": true
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='event', ctx=Load()), attr='stable_dict', ctx=Load()))"
+      "argument_expression": "event.stable_dict()"
     },
     {
       "path": "src/quant_platform/data/publication_catalog.py",
@@ -304,7 +304,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='value', ctx=Load())"
+      "argument_expression": "value"
     },
     {
       "path": "src/quant_platform/data/quality_lifecycle.py",
@@ -319,7 +319,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/data/quality_lifecycle.py",
@@ -334,7 +334,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Call(func=Name(id='_normalize', ctx=Load()), args=[Name(id='value', ctx=Load())])"
+      "argument_expression": "_normalize(value)"
     },
     {
       "path": "src/quant_platform/data/repair.py",
@@ -349,7 +349,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='provenance', ctx=Load()), attr='stable_dict', ctx=Load()))"
+      "argument_expression": "provenance.stable_dict()"
     },
     {
       "path": "src/quant_platform/data/repair.py",
@@ -364,7 +364,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/execution/__init__.py",
@@ -380,7 +380,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Name(id='_canonical_value', ctx=Load()), args=[Name(id='payload', ctx=Load())])"
+      "argument_expression": "_canonical_value(payload)"
     },
     {
       "path": "src/quant_platform/experiments/accounting.py",
@@ -396,7 +396,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Name(id='_canonical_value', ctx=Load()), args=[Name(id='payload', ctx=Load())])"
+      "argument_expression": "_canonical_value(payload)"
     },
     {
       "path": "src/quant_platform/experiments/identities.py",
@@ -412,7 +412,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/experiments/persistence.py",
@@ -428,7 +428,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='value', ctx=Load())"
+      "argument_expression": "value"
     },
     {
       "path": "src/quant_platform/features/artifacts.py",
@@ -444,7 +444,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/features/artifacts.py",
@@ -459,7 +459,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/features/definitions.py",
@@ -475,7 +475,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/features/definitions.py",
@@ -490,7 +490,7 @@
         ],
         "allow_nan": false
       },
-      "argument_ast": "Name(id='value', ctx=Load())"
+      "argument_expression": "value"
     },
     {
       "path": "src/quant_platform/features/definitions.py",
@@ -506,7 +506,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load()))"
+      "argument_expression": "self.canonical_payload()"
     },
     {
       "path": "src/quant_platform/learning/supervised.py",
@@ -522,7 +522,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Name(id='_canonical_value', ctx=Load()), args=[Name(id='payload', ctx=Load())])"
+      "argument_expression": "_canonical_value(payload)"
     },
     {
       "path": "src/quant_platform/learning/training.py",
@@ -538,7 +538,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Name(id='_canonical_value', ctx=Load()), args=[Name(id='payload', ctx=Load())])"
+      "argument_expression": "_canonical_value(payload)"
     },
     {
       "path": "src/quant_platform/operations/checkpoint.py",
@@ -554,7 +554,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/operations/pressure.py",
@@ -570,7 +570,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/operations/protection.py",
@@ -586,7 +586,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/operations/recovery.py",
@@ -602,7 +602,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/operations/relocation.py",
@@ -617,7 +617,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/operations/retention.py",
@@ -632,7 +632,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/portfolio/__init__.py",
@@ -648,7 +648,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Name(id='_canonical_value', ctx=Load()), args=[Name(id='payload', ctx=Load())])"
+      "argument_expression": "_canonical_value(payload)"
     },
     {
       "path": "src/quant_platform/replay/__init__.py",
@@ -664,7 +664,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Name(id='_canonical_value', ctx=Load()), args=[Name(id='payload', ctx=Load())])"
+      "argument_expression": "_canonical_value(payload)"
     },
     {
       "path": "src/quant_platform/representation/candles.py",
@@ -679,7 +679,7 @@
           ":"
         ]
       },
-      "argument_ast": "Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load())"
+      "argument_expression": "self.canonical_payload"
     },
     {
       "path": "src/quant_platform/representation/candles.py",
@@ -694,7 +694,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/representation/footprints.py",
@@ -709,7 +709,7 @@
           ":"
         ]
       },
-      "argument_ast": "Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load())"
+      "argument_expression": "self.canonical_payload"
     },
     {
       "path": "src/quant_platform/representation/footprints.py",
@@ -724,7 +724,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/research/events.py",
@@ -740,7 +740,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/research/events.py",
@@ -756,7 +756,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load()))"
+      "argument_expression": "self.canonical_payload()"
     },
     {
       "path": "src/quant_platform/research/hypothesis.py",
@@ -772,7 +772,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/research/hypothesis.py",
@@ -788,7 +788,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load()))"
+      "argument_expression": "self.canonical_payload()"
     },
     {
       "path": "src/quant_platform/research/outcomes.py",
@@ -804,7 +804,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/research/outcomes.py",
@@ -820,7 +820,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load()))"
+      "argument_expression": "self.canonical_payload()"
     },
     {
       "path": "src/quant_platform/research/studies.py",
@@ -836,7 +836,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/research/studies.py",
@@ -852,7 +852,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load()))"
+      "argument_expression": "self.canonical_payload()"
     },
     {
       "path": "src/quant_platform/research/studies.py",
@@ -868,7 +868,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='canonical_payload', ctx=Load()))"
+      "argument_expression": "self.canonical_payload()"
     },
     {
       "path": "src/quant_platform/source_adapters/bybit_live.py",
@@ -883,7 +883,7 @@
         ],
         "ensure_ascii": true
       },
-      "argument_ast": "Name(id='document', ctx=Load())"
+      "argument_expression": "document"
     },
     {
       "path": "src/quant_platform/strategy/__init__.py",
@@ -899,7 +899,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Call(func=Name(id='_canonical_value', ctx=Load()), args=[Name(id='payload', ctx=Load())])"
+      "argument_expression": "_canonical_value(payload)"
     },
     {
       "path": "src/quant_platform/validation/labels.py",
@@ -915,7 +915,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/validation/lockbox.py",
@@ -931,7 +931,7 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     },
     {
       "path": "src/quant_platform/validation/robustness.py",
@@ -947,33 +947,33 @@
         "ensure_ascii": true,
         "allow_nan": false
       },
-      "argument_ast": "Name(id='payload', ctx=Load())"
+      "argument_expression": "payload"
     }
   ],
   "raw_exceptions": [
     [
       "src/quant_platform/application/bybit_live.py",
-      "Call(func=Attribute(value=Name(id='json', ctx=Load()), attr='dumps', ctx=Load()), args=[Dict(keys=[Constant(value='op'), Constant(value='args')], values=[Constant(value='subscribe'), List(elts=[Name(id='SUPPORTED_TOPIC', ctx=Load())], ctx=Load())])])"
+      "json.dumps({\"op\": \"subscribe\", \"args\": [SUPPORTED_TOPIC]})"
     ],
     [
       "src/quant_platform/application/live_gap_orchestration.py",
-      "Call(func=Attribute(value=Name(id='json', ctx=Load()), attr='dumps', ctx=Load()), args=[Dict(keys=[Constant(value='state'), Constant(value='repair_state'), Constant(value='repair_source'), Constant(value='reason'), Constant(value='last_durable_key'), Constant(value='recent_window_records'), Constant(value='buffered_ws_records'), Constant(value='evaluation_reasons')], values=[Name(id='GAP_RECORDED_NON_COMPLETE', ctx=Load()), Attribute(value=Name(id='evaluation', ctx=Load()), attr='interval_state', ctx=Load()), Attribute(value=Name(id='evaluation', ctx=Load()), attr='source_id', ctx=Load()), Attribute(value=Name(id='interval', ctx=Load()), attr='reason', ctx=Load()), Call(func=Attribute(value=Attribute(value=Name(id='interval', ctx=Load()), attr='start_key', ctx=Load()), attr='stable_dict', ctx=Load())), Attribute(value=Name(id='interval', ctx=Load()), attr='recent_window_records', ctx=Load()), Attribute(value=Name(id='interval', ctx=Load()), attr='buffered_ws_records', ctx=Load()), Call(func=Name(id='list', ctx=Load()), args=[Attribute(value=Name(id='evaluation', ctx=Load()), attr='reasons', ctx=Load())])])], keywords=[keyword(arg='sort_keys', value=Constant(value=True))])"
+      "json.dumps(\n        {\n            \"state\": GAP_RECORDED_NON_COMPLETE,\n            \"repair_state\": evaluation.interval_state,\n            \"repair_source\": evaluation.source_id,\n            \"reason\": interval.reason,\n            \"last_durable_key\": interval.start_key.stable_dict(),\n            \"recent_window_records\": interval.recent_window_records,\n            \"buffered_ws_records\": interval.buffered_ws_records,\n            \"evaluation_reasons\": list(evaluation.reasons),\n        },\n        sort_keys=True,\n    )"
     ],
     [
       "src/quant_platform/application/retention_deletion.py",
-      "Call(func=Attribute(value=Name(id='json', ctx=Load()), attr='dumps', ctx=Load()), args=[Call(func=Attribute(value=Attribute(value=Name(id='decision', ctx=Load()), attr='candidate', ctx=Load()), attr='stable_dict', ctx=Load()))], keywords=[keyword(arg='sort_keys', value=Constant(value=True))])"
+      "json.dumps(decision.candidate.stable_dict(), sort_keys=True)"
     ],
     [
       "src/quant_platform/application/retention_deletion.py",
-      "Call(func=Attribute(value=Name(id='json', ctx=Load()), attr='dumps', ctx=Load()), args=[Call(func=Attribute(value=Name(id='decision', ctx=Load()), attr='stable_dict', ctx=Load()))], keywords=[keyword(arg='sort_keys', value=Constant(value=True))])"
+      "json.dumps(decision.stable_dict(), sort_keys=True)"
     ],
     [
       "src/quant_platform/application/retention_deletion.py",
-      "Call(func=Attribute(value=Name(id='json', ctx=Load()), attr='dumps', ctx=Load()), args=[Call(func=Attribute(value=Name(id='result', ctx=Load()), attr='stable_dict', ctx=Load()))], keywords=[keyword(arg='sort_keys', value=Constant(value=True))])"
+      "json.dumps(result.stable_dict(), sort_keys=True)"
     ],
     [
       "src/quant_platform/application/storage_relocation.py",
-      "Call(func=Attribute(value=Name(id='json', ctx=Load()), attr='dumps', ctx=Load()), args=[Call(func=Attribute(value=Attribute(value=Name(id='record', ctx=Load()), attr='dataset_identity', ctx=Load()), attr='stable_dict', ctx=Load()))], keywords=[keyword(arg='sort_keys', value=Constant(value=True))])"
+      "json.dumps(record.dataset_identity.stable_dict(), sort_keys=True)"
     ]
   ]
 }

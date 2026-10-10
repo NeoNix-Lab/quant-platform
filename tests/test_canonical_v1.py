@@ -91,10 +91,17 @@ class CanonicalV1Tests(unittest.TestCase):
             parameters = {"profile": site["profile"]}
             if site["profile"] != "rfc8785-v1":
                 parameters["allow_nan"] = site["options"].get("allow_nan", True)
-            expected.append({k: site[k] for k in ("path", "ordinal", "scope", "argument_ast")}
-                            | {"parameters": parameters})
+            # Parse both sides with this interpreter: ast.dump's default
+            # empty-field formatting differs between Python 3.11 and 3.14.
+            argument = ast.parse(site["argument_expression"], mode="eval").body
+            expected.append({k: site[k] for k in ("path", "ordinal", "scope")}
+                            | {"argument_ast": ast.dump(argument, include_attributes=False),
+                               "parameters": parameters})
         self.assertEqual(expected, sites)
-        self.assertEqual(INVENTORY["raw_exceptions"], raw)
+        expected_raw = [[path, ast.dump(ast.parse(expression, mode="eval").body,
+                                       include_attributes=False)]
+                        for path, expression in INVENTORY["raw_exceptions"]]
+        self.assertEqual(expected_raw, raw)
         self.assertEqual(Counter({"sorted-compact-ascii-v1": 56, "sorted-compact-utf8-v1": 3,
                                   "ordered-compact-ascii-line-v1": 1, "rfc8785-v1": 2}),
                          Counter(s["parameters"]["profile"] for s in sites))
