@@ -560,6 +560,83 @@ remote implementation of `J15` is explicitly blocked until `J09` is
 implemented** — this ADR authorizes neither that server work nor an Omega
 adapter by itself. Freezes `J15`. Anchors: ADR-0055; `PUBLIC_PYTHON_API.md`.
 
+## DG-K — Process Topology v1 — OPEN_BLOCKING (design gate #319)
+
+Registered by governance issue #318 (2026-10-10) after the Wave 8 closeout
+(#327). ADR-0024 §6 leaves open whether any component becomes an
+independently deployed service, where executable hosts live and the process
+topology. The maintainer's direction (2026-10-07, refined 2026-10-10) is a
+modular monolith deployed as a small fixed set of processes, not one service
+per domain package, with heavy compute on the deck and the server kept as free
+as possible. This section registers that direction as an open gate; it decides
+no topology. The single design-gate issue is #319 (ADR-0068 process topology
+v1; ADR-0069 J02 carriage of consumer seams and deck handoff v1). It gates the
+candidate atoms `P01`, `P02`, `P03`, `P04a`, `P04b`, `P05a`, `P05b` and `P06`
+in `CAPABILITY_DAG.md` (names provisional).
+
+Owner decisions, fixed inputs to the gate (not open questions):
+
+1. `P01` preserves every existing identity hash: one module with named,
+   versioned byte profiles reproducing today's three profiles
+   (sorted/compact/ASCII, sorted/compact/UTF-8 for frozen data-plane
+   contracts, sorted with default separators); RFC 8785 is one profile, for
+   `J14` and new contracts only. Changing existing identity bytes would need a
+   separate ADR-0018 contract evolution.
+2. `P03` keeps executable hosts in `tools/` (ADR-0043 names
+   `tools/live_ingest_server.py`); no `apps/` move and no ADR-0043/ADR-0050
+   amendment.
+3. `P04` v1 runs exactly one J03 worker process: `recover_after_restart`
+   (`application/durable_jobs.py:244-264`) is global, and per-process attempt
+   ownership would need an ADR-0062 §4 amendment. More than one worker waits
+   for a recorded evidence trigger.
+4. `P05` (J02 carriage of `J10`/`J12`/`J13`) belongs to DG-K, not Wave 8
+   (2026-10-08).
+5. The server stays as free as possible (2026-10-10): server-side J03 handlers
+   are data-local only (feature/representation materialization, historical
+   imports, catalog maintenance); replay, sweeps, training and large PBO runs
+   belong on the deck, on the deck's own initiative. The server never
+   delegates or pushes jobs to the deck or any other machine, and no remote
+   worker pulls from the server queue (ADR-0062 §1/§6, ADR-0057 §6).
+6. `J11` is not planned (2026-10-10): replay runs only on the deck over
+   `K12`-admitted inputs, with results returned through `K13`. No `J11` design
+   gate follows DG-K (see `J11` below).
+
+Question set for #319:
+
+1. Which deployable units exist (proposed: ingest per venue/stream, platform
+   API, one J03 worker, deck compute, PostgreSQL; live/paper execution
+   deferred to Wave 10)?
+2. Which domain packages remain in-process libraries in every unit, and why
+   (replay calls `feature_provider` per tick,
+   `src/quant_platform/replay/__init__.py:311,370`)?
+3. Which PostgreSQL schema and DB role each unit owns (extending
+   `db/init/002_roles.sh`)?
+4. How `J03`/`K12`/`K13` state moves to a `runtime` schema and how `K13`
+   registration becomes one transaction with the Experiment write (today
+   PostgreSQL then SQLite, `application/governed_result_import.py:268-288`)?
+5. Which byte profile each existing identity site uses, how `P01` proves
+   parity, and how code identity is checked between units (ADR-0057 §2)?
+6. How `tests/test_package_boundaries_v1.py` extends to per-host rules for
+   `tools/`, with `clients/*` kept separate?
+7. Which J02 wire messages and remote scopes carry `J10`/`J12`/`J13`
+   (`P05a`/`P05b`), which operations are synchronous versus admitted through
+   `J03`, and how a `J13` request carrying a full `SupervisedProjection` stays
+   within the J02 16 MiB message bound (ADR-0050 §2; `J14` frames results
+   only, ADR-0066)?
+8. Which evidence trigger re-opens more than one J03 worker (ADR-0062 §3/§4)?
+9. Which wire messages, scopes and deck-side client carry `K12` delivery and
+   `K13` submission (`P06`), and which feature-provider identity the `K13`
+   bundle must carry?
+
+Valid closes: accepted ADRs, or an explicit "keep single process" disposition
+with a recorded evidence trigger. Stop conditions: the gate stops and reports
+if it would weaken ADR-0057's server authority, ADR-0062's no-automatic-retry
+rule or attempt model, ADR-0064's sealed-input identity, ADR-0043's host
+placement or the frozen Consumer API, or change any existing identity. Out of
+this gate: L2 acquisition semantics (`A13`-`A15`), `J11`, `D05` bar-input
+replay, and Omega remote use of `P05`/`P06` (needs its own ADR-0067
+amendment).
+
 ## Explicitly deferable decisions
 
 The following are classified and therefore not roadmap unknowns:
@@ -616,6 +693,13 @@ Strategy/Replay authority. Trigger: a future ADR that defines that semantic
 feature/provider reference and its provenance/availability contract, and
 chooses whether the resulting operation is synchronously bounded or must be
 admitted through `J03`.
+
+Owner decision 2026-10-10 (DG-K, #318): `J11` is **not planned**. Replay runs
+only on the deck, in-process, over `K12`-admitted inputs, and results return
+through `K13` (DG-K atom `P06` carries that handoff over J02). The trigger is
+therefore narrowed: an explicit maintainer request for server-side or
+remote-client replay, after which the ADR above is still required. No `J11`
+design gate follows DG-K.
 
 ### Paper/shadow and live product runtime (`J07`,`J08`)
 

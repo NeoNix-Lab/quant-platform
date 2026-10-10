@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 8 — Full Platform API & Remote Service Topology v1 CLOSED by operator closeout (issue #327): `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` implemented and promoted to `main` (PR #322, #326), within the bounds recorded in their rows; no Wave 8 Golden proof claimed; `J11` remains `OPEN_DEFERABLE`.**
+Status: **CANONICAL; Wave 8 — Full Platform API & Remote Service Topology v1 CLOSED by operator closeout (issue #327): `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` implemented and promoted to `main` (PR #322, #326), within the bounds recorded in their rows; no Wave 8 Golden proof claimed; `J11` remains `OPEN_DEFERABLE` (not planned, owner decision 2026-10-10). DG-K Process Topology v1 is registered as an open design gate (issue #318; design gate #319) with candidate atoms `P01`-`P06`.**
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,22 +10,28 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after the Wave 8 closeout (issue #327; recomputed
+Current audited inventory after the DG-K registration (issue #318; recomputed
 mechanically from the atom tables below, not by hand):
 
 ```text
-TOTAL_ATOMS                     = 96
-CLASSIFIED_ATOMS                = 96
+TOTAL_ATOMS                     = 104
+CLASSIFIED_ATOMS                = 104
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 84 / 96 = 87.5%
-OPEN_BLOCKING                   = 4
+SEMANTIC_FROZEN_OR_RESOLVED     = 84 / 104 = 80.8%
+OPEN_BLOCKING                   = 12
 OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 84 + 4 + 8 = 96
-ROADMAP_PLANNING_COMPLETENESS   = 96 / 96 = 100%
-IMPLEMENTATION_COMPLETE         = 78 / 96 = 81.3%
+ROADMAP_DEFINED                 = 84 + 12 + 8 = 104
+ROADMAP_PLANNING_COMPLETENESS   = 104 / 104 = 100%
+IMPLEMENTATION_COMPLETE         = 78 / 104 = 75.0%
 ```
 
-Wave 8 closeout (issue #327): the nine Wave 8 atoms `J03`, `J09`, `J10`, `J12`,
+DG-K registration (issue #318): eight candidate atoms `P01`, `P02`, `P03`,
+`P04a`, `P04b`, `P05a`, `P05b` and `P06` are added as `OPEN_BLOCKING`/`MISSING`
+under the DG-K design gate (#319). No existing atom changes state; the lower
+percentages reflect a larger inventory, not lost progress (96 -> 104 atoms;
+semantic 87.5% -> 80.8%; implementation 81.3% -> 75.0%).
+
+Earlier, Wave 8 closeout (issue #327): the nine Wave 8 atoms `J03`, `J09`, `J10`, `J12`,
 `J13`, `J14`, `J15`, `K12` and `K13` moved from `MISSING` to `COMPLETE`
 (69 -> 78). No decision state changed, so the semantic score stays at 87.5%.
 Each row states the bound of its credit; in particular `J10`/`J12`/`J13` are
@@ -70,6 +76,7 @@ H  Execution & Portfolio
 I  Experiment / ML / RL
 J  Runtime & Interface
 K  Operations
+P  Process Topology (DG-K candidate atoms; provisional)
 ```
 
 The implemented ownership direction remains governed by ADR-0024 and architecture tests. `application` composes existing capabilities and owns no quantitative meaning.
@@ -203,7 +210,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | J08 | Live product mode | Runtime/Operations | J07,K02,K03,K05,K06,K08,K09,K10 | production | RESOLVED | MISSING | Explicit authorization/audit/recovery gates |
 | J09 | Authenticated/TLS transport v1 | API Runtime | J02 | K12,K13,J10-J13,J15 | FROZEN | COMPLETE | ADR-0063 WSS+TLS 1.3+mTLS non-loopback J02, exact-fingerprint principal mapping, `j02.market_data.read` scope and security evidence implemented by PR #310 / issue #297. Only `j02.market_data.read` exists |
 | J10 | Strategy Consumer-API seam v1 | Application/API | C03,G01-G04,J02 | J04-J06 extension | FROZEN | COMPLETE | ADR-0065 §2 `strategy-compose-v1` implemented as an in-process application seam by PR #308 / issue #300. Not reachable over J02 (no wire message or remote scope; owner decision 2026-10-08 assigns that to DG-K P05) |
-| J11 | Replay Consumer-API seam v1 | Application/API | C03,H05,J02 | J04-J06 extension | OPEN_DEFERABLE | MISSING | ADR-0065 §5 explicitly defers `DG-J` G4's Replay seam: `HistoricalReplayRuntime.run()`'s injected `feature_provider` callable has no accepted identity-bearing, serializable, server-resolved definition yet. Trigger: a future ADR defining that semantic feature/provider reference and whether the resulting operation is synchronous or J03-admitted |
+| J11 | Replay Consumer-API seam v1 | Application/API | C03,H05,J02 | J04-J06 extension | OPEN_DEFERABLE | MISSING | ADR-0065 §5 explicitly defers `DG-J` G4's Replay seam: `HistoricalReplayRuntime.run()`'s injected `feature_provider` callable has no accepted identity-bearing, serializable, server-resolved definition yet. Owner decision 2026-10-10 (DG-K, #318): not planned; replay runs only on the deck over K12-admitted inputs, results return through K13 (P06). Trigger: an explicit maintainer request for server-side or remote-client replay, then a future ADR defining that feature/provider reference and whether the operation is synchronous or J03-admitted |
 | J12 | Validation Consumer-API seam v1 | Application/API | C03,F06-F08,J02 | J04-J06 extension | FROZEN | COMPLETE | ADR-0065 §3 and Amendment 1 finite Validation seam (folds, classification, DSR, bounded synchronous PBO) implemented in-process by PR #312 / issue #301. Not reachable over J02 (DG-K P05) |
 | J13 | Training Consumer-API seam v1 | Application/API | C03,I03-I05,J02 | J04-J06 extension | FROZEN | COMPLETE | ADR-0065 §4 and Amendment 2 bounded `supervised-train-evaluate-v1` seam implemented in-process by PR #315 / issue #302, including RunIdentity/projection provenance refusal. Not reachable over J02 (DG-K P05) |
 | J14 | Streaming/live transport extension v1 | API Runtime | J02 | future live consumer seams | FROZEN | COMPLETE | ADR-0066 `j14-framed-result-v1` framing (RFC 8785, per-chunk/transfer SHA-256, transfer-local resume, bounded retention) implemented by PR #320 / issue #303 (`application/framed_result_transport.py`). Not yet dispatched by the J02 server; no live family |
@@ -227,6 +234,24 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | K12 | Server-owned admitted-input export/reference v1 | Operations | K02,B01-B04 | deck/consumer-machine compute | FROZEN | COMPLETE | ADR-0064 §2 sealed `AdmittedInputManifestV1`, `admission_id` and `ADMITTED`..`DELIVERED` state machine implemented by PR #309 / issue #298 (`application/admitted_input.py`, SQLite store). Physical byte transfer to the deck and a deck-side reader are not claimed |
 | K13 | Governed experiment-result import/registration v1 | Operations | K12,I01,I02 | attributable deck results | FROZEN | COMPLETE | ADR-0064 §3 full-bundle refusal, idempotent re-submission and distinct identities implemented by PR #311 / issue #299 (`application/governed_result_import.py`). Experiment write (PostgreSQL) and evidence record (SQLite) are not one transaction; DG-K P02 must establish it |
 
+### P — Process Topology (DG-K candidate atoms)
+
+Registered by governance issue #318. Names are provisional; the design gate
+(#319: ADR-0068 process topology v1, ADR-0069 J02 carriage of consumer seams
+and deck handoff v1) decides final names. Every atom `Requires` DG-K. Owner
+decisions fixed as inputs are recorded in `OPEN_DECISIONS.md` (DG-K).
+
+| ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
+|---|---|---|---|---|---|---|---|
+| P01 | Canonical identity serializer v1 | Engineering/Application | DG-K | P04a, identities computed in several processes | OPEN_BLOCKING | MISSING | One module with named, versioned byte profiles; every existing identity site declares its profile; golden-hash parity on every existing identity vector (including #313's replay vectors); no identity changes. RFC 8785 is one profile, for J14 and new contracts only |
+| P02 | Runtime store on PostgreSQL v1 | Operations/Application | DG-K,J03,K12,K13 | P04a,P06 | OPEN_BLOCKING | MISSING | `runtime` schema and DB role for the J03/K12/K13 stores (today SQLite); establishes atomic K13 registration with the Experiment write (today PostgreSQL then SQLite, `application/governed_result_import.py:268-288`) |
+| P03 | Executable host boundaries v1 | Engineering | DG-K | P04b | OPEN_BLOCKING | MISSING | Hosts stay in `tools/` (owner decision; ADR-0043 unchanged); per-host import rules in `tests/test_package_boundaries_v1.py`; `clients/*` stay outside `tools/` and `src/quant_platform` |
+| P04a | J03 handler registry and dispatch v1 | Application | DG-K,P01,P02 | P04b | OPEN_BLOCKING | MISSING | Closed, declared, data-local handler set inside `quant_platform.application` (owner decision: no replay/sweep/training handlers on the server); no generic executor (ADR-0062 §6) |
+| P04b | Single J03 worker process v1 | Runtime | DG-K,P03,P04a | P05b | OPEN_BLOCKING | MISSING | Exactly one worker process over the PostgreSQL-backed queue; no broker; restart recovery stays correct with one worker; evidence trigger recorded for more than one (ADR-0062 §3/§4) |
+| P05a | J02 carriage of synchronous J10/J12/J13 v1 | API Runtime | DG-K,J02,J09 | J04-J06 extension | OPEN_BLOCKING | MISSING | J02 wire messages and one remote scope per operation family (ADR-0063) without changing ADR-0065 semantics or J02 v1; J13 requests respect the 16 MiB bound (ADR-0050 §2) |
+| P05b | J02 submit/status/result for J03 data-local jobs v1 | API Runtime | DG-K,P04b | remote data-local jobs | OPEN_BLOCKING | MISSING | Submit/status/result messages for data-local operations admitted through J03 |
+| P06 | Deck handoff over J02 v1 | API Runtime/Operations | DG-K,J09,J14,P02 | deck replay/training with governed results | OPEN_BLOCKING | MISSING | K12 delivery of admitted input bytes (J14 framing for large payloads) and K13 result-bundle submission, one least-privilege scope each; deck-side client verifies delivered digests and submits the bundle; the K13 bundle carries the replay feature-provider code identity. ADR-0064 §4 defines no wire shape today |
+
 ## Dependency integrity
 
 The `Requires` relation is a DAG. In particular, operational capability and implementation sequencing are not conflated:
@@ -241,7 +266,7 @@ K08/A11/K02/K10 are now complete for the selected first live-ingest path, includ
 
 ## Decision gates
 
-There are now **12 unresolved atom decisions** (4 `OPEN_BLOCKING`: `A13`, `A14`, `I06`, `I07`; 8 `OPEN_DEFERABLE`: `A12`, `A15`, `B05`, `B08`, `C06`, `E07`, `H06`, `J11`) grouped into gate families. The `DG-J` Wave 8 gates (`G1`-`G6`) are resolved and their nine atoms are implemented (Wave 8 closeout, issue #327); `J11` is deliberately `OPEN_DEFERABLE` under ADR-0065 §5. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
+There are now **20 unresolved atom decisions** (12 `OPEN_BLOCKING`: `A13`, `A14`, `I06`, `I07`, and DG-K's `P01`, `P02`, `P03`, `P04a`, `P04b`, `P05a`, `P05b`, `P06`; 8 `OPEN_DEFERABLE`: `A12`, `A15`, `B05`, `B08`, `C06`, `E07`, `H06`, `J11`) grouped into gate families. The `DG-J` Wave 8 gates (`G1`-`G6`) are resolved and their nine atoms are implemented (Wave 8 closeout, issue #327); `J11` is deliberately `OPEN_DEFERABLE` under ADR-0065 §5. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
 
 A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path.
 
@@ -356,6 +381,26 @@ Each atom's row above states exactly what is credited. `implement/omega`,
 J02 carriage of `J10`/`J12`/`J13`, J03 dispatch/worker and a single runtime
 store are carried to DG-K Process Topology v1 (#318/#319), not to this gate.
 
+### DG-K — Process Topology v1 — OPEN_BLOCKING (design gate #319)
+
+Registered by governance issue #318 after the Wave 8 closeout. One design-gate
+issue (#319) must produce ADR-0068 (process topology v1) and ADR-0069 (J02
+carriage of consumer seams and deck handoff v1), or close with an explicit
+"keep single process" disposition and evidence trigger. It gates `P01`-`P06`
+above. Fixed owner inputs: identity-preserving canonical profiles (P01), hosts
+in `tools/` (P03), one J03 worker (P04), P05 in DG-K, a free server with
+data-local J03 handlers only and heavy compute on the deck on its own
+initiative, and `J11` not planned. Full question set and stop conditions:
+`OPEN_DECISIONS.md` (DG-K).
+
+```text
+P01 ──┐
+P02 ──┼─> P04a ─> P04b ─> P05b
+P03 ──┘     (P04b also requires P03)
+P05a       (requires J02/J09 only)
+P06        (requires J09, J14, P02)
+```
+
 ## Vertical milestones
 
 | ID | Path | Proposition | State |
@@ -393,10 +438,12 @@ identity cost) and #314 (uniqueness weights) are also on `main` via the ad-hoc
 `implement/wave-8.1` branch, with identities unchanged. No Wave 8 Golden E2E
 proof artifact is claimed. `J11` remains `OPEN_DEFERABLE`.
 
-The next scope is DG-K Process Topology v1 (#318 governance, #319 design gate),
-which owns J02 wiring of `J10`/`J12`/`J13` (P05), J03 dispatch and a single
-worker (P04), the runtime store on PostgreSQL (P02) and one canonical identity
-module (P01). It is not open until #318 lands.
+The current scope is the DG-K Process Topology v1 design gate (registered by
+#318; design gate #319), which owns J02 wiring of `J10`/`J12`/`J13` (P05a/P05b),
+J03 dispatch and a single worker (P04a/P04b), the runtime store on PostgreSQL
+(P02), one canonical identity module (P01), host boundaries (P03) and the deck
+handoff over J02 (P06). It authorizes ADRs only; no `P` atom implementation is
+authorized until a later reconciliation adds an inventory.
 
 No new runtime/product frontier is authorized by this document. Neither the
 Wave 7 closeout, the Omega stabilization line, the `DG-J` resolution nor the
@@ -481,6 +528,7 @@ Wave 7  Runtime / Clients                                 COMPLETE (J02 -> J04/J
 Wave 8  Full Platform API & Remote Service Topology v1    COMPLETE (J03,J09,J10,J12,J13,J14,J15,K12,K13 within
                                                            recorded bounds; J10/J12/J13 in-process only; J11
                                                            deferred; no Golden proof claimed; operator closeout #327)
+DG-K   Process Topology v1 (design gate)                 OPEN (#318/#319; P01-P06 candidate atoms; before Wave 9)
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```
