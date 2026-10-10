@@ -7,12 +7,14 @@ from decimal import Decimal
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.data.models import Instant
 from quant_platform.execution import Fill, LiquidityRole, Order, OrderSide, OrderType
+import quant_platform.portfolio as portfolio_module
 from quant_platform.portfolio import (
     HedgePosition,
     LedgerTransaction,
@@ -442,6 +444,43 @@ class PortfolioLedgerTests(unittest.TestCase):
         second = build()
         self.assertEqual(first.identity, second.identity)
         self.assertTrue(first.identity.startswith("portfolio-ledger-v1:sha256:"))
+
+    def test_ledger_identity_hashes_each_immutable_ledger_once(self):
+        ledger = PortfolioLedger.open(initial_capital="10000", as_of=AS_OF)
+        for index in range(1, 5):
+            order = make_order(
+                side=OrderSide.BUY,
+                quantity="1",
+                reduce_only=False,
+                at=later(index - 1),
+                provenance=f"test:identity-cache:{index}",
+            )
+            ledger = ledger.apply_fill(
+                make_fill(
+                    order=order,
+                    price="100",
+                    quantity="1",
+                    fee="0",
+                    at=later(index),
+                    label=f"identity-cache:{index}",
+                ),
+                order,
+            )
+
+        original_fingerprint = portfolio_module._canonical_fingerprint
+        hashed_transaction_counts: list[int] = []
+
+        def count_ledger_identity_hashes(payload):
+            if "transactions" in payload and "consumed_fill_ids" in payload:
+                hashed_transaction_counts.append(len(payload["transactions"]))
+            return original_fingerprint(payload)
+
+        with patch.object(portfolio_module, "_canonical_fingerprint", count_ledger_identity_hashes):
+            identities = [ledger.identity for _ in range(16)]
+
+        self.assertEqual(1, len(set(identities)))
+        self.assertEqual([len(ledger.transactions)], hashed_transaction_counts)
+        self.assertEqual(ledger.identity, identities[0])
 
 
 if __name__ == "__main__":

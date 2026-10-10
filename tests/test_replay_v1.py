@@ -198,6 +198,25 @@ class ReplayV1Tests(unittest.TestCase):
 
         self.assertEqual(first.trace_fingerprint, second.trace_fingerprint)
         self.assertEqual(first.stable_dict(), second.stable_dict())
+        self.assertEqual(
+            "replay-spec-v1:sha256:e930cfc678274a61c8078fbba99b1efb6287740a62a57dbc5deee95cd92c1559",
+            first.spec_identity,
+        )
+        self.assertEqual(
+            "replay-result-v1:sha256:11c55c7ac41fad4152959dbc49fed620df8a436d361bc63a550d8d26ab301984",
+            first.identity,
+        )
+        self.assertEqual(
+            "replay-summary-v1:sha256:b30117624964014c71068ad4a84069425f42a9e92c94ff6626d05541fd985e28",
+            first.summary.digest,
+        )
+        self.assertEqual(
+            [
+                "portfolio-ledger-v1:sha256:f0456226a7cdeefaeec1322ff8728e91210f12709cbd0712bb35e97fc6afa9de",
+                "portfolio-ledger-v1:sha256:7eace7a517a57c5d6467b77ce79049df11cc2a7e0158b6af8c0d382371a7f88f",
+            ],
+            [snapshot.ledger_identity for snapshot in first.equity_curve],
+        )
         self.assertEqual([order.order_id for order in first.orders], [order.order_id for order in second.orders])
         self.assertEqual([fill.fill_id for fill in first.fills], [fill.fill_id for fill in second.fills])
         self.assertEqual(Decimal("10010"), first.final_ledger.cash)
