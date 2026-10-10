@@ -285,6 +285,12 @@ Activate only when L2 is selected, after the declared L1 dependency. Resolve sna
 
 Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
 
+PR #317 / issue #316 (operator-requested emergency slice, merged during Wave 8)
+added an `l2-book-event-v1` schema, an `L2BookEvent` identity and pure venue
+adapters. No accepted ADR resolves this branch, so `A14` stays `OPEN_BLOCKING`
+and that code is groundwork, not a decision. The L2 branch decision must
+ratify the schema by ADR or supersede it.
+
 ## DG-E — Validation semantics — RESOLVED / IMPLEMENTED
 
 DG-E has no remaining open semantic or implementation branch through F07/F08.
@@ -368,15 +374,16 @@ Freeze StrategicState/StrategicAction/StrategicReward only when the strategic-RL
 
 Freeze ExecutionState/ExecutionAction/ExecutionReward only when execution RL is selected. It must remain structurally separate from the strategic task.
 
-### Job runtime (`J03`) — FROZEN (semantics), implementation MISSING
+### Job runtime (`J03`) — FROZEN (semantics), IMPLEMENTED (durable record)
 
 ADR-0062 freezes `J03`'s decision: submission identity (deterministic `job_id`
 fingerprint), durable lifecycle (`ADMITTED` through `RECOVERY_REQUIRED`),
 attempt/retry-idempotency rules, result/artifact reference requirements, and
 failure semantics for a server-local, Application-owned Job. It does not infer
-transport/process topology, define a remote worker, or implement Job storage,
-schema, scheduling, or an API — see `DG-J` G2 below. Implementation is tracked
-by the Wave 8 implementation inventory in `SCOPE.md`.
+transport/process topology or define a remote worker — see `DG-J` G2 below.
+PR #307 (Wave 8) implements the durable record and lifecycle; handler
+dispatch, a worker process and a PostgreSQL store are not implemented and are
+carried to DG-K Process Topology v1 (#318).
 
 ## DG-H — Operational safety
 
@@ -469,13 +476,13 @@ complete without future attributable repair evidence. This closes the selected
 production-readiness path while preserving issue #110's
 `NO_AUTHORITATIVE_REPAIR_PATH_PROVEN` disposition.
 
-## DG-J — Remote Service Topology (Wave 8 design gates) — RESOLVED
+## DG-J — Remote Service Topology (Wave 8 design gates) — RESOLVED / IMPLEMENTED
 
 All six gates reached a disposition on 2026-10-04 (issues #282-#287, parent
-#281, reconciled by issue #288). `SCOPE.md`'s "Wave 8 — Full Platform API &
-Remote Service Topology v1" records the authorized implementation inventory
-that results; being resolved here is not itself an implementation go-ahead —
-each atom still needs its own implementation issue citing its ADR.
+#281, reconciled by issue #288). Their nine atoms were implemented in Wave 8
+and promoted to `main` (PR #322, #326); the Wave 8 closeout (issue #327)
+records the exact bound of each credit in `CAPABILITY_DAG.md` and `SCOPE.md`.
+No Wave 8 Golden proof artifact is claimed.
 
 ### G1 — Authentication, TLS and authorization for non-loopback J02 — ACCEPTED (ADR-0063)
 
@@ -522,6 +529,13 @@ path/module name/callable would invent a new semantic authority. Trigger for
 revisiting: a future ADR that defines that semantic feature/provider reference
 and whether the resulting operation is synchronous or J03-admitted. Anchors:
 `ROADMAP.md` Wave 8; the existing `C02`/`C03` pattern.
+
+Implementation note (Wave 8 closeout, #327): `J10`/`J12`/`J13` are implemented
+as in-process application seams (PR #308, #312, #315). ADR-0065 defines no J02
+wire message or remote scope for them, and the owner decided on 2026-10-08
+that this carriage belongs to DG-K Process Topology v1 (atom P05, #318), not
+to Wave 8. "Carried over existing J02" above is the design intent, not a
+delivered capability.
 
 ### G5 — Transport evolution for larger/streamed/live results — ACCEPTED (ADR-0066)
 
@@ -586,9 +600,10 @@ runtime beyond the accepted transport/client boundary.
 ADR-0050 Amendment 1 additionally froze a documented 50,000-row/16 MiB result
 bound (`RESULT_TOO_LARGE`) and an explicit wire `max_size`. It left
 authentication, TLS and authorization for non-loopback J02 open at the time;
-**that gap is now frozen (not implemented) under ADR-0063** — see `DG-J` G1 /
-`J09` below. ADR-0057 separately forbids using the non-loopback override as a
-deck/consumer-machine handoff channel until `J09` is actually implemented.
+**that gap is frozen under ADR-0063 and implemented by `J09` (PR #310, Wave 8)**
+— see `DG-J` G1. ADR-0057 forbade using the unauthenticated non-loopback
+override as a deck handoff channel; the authenticated WSS/mTLS surface now
+exists for the `j02.market_data.read` scope only.
 
 ### Replay Consumer-API seam (`J11`)
 
