@@ -85,7 +85,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Runtime | Live product mode | RESOLVED | MISSING | Runtime/Operations | J08 | Requires explicit operational authorization; roadmap state is not authorization. |
 | Interfaces | Authenticated/TLS transport v1 | FROZEN | COMPLETE | API Runtime | J09 | ADR-0063; WSS+mTLS 1.3, exact-fingerprint principal mapping, `j02.market_data.read` scope implemented by PR #310 (Wave 8). |
 | Interfaces | Strategy Consumer-API seam v1 | FROZEN | COMPLETE | Application/API | J10 | ADR-0065 §2; in-process `strategy-compose-v1` seam, PR #308 (Wave 8). Not reachable over J02 (DG-K P05). |
-| Interfaces | Replay Consumer-API seam v1 | OPEN_DEFERABLE | MISSING | Application/API | J11 | ADR-0065 §5 explicitly defers: no accepted identity for `HistoricalReplayRuntime`'s `feature_provider` callable yet. |
+| Interfaces | Replay Consumer-API seam v1 | OPEN_DEFERABLE | MISSING | Application/API | J11 | ADR-0065 §5 explicitly defers: no accepted identity for `HistoricalReplayRuntime`'s `feature_provider` callable yet. Not planned (owner decision 2026-10-10, DG-K #318): replay runs on the deck over K12/K13. |
 | Interfaces | Validation Consumer-API seam v1 | FROZEN | COMPLETE | Application/API | J12 | ADR-0065 §3 + Amendment 1; in-process Validation seam, PR #312 (Wave 8). Not reachable over J02 (DG-K P05). |
 | Interfaces | Training Consumer-API seam v1 | FROZEN | COMPLETE | Application/API | J13 | ADR-0065 §4 + Amendment 2; in-process bounded Training seam, PR #315 (Wave 8). Not reachable over J02 (DG-K P05). |
 | Interfaces | Streaming/live transport extension v1 | FROZEN | COMPLETE | API Runtime | J14 | ADR-0066; `j14-framed-result-v1` framing/verification/resume module, PR #320 (Wave 8). Not yet dispatched by the J02 server; no live family. |
@@ -103,6 +103,14 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Canonical authority reconciled through Wave 4 closeout by governance issue #147. |
 | Operations | Server-owned admitted-input export/reference v1 | FROZEN | COMPLETE | Operations | K12 | ADR-0064; sealed `AdmittedInputManifestV1`/`admission_id` and delivery states, PR #309 (Wave 8). No physical byte transfer or deck reader. |
 | Operations | Governed experiment-result import/registration v1 | FROZEN | COMPLETE | Operations | K13 | ADR-0064 §3; full-bundle refusal and idempotent import, PR #311 (Wave 8). Not one transaction across PostgreSQL and SQLite (DG-K P02). |
+| Topology | Canonical identity serializer v1 | FROZEN | MISSING | Engineering/Application | P01 | ADR-0068 (#319); named versioned byte profiles, no identity changes. |
+| Topology | Runtime store on PostgreSQL v1 | FROZEN | MISSING | Operations/Application | P02 | ADR-0068 (#319); `runtime` schema for J03/K12/K13; atomic K13 registration. |
+| Topology | Executable host boundaries v1 | FROZEN | MISSING | Engineering | P03 | ADR-0068 (#319); hosts stay in `tools/`, per-host import rules. |
+| Topology | J03 handler registry and dispatch v1 | FROZEN | MISSING | Application | P04a | ADR-0068 (#319); closed data-local handler set. |
+| Topology | Single J03 worker process v1 | FROZEN | MISSING | Runtime | P04b | ADR-0068 (#319); exactly one worker, no broker. |
+| Topology | J02 carriage of synchronous J10/J12/J13 v1 | FROZEN | MISSING | API Runtime | P05a | ADR-0069 (#319); wire messages and one scope per operation family. |
+| Topology | J02 submit/status/result for J03 data-local jobs v1 | FROZEN | MISSING | API Runtime | P05b | ADR-0069 (#319); requires P04b. |
+| Topology | Deck handoff over J02 v1 | FROZEN | MISSING | API Runtime/Operations | P06 | ADR-0069 (#319); K12 byte delivery and K13 submission, deck-side client, feature-provider code identity in the bundle. |
 
 ## Gate / evidence state
 
@@ -142,6 +150,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Omega external-audit stabilization line (`implement/omega`, tracking #232) | COMPLETE for the audited findings | Not a wave; a post-Wave-7 stabilization line reconciling an external audit from integrating `NeoNix-Lab/omega`. 25 PRs (#254, #256-#278) merged: safety tooling/package hygiene (#254), workflow non-wave integration-branch detection (#256), exception-handling narrowing (#257), SQLite covering-index preflight (#258), systemd hardening (#259), J02 result-size bound (ADR-0050 Am.1, #260), StrategySpec extensions (ADR-0051/52/53, #261-263), A07 day-boundary (ADR-0054, #264), H05 repeated-entry gating (#265-266), `k_eff` permanent disposition (ADR-0037 Am.1, #267), `shell=True` removal (#268), promotion-candidate validation (#269), public dependency surface (#270), Omega validation bridge (ADR-0055, #271), Golden proof/test-double boundary (ADR-0056, #272), server/deck topology (ADR-0057, #273), replay sweep orchestration boundary (ADR-0058, #274), D05 representation-replay input (ADR-0059, #275), canonical replay I/O profile (ADR-0060, #276), replay summary mode (ADR-0061, #277), and replay strategy-identity caching (#278). This governance pass (issue "Omega stabilization-line reconciliation and platform-v1.0 service-topology scope") reconciles the above into governance state; it adds no new code itself. |
 | `DG-J` Remote Service Topology design-gate line (issues #282-#287, parent #281) | RESOLVED for all six gates | Six design-gate issues on `implement/omega` each produced one ACCEPTED ADR: G1/`J09` (ADR-0063, #283/PR #290), G2/`J03` (ADR-0062, #282/PR #289), G3/`K12`+`K13` (ADR-0064, #284/PR #291), G4/`J10`,`J12`,`J13` (ADR-0065, #285/PR #292; `J11` explicitly deferred), G5/`J14` (ADR-0066, #286/PR #293), G6/`J15` (ADR-0067, #287/PR #294). Issue #288 reconciles these outcomes into governance state and authorizes the Wave 8 implementation inventory; `implement/omega` is closed as the bounded design-integration line for this scope. |
 | Wave 8 Full Platform API & Remote Service Topology | COMPLETE (operator closeout #327) | J03/J09/J10/J12/J13/J14/J15/K12/K13 implemented by PR #307-#312, #315, #320, #321 and promoted by PR #322; owner-accepted extras #313/#314 by PR #323/#324 via `implement/wave-8.1` and PR #326. J10/J12/J13 are in-process seams only; no Wave 8 Golden proof artifact is claimed. PR #317 (A14 L2 groundwork) does not complete A14. |
+| `DG-K` Process Topology v1 design gate (governance #318, design gate #319) | RESOLVED | ADR-0068 (process topology v1) and ADR-0069 (J02 carriage of consumer seams and deck handoff v1) accepted; P01-P06 `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B; no implementation issue opened yet. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
@@ -165,9 +174,12 @@ Wave 8 — Full Platform API & Remote Service Topology v1 is closed by operator
 closeout (issue #327): `J03`, `J09`, `J10`, `J12`, `J13`, `J14`, `J15`, `K12`,
 `K13` are implemented and on `main` (PR #322, #326) within the bounds in their
 rows; `J11` remains deferred; no Wave 8 Golden proof artifact is claimed. The
-next scope is DG-K Process Topology v1 (#318/#319), which owns J02 wiring of
-`J10`/`J12`/`J13`, J03 dispatch/worker, the runtime store on PostgreSQL and one
-canonical identity module. J07, J08, RL, broker/live execution, second venue
+current scope is DG-K Process Topology v1: its design gate is resolved by
+ADR-0068 and ADR-0069 (#319), and `SCOPE.md` Part B authorizes P01-P06 (J02
+wiring of `J10`/`J12`/`J13`, J03 dispatch and one worker, the runtime store on
+PostgreSQL, one canonical identity module, host boundaries and the K12/K13
+deck handoff over J02). No implementation issue is open yet. `J11` is not
+planned. J07, J08, RL, broker/live execution, second venue
 and L1/L2/L3 market depth remain outside every closed scope (`A14` has
 groundwork from PR #317 only). Frontier/readiness state is **not concurrent
 implementation authorization**.
