@@ -261,6 +261,109 @@ class FamilyDispatchTests(unittest.IsolatedAsyncioTestCase):
         execute.assert_not_called()
 
 
+class FamilyFailedBodyTests(unittest.IsolatedAsyncioTestCase):
+    """Raw body failures must never select a different authorization family."""
+
+    def wire(self, *, body, header_last=False, **overrides):
+        header = {
+            "message_family": "j02-strategy-v1",
+            "schema_version": "j02-strategy-v1-request-v1",
+            "operation": "compose", "request_id": "r",
+        }
+        header.update(overrides)
+        fields = json.dumps(header)[1:-1]
+        request = '"request":' + body
+        return "{" + (request + "," + fields if header_last else fields + "," + request) + "}"
+
+    def bad_bodies(self):
+        return (
+            '{"value":' + "9" * 5000 + "}",
+            '{"value":}',  # A JSON syntax failure as well as conversion failure.
+        )
+
+    async def exchange(self, wire, scopes):
+        decoder, executor, legacy = MagicMock(), MagicMock(), MagicMock()
+        handler = transport.J02FamilyHandler(
+            SCOPE, "j02-strategy-v1-response-v1", decoder, executor,
+        )
+        configuration = security(principal=transport.RemoteJ02Principal("peer", scopes))
+        configuration.evidence_log._max_events = 16
+        socket = Socket([wire])
+        await transport.handle_api_transport_connection(
+            socket, execute=legacy, remote_security=configuration,
+            family_handlers={
+                ("j02-strategy-v1", "j02-strategy-v1-request-v1", "compose"): handler,
+            },
+        )
+        decoder.assert_not_called()
+        executor.assert_not_called()
+        legacy.assert_not_called()
+        return socket, configuration
+
+    def test_reviewer_integer_probe_is_valid_json_below_the_wire_bound(self):
+        wire = self.wire(body=self.bad_bodies()[0])
+        self.assertLess(len(wire.encode()), transport.J02_MAX_WIRE_MESSAGE_BYTES)
+        self.assertEqual("9" * 5000, json.loads(wire, parse_int=str)["request"]["value"])
+
+    async def test_bad_family_body_denies_wrong_scope_before_any_decoder(self):
+        for body in self.bad_bodies():
+            for header_last in (False, True):
+                with self.subTest(body_size=len(body), header_last=header_last):
+                    socket, config = await self.exchange(
+                        self.wire(body=body, header_last=header_last),
+                        frozenset({"j02.market_data.read"}),
+                    )
+                    self.assertEqual([(1008, "policy denied")], socket.close_calls)
+                    self.assertEqual([], socket.responses)
+                    self.assertEqual(SCOPE, config.evidence_log.events[-1].requested_scope)
+
+    async def test_bad_family_body_keeps_authorized_family_and_request_id(self):
+        for body in self.bad_bodies():
+            for header_last in (False, True):
+                with self.subTest(body_size=len(body), header_last=header_last):
+                    socket, config = await self.exchange(
+                        self.wire(body=body, header_last=header_last), frozenset({SCOPE}),
+                    )
+                    self.assertEqual([], socket.close_calls)
+                    response = socket.responses[0]
+                    self.assertEqual("j02-strategy-v1", response["message_family"])
+                    self.assertEqual("j02-strategy-v1-response-v1", response["schema_version"])
+                    self.assertEqual("r", response["request_id"])
+                    self.assertEqual("invalid_request", response["error"]["code"])
+                    self.assertEqual([SCOPE], [event.requested_scope for event in config.evidence_log.events])
+
+    async def test_bad_body_unknown_or_invalid_header_never_falls_back(self):
+        for header in (
+            {"message_family": "unknown-family-v1"}, {"schema_version": "unknown"},
+            {"message_family": None},
+        ):
+            for body in self.bad_bodies():
+                with self.subTest(header=header, body_size=len(body)):
+                    socket, _ = await self.exchange(self.wire(body=body, header_last=True, **header), SCOPES)
+                    self.assertEqual([], socket.close_calls)
+                    self.assertNotEqual(transport.J02_RESPONSE_SCHEMA_VERSION, socket.responses[0]["schema_version"])
+                    self.assertIn("unsupported", socket.responses[0]["error"]["message"])
+
+    async def test_bad_body_with_only_nested_or_quoted_family_stays_legacy(self):
+        for body in (
+            '{"message_family":"j02-strategy-v1","value":' + "9" * 5000 + "}",
+            '{"quoted":"\\\"message_family\\\":\\\"j02-strategy-v1\\\"","value":' + "9" * 5000 + "}",
+        ):
+            with self.subTest(body_size=len(body)):
+                wire = '{"schema_version":"j02-request-v1","request_id":"r","request":' + body + "}"
+                socket, _ = await self.exchange(wire, frozenset({"j02.market_data.read"}))
+                self.assertEqual(transport.J02_RESPONSE_SCHEMA_VERSION, socket.responses[0]["schema_version"])
+                self.assertIsNone(socket.responses[0]["request_id"])
+
+    async def test_header_recovery_handles_escaped_keys_and_quoted_body_delimiters(self):
+        body = '{"quoted":"\\\",}\\\"message_family\\\":\\\"unknown\\\"","value":' + "9" * 5000 + "}"
+        wire = self.wire(body=body, header_last=True).replace('"message_family"', '"message_\\u0066amily"')
+        socket, config = await self.exchange(wire, frozenset({SCOPE}))
+        self.assertEqual("j02-strategy-v1", socket.responses[0]["message_family"])
+        self.assertEqual("r", socket.responses[0]["request_id"])
+        self.assertEqual([SCOPE], [event.requested_scope for event in config.evidence_log.events])
+
+
 class FamilyResponseAndBodyTests(unittest.IsolatedAsyncioTestCase):
     """Review findings on the response path, the lossless body and the scope interface."""
 

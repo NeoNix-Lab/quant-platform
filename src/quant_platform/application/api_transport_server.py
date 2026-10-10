@@ -373,7 +373,8 @@ class _ParsedMessage:
 
     @property
     def family(self) -> bool:
-        return (not self.failed) and isinstance(self.payload, Mapping) and "message_family" in self.payload
+        # A body parse failure cannot turn a present family into an absent one.
+        return isinstance(self.payload, Mapping) and "message_family" in self.payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -683,14 +684,92 @@ def _parse_message(message: str | bytes) -> _ParsedMessage:
             lossless = False
         return mapping
 
+    text = None
     try:
+        text = _message_text(message)
         payload = json.loads(
-            _message_text(message), parse_float=lossy_float,
+            text, parse_float=lossy_float,
             parse_constant=lossy_constant, object_pairs_hook=unique_pairs,
         )
     except Exception:
-        return _ParsedMessage(None, True, False)  # Preserve v1 malformed-message handling.
+        # Parse only top-level header values independently of the failed body.
+        # No recovered payload may reach a decoder, even if its header routes.
+        header = _recover_family_header(text) if text is not None else None
+        return _ParsedMessage(header, True, False)
     return _ParsedMessage(payload, False, lossless)
+
+
+def _recover_family_header(text: str) -> dict[str, Any] | None:
+    """Retain top-level headers on a failed parse, without converting the body.
+
+    This is not an alternate request parser: the failed message stays failed.
+    Scan value boundaries with quote/escape and nesting tracking, then use the
+    standard decoder only for scalar header values. Never search for a header
+    substring inside a string or a nested object. Normal messages use one parse.
+    """
+    decoder = json.JSONDecoder()
+    header: dict[str, Any] = {}
+    index = len(text) - len(text.lstrip(" \t\r\n"))
+    if index == len(text) or text[index] != "{":
+        return None
+    index += 1
+    while index < len(text):
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if index == len(text) or text[index] != '"':
+            break
+        try:
+            key, index = decoder.raw_decode(text, index)
+        except (ValueError, RecursionError):
+            break
+        if not isinstance(key, str):
+            break
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if index == len(text) or text[index] != ":":
+            break
+        index += 1
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        start = index
+        depth = 0
+        quoted = escaped = False
+        while index < len(text):
+            character = text[index]
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    quoted = False
+            elif character == '"':
+                quoted = True
+            elif character in "[{":
+                depth += 1
+            elif character in "]}":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif character == "," and depth == 0:
+                break
+            index += 1
+        if key in ("message_family", "schema_version", "operation", "request_id"):
+            # Presence is retained even for an invalid header value. Only
+            # strings can route; do not recursively decode header containers.
+            value = None
+            if start < len(text) and text[start] == '"':
+                try:
+                    decoded, end = decoder.raw_decode(text, start)
+                    if end <= index and not text[end:index].strip(" \t\r\n"):
+                        value = decoded
+                except (ValueError, RecursionError):
+                    pass
+            header[key] = value
+        if index == len(text) or text[index] != ",":
+            break
+        index += 1
+    return header if "message_family" in header else None
 
 
 def _declared_family_scope(family: str, version: str, operation: str) -> str | None:
@@ -746,7 +825,7 @@ def _prepare_family_request(
         if not isinstance(request_id, str) or not request_id:
             raise ValueError("request_id must be a non-empty string")
         envelope["request_id"] = request_id
-        if not parsed.lossless:
+        if parsed.failed or not parsed.lossless:
             raise ValueError("request must be lossless canonical JSON")
         request = payload.get("request")
         if not isinstance(request, Mapping):
