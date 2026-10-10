@@ -560,7 +560,27 @@ remote implementation of `J15` is explicitly blocked until `J09` is
 implemented** — this ADR authorizes neither that server work nor an Omega
 adapter by itself. Freezes `J15`. Anchors: ADR-0055; `PUBLIC_PYTHON_API.md`.
 
-## DG-K — Process Topology v1 — OPEN_BLOCKING (design gate #319)
+## DG-K — Process Topology v1 — RESOLVED (ADR-0068, ADR-0069)
+
+**Resolved 2026-10-10 by design gate #319:** ADR-0068 (process topology v1)
+and ADR-0069 (J02 carriage of consumer seams and deck handoff v1) are
+`ACCEPTED`. `P01`-`P04b` are `FROZEN` under ADR-0068 and `P05a`, `P05b`, `P06`
+under ADR-0069; implementation is `MISSING` and no implementation issue is
+open yet. Answers in summary: (1) five units: ingest, platform API, exactly one
+J03 worker, PostgreSQL, deck compute; (2) every domain package stays an
+in-process library; (3) a `runtime` schema with per-unit login roles, no deck
+database login; (4) J03/K12/K13 stores move to `runtime` and K13 registration
+becomes one transaction with the Experiment write; (5) four named byte
+profiles reproduce today's identity bytes, RFC 8785 only for J14 and new
+contracts, and server units run one commit; (6) per-host import rules for
+`tools/`; (7) additive J02 message families with one scope each, synchronous
+`J10`/`J12`/`J13` within unchanged budgets and J13 requests bounded by 16 MiB;
+(8) a second worker needs recorded queue-wait evidence and an ADR-0062 §4
+amendment first; (9) deck-initiated K12 delivery and K13 submission with a
+`feature-provider-v1` code identity in replay bundles. Over-budget PBO and
+training are deck work, which answers the J03 dispatch question ADR-0065
+Amendments 1 and 2 had deferred. The text below is the registration record
+(#318) the gate answered.
 
 Registered by governance issue #318 (2026-10-10) after the Wave 8 closeout
 (#327). ADR-0024 §6 leaves open whether any component becomes an

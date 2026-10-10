@@ -75,8 +75,8 @@ DG-J Remote Service Topology design gates       RESOLVED (issues #282-#287/#288;
 (implement/omega, PR #289-#294)                     J11 deferred; Wave 8 implementation inventory authorized)
 Wave 8 Full Platform API & Remote Service       COMPLETE (J03,J09,J10,J12-J15,K12,K13; operator closeout #327;
 Topology v1 (PR #322, #326)                         J10/J12/J13 in-process only; no Golden proof claimed)
-DG-K Process Topology v1 design gate             OPEN (governance #318; design gate #319; candidate atoms
-                                                    P01-P06; ADRs only, no implementation authorized)
+DG-K Process Topology v1 design gate             RESOLVED (#318/#319; ADR-0068, ADR-0069; P01-P06 FROZEN,
+                                                    authorized in SCOPE.md Part B, issues not yet opened)
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
@@ -102,15 +102,19 @@ Completed checkpoints are credited and must not be re-proved absent a concrete i
 TOTAL_ATOMS                     104
 CLASSIFIED_ATOMS                104
 UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     84 / 104 = 80.8%
-OPEN_BLOCKING                   12
+SEMANTIC_FROZEN_OR_RESOLVED     92 / 104 = 88.5%
+OPEN_BLOCKING                   4
 OPEN_DEFERABLE                  8
-ROADMAP_DEFINED                 84 + 12 + 8 = 104
+ROADMAP_DEFINED                 92 + 4 + 8 = 104
 ROADMAP_PLANNING_COMPLETENESS   104 / 104 = 100%
 IMPLEMENTATION_COMPLETE         78 / 104 = 75.0%
 ```
 
-DG-K registration (issue #318) adds eight candidate atoms (`P01`, `P02`,
+DG-K design-gate reconciliation (#319): ADR-0068 and ADR-0069 are accepted,
+so `P01`-`P06` move from `OPEN_BLOCKING` to `FROZEN` (84 -> 92 decided);
+implementation stays `MISSING`.
+
+Earlier, DG-K registration (issue #318) added eight candidate atoms (`P01`, `P02`,
 `P03`, `P04a`, `P04b`, `P05a`, `P05b`, `P06`) as `OPEN_BLOCKING`/`MISSING`. No
 existing atom changes state; the percentages fall because the inventory grows
 from 96 to 104 atoms, not because anything regressed.
@@ -143,7 +147,7 @@ DG-G  Experiment / RL / Jobs
 DG-H  Operational safety
 DG-I  API transport / client convergence        RESOLVED / IMPLEMENTED
 DG-J  Remote Service Topology (Wave 8)           RESOLVED / IMPLEMENTED
-DG-K  Process Topology v1                        OPEN_BLOCKING (design gate #319)
+DG-K  Process Topology v1                        RESOLVED (ADR-0068, ADR-0069)
 ```
 
 Important current boundaries:
@@ -160,7 +164,7 @@ Important current boundaries:
 Explicit deferables — second-provider resolution, exact L3/MBO semantics, DatasetSnapshot shape, future schema evolution, generic provider extension, multi-asset execution, and the Replay Consumer-API seam (`J11`, not planned per owner decision 2026-10-10: replay runs on the deck over K12/K13) — remain open until their evidence trigger exists. Concrete API transport was resolved by ADR-0050 in Wave 7; authentication/TLS for non-loopback deployment is frozen under ADR-0063 and implemented by `J09` (Wave 8).
 
 - DG-J: all six gates resolved (ADR-0062 through ADR-0067); see `docs/architecture/OPEN_DECISIONS.md` for the full G1-G6 disposition text. `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` are frozen and implemented (Wave 8 closeout #327, within recorded bounds); `J11` remains `OPEN_DEFERABLE`.
-- DG-K: Process Topology v1 is registered (#318) and open as a single design gate (#319: ADR-0068 process topology v1, ADR-0069 J02 carriage of consumer seams and deck handoff v1). It gates candidate atoms `P01`-`P06`; owner inputs fix identity-preserving canonical profiles, hosts in `tools/`, one J03 worker, a free server with data-local J03 handlers only, heavy compute on the deck on its own initiative, and `J11` not planned. See `OPEN_DECISIONS.md` (DG-K).
+- DG-K: Process Topology v1 is resolved (#318 registration, #319 design gate: ADR-0068 process topology v1, ADR-0069 J02 carriage of consumer seams and deck handoff v1). `P01`-`P06` are `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B, with no implementation issue opened yet; owner inputs fix identity-preserving canonical profiles, hosts in `tools/`, one J03 worker, a free server with data-local J03 handlers only, heavy compute on the deck on its own initiative, and `J11` not planned. See `OPEN_DECISIONS.md` (DG-K).
 
 ## Operational dependency direction
 
@@ -211,9 +215,10 @@ and `K13` are implemented and promoted to `main` (PR #322, #326). `J10`/`J12`/
 remote scope carries them yet. No Wave 8 Golden E2E proof artifact is claimed.
 Owner-accepted extras #313/#314 are on `main` through `implement/wave-8.1`.
 
-The current scope is the DG-K Process Topology v1 design gate (registered by
-#318, design gate #319). It authorizes ADRs only; no `P` atom implementation
-is authorized until a later reconciliation adds an inventory.
+The current scope is DG-K Process Topology v1. Its design gate is closed
+(ADR-0068, ADR-0069, #319) and `SCOPE.md` Part B authorizes `P01`-`P06`;
+implementation issues are not opened yet. Startable first: `P01`, `P02`, `P03`,
+`P05a`.
 
 No new runtime/product frontier is authorized by this closeout, the Wave 8
 closeout or the stabilization line. H06, I06-I07, J07/J08, RL, live broker execution, second
@@ -239,7 +244,7 @@ Wave 8  Full Platform API & Remote Service Topology v1    COMPLETE (J03,J09,J10,
                                                            recorded bounds; J10/J12/J13 in-process only; J11
                                                            deferred; no Golden proof claimed; operator closeout
                                                            #327). J02 carriage of J10/J12/J13 moves to DG-K P05.
-DG-K    Process Topology v1 (design gate, not a wave)     OPEN (#318/#319; P01-P06 candidate atoms; before Wave 9)
+DG-K    Process Topology v1 (design-gate line, not a wave) ADRs ACCEPTED (#319); P01-P06 authorized, MISSING; before Wave 9
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL; harvest-audit
                                                            evidence sources: ml_core (already the Wave 5 legacy
                                                            baseline), JJJerome/mbt_gym, sadighian/crypto-rl
