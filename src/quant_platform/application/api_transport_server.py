@@ -12,7 +12,7 @@ authorizes the header's scope before invoking any semantic request decoder.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import asyncio
@@ -96,13 +96,18 @@ class J02FamilyHandler:
     """One server-composed family/version/operation route; none is installed by default.
 
     The scope is resolved from the header route, never from the request body.
-    Concrete seam codecs and handlers belong to subsequent implementation atoms.
+    ``additional_scopes`` lets a codec declare grants that depend on the decoded
+    request (for example ADR-0069 section 3's ``register`` flag): the server
+    authorizes each returned scope, with evidence, after decoding and before
+    ``execute`` can run. Concrete seam codecs and handlers belong to subsequent
+    implementation atoms.
     """
 
     required_scope: str
     response_schema_version: str
     decode_request: Callable[[Mapping[str, Any]], Any]
     execute: Callable[[Any], Mapping[str, Any]]
+    additional_scopes: Callable[[Any], Iterable[str]] | None = None
 
     def __post_init__(self) -> None:
         if self.required_scope not in J02_REMOTE_SCOPES:
@@ -111,6 +116,8 @@ class J02FamilyHandler:
             raise ValueError("response_schema_version must be a non-empty string")
         if not callable(self.decode_request) or not callable(self.execute):
             raise TypeError("family decoder and executor must be callable")
+        if self.additional_scopes is not None and not callable(self.additional_scopes):
+            raise TypeError("additional_scopes must be callable")
 
 
 FamilyHandlers = Mapping[tuple[str, str, str], J02FamilyHandler]
@@ -353,39 +360,120 @@ def encode_consumer_error(error: ConsumerApiError) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _ParsedMessage:
+    """One JSON syntax parse, shared by header selection and body handling."""
+
+    payload: Any
+    failed: bool
+    # False when the text carried a float, NaN/Infinity or a duplicate key, i.e.
+    # something ``json.loads`` would silently round, coerce or overwrite.
+    lossless: bool
+
+    @property
+    def family(self) -> bool:
+        return (not self.failed) and isinstance(self.payload, Mapping) and "message_family" in self.payload
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedFamilyRequest:
+    envelope: dict[str, Any]
+    decoded: Any
+    additional_scopes: frozenset[str]
+
+
 def handle_api_transport_message(
     message: str | bytes, *, execute: MarketDataExecutor,
     family_handler: J02FamilyHandler | None = None,
+    _parsed: _ParsedMessage | None = None,
+    _family_response: dict[str, Any] | None = None,
 ) -> str:
-    """Handle one JSON request message and return one JSON response message."""
+    """Handle one JSON request message and return one JSON response message.
 
+    This direct entry point has no principal, so a family handler that declares
+    ``additional_scopes`` cannot be authorized here and is treated as
+    unsupported; the connection handler authorizes those scopes itself.
+    ``_parsed`` and ``_family_response`` let the connection handler hand over
+    its single parse and an already-built family response, so that every
+    response keeps going through this one canonical serialization site.
+    """
+
+    family = _family_response is not None
+    if _family_response is not None:
+        response = _family_response
+    else:
+        parsed = _parsed if _parsed is not None else _parse_message(message)
+        family = parsed.family
+        if family:
+            response = _build_direct_family_response(parsed, family_handler)
+        else:
+            response = _build_v1_response(parsed, execute)
+    original = response
+    while True:
+        try:
+            encoded = canonical_bytes(response, profile="sorted-compact-ascii-v1", allow_nan=True)
+            if family and response is original and len(encoded) > J02_MAX_WIRE_MESSAGE_BYTES:
+                raise _ResponseTooLarge
+            return encoded.decode("utf-8")
+        except _ResponseTooLarge:
+            # J02 v1 has RESULT_TOO_LARGE for this; a 1009 close is not typed.
+            response = _family_failure(
+                original, ConsumerErrorCode.RESULT_TOO_LARGE, _RESULT_TOO_LARGE_MESSAGE,
+            )
+        except Exception:
+            # Only a family result is server-composed arbitrary data; v1 keeps
+            # its existing behavior for frozen Consumer API types.
+            if not family or response is not original:
+                raise
+            response = _family_failure(
+                original, ConsumerErrorCode.INTEGRITY_FAILURE, _INTEGRITY_FAILURE_MESSAGE,
+            )
+
+
+class _ResponseTooLarge(Exception):
+    pass
+
+
+def _build_direct_family_response(
+    parsed: _ParsedMessage, family_handler: J02FamilyHandler | None,
+) -> dict[str, Any]:
+    # An additive envelope must never be coerced into a v1 query, even when it
+    # also carries a perfectly valid legacy query.
+    prepared, response = _prepare_family_request(parsed, family_handler)
+    if prepared is None:
+        return response
+    if prepared.additional_scopes:
+        return _family_failure(
+            prepared.envelope, ConsumerErrorCode.INVALID_REQUEST, _FAMILY_UNSUPPORTED_MESSAGE,
+        )
+    return _execute_family_request(prepared, family_handler)
+
+
+def _build_v1_response(parsed: _ParsedMessage, execute: MarketDataExecutor) -> dict[str, Any]:
     request_id: str | None = None
     try:
-        payload = json.loads(_message_text(message))
+        if parsed.failed:
+            raise ValueError("request is not valid JSON")
+        payload = parsed.payload
         if not isinstance(payload, Mapping):
             raise ValueError("request payload must be a JSON object")
-        if "message_family" in payload:
-            # An additive envelope must never be coerced into a v1 query, even
-            # when it also carries a perfectly valid legacy query.
-            response = _handle_family_message(payload, handler=family_handler)
-        else:
-            request_id, query = decode_transport_query(payload)
-            result = execute(query)
-            response = {
-                "schema_version": J02_RESPONSE_SCHEMA_VERSION,
-                "request_id": request_id,
-                "status": "ok",
-                "result": encode_consumer_result(result),
-            }
+        request_id, query = decode_transport_query(payload)
+        result = execute(query)
+        return {
+            "schema_version": J02_RESPONSE_SCHEMA_VERSION,
+            "request_id": request_id,
+            "status": "ok",
+            "result": encode_consumer_result(result),
+        }
     except ConsumerApiError as exc:
-        response = {
+        return {
             "schema_version": J02_RESPONSE_SCHEMA_VERSION,
             "request_id": request_id,
             "status": "error",
             "error": encode_consumer_error(exc),
         }
     except Exception:
-        response = {
+        return {
             "schema_version": J02_RESPONSE_SCHEMA_VERSION,
             "request_id": request_id,
             "status": "error",
@@ -396,7 +484,33 @@ def handle_api_transport_message(
                 "request_identity": None,
             },
         }
-    return canonical_bytes(response, profile="sorted-compact-ascii-v1", allow_nan=True).decode("utf-8")
+
+
+def _validate_family_routes(
+    routes: Mapping[tuple[str, str, str], J02FamilyHandler],
+    remote_security: RemoteJ02SecurityConfig | None,
+) -> None:
+    """Fail composition early: routes are checked at startup, not per connection."""
+
+    if routes and remote_security is None:
+        # ADR-0069 section 1 places families on the WSS/mTLS endpoint; the
+        # eight family scopes have no meaning on an unauthenticated listener.
+        raise ValueError("family routes require remote_security (TLS/mTLS authorization)")
+    for key, route in routes.items():
+        if (
+            not isinstance(key, tuple) or len(key) != 3
+            or not all(isinstance(part, str) and part for part in key)
+            or not isinstance(route, J02FamilyHandler)
+        ):
+            raise ValueError("family routes must map (family, version, operation) to J02FamilyHandler")
+        family, version, operation = key
+        declared_scope = _declared_family_scope(family, version, operation)
+        if family in _FAMILY_OPERATION_SCOPES and (
+            declared_scope is None or route.required_scope != declared_scope
+        ):
+            raise ValueError("family route must preserve its declared header scope and version")
+        if route.response_schema_version != f"{family}-response-v1":
+            raise ValueError("family route response_schema_version must be <family>-response-v1")
 
 
 async def handle_api_transport_connection(
@@ -411,12 +525,7 @@ async def handle_api_transport_connection(
     session_id = secrets.token_hex(16)
     # Snapshot trusted composition, not a request-controlled route registry.
     routes = dict(family_handlers or {})
-    for (family, version, operation), route in routes.items():
-        declared_scope = _declared_family_scope(family, version, operation)
-        if family in _FAMILY_OPERATION_SCOPES and (
-            declared_scope is None or route.required_scope != declared_scope
-        ):
-            raise ValueError("family route must preserve its declared header scope and version")
+    _validate_family_routes(routes, remote_security)
     if remote_security is not None and not await _authorize_remote_connection(
         websocket, remote_security, session_id=session_id, required_scope=None
     ):
@@ -425,40 +534,54 @@ async def handle_api_transport_connection(
     async for message in websocket:
         # Revocation and policy removal take effect at every request boundary;
         # an already-open socket must not retain a prior authorization grant.
+        # An allowed recheck records nothing: the scope check below writes the
+        # single evidence row for this message.
         if remote_security is not None and not await _authorize_remote_connection(
-            websocket, remote_security, session_id=session_id, required_scope=None
+            websocket, remote_security, session_id=session_id, required_scope=None,
+            record_allow=False,
         ):
             return
-        payload = _family_payload(message)
-        if payload is None:
-            required_scope = J02_MARKET_DATA_READ_SCOPE
-            handler = None
-        else:
-            header = tuple(payload.get(name) for name in (
+        parsed = await asyncio.to_thread(_parse_message, message)
+        handler = None
+        if parsed.family:
+            header = tuple(parsed.payload.get(name) for name in (
                 "message_family", "schema_version", "operation"
             ))
-            handler = (
-                routes.get(header)
-                if all(isinstance(value, str) and value for value in header)
-                else None
-            )
-            required_scope = (
-                _declared_family_scope(*header)
-                if all(isinstance(value, str) and value for value in header) else None
-            )
+            well_formed = all(isinstance(value, str) and value for value in header)
+            handler = routes.get(header) if well_formed else None
+            required_scope = _declared_family_scope(*header) if well_formed else None
             if required_scope is None and handler is not None:
                 required_scope = handler.required_scope
+        else:
+            required_scope = J02_MARKET_DATA_READ_SCOPE
         if required_scope is not None and remote_security is not None:
             if not await _authorize_remote_connection(
                 websocket, remote_security, session_id=session_id, required_scope=required_scope
             ):
                 return
-        if payload is None:
-            response = await asyncio.to_thread(handle_api_transport_message, message, execute=execute)
-        else:
+        if not parsed.family:
             response = await asyncio.to_thread(
-                handle_api_transport_message, message, execute=execute, family_handler=handler,
+                handle_api_transport_message, message, execute=execute, _parsed=parsed,
             )
+        else:
+            prepared, early = await asyncio.to_thread(_prepare_family_request, parsed, handler)
+            if prepared is None:
+                response = await asyncio.to_thread(
+                    handle_api_transport_message, message, execute=execute,
+                    _family_response=early,
+                )
+            else:
+                # Body-dependent grants (ADR-0069 section 3) are authorized
+                # after decode but strictly before the executor can run.
+                for extra_scope in sorted(prepared.additional_scopes):
+                    if not await _authorize_remote_connection(
+                        websocket, remote_security, session_id=session_id,
+                        required_scope=extra_scope,
+                    ):
+                        return
+                response = await asyncio.to_thread(
+                    _execute_family_wire, message, prepared, handler, execute,
+                )
         await websocket.send(response)
 
 
@@ -471,8 +594,11 @@ async def run_api_transport_server(
 ) -> None:
     """Run the J02 server until ``stop_event`` is set."""
 
-    executor = execute or compose_market_data_executor(config)
     remote_security = config.remote_security
+    # Invalid composition must stop the process at startup, not surface as a
+    # ValueError inside every connection handler.
+    _validate_family_routes(dict(family_handlers or {}), remote_security)
+    executor = execute or compose_market_data_executor(config)
     ssl_context = remote_security.build_server_ssl_context() if remote_security is not None else None
     async with websockets.serve(
         lambda websocket: handle_api_transport_connection(
@@ -498,13 +624,36 @@ def _message_text(message: str | bytes) -> str:
     raise TypeError("WebSocket messages must be text or UTF-8 bytes")
 
 
-def _family_payload(message: str | bytes) -> Mapping[str, Any] | None:
-    """Parse JSON syntax to select a header, without decoding a semantic body."""
+def _parse_message(message: str | bytes) -> _ParsedMessage:
+    """Parse JSON syntax once; never decodes a semantic body and never raises."""
+
+    lossless = True
+
+    def lossy_float(text: str) -> float:
+        nonlocal lossless
+        lossless = False
+        return float(text)
+
+    def lossy_constant(name: str) -> float:
+        nonlocal lossless
+        lossless = False
+        return float(name)
+
+    def unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        nonlocal lossless
+        mapping = dict(pairs)
+        if len(mapping) != len(pairs):
+            lossless = False
+        return mapping
+
     try:
-        payload = json.loads(_message_text(message))
+        payload = json.loads(
+            _message_text(message), parse_float=lossy_float,
+            parse_constant=lossy_constant, object_pairs_hook=unique_pairs,
+        )
     except Exception:
-        return None  # Preserve v1 malformed-message handling.
-    return payload if isinstance(payload, Mapping) and "message_family" in payload else None
+        return _ParsedMessage(None, True, False)  # Preserve v1 malformed-message handling.
+    return _ParsedMessage(payload, False, lossless)
 
 
 def _declared_family_scope(family: str, version: str, operation: str) -> str | None:
@@ -513,12 +662,38 @@ def _declared_family_scope(family: str, version: str, operation: str) -> str | N
     return _FAMILY_OPERATION_SCOPES.get(family, {}).get(operation)
 
 
-def _handle_family_message(
-    payload: Mapping[str, Any], *, handler: J02FamilyHandler | None
+_FAMILY_UNSUPPORTED_MESSAGE = "unsupported message family, schema_version or operation"
+_INTEGRITY_FAILURE_MESSAGE = "the platform cannot produce a trustworthy result"
+_RESULT_TOO_LARGE_MESSAGE = "the result would exceed the maximum J02 response size"
+
+
+def _family_failure(
+    envelope: Mapping[str, Any], code: ConsumerErrorCode, message: str,
 ) -> dict[str, Any]:
+    response = {
+        name: envelope.get(name) for name in ("message_family", "schema_version", "request_id")
+    }
+    for name, value in response.items():
+        if not isinstance(value, str):
+            response[name] = None
+    response.update(status="error", error={
+        "code": code.value, "message": message, "context": {}, "request_identity": None,
+    })
+    return response
+
+
+def _prepare_family_request(
+    parsed: _ParsedMessage, handler: J02FamilyHandler | None,
+) -> tuple[_PreparedFamilyRequest | None, dict[str, Any] | None]:
+    """Decode a family body after header authorization.
+
+    Returns a prepared request, or a finished error response in its place.
+    """
+
+    payload = parsed.payload
     family = payload.get("message_family")
     family = family if isinstance(family, str) else None
-    response = {
+    envelope = {
         "message_family": family,
         "schema_version": handler.response_schema_version if handler else (
             f"{family}-response-v1" if family else None
@@ -529,34 +704,73 @@ def _handle_family_message(
     }
     try:
         if handler is None:
-            raise ValueError("unsupported message family, schema_version or operation")
+            raise ValueError(_FAMILY_UNSUPPORTED_MESSAGE)
         request_id = payload.get("request_id")
         if not isinstance(request_id, str) or not request_id:
             raise ValueError("request_id must be a non-empty string")
-        response["request_id"] = request_id
+        envelope["request_id"] = request_id
+        if not parsed.lossless:
+            raise ValueError("request must be lossless canonical JSON")
         request = payload.get("request")
         if not isinstance(request, Mapping):
             raise ValueError("request must be a mapping")
-        result = handler.execute(handler.decode_request(request))
-        response.update(status="ok", result=result)
+        decoded = handler.decode_request(request)
+    except ConsumerApiError as exc:
+        response = dict(envelope)
+        response.update(status="error", error=encode_consumer_error(exc))
+        return None, response
+    except Exception:
+        return None, _family_failure(
+            envelope, ConsumerErrorCode.INVALID_REQUEST,
+            _FAMILY_UNSUPPORTED_MESSAGE if handler is None else J02_INVALID_REQUEST_MESSAGE,
+        )
+    try:
+        extra = (
+            frozenset(handler.additional_scopes(decoded))
+            if handler.additional_scopes is not None else frozenset()
+        )
+        if not extra <= J02_REMOTE_SCOPES:
+            raise ValueError("additional scope is not a registered J02 scope")
+    except Exception:
+        # A broken server-side hook is a platform fault, not a client error.
+        return None, _family_failure(
+            envelope, ConsumerErrorCode.INTEGRITY_FAILURE, _INTEGRITY_FAILURE_MESSAGE,
+        )
+    return _PreparedFamilyRequest(envelope, decoded, extra), None
+
+
+def _execute_family_request(
+    prepared: _PreparedFamilyRequest, handler: J02FamilyHandler,
+) -> dict[str, Any]:
+    response = dict(prepared.envelope)
+    try:
+        result = handler.execute(prepared.decoded)
     except ConsumerApiError as exc:
         response.update(status="error", error=encode_consumer_error(exc))
     except Exception:
-        response.update(status="error", error={
-            "code": ConsumerErrorCode.INVALID_REQUEST.value,
-            "message": (
-                "unsupported message family, schema_version or operation"
-                if handler is None else J02_INVALID_REQUEST_MESSAGE
-            ),
-            "context": {},
-            "request_identity": None,
-        })
+        # The request already decoded: an executor fault is the server's, and
+        # no raw exception text may reach the wire (ADR-0065 section 1).
+        return _family_failure(
+            prepared.envelope, ConsumerErrorCode.INTEGRITY_FAILURE, _INTEGRITY_FAILURE_MESSAGE,
+        )
+    else:
+        response.update(status="ok", result=result)
     return response
+
+
+def _execute_family_wire(
+    message: str | bytes, prepared: _PreparedFamilyRequest, handler: J02FamilyHandler,
+    execute: MarketDataExecutor,
+) -> str:
+    return handle_api_transport_message(
+        message, execute=execute, _family_response=_execute_family_request(prepared, handler),
+    )
 
 
 async def _authorize_remote_connection(
     websocket: Any, security: RemoteJ02SecurityConfig, *, session_id: str,
     required_scope: str | None = J02_MARKET_DATA_READ_SCOPE,
+    record_allow: bool = True,
 ) -> bool:
     """Authorize an already TLS-authenticated peer before JSON decoding starts."""
     ssl_object = websocket.transport.get_extra_info("ssl_object")
@@ -576,6 +790,13 @@ async def _authorize_remote_connection(
     cipher_name = cipher[0] if cipher is not None else None
     if not allowed:
         await websocket.close(code=1008, reason="policy denied")
+    elif not record_allow or (
+        required_scope is None and J02_MARKET_DATA_READ_SCOPE not in principal.scopes
+    ):
+        # An allowed recheck, or the scope-less admission of a family-only
+        # principal, grants no operation: the per-request scope row is the
+        # evidence, never an empty or invented scope.
+        return True
     security.evidence_log.record(
         RemoteJ02SecurityEvidence(
             timestamp=datetime.now(UTC).isoformat(),
@@ -586,13 +807,10 @@ async def _authorize_remote_connection(
             credential_fingerprint=fingerprint,
             principal_id=principal.principal_id if principal is not None else None,
             authorization_policy_version=security.authorization_policy_version,
-            # A connection admission is not an operation grant. Preserve the
-            # legacy admission label for market-data peers; family-only peers
-            # record their actual requested scope at the message boundary.
-            requested_scope=required_scope or (
-                J02_MARKET_DATA_READ_SCOPE
-                if principal is None or J02_MARKET_DATA_READ_SCOPE in principal.scopes else ""
-            ),
+            # A connection admission is not an operation grant: it keeps the
+            # legacy admission label, and family-only peers record their real
+            # requested scope at the message boundary.
+            requested_scope=required_scope or J02_MARKET_DATA_READ_SCOPE,
             decision="allow" if allowed else "deny",
             terminal_close_reason="application_session_authorized" if allowed else "policy_denied",
         )

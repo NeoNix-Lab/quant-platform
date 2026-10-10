@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 import json
 from pathlib import Path
+import shutil
+import ssl
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +21,9 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import quant_platform.application.api_transport_server as transport  # noqa: E402
 from test_api_transport_server_v1 import request_payload  # noqa: E402
+from test_omega_remote_client_acceptance_v1 import (  # noqa: E402
+    _certificate_fingerprint, _generate_ec_key, _self_signed_ca, _signed_certificate,
+)
 from test_remote_j02_security_v1 import (  # noqa: E402
     CERTIFICATE_DER, _Socket, security,
 )
@@ -241,49 +248,6 @@ class FamilyDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.J02_RESPONSE_SCHEMA_VERSION, socket.responses[0]["schema_version"])
         execute.assert_not_called()
 
-    async def test_server_composition_forwards_test_route_over_real_websocket(self):
-        handlers, decoder, executor = route()
-        stop = asyncio.Event()
-        # Capture only the server's ephemeral port; use its real serve context.
-        serve = transport.websockets.serve
-        captured = {}
-
-        class ServerContext:
-            async def __aenter__(self):
-                self.context = serve(captured["handler"], "127.0.0.1", 0, max_size=transport.J02_MAX_WIRE_MESSAGE_BYTES)
-                server = await self.context.__aenter__()
-                captured["port"] = server.sockets[0].getsockname()[1]
-                captured["ready"].set()
-                return server
-
-            async def __aexit__(self, *args):
-                return await self.context.__aexit__(*args)
-
-        captured["ready"] = asyncio.Event()
-
-        def listener(handler, _host, _port, **_kwargs):
-            captured["handler"] = handler
-            return ServerContext()
-
-        with patch.object(transport.websockets, "serve", listener):
-            task = asyncio.create_task(transport.run_api_transport_server(
-                transport.ApiTransportServerConfig(), stop_event=stop,
-                execute=MagicMock(), family_handlers=handlers,
-            ))
-            try:
-                await captured["ready"].wait()
-                async with websockets.connect(f"ws://127.0.0.1:{captured['port']}") as socket:
-                    for request_id in ("first", "second"):
-                        await socket.send(json.dumps(envelope(request_id=request_id)))
-                        response = json.loads(await socket.recv())
-                        self.assertEqual(request_id, response["request_id"])
-                        self.assertEqual(envelope()["request"], response["result"])
-            finally:
-                stop.set()
-                await task
-        self.assertEqual(2, decoder.call_count)
-        self.assertEqual(2, executor.call_count)
-
     def test_direct_legacy_entrypoint_cannot_coerce_family_into_valid_query(self):
         execute = MagicMock(return_value=None)
         response = json.loads(transport.handle_api_transport_message(
@@ -293,6 +257,411 @@ class FamilyDispatchTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertIn("unsupported", response["error"]["message"])
         execute.assert_not_called()
+
+
+class FamilyResponseAndBodyTests(unittest.IsolatedAsyncioTestCase):
+    """Review findings on the response path, the lossless body and the scope interface."""
+
+    async def exchange_text(self, text, handlers, scopes=frozenset({SCOPE})):
+        configuration = security(principal=transport.RemoteJ02Principal("family-peer", scopes))
+        socket = Socket([text])
+        await transport.handle_api_transport_connection(
+            socket, execute=MagicMock(), remote_security=configuration, family_handlers=handlers,
+        )
+        return socket, configuration
+
+    async def exchange(self, handlers, **overrides):
+        return await self.exchange_text(json.dumps(envelope(**overrides)), handlers)
+
+    # -- P2: nothing escapes after the handler ---------------------------------
+
+    async def test_unserializable_result_is_a_typed_integrity_failure_with_request_id(self):
+        handlers, _, executor = route()
+        for bad in (Decimal("1.5"), b"bytes", object()):
+            with self.subTest(bad=type(bad).__name__):
+                executor.side_effect = lambda _request, bad=bad: {"value": bad}
+                socket, _ = await self.exchange(handlers)
+                response = socket.responses[0]
+                self.assertEqual("error", response["status"])
+                self.assertEqual("integrity_failure", response["error"]["code"])
+                self.assertEqual("opaque-request-id", response["request_id"])
+                self.assertEqual(FAMILY, response["message_family"])
+                self.assertEqual(RESPONSE_VERSION, response["schema_version"])
+
+    async def test_executor_fault_is_integrity_failure_without_raw_exception_text(self):
+        handlers, _, executor = route()
+        executor.side_effect = RuntimeError("db down: password=hunter2")
+        socket, _ = await self.exchange(handlers)
+        error = socket.responses[0]["error"]
+        self.assertEqual("integrity_failure", error["code"])
+        self.assertNotIn("db down", json.dumps(socket.responses[0]))
+        self.assertEqual("opaque-request-id", socket.responses[0]["request_id"])
+
+    async def test_decoder_fault_stays_a_client_invalid_request(self):
+        handlers, decoder, executor = route()
+        decoder.side_effect = KeyError("missing")
+        socket, _ = await self.exchange(handlers)
+        self.assertEqual("invalid_request", socket.responses[0]["error"]["code"])
+        executor.assert_not_called()
+
+    async def test_oversized_result_is_a_typed_result_too_large_not_a_1009_close(self):
+        handlers, _, executor = route()
+        executor.side_effect = lambda _request: {"blob": "x" * transport.J02_MAX_WIRE_MESSAGE_BYTES}
+        socket, _ = await self.exchange(handlers)
+        response = socket.responses[0]
+        self.assertEqual("result_too_large", response["error"]["code"])
+        self.assertEqual("opaque-request-id", response["request_id"])
+        self.assertLess(len(json.dumps(response)), 1024)
+
+    def test_integrity_message_matches_the_consumer_api_vocabulary(self):
+        from quant_platform.application import market_data
+        self.assertEqual(
+            market_data._MESSAGES[transport.ConsumerErrorCode.INTEGRITY_FAILURE],
+            transport._INTEGRITY_FAILURE_MESSAGE,
+        )
+
+    # -- P2: the family body is lossless ----------------------------------------
+
+    async def test_family_body_rejects_floats_nan_and_duplicate_keys_before_decode(self):
+        prefix = (
+            '{"message_family":"%s","schema_version":"%s","operation":"echo",'
+            '"request_id":"opaque-request-id","request":' % (FAMILY, VERSION)
+        )
+        cases = {
+            "float": prefix + '{"price":0.1000000000000000055511151231257827}}',
+            "exponent": prefix + '{"price":1e2}}',
+            "nan": prefix + '{"price":NaN}}',
+            "infinity": prefix + '{"price":-Infinity}}',
+            "duplicate": prefix + '{"price":"1","price":"2"}}',
+            "nested duplicate": prefix + '{"a":{"b":1,"b":2}}}',
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                handlers, decoder, executor = route()
+                socket, _ = await self.exchange_text(text, handlers)
+                self.assertEqual("invalid_request", socket.responses[0]["error"]["code"])
+                self.assertEqual("opaque-request-id", socket.responses[0]["request_id"])
+                decoder.assert_not_called()
+                executor.assert_not_called()
+
+    async def test_family_body_preserves_large_integers_and_decimal_strings_exactly(self):
+        handlers, decoder, _ = route()
+        text = (
+            '{"message_family":"%s","schema_version":"%s","operation":"echo",'
+            '"request_id":"r","request":{"n":12345678901234567890,'
+            '"price":"12345678901234567890.123456789"}}' % (FAMILY, VERSION)
+        )
+        socket, _ = await self.exchange_text(text, handlers)
+        self.assertEqual("ok", socket.responses[0]["status"])
+        decoder.assert_called_once_with({
+            "n": 12345678901234567890, "price": "12345678901234567890.123456789",
+        })
+
+    async def test_legacy_v1_body_keeps_existing_json_semantics(self):
+        socket = Socket([json.dumps(request_payload()).replace('"venue"', '"venue":"x","venue"', 1)])
+        # A v1 message with a duplicate key is not rejected by the family rule.
+        execute = MagicMock(side_effect=ValueError("reached the v1 decoder path"))
+        await transport.handle_api_transport_connection(socket, execute=execute)
+        self.assertEqual(transport.J02_RESPONSE_SCHEMA_VERSION, socket.responses[0]["schema_version"])
+
+    async def test_each_message_is_parsed_exactly_once(self):
+        handlers, _, _ = route()
+        with patch.object(transport, "_parse_message", wraps=transport._parse_message) as parse:
+            await self.exchange(handlers)
+            self.assertEqual(1, parse.call_count)
+            parse.reset_mock()
+            socket = Socket([json.dumps(request_payload())])
+            await transport.handle_api_transport_connection(
+                socket, execute=MagicMock(return_value=None),
+            )
+            self.assertEqual(1, parse.call_count)
+
+    # -- P2: body-dependent second scope (ADR-0069 section 3) -------------------
+
+    def additional_route(self, extra=("j02.training.register",)):
+        decoder = MagicMock(side_effect=lambda body: dict(body))
+        executor = MagicMock(side_effect=lambda request: request)
+        hook = MagicMock(side_effect=lambda decoded: extra if decoded.get("register") else ())
+        handler = transport.J02FamilyHandler(
+            SCOPE, RESPONSE_VERSION, decoder, executor, additional_scopes=hook,
+        )
+        return {(FAMILY, VERSION, "echo"): handler}, decoder, executor, hook
+
+    async def test_additional_scope_is_denied_after_decode_and_before_execute(self):
+        handlers, decoder, executor, hook = self.additional_route()
+        socket, configuration = await self.exchange(
+            handlers, request={"register": True},
+        )
+        self.assertEqual([(1008, "policy denied")], socket.close_calls)
+        self.assertEqual([], socket.responses)
+        decoder.assert_called_once()
+        hook.assert_called_once()
+        executor.assert_not_called()
+        evidence = configuration.evidence_log.events[-1]
+        self.assertEqual(("j02.training.register", "deny"), (evidence.requested_scope, evidence.decision))
+
+    async def test_additional_scope_granted_runs_executor_and_records_each_scope(self):
+        handlers, _, executor, _ = self.additional_route()
+        configuration = security(principal=transport.RemoteJ02Principal(
+            "family-peer", frozenset({SCOPE, "j02.training.register"}),
+        ))
+        configuration.evidence_log._max_events = 8
+        socket = Socket([json.dumps(envelope(request={"register": True}))])
+        await transport.handle_api_transport_connection(
+            socket, execute=MagicMock(), remote_security=configuration, family_handlers=handlers,
+        )
+        self.assertEqual("ok", socket.responses[0]["status"])
+        executor.assert_called_once()
+        self.assertEqual(
+            [SCOPE, "j02.training.register"],
+            [event.requested_scope for event in configuration.evidence_log.events],
+        )
+
+    async def test_request_without_the_flag_needs_no_additional_scope(self):
+        handlers, _, executor, hook = self.additional_route()
+        socket, _ = await self.exchange(handlers, request={"register": False})
+        self.assertEqual("ok", socket.responses[0]["status"])
+        hook.assert_called_once()
+        executor.assert_called_once()
+
+    async def test_unregistered_or_faulty_additional_scope_hook_is_integrity_failure(self):
+        for extra in (("j02.not.registered",), None):
+            with self.subTest(extra=extra):
+                handlers, _, executor, hook = self.additional_route(extra)
+                if extra is None:
+                    hook.side_effect = RuntimeError("hook fault")
+                socket, _ = await self.exchange(handlers, request={"register": True})
+                self.assertEqual("integrity_failure", socket.responses[0]["error"]["code"])
+                executor.assert_not_called()
+
+    def test_direct_entry_cannot_authorize_additional_scopes_and_fails_closed(self):
+        handlers, _, executor, _ = self.additional_route()
+        response = json.loads(transport.handle_api_transport_message(
+            json.dumps(envelope(request={"register": True})), execute=MagicMock(),
+            family_handler=next(iter(handlers.values())),
+        ))
+        self.assertEqual("error", response["status"])
+        executor.assert_not_called()
+
+    def test_additional_scopes_must_be_callable(self):
+        with self.assertRaises(TypeError):
+            transport.J02FamilyHandler(
+                SCOPE, RESPONSE_VERSION, MagicMock(), MagicMock(), additional_scopes="x",
+            )
+
+    # -- P3: evidence ------------------------------------------------------------
+
+    async def test_family_only_session_records_one_real_scope_row_and_no_empty_scope(self):
+        handlers, _, _ = route()
+        configuration = security(principal=transport.RemoteJ02Principal(
+            "family-peer", frozenset({SCOPE}),
+        ))
+        configuration.evidence_log._max_events = 16
+        socket = Socket([json.dumps(envelope()), json.dumps(envelope(request_id="second"))])
+        await transport.handle_api_transport_connection(
+            socket, execute=MagicMock(), remote_security=configuration, family_handlers=handlers,
+        )
+        self.assertEqual(2, len(socket.responses))
+        self.assertEqual(
+            [SCOPE, SCOPE], [event.requested_scope for event in configuration.evidence_log.events],
+        )
+        self.assertNotIn("", [event.requested_scope for event in configuration.evidence_log.events])
+
+    async def test_revoked_family_only_principal_is_denied_with_a_non_empty_label(self):
+        handlers, _, _ = route()
+        configuration = security(principal=transport.RemoteJ02Principal(
+            "family-peer", frozenset({SCOPE}), revoked=True,
+        ))
+        socket = Socket([json.dumps(envelope())])
+        await transport.handle_api_transport_connection(
+            socket, execute=MagicMock(), remote_security=configuration, family_handlers=handlers,
+        )
+        self.assertEqual([(1008, "policy denied")], socket.close_calls)
+        self.assertTrue(configuration.evidence_log.events[-1].requested_scope)
+
+
+class FamilyCompositionTests(unittest.IsolatedAsyncioTestCase):
+    """P1 and the startup-time composition findings."""
+
+    async def test_family_routes_are_refused_without_remote_security(self):
+        handlers, decoder, executor = route()
+        with self.assertRaisesRegex(ValueError, "remote_security"):
+            await transport.handle_api_transport_connection(
+                Socket([json.dumps(envelope())]), execute=MagicMock(), family_handlers=handlers,
+            )
+        decoder.assert_not_called()
+        executor.assert_not_called()
+
+    async def test_server_refuses_to_start_family_routes_on_the_loopback_listener(self):
+        handlers, _, _ = route()
+        with patch.object(transport.websockets, "serve") as serve:
+            with self.assertRaisesRegex(ValueError, "remote_security"):
+                await transport.run_api_transport_server(
+                    transport.ApiTransportServerConfig(), execute=MagicMock(),
+                    family_handlers=handlers,
+                )
+        serve.assert_not_called()
+
+    async def test_invalid_composition_fails_at_startup_before_any_listener_exists(self):
+        decoder, executor = MagicMock(), MagicMock()
+        cases = {
+            "scope reassigned": {
+                ("j02-strategy-v1", "j02-strategy-v1-request-v1", "compose"): transport.J02FamilyHandler(
+                    "j02.market_data.read", "j02-strategy-v1-response-v1", decoder, executor,
+                ),
+            },
+            "response version": {
+                ("j02-strategy-v1", "j02-strategy-v1-request-v1", "compose"): transport.J02FamilyHandler(
+                    SCOPE, "whatever-v9", decoder, executor,
+                ),
+            },
+            "key shape": {("j02-strategy-v1", "compose"): transport.J02FamilyHandler(
+                SCOPE, "j02-strategy-v1-response-v1", decoder, executor,
+            )},
+        }
+        configuration = security()
+        for name, handlers in cases.items():
+            with self.subTest(case=name), patch.object(transport.websockets, "serve") as serve:
+                config = transport.ApiTransportServerConfig(remote_security=configuration)
+                with self.assertRaises(ValueError):
+                    await transport.run_api_transport_server(
+                        config, execute=MagicMock(), family_handlers=handlers,
+                    )
+                serve.assert_not_called()
+
+    async def test_response_schema_version_is_validated_per_family(self):
+        decoder, executor = MagicMock(), MagicMock()
+        handler = transport.J02FamilyHandler(SCOPE, "whatever-v9", decoder, executor)
+        configuration = security(principal=transport.RemoteJ02Principal("p", frozenset({SCOPE})))
+        with self.assertRaisesRegex(ValueError, "response_schema_version"):
+            await transport.handle_api_transport_connection(
+                Socket([]), execute=MagicMock(), remote_security=configuration,
+                family_handlers={(FAMILY, VERSION, "echo"): handler},
+            )
+
+
+@unittest.skipUnless(shutil.which("openssl"), "openssl binary is required to generate a real mTLS fixture")
+class FamilyRealMtlsTests(unittest.IsolatedAsyncioTestCase):
+    """Families over a real TLS 1.3 / mTLS WebSocket, through server composition."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory(prefix="p05a_mtls_")
+        cwd = Path(cls._tmp.name)
+        cls.cwd = cwd
+        _generate_ec_key(cwd, "ca.key")
+        _self_signed_ca(cwd, key="ca.key", out="ca.crt", cn="P05a Test CA")
+        _generate_ec_key(cwd, "server.key")
+        (cwd / "server_ext.cnf").write_text("subjectAltName=IP:127.0.0.1\n", encoding="utf-8")
+        _signed_certificate(
+            cwd, key="server.key", csr="server.csr", cn="127.0.0.1",
+            ca_cert="ca.crt", ca_key="ca.key", out="server.crt", extfile="server_ext.cnf",
+        )
+        _generate_ec_key(cwd, "client.key")
+        _signed_certificate(
+            cwd, key="client.key", csr="client.csr", cn="p05a-client",
+            ca_cert="ca.crt", ca_key="ca.key", out="client.crt",
+        )
+        cls.fingerprint = _certificate_fingerprint(cwd, "client.crt")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def _security(self, scopes):
+        return transport.RemoteJ02SecurityConfig(
+            server_certificate_path=str(self.cwd / "server.crt"),
+            server_private_key_path=str(self.cwd / "server.key"),
+            client_trust_anchor_path=str(self.cwd / "ca.crt"),
+            server_trust_bundle_version="p05a-bundle-v1",
+            authorization_policy_version="p05a-policy-v1",
+            principals_by_fingerprint={
+                self.fingerprint: transport.RemoteJ02Principal("p05a-peer", scopes),
+            },
+            evidence_log=transport.RemoteJ02SecurityEvidenceLog(max_events=64),
+        )
+
+    def _client_ssl(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.load_verify_locations(cafile=str(self.cwd / "ca.crt"))
+        context.load_cert_chain(str(self.cwd / "client.crt"), str(self.cwd / "client.key"))
+        return context
+
+    async def _run(self, scopes, handlers, session):
+        """Start the real server composition on an ephemeral TLS port and run ``session(url)``."""
+        stop = asyncio.Event()
+        ready = asyncio.Event()
+        captured = {}
+        real_serve = transport.websockets.serve
+
+        class Listener:
+            def __init__(self, handler, host, kwargs):
+                self.context = real_serve(handler, host, 0, **kwargs)
+
+            async def __aenter__(self):
+                server = await self.context.__aenter__()
+                captured["port"] = server.sockets[0].getsockname()[1]
+                ready.set()
+                return server
+
+            async def __aexit__(self, *args):
+                return await self.context.__aexit__(*args)
+
+        def listener(handler, host, _port, **kwargs):
+            return Listener(handler, host, kwargs)
+
+        configuration = self._security(scopes)
+        with patch.object(transport.websockets, "serve", listener):
+            task = asyncio.create_task(transport.run_api_transport_server(
+                transport.ApiTransportServerConfig(remote_security=configuration),
+                stop_event=stop, execute=MagicMock(), family_handlers=handlers,
+            ))
+            try:
+                await asyncio.wait_for(ready.wait(), 10)
+                await session(f"wss://127.0.0.1:{captured['port']}")
+            finally:
+                stop.set()
+                await task
+        return configuration
+
+    async def test_family_only_principal_exchanges_over_real_wss_mtls(self):
+        handlers, decoder, executor = route()
+        responses = []
+
+        async def session(url):
+            async with websockets.connect(url, ssl=self._client_ssl()) as socket:
+                for request_id in ("first", "second"):
+                    await socket.send(json.dumps(envelope(request_id=request_id)))
+                    responses.append(json.loads(await asyncio.wait_for(socket.recv(), 10)))
+
+        configuration = await self._run(frozenset({SCOPE}), handlers, session)
+        self.assertEqual(["first", "second"], [item["request_id"] for item in responses])
+        self.assertEqual([envelope()["request"]] * 2, [item["result"] for item in responses])
+        self.assertEqual(2, decoder.call_count)
+        self.assertEqual(2, executor.call_count)
+        events = configuration.evidence_log.events
+        self.assertEqual([SCOPE, SCOPE], [event.requested_scope for event in events])
+        self.assertTrue(all(event.tls_version == "TLSv1.3" for event in events))
+
+    async def test_missing_family_scope_is_policy_closed_over_real_wss_mtls(self):
+        handlers, decoder, executor = route()
+        outcome = {}
+
+        async def session(url):
+            async with websockets.connect(url, ssl=self._client_ssl()) as socket:
+                await socket.send(json.dumps(envelope(request=["not a request"])))
+                try:
+                    await asyncio.wait_for(socket.recv(), 10)
+                except websockets.ConnectionClosed as closed:
+                    outcome["code"] = closed.rcvd.code
+
+        configuration = await self._run(frozenset({"j02.jobs.read"}), handlers, session)
+        self.assertEqual(1008, outcome["code"])
+        decoder.assert_not_called()
+        executor.assert_not_called()
+        self.assertEqual(SCOPE, configuration.evidence_log.events[-1].requested_scope)
+        self.assertEqual("deny", configuration.evidence_log.events[-1].decision)
 
 
 if __name__ == "__main__":
