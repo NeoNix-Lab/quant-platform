@@ -384,11 +384,24 @@ class _ParsedMessage:
     # False when the text carried a float, NaN/Infinity or a duplicate key, i.e.
     # something ``json.loads`` would silently round, coerce or overwrite.
     lossless: bool
+    # A partial recovery cannot prove that an undiscovered family is absent.
+    classification_complete: bool = True
 
     @property
     def family(self) -> bool:
         # A body parse failure cannot turn a present family into an absent one.
         return isinstance(self.payload, Mapping) and "message_family" in self.payload
+
+    @property
+    def legacy(self) -> bool:
+        """Select v1 only after absence is proved, never by a partial scan."""
+        return self.classification_complete and not self.family
+
+
+@dataclass(frozen=True, slots=True)
+class _RecoveredHeader:
+    header: dict[str, Any]
+    complete: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -419,7 +432,7 @@ def handle_api_transport_message(
         response = _family_response
     else:
         parsed = _parsed if _parsed is not None else _parse_message(message)
-        family = parsed.family
+        family = not parsed.legacy
         if family:
             response = _build_direct_family_response(parsed, family_handler)
         else:
@@ -477,8 +490,8 @@ def _require_finite_family_json(value: Any) -> None:
 def _build_direct_family_response(
     parsed: _ParsedMessage, family_handler: J02FamilyHandler | None,
 ) -> dict[str, Any]:
-    # An additive envelope must never be coerced into a v1 query, even when it
-    # also carries a perfectly valid legacy query.
+    # An additive or unclassifiable envelope must never be coerced into a v1
+    # query, even when it also carries a perfectly valid legacy query.
     prepared, response = _prepare_family_request(parsed, family_handler)
     if prepared is None:
         return response
@@ -587,7 +600,10 @@ async def handle_api_transport_connection(
             return
         parsed = await asyncio.to_thread(_parse_message, message)
         handler = None
-        if parsed.family:
+        if not parsed.legacy:
+            # This includes incomplete recovery without a known family. Its
+            # partial mapping cannot grant v1: unsupported-header handling
+            # below refuses it and records no operation scope.
             header = tuple(parsed.payload.get(name) for name in (
                 "message_family", "schema_version", "operation"
             ))
@@ -603,7 +619,7 @@ async def handle_api_transport_connection(
                 websocket, remote_security, session_id=session_id, required_scope=required_scope
             ):
                 return
-        elif parsed.family and remote_security is not None:
+        elif not parsed.legacy and remote_security is not None:
             # An unsupported header has no operation grant to audit. Record
             # only authenticated connection evidence, never request payload.
             if not await _authorize_remote_connection(
@@ -611,7 +627,7 @@ async def handle_api_transport_connection(
                 unsupported_header=True,
             ):
                 return
-        if not parsed.family:
+        if parsed.legacy:
             response = await asyncio.to_thread(
                 handle_api_transport_message, message, execute=execute, _parsed=parsed,
             )
@@ -711,12 +727,16 @@ def _parse_message(message: str | bytes) -> _ParsedMessage:
         # A header key can only be written without the literal name through a
         # JSON escape, so a text with neither the name nor a backslash cannot
         # carry one: skip the scan for that (C-speed) test.
-        header = (
+        recovered = (
             _recover_family_header(text)
             if text is not None and ("message_family" in text or "\\" in text)
-            else None
+            else _RecoveredHeader({}, True)
         )
-        return _ParsedMessage(header, True, False)
+        header = recovered.header
+        return _ParsedMessage(
+            header if "message_family" in header or not recovered.complete else None,
+            True, False, recovered.complete,
+        )
     return _ParsedMessage(payload, False, lossless)
 
 
@@ -732,9 +752,9 @@ _JSON_BOUNDARY_NESTED = re.compile(
     r'"[^"\\]*(?:\\.[^"\\]*)*"?|[\[\]{}]|[^"\[\]{}]+', re.DOTALL,
 )
 # Bounds for the recovery scan on hostile input. A protocol envelope has five
-# members, and a well-formed value is skipped at C speed, so only a malformed
-# value reaches the token scan; neither bound is reachable by a legitimate
-# sender whose message failed only on the whole-message parse.
+# members, and a well-formed value is skipped at C speed. These are work
+# budgets, not proof of header absence: exhausting either leaves classification
+# incomplete and must never select the legacy authorization path.
 _MAX_RECOVERY_MEMBERS = 64
 _MAX_RECOVERY_TOKENS = 100_000
 _FAMILY_HEADER_KEYS = ("message_family", "schema_version", "operation", "request_id")
@@ -760,22 +780,30 @@ def _well_formed_value_end(text: str, start: int) -> int | None:
     return None
 
 
-def _recover_family_header(text: str) -> dict[str, Any] | None:
+def _recover_family_header(text: str) -> _RecoveredHeader:
     """Retain top-level headers on a failed parse, without converting the body.
 
     This is not an alternate request parser: the failed message stays failed.
     Scan value boundaries with quote/escape and nesting tracking, then use the
     standard decoder only for scalar header values. Never search for a header
     substring inside a string or a nested object. Normal messages use one parse.
+    Only reaching the top-level closing brace proves absence; a syntax stop or
+    exhausted budget preserves an explicit incomplete classification instead.
     """
     decoder = json.JSONDecoder()
     header: dict[str, Any] = {}
     index = len(text) - len(text.lstrip(" \t\r\n"))
     if index == len(text) or text[index] != "{":
-        return None
+        return _RecoveredHeader({}, True)
     index += 1
     members = tokens = 0
+    complete = False
     while index < len(text):
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if index < len(text) and text[index] == "}":
+            complete = True
+            break
         members += 1
         if members > _MAX_RECOVERY_MEMBERS:
             break
@@ -841,9 +869,10 @@ def _recover_family_header(text: str) -> dict[str, Any] | None:
                     pass
             header[key] = value
         if index == len(text) or text[index] != ",":
+            complete = index < len(text) and text[index] == "}"
             break
         index += 1
-    return header if "message_family" in header else None
+    return _RecoveredHeader(header, complete)
 
 
 def _declared_family_scope(family: str, version: str, operation: str) -> str | None:
@@ -880,6 +909,12 @@ def _prepare_family_request(
     Returns a prepared request, or a finished error response in its place.
     """
 
+    if not parsed.family:
+        # No family can be selected from an incomplete scan, even if a trusted
+        # direct caller supplied a handler. Do not invent reflected headers.
+        return None, _family_failure(
+            {}, ConsumerErrorCode.INVALID_REQUEST, _FAMILY_UNSUPPORTED_MESSAGE,
+        )
     payload = parsed.payload
     family = payload.get("message_family")
     family = family if isinstance(family, str) else None

@@ -307,6 +307,78 @@ class FamilyFailedBodyTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(wire.encode()), transport.J02_MAX_WIRE_MESSAGE_BYTES)
         self.assertEqual("9" * 5000, json.loads(wire, parse_int=str)["request"]["value"])
 
+    def exhausted_wires(self, *, header_last, family="j02-strategy-v1"):
+        header = json.dumps({
+            "message_family": family, "schema_version": family + "-request-v1",
+            "operation": "compose", "request_id": "r",
+        })[1:-1]
+        # Literal sizes reproduce both reviewer probes without raising limits.
+        members = '"request":{"value":' + "9" * 5000 + "}," + ",".join(
+            '"p%d":0' % index for index in range(64)
+        )
+        tokens = '"request":{"value":' + json.dumps(["a"] * 60_000) + " x}"
+        return tuple(
+            "{" + (body + "," + header if header_last else header + "," + body) + "}"
+            for body in (members, tokens)
+        )
+
+    async def test_exhausted_recovery_without_header_never_authorizes_legacy(self):
+        for family in ("j02-strategy-v1", "unknown-family-v1"):
+            for wire in self.exhausted_wires(header_last=True, family=family):
+                self.assertLess(len(wire.encode()), transport.J02_MAX_WIRE_MESSAGE_BYTES)
+                for scopes in (frozenset({"j02.market_data.read"}), frozenset({SCOPE}), SCOPES):
+                    with self.subTest(family=family, size=len(wire), scopes=scopes):
+                        with patch.object(transport, "decode_transport_query") as legacy_decode:
+                            socket, config = await self.exchange(wire, scopes)
+                        legacy_decode.assert_not_called()
+                        self.assertEqual([], socket.close_calls)
+                        response = socket.responses[0]
+                        self.assertEqual("invalid_request", response["error"]["code"])
+                        self.assertIn("unsupported", response["error"]["message"])
+                        self.assertIsNone(response["message_family"])
+                        self.assertIsNone(response["schema_version"])
+                        evidence = config.evidence_log.events[-1]
+                        self.assertEqual(transport.J02_EVIDENCE_NO_OPERATION_SCOPE, evidence.requested_scope)
+                        self.assertEqual(transport.J02_EVIDENCE_UNSUPPORTED_HEADER_REASON, evidence.terminal_close_reason)
+                        self.assertEqual(
+                            2 if "j02.market_data.read" in scopes else 1,
+                            len(config.evidence_log.events),
+                        )
+                        # Admission evidence may precede this, but no message
+                        # operation grant may be invented from a partial scan.
+                        self.assertNotIn(SCOPE, [event.requested_scope for event in config.evidence_log.events])
+                for message in (wire, wire.encode()):
+                    with self.subTest(entry="direct", family=family, size=len(wire)):
+                        execute = MagicMock()
+                        with patch.object(transport, "decode_transport_query") as legacy_decode:
+                            response = json.loads(transport.handle_api_transport_message(message, execute=execute))
+                        self.assertIsNone(response["schema_version"])
+                        self.assertEqual("invalid_request", response["error"]["code"])
+                        execute.assert_not_called()
+                        legacy_decode.assert_not_called()
+                with self.subTest(entry="loopback", family=family, size=len(wire)):
+                    socket = Socket([wire])
+                    with patch.object(transport, "decode_transport_query") as legacy_decode:
+                        execute = MagicMock()
+                        await transport.handle_api_transport_connection(socket, execute=execute)
+                    self.assertIsNone(socket.responses[0]["schema_version"])
+                    execute.assert_not_called()
+                    legacy_decode.assert_not_called()
+
+    async def test_exhausted_recovery_retains_known_scope_before_body_failure(self):
+        for wire in self.exhausted_wires(header_last=False):
+            with self.subTest(size=len(wire), peer="market-only"):
+                socket, config = await self.exchange(wire, frozenset({"j02.market_data.read"}))
+                self.assertEqual([(1008, "policy denied")], socket.close_calls)
+                self.assertEqual([], socket.responses)
+                self.assertEqual(SCOPE, config.evidence_log.events[-1].requested_scope)
+            with self.subTest(size=len(wire), peer="strategy-only"):
+                socket, config = await self.exchange(wire, frozenset({SCOPE}))
+                self.assertEqual([], socket.close_calls)
+                self.assertEqual("j02-strategy-v1-response-v1", socket.responses[0]["schema_version"])
+                self.assertEqual("invalid_request", socket.responses[0]["error"]["code"])
+                self.assertEqual([SCOPE], [event.requested_scope for event in config.evidence_log.events])
+
     async def test_bad_family_body_denies_wrong_scope_before_any_decoder(self):
         for body in self.bad_bodies():
             for header_last in (False, True):
@@ -370,7 +442,8 @@ class FamilyFailedBodyTests(unittest.IsolatedAsyncioTestCase):
         )
         for text, expected in cases:
             with self.subTest(text=text[:60]):
-                self.assertEqual(expected, transport._recover_family_header(text))
+                recovered = transport._recover_family_header(text)
+                self.assertEqual(expected or {}, recovered.header)
 
     def test_header_recovery_work_is_bounded_on_hostile_input(self):
         # Literal sizes on purpose: a bound that is removed or widened must fail
@@ -379,21 +452,57 @@ class FamilyFailedBodyTests(unittest.IsolatedAsyncioTestCase):
         beyond = ",".join('"m%d":1' % index for index in range(100))
         self.assertEqual(
             {"message_family": "f"},
-            transport._recover_family_header('{%s,"message_family":"f"}' % within),
+            transport._recover_family_header('{%s,"message_family":"f"}' % within).header,
         )
-        self.assertIsNone(
-            transport._recover_family_header('{%s,"message_family":"f"}' % beyond),
-        )
-        # A malformed value larger than the token budget abandons the scan: what
-        # precedes it is kept, nothing after an unknown boundary is read.
-        # The array is complete but followed by junk, so it is not a well-formed
-        # value and goes to the token scan; unbudgeted, the scan would resume at
-        # the next top-level comma and also read ``schema_version``.
+        recovered = transport._recover_family_header('{%s,"message_family":"f"}' % beyond)
+        self.assertEqual({}, recovered.header)
+        self.assertFalse(recovered.complete)
+        # A malformed value larger than the token budget abandons the scan:
+        # what precedes it is kept, nothing after its unknown boundary is read.
         hostile = '{"message_family":"f","pad":[%s] x,"schema_version":"s"}' % ",".join(
             ['"a"'] * 60_000
         )
         recovered = transport._recover_family_header(hostile)
-        self.assertEqual({"message_family": "f"}, recovered)
+        self.assertEqual({"message_family": "f"}, recovered.header)
+        self.assertFalse(recovered.complete)
+
+    def test_recovery_distinguishes_absent_header_from_incomplete_scan(self):
+        for text in (
+            '{}', '{"pad":"message_family"}',
+            '{"pad":{"message_family":"nested"}}',
+        ):
+            with self.subTest(text=text):
+                recovered = transport._recover_family_header(text)
+                self.assertTrue(recovered.complete)
+                self.assertNotIn("message_family", recovered.header)
+        # An unparseable key or missing member separator stops recovery just
+        # like a budget; neither stop is evidence that a later header is absent.
+        for wire in (
+            '{"pad" x,"message_family":"j02-strategy-v1"}',
+            '{"pad":1]"message_family":"j02-strategy-v1"}',
+            '{"pad":"\\',
+        ):
+            with self.subTest(wire=wire):
+                parsed = transport._parse_message(wire)
+                self.assertTrue(parsed.failed)
+                self.assertFalse(parsed.classification_complete)
+                self.assertFalse(parsed.family)
+                self.assertFalse(parsed.legacy)
+
+    def test_direct_handler_cannot_invent_family_for_incomplete_recovery(self):
+        for wire in self.exhausted_wires(header_last=True):
+            with self.subTest(size=len(wire)):
+                handlers, decoder, executor = route()
+                legacy = MagicMock()
+                response = json.loads(transport.handle_api_transport_message(
+                    wire, execute=legacy, family_handler=next(iter(handlers.values())),
+                ))
+                self.assertIsNone(response["message_family"])
+                self.assertIsNone(response["schema_version"])
+                self.assertEqual("invalid_request", response["error"]["code"])
+                decoder.assert_not_called()
+                executor.assert_not_called()
+                legacy.assert_not_called()
 
     async def test_failed_non_family_text_is_not_scanned(self):
         # No header name and no backslash: a header key cannot be present.
