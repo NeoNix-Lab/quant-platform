@@ -111,6 +111,64 @@ jobs:
           PGPORT: '5432'
         run: python tests/integration_datagateway_postgres.py
 
+  runtime-stores-postgres:
+    name: Disposable PostgreSQL 17 runtime store parity and least privilege
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-postgres-password
+          POSTGRES_DB: dgk331_disposable
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dgk331_disposable"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install runtime test dependencies
+        run: python -m pip install --disable-pip-version-check -r tests/requirements.txt
+      - name: Bootstrap disposable catalog, experiment and runtime schemas and roles
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: dgk331_disposable
+          PGPASSWORD: ci-postgres-password
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          CATALOG_ADMIN_PASSWORD: ci-admin-password
+          CATALOG_WRITER_PASSWORD: ci-writer-password
+          CATALOG_READER_PASSWORD: ci-reader-password
+          PLATFORM_API_PASSWORD: ci-api-password
+          PLATFORM_WORKER_PASSWORD: ci-worker-password
+        run: |
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -e POSTGRES_USER -e POSTGRES_DB -e PGPASSWORD -e PGHOST -e PGPORT \
+            -e CATALOG_ADMIN_PASSWORD -e CATALOG_WRITER_PASSWORD -e CATALOG_READER_PASSWORD \
+            -e PLATFORM_API_PASSWORD -e PLATFORM_WORKER_PASSWORD \
+            postgres:17 bash -euc '
+              psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /workspace/db/init/001_catalog.sql
+              bash /workspace/db/init/002_roles.sh
+              psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /workspace/db/init/003_experiment.sql
+              psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /workspace/db/init/004_runtime.sql
+              bash -n /workspace/db/init/005_runtime_roles.sh
+              bash /workspace/db/init/005_runtime_roles.sh
+            '
+      - name: Run existing runtime contracts on PostgreSQL and real role denials
+        env:
+          RUNTIME_TEST_ADMIN_DSN: postgresql://postgres:ci-postgres-password@127.0.0.1:5432/dgk331_disposable
+          RUNTIME_TEST_API_DSN: postgresql://platform_api:ci-api-password@127.0.0.1:5432/dgk331_disposable
+          RUNTIME_TEST_WORKER_DSN: postgresql://platform_worker:ci-worker-password@127.0.0.1:5432/dgk331_disposable
+          RUNTIME_TEST_INGEST_DSN: postgresql://market_catalog_writer:ci-writer-password@127.0.0.1:5432/dgk331_disposable
+        run: python tests/integration_runtime_stores_postgres.py
+
   publication-certification-postgres:
     name: Disposable PostgreSQL 17 publication certification test
     runs-on: ubuntu-latest

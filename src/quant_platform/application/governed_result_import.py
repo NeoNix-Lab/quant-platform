@@ -16,10 +16,14 @@ import json
 import sqlite3
 from typing import Any
 
+from psycopg import Connection
+
 from quant_platform.canonical import canonical_bytes
 from quant_platform.experiments.accounting import TrialAttemptResult, record_trial_attempt
 from quant_platform.experiments.identities import RunIdentity
 from quant_platform.experiments.persistence import ArtifactRegistration, ExperimentRepository, RunRecord, RunState
+
+from .runtime_store import RuntimeStoreConnection
 
 from .admitted_input import (
     AdmittedInputError,
@@ -163,19 +167,20 @@ class GovernedResultRegistration:
 
 
 class GovernedResultEvidenceStore:
-    """SQLite evidence ledger for accepted result bundles and output roles."""
+    """PostgreSQL K13 evidence ledger; SQLite is a hermetic test double."""
 
-    def __init__(self, connection: sqlite3.Connection):
-        if not isinstance(connection, sqlite3.Connection):
-            raise TypeError("connection must be a sqlite3.Connection")
+    def __init__(self, connection: sqlite3.Connection | Connection):
         self.connection = connection
-        with self.connection:
-            self.connection.execute(
+        self._db = RuntimeStoreConnection(connection, 33103)
+        if self._db.postgres:
+            return
+        with self._db.transaction():
+            self._db.execute(
                 "CREATE TABLE IF NOT EXISTS governed_result_bundles ("
                 "bundle_digest TEXT PRIMARY KEY, payload TEXT NOT NULL, "
                 "run_spec_fingerprint TEXT NOT NULL, execution_id TEXT NOT NULL)"
             )
-            self.connection.execute(
+            self._db.execute(
                 "CREATE TABLE IF NOT EXISTS governed_result_outputs ("
                 "run_spec_fingerprint TEXT NOT NULL, execution_id TEXT NOT NULL, "
                 "artifact_role TEXT NOT NULL, content_checksum TEXT NOT NULL, bundle_digest TEXT NOT NULL, "
@@ -186,7 +191,7 @@ class GovernedResultEvidenceStore:
     def assert_admissible(self, bundle: GovernedResultBundleV1) -> None:
         """Refuse a conflicting accepted bundle before I02 receives a mutation."""
 
-        row = self.connection.execute(
+        row = self._db.execute(
             "SELECT payload FROM governed_result_bundles WHERE bundle_digest = ?", (bundle.bundle_digest,)
         ).fetchone()
         if row is not None:
@@ -196,7 +201,7 @@ class GovernedResultEvidenceStore:
         run_spec, execution_id = _run_key(bundle.run_identity)
         for output in bundle.outputs:
             role = output.registration.identity.artifact_role
-            existing = self.connection.execute(
+            existing = self._db.execute(
                 "SELECT content_checksum FROM governed_result_outputs "
                 "WHERE run_spec_fingerprint = ? AND execution_id = ? AND artifact_role = ?",
                 (run_spec, execution_id, role),
@@ -207,20 +212,20 @@ class GovernedResultEvidenceStore:
     def record(self, bundle: GovernedResultBundleV1) -> None:
         """Persist one accepted immutable bundle after the I02 owner succeeds."""
 
-        self.assert_admissible(bundle)
-        existing = self.connection.execute(
-            "SELECT 1 FROM governed_result_bundles WHERE bundle_digest = ?", (bundle.bundle_digest,)
-        ).fetchone()
-        if existing is not None:
-            return
-        run_spec, execution_id = _run_key(bundle.run_identity)
-        with self.connection:
-            self.connection.execute(
+        with self._db.transaction():
+            self.assert_admissible(bundle)
+            existing = self._db.execute(
+                "SELECT 1 FROM governed_result_bundles WHERE bundle_digest = ?", (bundle.bundle_digest,)
+            ).fetchone()
+            if existing is not None:
+                return
+            run_spec, execution_id = _run_key(bundle.run_identity)
+            self._db.execute(
                 "INSERT INTO governed_result_bundles "
                 "(bundle_digest, payload, run_spec_fingerprint, execution_id) VALUES (?, ?, ?, ?)",
                 (bundle.bundle_digest, bundle.canonical_payload_v1, run_spec, execution_id),
             )
-            self.connection.executemany(
+            self._db.executemany(
                 "INSERT INTO governed_result_outputs "
                 "(run_spec_fingerprint, execution_id, artifact_role, content_checksum, bundle_digest) "
                 "VALUES (?, ?, ?, ?, ?)",
