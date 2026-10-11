@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from ..data.models import Instant
@@ -27,6 +28,80 @@ from .strategy_consumer import (
 J02_STRATEGY_FAMILY = "j02-strategy-v1"
 J02_STRATEGY_REQUEST_VERSION = J02_STRATEGY_FAMILY + "-request-v1"
 J02_STRATEGY_RESPONSE_VERSION = J02_STRATEGY_FAMILY + "-response-v1"
+
+
+def _decimal_values(value: Any, path: list[str | int]) -> list[dict[str, Any]]:
+    if isinstance(value, Decimal):
+        return [{"path": path, "value": str(value)}]
+    if isinstance(value, Mapping):
+        return [nested for key in sorted(value) for nested in _decimal_values(value[key], path + [key])]
+    if isinstance(value, (list, tuple)):
+        return [nested for index, item in enumerate(value) for nested in _decimal_values(item, path + [index])]
+    return []
+
+
+def encode_strategy_compose_request(request: StrategyComposeRequest) -> dict[str, Any]:
+    """Encode J10 with separate Decimal evidence approved in issue #337.
+
+    ``input_decimal_values`` is optional transport-only evidence: an input key,
+    a path of object keys/array indices to each Decimal leaf (``[]`` means the
+    whole input value), and its original Decimal text. Normalization can lose
+    not just type but numeric precision, so reconstruction needs both. Unmarked
+    strings stay literal. The reconstructed value must reproduce the canonical
+    body. This sidecar is never part of a domain canonical payload or identity;
+    the legacy identity alone therefore cannot attest its type/value evidence.
+    """
+    body = request.canonical_payload()
+    values = [
+        {"input_key": item.key, **evidence}
+        for item in sorted(request.inputs, key=lambda item: item.key)
+        for evidence in _decimal_values(item.value, [])
+    ]
+    if values:
+        body["input_decimal_values"] = values
+    return body
+
+
+def _restore_decimal(value: Any, path: list[str | int], decimal: Decimal) -> Any:
+    if not path:
+        if type(value) is not str:
+            raise ValueError("Decimal evidence must name a canonical string")
+        return decimal
+    key, *rest = path
+    if type(value) is dict and type(key) is str and key in value:
+        value[key] = _restore_decimal(value[key], rest, decimal)
+    elif type(value) is list and type(key) is int and 0 <= key < len(value):
+        value[key] = _restore_decimal(value[key], rest, decimal)
+    else:
+        raise ValueError("Decimal evidence does not resolve to an input value")
+    return value
+
+
+def _input_decimal_values(body: Mapping[str, Any]) -> dict[str, list[tuple[list[str | int], Decimal]]]:
+    evidence = body.get("input_decimal_values", [])
+    if type(evidence) is not list:
+        raise ValueError("Decimal evidence must be an array")
+    grouped: dict[str, list[tuple[list[str | int], Decimal]]] = {}
+    seen = set()
+    for value in evidence:
+        item = _object(value, {"input_key", "path", "value"})
+        key, path = item["input_key"], item["path"]
+        if type(key) is not str or not key or type(path) is not list or any(
+            not (type(part) is str and part or type(part) is int and part >= 0)
+            for part in path
+        ):
+            raise ValueError("invalid Decimal evidence")
+        if type(item["value"]) is not str:
+            raise ValueError("Decimal text required")
+        decimal = Decimal(item["value"])
+        if str(decimal) != item["value"]:
+            raise ValueError("non-canonical Decimal text")
+        location = (key, tuple(path))
+        if location in seen:
+            raise ValueError("duplicate Decimal evidence")
+        seen.add(location)
+        grouped.setdefault(key, []).append((path, decimal))
+    return grouped
 
 
 def _object(value: Any, keys: set[str]) -> Mapping[str, Any]:
@@ -150,10 +225,13 @@ def _decode_cooldown(value: Any) -> CooldownPolicyDefinition:
 def decode_strategy_compose_request(payload: Mapping[str, Any]) -> StrategyComposeRequest:
     """Rebuild the owned domain values, rejecting mutations before execution."""
     try:
-        body = _object(payload, {
+        keys = {
             "identity_domain", "strategy_spec", "strategy_identity", "inputs",
             "decision_time", "instrument",
-        })
+        }
+        if "input_decimal_values" in payload:
+            keys.add("input_decimal_values")
+        body = _object(payload, keys)
         if body["identity_domain"] != STRATEGY_COMPOSE_REQUEST_IDENTITY_DOMAIN:
             raise ValueError("unsupported strategy request")
         spec = _decode_spec(body["strategy_spec"])
@@ -161,15 +239,21 @@ def decode_strategy_compose_request(payload: Mapping[str, Any]) -> StrategyCompo
             raise ValueError("strategy content identity mismatch")
         if type(body["inputs"]) is not list:
             raise ValueError("inputs must be a canonical array")
+        decimal_values = _input_decimal_values(body)
         inputs = []
         for value in body["inputs"]:
             item = _object(value, {"key", "value", "available_at", "provenance"})
+            input_value = _json_value(item["value"])
+            for path, decimal in decimal_values.pop(item["key"], []):
+                input_value = _restore_decimal(input_value, path, decimal)
             decoded = StrategyInput(
-                key=item["key"], value=_json_value(item["value"]),
+                key=item["key"], value=input_value,
                 available_at=item["available_at"], provenance=item["provenance"],
             )
             _require_canonical(item, decoded.stable_dict())
             inputs.append(decoded)
+        if decimal_values:
+            raise ValueError("Decimal evidence names an unknown input")
         if len({item.key for item in inputs}) != len(inputs):
             raise ValueError("duplicate strategy input key")
         decision_time = Instant.parse(body["decision_time"])
