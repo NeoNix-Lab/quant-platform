@@ -109,6 +109,7 @@ OWNERS = {
     "quant_platform.application.strategy_transport": "application",
     "quant_platform.application.training_consumer": "application",
     "quant_platform.application.validation_consumer": "application",
+    "quant_platform.application.validation_transport": "application",
     "quant_platform.application.wave6_golden": "application",
 }
 ALLOWED = {

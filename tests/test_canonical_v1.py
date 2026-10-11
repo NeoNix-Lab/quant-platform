@@ -97,13 +97,23 @@ class CanonicalV1Tests(unittest.TestCase):
             expected.append({k: site[k] for k in ("path", "ordinal", "scope")}
                             | {"argument_ast": ast.dump(argument, include_attributes=False),
                                "parameters": parameters})
-        self.assertEqual(expected, sites)
+        # P01's pre-migration fixture is immutable historical evidence. New
+        # application codecs declare their additional usage explicitly rather
+        # than weakening the complete source inventory or altering that fixture.
+        additional = [{
+            "path": "src/quant_platform/application/validation_transport.py",
+            "ordinal": 1, "scope": "_bytes",
+            "argument_ast": ast.dump(ast.parse("value", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }]  # #338: existing J12 canonical identities, unchanged byte profile.
+        self.assertEqual(sorted(expected + additional, key=lambda site: (site["path"], site["ordinal"])), sites)
         expected_raw = [[path, ast.dump(ast.parse(expression, mode="eval").body,
                                        include_attributes=False)]
                         for path, expression in INVENTORY["raw_exceptions"]]
         self.assertEqual(expected_raw, raw)
         self.assertEqual(Counter({"sorted-compact-ascii-v1": 56, "sorted-compact-utf8-v1": 3,
-                                  "ordered-compact-ascii-line-v1": 1, "rfc8785-v1": 2}),
+                                  "ordered-compact-ascii-line-v1": 1, "rfc8785-v1": 2})
+                         + Counter(site["parameters"]["profile"] for site in additional),
                          Counter(s["parameters"]["profile"] for s in sites))
 
     def test_old_and_new_bytes_match_at_every_site_on_adversarial_corpus(self):
