@@ -181,7 +181,10 @@ class DurableJobStore:
         ).fetchone()
         if row is None:
             raise DurableJobNotFound("job is not admitted")
-        return _job_record(row)
+        return _job_record((
+            row[0], row[1], row[2], self._evidence_from_storage(row[3]),
+            row[4], self._evidence_from_storage(row[5]),
+        ))
 
     def transition(
         self,
@@ -210,7 +213,7 @@ class DurableJobStore:
                 ):
                     self._db.execute(
                         "UPDATE durable_jobs SET diagnostic_reference = ? WHERE job_id = ?",
-                        (diagnostic_reference, job_id),
+                        (self._evidence_for_storage(diagnostic_reference), job_id),
                     )
                     return self.get(job_id)
                 if (
@@ -231,13 +234,16 @@ class DurableJobStore:
             self._db.execute(
                 "UPDATE durable_jobs SET state = ?, reason_code = ?, result_references = ?, "
                 "diagnostic_reference = ? WHERE job_id = ?",
-                (state.value, reason_code, _canonical_json(list(result_references)), diagnostic_reference, job_id),
+                (state.value, self._evidence_for_storage(reason_code),
+                 _canonical_json(list(result_references)),
+                 self._evidence_for_storage(diagnostic_reference), job_id),
             )
             if current.state in frozenset({JobState.RUNNING, JobState.CANCELLATION_REQUESTED}):
                 self._db.execute(
                     "UPDATE durable_job_attempts SET state = ?, failure_code = ?, evidence_reference = ? "
                     "WHERE job_id = ? AND attempt_no = (SELECT MAX(attempt_no) FROM durable_job_attempts WHERE job_id = ?)",
-                    (state.value, reason_code, diagnostic_reference, job_id, job_id),
+                    (state.value, self._evidence_for_storage(reason_code),
+                     self._evidence_for_storage(diagnostic_reference), job_id, job_id),
                 )
             if state == JobState.RUNNING:
                 self._db.execute(
@@ -259,12 +265,14 @@ class DurableJobStore:
                 current = self.get(str(job_id))
                 self._db.execute(
                     "UPDATE durable_jobs SET state = ?, reason_code = ? WHERE job_id = ?",
-                    (JobState.RECOVERY_REQUIRED.value, "restart_recovery_required", current.job_id),
+                    (JobState.RECOVERY_REQUIRED.value,
+                     self._evidence_for_storage("restart_recovery_required"), current.job_id),
                 )
                 self._db.execute(
                     "UPDATE durable_job_attempts SET state = ?, failure_code = ? "
                     "WHERE job_id = ? AND attempt_no = (SELECT MAX(attempt_no) FROM durable_job_attempts WHERE job_id = ?)",
-                    (JobState.RECOVERY_REQUIRED.value, "restart_recovery_required", current.job_id, current.job_id),
+                    (JobState.RECOVERY_REQUIRED.value,
+                     self._evidence_for_storage("restart_recovery_required"), current.job_id, current.job_id),
                 )
                 recovered.append(self.get(current.job_id))
         return tuple(recovered)
@@ -285,7 +293,23 @@ class DurableJobStore:
             "SELECT job_id, attempt_no, state, failure_code, evidence_reference "
             "FROM durable_job_attempts WHERE job_id = ? ORDER BY attempt_no", (job_id,)
         ).fetchall()
-        return tuple(JobAttempt(str(row[0]), int(row[1]), JobState(str(row[2])), row[3], row[4]) for row in rows)
+        return tuple(JobAttempt(
+            str(row[0]), int(row[1]), JobState(str(row[2])),
+            self._evidence_from_storage(row[3]), self._evidence_from_storage(row[4]),
+        ) for row in rows)
+
+    def _evidence_for_storage(self, value: str | None) -> str | None:
+        # PostgreSQL TEXT cannot contain NUL. Encode the entire optional string,
+        # not just NUL, so literal escape sequences roundtrip unambiguously.
+        # This representation is not an identity payload or an input restriction.
+        if value is None or not self._db.postgres:
+            return value
+        return _canonical_json(value)
+
+    def _evidence_from_storage(self, value: str | None) -> str | None:
+        if value is None or not self._db.postgres:
+            return value
+        return json.loads(value)
 
     def _initialize(self) -> None:
         with self._db.transaction():

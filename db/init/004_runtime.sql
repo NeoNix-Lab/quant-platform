@@ -1,4 +1,7 @@
 -- DG-K P02: runtime evidence only; canonical catalog/experiment unchanged.
+-- Job reason_code/diagnostic_reference and attempt failure_code/evidence_reference
+-- store ASCII JSON string values (or SQL NULL), decoded by DurableJobStore.
+-- This preserves free-text NUL and literal escapes without changing identity bytes.
 BEGIN;
 CREATE ROLE runtime_owner NOLOGIN;
 CREATE ROLE runtime_reader NOLOGIN;

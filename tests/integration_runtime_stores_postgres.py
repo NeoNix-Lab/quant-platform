@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import replace
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -77,6 +78,58 @@ class PostgresJobs(DisposableCase, j03.DurableJobRuntimeV1Tests):
         self.assertEqual((JobState.RECOVERY_REQUIRED,), tuple(
             item.state for item in restarted.attempts(job.job_id)
         ))
+
+    def test_free_text_evidence_and_terminal_append_survive_reconnect(self):
+        first = self.store()
+        job = first.admit(j03.admission())
+        raw = first.connection.execute(
+            "SELECT reason_code, diagnostic_reference FROM runtime.durable_jobs WHERE job_id = %s",
+            (job.job_id,),
+        ).fetchone()
+        self.assertEqual((None, None), raw)
+        first.transition(job.job_id, JobState.QUEUED)
+        first.transition(job.job_id, JobState.RUNNING)
+        reason = 'failed\x00detail' + r'\u0000 "quoted"'
+        failed = first.transition(job.job_id, JobState.FAILED, reason_code=reason)
+        attempt = first.attempts(job.job_id)[0]
+        first.connection.close()
+        reopened = self.store()
+        self.assertEqual(failed, reopened.get(job.job_id))
+        self.assertEqual((attempt,), reopened.attempts(job.job_id))
+        diagnostic = 'evidence\x00ref' + r'\x00\u0000'
+        appended = reopened.transition(
+            job.job_id, JobState.FAILED, reason_code=reason, diagnostic_reference=diagnostic,
+        )
+        reopened.connection.close()
+        final = self.store()
+        self.assertEqual(appended, final.get(job.job_id))
+        self.assertEqual(appended, final.transition(
+            job.job_id, JobState.FAILED, reason_code=reason, diagnostic_reference=diagnostic,
+        ))
+        self.assertEqual((attempt,), final.attempts(job.job_id))
+        raw = final.connection.execute(
+            "SELECT reason_code, diagnostic_reference FROM runtime.durable_jobs WHERE job_id = %s",
+            (job.job_id,),
+        ).fetchone()
+        self.assertEqual((reason, diagnostic), tuple(json.loads(value) for value in raw))
+        raw_attempt = final.connection.execute(
+            "SELECT failure_code, evidence_reference FROM runtime.durable_job_attempts WHERE job_id = %s",
+            (job.job_id,),
+        ).fetchone()
+        self.assertEqual(reason, json.loads(raw_attempt[0]))
+        self.assertIsNone(raw_attempt[1])
+
+        second = final.admit(replace(j03.admission(), request_identity="reconnect-attempt"))
+        final.transition(second.job_id, JobState.QUEUED)
+        final.transition(second.job_id, JobState.RUNNING)
+        failed = final.transition(second.job_id, JobState.FAILED,
+                                  reason_code=reason, diagnostic_reference=diagnostic)
+        attempt = final.attempts(second.job_id)[0]
+        final.connection.close()
+        after_failure = self.store()
+        self.assertEqual(failed, after_failure.get(second.job_id))
+        self.assertEqual((attempt,), after_failure.attempts(second.job_id))
+        self.assertEqual((reason, diagnostic), (attempt.failure_code, attempt.evidence_reference))
 
 
 class PostgresInputs(DisposableCase, k12.AdmittedInputManifestV1Tests):
