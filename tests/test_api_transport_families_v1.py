@@ -519,6 +519,151 @@ class FamilyFailedBodyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(parsed.failed)
         self.assertTrue(parsed.family)
 
+    def swallowing_wires(self, *, header_last, family="j02-strategy-v1"):
+        """Malformed bodies whose delimiters end or skip the scan early.
+
+        ``]`` closing an object and a stray ``}`` end the body at an inner
+        brace; an unbalanced quote shifts string parity so that the following
+        header members read as string contents. Each wire is syntax-invalid.
+        """
+        header = json.dumps({
+            "message_family": family, "schema_version": family + "-request-v1",
+            "operation": "compose", "request_id": "r",
+        })[1:-1]
+        bodies = ('{"a":1]}', "}", '"', '"abc', '{"a":"x\\"y}')
+        wires = tuple(
+            "{" + (
+                '"request":' + body + "," + header if header_last
+                else header + ',"request":' + body
+            ) + "}"
+            for body in bodies
+        )
+        if not header_last:
+            return wires
+        # The unbalanced quote is balanced again by a stray one just before the
+        # closing brace, so the scan reaches that brace with the whole header
+        # inside the malformed value: only the unproven-region rule sees it.
+        return wires + ('{"request":",' + header + '"}',)
+
+    def test_swallowed_header_is_never_classified_legacy(self):
+        for family in ("j02-strategy-v1", "unknown-family-v1"):
+            for wire in self.swallowing_wires(header_last=True, family=family):
+                with self.subTest(family=family, wire=wire):
+                    with self.assertRaises(ValueError):
+                        json.loads(wire)  # The fixture really is malformed.
+                    parsed = transport._parse_message(wire)
+                    self.assertTrue(parsed.failed)
+                    self.assertFalse(parsed.legacy)
+
+    async def test_swallowed_header_is_refused_without_a_legacy_grant(self):
+        legacy_scope = "j02.market_data.read"
+        for family in ("j02-strategy-v1", "unknown-family-v1"):
+            for wire in self.swallowing_wires(header_last=True, family=family):
+                for scopes in (frozenset({legacy_scope}), frozenset({SCOPE}), SCOPES):
+                    with self.subTest(family=family, wire=wire, scopes=scopes):
+                        # ``exchange`` also asserts decoder/executor/legacy uncalled.
+                        socket, config = await self.exchange(wire, scopes)
+                        self.assertEqual([], socket.close_calls)
+                        response = socket.responses[0]
+                        self.assertEqual("invalid_request", response["error"]["code"])
+                        self.assertIsNone(response["schema_version"])
+                        self.assertIsNone(response["message_family"])
+                        evidence = config.evidence_log.events
+                        # Admission may record the legacy scope for a market-data
+                        # peer; the message itself records no operation grant.
+                        self.assertEqual(
+                            transport.J02_EVIDENCE_NO_OPERATION_SCOPE, evidence[-1].requested_scope,
+                        )
+                        self.assertEqual(2 if legacy_scope in scopes else 1, len(evidence))
+                for message in (wire, wire.encode()):
+                    with self.subTest(entry="direct", family=family, wire=wire):
+                        execute = MagicMock()
+                        response = json.loads(
+                            transport.handle_api_transport_message(message, execute=execute)
+                        )
+                        self.assertIsNone(response["schema_version"])
+                        self.assertEqual("invalid_request", response["error"]["code"])
+                        execute.assert_not_called()
+                with self.subTest(entry="loopback", family=family, wire=wire):
+                    socket = Socket([wire])
+                    execute = MagicMock()
+                    await transport.handle_api_transport_connection(socket, execute=execute)
+                    self.assertIsNone(socket.responses[0]["schema_version"])
+                    execute.assert_not_called()
+
+    async def test_header_first_is_still_authorized_by_its_declared_scope(self):
+        # The same members with the header first are classified exactly, so the
+        # two orders may differ in strength of knowledge, never in grant.
+        for wire in self.swallowing_wires(header_last=False):
+            with self.subTest(wire=wire, peer="market-only"):
+                socket, config = await self.exchange(wire, frozenset({"j02.market_data.read"}))
+                self.assertEqual([(1008, "policy denied")], socket.close_calls)
+                self.assertEqual(SCOPE, config.evidence_log.events[-1].requested_scope)
+            with self.subTest(wire=wire, peer="strategy-only"):
+                socket, config = await self.exchange(wire, frozenset({SCOPE}))
+                self.assertEqual([], socket.close_calls)
+                self.assertEqual("j02-strategy-v1-response-v1", socket.responses[0]["schema_version"])
+                self.assertEqual("invalid_request", socket.responses[0]["error"]["code"])
+
+    def test_recovery_is_incomplete_when_an_unproven_region_may_hide_a_header(self):
+        header = '"message_family":"j02-strategy-v1","operation":"compose"'
+        incomplete = (
+            '{"request":{"a":1]},' + header + "}",         # mismatched inner closer
+            '{"request":},' + header + "}",                 # empty value, stray closer
+            '{"request":",' + header + "}",                # unbalanced quote
+            '﻿{' + header + "}",                      # prefix before the object
+            '{"request":{"a":1]}}\n' + header,             # header-like text after the end
+        )
+        for text in incomplete:
+            with self.subTest(text=text[:50]):
+                self.assertFalse(transport._recover_family_header(text).complete)
+        # A mismatch that does not end the body is read through to the header.
+        recovered = transport._parse_message('{"request":{"a":{"b":2]},' + header + "}")
+        self.assertTrue(recovered.failed)
+        self.assertTrue(recovered.family)
+        self.assertEqual("j02-strategy-v1", recovered.payload["message_family"])
+        # Absence is still proved where nothing unread or unproven can spell it.
+        complete = (
+            '{"request":{"a":1]},"b":2}',
+            '{"query":"a\\nb","request":{"a":1]},"b":2}',  # backslash only in a proven value
+            '{"request":' + "9" * 5000 + ',"b":2}',
+            '{"pad":"message_family","b":{"message_family":"nested"}}',
+        )
+        for text in complete:
+            with self.subTest(text=text[:50]):
+                recovered = transport._recover_family_header(text)
+                self.assertTrue(recovered.complete)
+                self.assertNotIn("message_family", recovered.header)
+
+    def test_header_position_never_yields_legacy_for_random_malformed_bodies(self):
+        # Property: a text that carries the header as a top-level member is
+        # never classified legacy, whatever malformed body sits beside it and
+        # wherever the header is. Seeded and size-bounded for reproducibility.
+        import random
+
+        rng = random.Random(336)
+        header = (
+            '"message_family":"j02-strategy-v1","schema_version":"j02-strategy-v1-request-v1",'
+            '"operation":"compose","request_id":"r"'
+        )
+        atoms = (
+            "{", "}", "[", "]", '"', ",", ":", "1", '"a"', "\\", '\\"', "x", " ", "true",
+            "9" * 5000, '"message_family"', '"k":', ",,",
+        )
+        counts = {"family": 0, "incomplete": 0}
+        for _ in range(3000):
+            body = "".join(rng.choice(atoms) for _ in range(rng.randint(0, 12)))
+            for wire in (
+                "{" + header + ',"request":' + body + "}",
+                "{" + '"request":' + body + "," + header + "}",
+                "{" + '"pad":1,"request":' + body + ',"tail":2,' + header + "}",
+            ):
+                parsed = transport._parse_message(wire)
+                self.assertFalse(parsed.legacy, wire[:160])
+                counts["family" if parsed.family else "incomplete"] += 1
+        self.assertGreater(counts["family"], 0)
+        self.assertGreater(counts["incomplete"], 0)
+
     async def test_bad_body_with_only_nested_or_quoted_family_stays_legacy(self):
         for body in (
             '{"message_family":"j02-strategy-v1","value":' + "9" * 5000 + "}",

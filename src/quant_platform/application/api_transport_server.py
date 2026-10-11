@@ -780,6 +780,17 @@ def _well_formed_value_end(text: str, start: int) -> int | None:
     return None
 
 
+def _could_spell_header_key(text: str, start: int, end: int | None = None) -> bool:
+    """Whether ``text[start:end]`` can contain a header key (C-speed).
+
+    A member name is written either literally or with a JSON escape, which
+    needs a backslash: the same argument as the entry guard in
+    ``_parse_message``. No slice is made, so a 16 MiB range is not copied.
+    """
+    end = len(text) if end is None else end
+    return text.find("message_family", start, end) != -1 or text.find("\\", start, end) != -1
+
+
 def _recover_family_header(text: str) -> _RecoveredHeader:
     """Retain top-level headers on a failed parse, without converting the body.
 
@@ -787,17 +798,22 @@ def _recover_family_header(text: str) -> _RecoveredHeader:
     Scan value boundaries with quote/escape and nesting tracking, then use the
     standard decoder only for scalar header values. Never search for a header
     substring inside a string or a nested object. Normal messages use one parse.
-    Only reaching the top-level closing brace proves absence; a syntax stop or
-    exhausted budget preserves an explicit incomplete classification instead.
+    Absence is proved only by reaching a closing brace *and* finding nothing
+    that could still spell a header key after it: the depth count cannot tell
+    ``]`` from ``}``, so a mismatched bracket can end the body early. A syntax
+    stop, an exhausted budget or an unread remainder that carries the header
+    name or an escape preserves an explicit incomplete classification instead.
     """
     decoder = json.JSONDecoder()
     header: dict[str, Any] = {}
     index = len(text) - len(text.lstrip(" \t\r\n"))
     if index == len(text) or text[index] != "{":
-        return _RecoveredHeader({}, True)
+        # Not an object, so no member can be a header; but a header spelled
+        # after a BOM or other prefix is not proved absent by that alone.
+        return _RecoveredHeader({}, not _could_spell_header_key(text, 0))
     index += 1
     members = tokens = 0
-    complete = False
+    complete = unproven_region = False
     while index < len(text):
         while index < len(text) and text[index] in " \t\r\n":
             index += 1
@@ -856,6 +872,12 @@ def _recover_family_header(text: str) -> _RecoveredHeader:
             if key in _FAMILY_HEADER_KEYS:
                 header[key] = None
             break
+        if skipped is None and _could_spell_header_key(text, start, index):
+            # A malformed value is bounded by the token scan, not by a parser:
+            # an unbalanced quote or mismatched bracket may have swallowed
+            # members that follow. Keys are read exactly and well-formed values
+            # are proven by the C decoder; this region is neither.
+            unproven_region = True
         if key in _FAMILY_HEADER_KEYS:
             # Presence is retained even for an invalid header value. Only
             # strings can route; do not recursively decode header containers.
@@ -872,6 +894,12 @@ def _recover_family_header(text: str) -> _RecoveredHeader:
             complete = index < len(text) and text[index] == "}"
             break
         index += 1
+    if complete and (unproven_region or _could_spell_header_key(text, index + 1)):
+        # ``index`` is the brace the scan took for the top-level one. If a
+        # malformed value, or whatever follows that brace, carries the header
+        # name or an escape, the brace may have been a mismatched inner closer
+        # or a swallowed delimiter and the header may be elsewhere.
+        complete = False
     return _RecoveredHeader(header, complete)
 
 
