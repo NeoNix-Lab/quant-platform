@@ -20,7 +20,9 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import quant_platform.application.api_transport_server as transport  # noqa: E402
-from test_api_transport_server_v1 import request_payload  # noqa: E402
+from quant_platform.application import execute_market_data_query  # noqa: E402
+from test_api_transport_server_v1 import batches, request_payload  # noqa: E402
+from test_application_market_data_result_v1 import covered_gateway, query  # noqa: E402
 from test_omega_remote_client_acceptance_v1 import (  # noqa: E402
     _certificate_fingerprint, _generate_ec_key, _self_signed_ca, _signed_certificate,
 )
@@ -553,11 +555,52 @@ class FamilyResponseAndBodyTests(unittest.IsolatedAsyncioTestCase):
         })
 
     async def test_legacy_v1_body_keeps_existing_json_semantics(self):
-        socket = Socket([json.dumps(request_payload()).replace('"venue"', '"venue":"x","venue"', 1)])
-        # A v1 message with a duplicate key is not rejected by the family rule.
-        execute = MagicMock(side_effect=ValueError("reached the v1 decoder path"))
-        await transport.handle_api_transport_connection(socket, execute=execute)
-        self.assertEqual(transport.J02_RESPONSE_SCHEMA_VERSION, socket.responses[0]["schema_version"])
+        # The lossless/duplicate-key restriction is a family-only rule (ADR-0069
+        # section 1; issue #336). A legacy v1 body keeps ``json.loads`` semantics:
+        # the duplicate ``venue`` key is accepted, the last value wins, and the
+        # legacy executor runs with it. Asserting only the response schema would
+        # also pass for a v1 invalid-request error, so the executor call, the
+        # value it received and the success payload are all pinned.
+        wire = json.dumps(request_payload()).replace('"venue"', '"venue":"x","venue"', 1)
+        self.assertEqual(2, wire.count('"venue"'))
+        self.assertLess(wire.index('"venue":"x"'), wire.rindex('"venue"'))
+        expected = request_payload()["query"]["venue"]
+        direct = execute_market_data_query(query(), gateway=covered_gateway(batches()))
+
+        async def through_connection(configuration):
+            socket = Socket([wire])
+            execute = MagicMock(return_value=direct)
+            await transport.handle_api_transport_connection(
+                socket, execute=execute, remote_security=configuration,
+            )
+            return socket.responses, execute
+
+        async def through_direct_entry():
+            execute = MagicMock(return_value=direct)
+            response = transport.handle_api_transport_message(wire, execute=execute)
+            return [json.loads(response)], execute
+
+        market_data = transport.RemoteJ02Principal(
+            "legacy-peer", frozenset({transport.J02_MARKET_DATA_READ_SCOPE}),
+        )
+        cases = {
+            "loopback connection": lambda: through_connection(None),
+            "authorized remote connection": lambda: through_connection(
+                security(principal=market_data)
+            ),
+            "direct entry point": through_direct_entry,
+        }
+        for label, run in cases.items():
+            with self.subTest(label):
+                responses, execute = await run()
+                execute.assert_called_once()
+                self.assertEqual(expected, execute.call_args.args[0].venue)
+                self.assertEqual([{
+                    "schema_version": transport.J02_RESPONSE_SCHEMA_VERSION,
+                    "request_id": request_payload()["request_id"],
+                    "status": "ok",
+                    "result": transport.encode_consumer_result(direct),
+                }], responses)
 
     async def test_each_message_is_parsed_exactly_once(self):
         handlers, _, _ = route()
