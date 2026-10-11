@@ -1144,12 +1144,13 @@ class FamilyCompositionTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl binary is required to generate a real mTLS fixture")
-class FamilyRealMtlsTests(unittest.IsolatedAsyncioTestCase):
-    """Families over a real TLS 1.3 / mTLS WebSocket, through server composition."""
+class _FamilyMtlsFixture(unittest.IsolatedAsyncioTestCase):
+    """Shared real TLS 1.3 / mTLS server fixture for concrete family proofs."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.TemporaryDirectory(prefix="p05a_mtls_")
+        cls.addClassCleanup(cls._tmp.cleanup)
         cwd = Path(cls._tmp.name)
         cls.cwd = cwd
         _generate_ec_key(cwd, "ca.key")
@@ -1228,6 +1229,8 @@ class FamilyRealMtlsTests(unittest.IsolatedAsyncioTestCase):
                 await task
         return configuration
 
+
+class FamilyRealMtlsTests(_FamilyMtlsFixture):
     async def test_family_only_principal_exchanges_over_real_wss_mtls(self):
         handlers, decoder, executor = route()
         responses = []
