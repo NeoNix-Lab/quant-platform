@@ -346,6 +346,70 @@ class FamilyFailedBodyTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotEqual(transport.J02_RESPONSE_SCHEMA_VERSION, socket.responses[0]["schema_version"])
                     self.assertIn("unsupported", socket.responses[0]["error"]["message"])
 
+    def test_header_recovery_boundaries_match_the_reference_scan(self):
+        # N1: well-formed values are now skipped by the C decoder instead of a
+        # per-character scan. These expectations were produced by the previous
+        # character scanner (96eb102 / b97ee29), so the two must agree,
+        # including where a value is only partly well-formed.
+        long_int = "9" * 5000
+        cases = (
+            ('{"message_family":"a","pad":1 2,"operation":"o"}',
+             {"message_family": "a", "operation": "o"}),
+            ('{"pad":01,"message_family":"x","request_id":"r"}',
+             {"message_family": "x", "request_id": "r"}),
+            ('{"pad":NaN,"message_family":"x"}', {"message_family": "x"}),
+            ('{"pad": [1, 2 , {"a": "}"} ] ,\n "message_family" : "f" , "schema_version":"v"}',
+             {"message_family": "f", "schema_version": "v"}),
+            ('{"pad":1]"message_family":"x"}', None),
+            ('{"message_family":"f","pad":"unterminated}', {"message_family": "f"}),
+            ('{"message_family":"f" "operation":"o"}', {"message_family": None}),
+            ('{"message_family":"f","operation":["o"],"request_id":7}',
+             {"message_family": "f", "operation": None, "request_id": None}),
+            ('{"pad":%s,"message_family":"f","schema_version":"s"}' % long_int,
+             {"message_family": "f", "schema_version": "s"}),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text[:60]):
+                self.assertEqual(expected, transport._recover_family_header(text))
+
+    def test_header_recovery_work_is_bounded_on_hostile_input(self):
+        # Literal sizes on purpose: a bound that is removed or widened must fail
+        # here, not silently re-derive the test data from the new constant.
+        within = ",".join('"m%d":1' % index for index in range(63))
+        beyond = ",".join('"m%d":1' % index for index in range(100))
+        self.assertEqual(
+            {"message_family": "f"},
+            transport._recover_family_header('{%s,"message_family":"f"}' % within),
+        )
+        self.assertIsNone(
+            transport._recover_family_header('{%s,"message_family":"f"}' % beyond),
+        )
+        # A malformed value larger than the token budget abandons the scan: what
+        # precedes it is kept, nothing after an unknown boundary is read.
+        # The array is complete but followed by junk, so it is not a well-formed
+        # value and goes to the token scan; unbudgeted, the scan would resume at
+        # the next top-level comma and also read ``schema_version``.
+        hostile = '{"message_family":"f","pad":[%s] x,"schema_version":"s"}' % ",".join(
+            ['"a"'] * 60_000
+        )
+        recovered = transport._recover_family_header(hostile)
+        self.assertEqual({"message_family": "f"}, recovered)
+
+    async def test_failed_non_family_text_is_not_scanned(self):
+        # No header name and no backslash: a header key cannot be present.
+        with patch.object(
+            transport, "_recover_family_header", wraps=transport._recover_family_header,
+        ) as recover:
+            transport._parse_message("{not json")
+            transport._parse_message('{"a":' + "9" * 5000 + "}")
+            recover.assert_not_called()
+            transport._parse_message('{"message_family":"f","n":' + "9" * 5000 + "}")
+            transport._parse_message('{"message\\u005ffamily":"f","n":' + "9" * 5000 + "}")
+            self.assertEqual(2, recover.call_count)
+        parsed = transport._parse_message('{"message\\u005ffamily":"f","n":' + "9" * 5000 + "}")
+        self.assertTrue(parsed.failed)
+        self.assertTrue(parsed.family)
+
     async def test_bad_body_with_only_nested_or_quoted_family_stays_legacy(self):
         for body in (
             '{"message_family":"j02-strategy-v1","value":' + "9" * 5000 + "}",
@@ -443,10 +507,28 @@ class FamilyResponseAndBodyTests(unittest.IsolatedAsyncioTestCase):
         for event in configuration.evidence_log.events:
             self.assertEqual("authenticated_connection", event.requested_scope)
             self.assertEqual("unsupported_message_header", event.terminal_close_reason)
+            self.assertEqual(transport.J02_EVIDENCE_NO_OPERATION_SCOPE, event.requested_scope)
+            self.assertEqual(
+                transport.J02_EVIDENCE_UNSUPPORTED_HEADER_REASON, event.terminal_close_reason,
+            )
             self.assertEqual("allow", event.decision)
             self.assertNotIn("secret", repr(event))
         decoder.assert_not_called()
         executor.assert_not_called()
+
+    def test_audit_markers_are_never_grantable_scopes(self):
+        # N4: the evidence vocabulary must not be mistaken for, or configurable
+        # as, a scope. Authorization only ever consults J02_REMOTE_SCOPES.
+        self.assertIn("J02_EVIDENCE_NO_OPERATION_SCOPE", transport.__all__)
+        self.assertIn("J02_EVIDENCE_UNSUPPORTED_HEADER_REASON", transport.__all__)
+        for marker in (
+            transport.J02_EVIDENCE_NO_OPERATION_SCOPE,
+            transport.J02_EVIDENCE_UNSUPPORTED_HEADER_REASON,
+        ):
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, transport.J02_REMOTE_SCOPES)
+                with self.assertRaises(ValueError):
+                    transport.J02FamilyHandler(marker, "x-response-v1", dict, dict)
 
     async def test_training_registration_requires_both_grants_with_the_hook(self):
         family = "j02-training-v1"

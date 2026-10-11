@@ -20,6 +20,7 @@ import hashlib
 import ipaddress
 import json
 import math
+import re
 import secrets
 import ssl
 from typing import Any
@@ -57,6 +58,14 @@ J02_REMOTE_SCOPES = frozenset({
     "j02.admitted_input.read",
     "j02.result.submit",
 })
+# Evidence-only vocabulary for ``RemoteJ02SecurityEvidence`` rows that record an
+# authenticated peer's message without any operation grant (an unsupported
+# message header). They are audit markers, not scopes: neither is in
+# ``J02_REMOTE_SCOPES``, no principal can hold them, and authorization never
+# consults them. ADR-0063 section 3 lists the evidence fields; this is the
+# only place these two values are defined.
+J02_EVIDENCE_NO_OPERATION_SCOPE = "authenticated_connection"
+J02_EVIDENCE_UNSUPPORTED_HEADER_REASON = "unsupported_message_header"
 # ADR-0069 declares these header-level grants independently of whether a
 # concrete seam handler has been installed. Training registration's additional
 # body-dependent grant belongs to the J13 codec (#339), not this dispatcher.
@@ -145,7 +154,12 @@ class RemoteJ02Principal:
 
 @dataclass(frozen=True, slots=True)
 class RemoteJ02SecurityEvidence:
-    """Bounded, payload-free remote J02 authorization evidence."""
+    """Bounded, payload-free remote J02 authorization evidence.
+
+    ``requested_scope`` is a registered J02 scope, or the audit marker
+    ``J02_EVIDENCE_NO_OPERATION_SCOPE`` for a message that asked for no
+    operation; the marker is never a grantable scope.
+    """
 
     timestamp: str
     session_id: str
@@ -694,9 +708,56 @@ def _parse_message(message: str | bytes) -> _ParsedMessage:
     except Exception:
         # Parse only top-level header values independently of the failed body.
         # No recovered payload may reach a decoder, even if its header routes.
-        header = _recover_family_header(text) if text is not None else None
+        # A header key can only be written without the literal name through a
+        # JSON escape, so a text with neither the name nor a backslash cannot
+        # carry one: skip the scan for that (C-speed) test.
+        header = (
+            _recover_family_header(text)
+            if text is not None and ("message_family" in text or "\\" in text)
+            else None
+        )
         return _ParsedMessage(header, True, False)
     return _ParsedMessage(payload, False, lossless)
+
+
+# One lexical unit of the boundary scan below. An unterminated string consumes
+# the rest of the text, as an open quote always did; a trailing lone backslash
+# is left to the scalar-run alternative. Commas only end a value at the top
+# level, so inside a container they are folded into the scalar run: a dense
+# array is then a handful of tokens, not one per element.
+_JSON_BOUNDARY_TOP = re.compile(
+    r'"[^"\\]*(?:\\.[^"\\]*)*"?|[\[\]{},]|[^"\[\]{},]+', re.DOTALL,
+)
+_JSON_BOUNDARY_NESTED = re.compile(
+    r'"[^"\\]*(?:\\.[^"\\]*)*"?|[\[\]{}]|[^"\[\]{}]+', re.DOTALL,
+)
+# Bounds for the recovery scan on hostile input. A protocol envelope has five
+# members, and a well-formed value is skipped at C speed, so only a malformed
+# value reaches the token scan; neither bound is reachable by a legitimate
+# sender whose message failed only on the whole-message parse.
+_MAX_RECOVERY_MEMBERS = 64
+_MAX_RECOVERY_TOKENS = 100_000
+_FAMILY_HEADER_KEYS = ("message_family", "schema_version", "operation", "request_id")
+# Number-preserving: never converts, so the integer-digit limit cannot trigger.
+_VALUE_SKIPPER = json.JSONDecoder(parse_int=str, parse_float=str, parse_constant=str)
+
+
+def _well_formed_value_end(text: str, start: int) -> int | None:
+    """Boundary index of a complete JSON value at ``start``, else ``None``.
+
+    Returns the position of the ``,`` or ``}`` that follows the value (after
+    whitespace), exactly where the token scan would stop. Anything that is not
+    a complete value followed by one of those is left to the token scan.
+    """
+    try:
+        _, end = _VALUE_SKIPPER.raw_decode(text, start)
+    except (ValueError, RecursionError):
+        return None
+    while end < len(text) and text[end] in " \t\r\n":
+        end += 1
+    if end < len(text) and text[end] in ",}":
+        return end
+    return None
 
 
 def _recover_family_header(text: str) -> dict[str, Any] | None:
@@ -713,7 +774,11 @@ def _recover_family_header(text: str) -> dict[str, Any] | None:
     if index == len(text) or text[index] != "{":
         return None
     index += 1
+    members = tokens = 0
     while index < len(text):
+        members += 1
+        if members > _MAX_RECOVERY_MEMBERS:
+            break
         while index < len(text) and text[index] in " \t\r\n":
             index += 1
         if index == len(text) or text[index] != '"':
@@ -733,19 +798,23 @@ def _recover_family_header(text: str) -> dict[str, Any] | None:
             index += 1
         start = index
         depth = 0
-        quoted = escaped = False
-        while index < len(text):
+        abandoned = False
+        # A well-formed value (the usual reason a whole-message parse failed:
+        # an integer past the conversion limit) is skipped by the C decoder.
+        skipped = _well_formed_value_end(text, index)
+        if skipped is not None:
+            index = skipped
+        while skipped is None and index < len(text):
+            # Malformed value: one token per string, bracket, comma or run of
+            # other characters, within a bounded budget.
+            tokens += 1
+            if tokens > _MAX_RECOVERY_TOKENS:
+                abandoned = True
+                break
+            pattern = _JSON_BOUNDARY_TOP if depth == 0 else _JSON_BOUNDARY_NESTED
+            token_end = pattern.match(text, index).end()
             character = text[index]
-            if quoted:
-                if escaped:
-                    escaped = False
-                elif character == "\\":
-                    escaped = True
-                elif character == '"':
-                    quoted = False
-            elif character == '"':
-                quoted = True
-            elif character in "[{":
+            if character in "[{":
                 depth += 1
             elif character in "]}":
                 if depth == 0:
@@ -753,8 +822,13 @@ def _recover_family_header(text: str) -> dict[str, Any] | None:
                 depth -= 1
             elif character == "," and depth == 0:
                 break
-            index += 1
-        if key in ("message_family", "schema_version", "operation", "request_id"):
+            index = token_end
+        if abandoned:
+            # The value boundary is unknown, so nothing after it can be read.
+            if key in _FAMILY_HEADER_KEYS:
+                header[key] = None
+            break
+        if key in _FAMILY_HEADER_KEYS:
             # Presence is retained even for an invalid header value. Only
             # strings can route; do not recursively decode header containers.
             value = None
@@ -929,12 +1003,12 @@ async def _authorize_remote_connection(
             # legacy admission label, and family-only peers record their real
             # requested scope at the message boundary.
             requested_scope=(
-                "authenticated_connection" if unsupported_header
+                J02_EVIDENCE_NO_OPERATION_SCOPE if unsupported_header
                 else required_scope or J02_MARKET_DATA_READ_SCOPE
             ),
             decision="allow" if allowed else "deny",
             terminal_close_reason=(
-                "unsupported_message_header" if allowed and unsupported_header
+                J02_EVIDENCE_UNSUPPORTED_HEADER_REASON if allowed and unsupported_header
                 else "application_session_authorized" if allowed else "policy_denied"
             ),
         )
@@ -988,6 +1062,8 @@ __all__ = [
     "J02_MAX_WIRE_MESSAGE_BYTES",
     "J02_MARKET_DATA_READ_SCOPE",
     "J02_REMOTE_SCOPES",
+    "J02_EVIDENCE_NO_OPERATION_SCOPE",
+    "J02_EVIDENCE_UNSUPPORTED_HEADER_REASON",
     "J02FamilyHandler",
     "J02_REQUEST_SCHEMA_VERSION",
     "J02_RESPONSE_SCHEMA_VERSION",
