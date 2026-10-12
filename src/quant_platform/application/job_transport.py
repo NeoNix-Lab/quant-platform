@@ -14,6 +14,14 @@ operation by the dispatcher before any decoding (``submit``/``cancel`` need
 - ``cancel`` follows ADR-0062 section 5: ``CANCELLED`` before dispatch,
   ``CANCELLATION_REQUESTED`` while running.
 
+Scopes never imply one another (ADR-0069 section 2), so what ``submit`` and
+``cancel`` return is a *receipt*: the Job's identity, which the caller already
+supplied or can compute, and nothing observed about it. State, attempts, reason
+and result or diagnostic references need ``j02.jobs.read`` and are returned only
+by ``status`` and ``result``; otherwise a resubmission or a cancel would be a
+read of a completed Job without the read scope. Refusals carry a reason and no
+state for the same reason.
+
 Not here, by design: lifecycle changes, recovery or retry over the wire
 (``RECOVERY_REQUIRED`` stays an operator action, ADR-0069 section 2), any new
 semantics, and result *bodies*. The Job store holds references only and no
@@ -143,6 +151,23 @@ class _JobReference:
         self.job_id = _text(_only(body, {"job_id"})["job_id"])
 
 
+def _submit_receipt(record: JobRecord) -> dict[str, Any]:
+    """What a submit-only caller may learn: the identity it submitted."""
+
+    admission = record.admission
+    return {
+        "job_id": record.job_id,
+        "operation_kind": admission.operation_kind,
+        "request_identity": admission.request_identity,
+    }
+
+
+def _cancel_receipt(record: JobRecord) -> dict[str, Any]:
+    """The cancellation is recorded; whether it already took effect is a read."""
+
+    return {"job_id": record.job_id, "cancellation": "recorded"}
+
+
 def status_document(record: JobRecord, attempts: Any) -> dict[str, Any]:
     """The bounded ADR-0062 section 5 projection of a Job. Nothing else."""
 
@@ -237,11 +262,12 @@ class JobTransport:
             ) from error
         if record.state is JobState.ADMITTED:
             try:
-                record = store.transition(record.job_id, JobState.QUEUED)
+                store.transition(record.job_id, JobState.QUEUED)
             except DurableJobConflict:
-                # Raced with a worker or a cancellation: report where it is.
-                record = store.get(record.job_id)
-        return status_document(record, store.attempts(record.job_id))
+                # Raced with a worker or a cancellation: it has moved on, which
+                # is not an error and is not reported to a submit-only caller.
+                pass
+        return _submit_receipt(record)
 
     def _status(self, store: DurableJobStore, job_id: str) -> dict[str, Any]:
         record = self._get(store, job_id)
@@ -265,24 +291,24 @@ class JobTransport:
             record = self._get(store, job_id)
             state = record.state
             if state in (JobState.CANCELLED, JobState.CANCELLATION_REQUESTED):
-                return status_document(record, store.attempts(job_id))
+                return _cancel_receipt(record)
             if state in (JobState.ADMITTED, JobState.QUEUED):
                 target, options = JobState.CANCELLED, {"reason_code": _CANCELLED_BY_REQUEST}
             elif state is JobState.RUNNING:
                 target, options = JobState.CANCELLATION_REQUESTED, {}
-            elif state is JobState.RECOVERY_REQUIRED:
-                # An explicit recovery decision, which stays an operator action.
-                raise _refusal("job_recovery_required")
-            else:  # SUCCEEDED, FAILED
-                raise _refusal("job_already_terminal", state=state.value)
+            else:
+                # SUCCEEDED and FAILED are finished; RECOVERY_REQUIRED is an
+                # explicit recovery decision that stays an operator action. One
+                # reason for all three: which of them it is would be a read.
+                raise _refusal("job_not_cancellable")
             try:
                 record = store.transition(job_id, target, **options)
             except DurableJobConflict:
                 if store.get(job_id).state is state:
                     raise
                 continue
-            return status_document(record, store.attempts(job_id))
-        return status_document(store.get(job_id), store.attempts(job_id))  # pragma: no cover
+            return _cancel_receipt(record)
+        return _cancel_receipt(store.get(job_id))  # pragma: no cover
 
     @staticmethod
     def _get(store: DurableJobStore, job_id: str) -> JobRecord:

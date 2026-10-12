@@ -55,6 +55,14 @@ STATUS_FIELDS = {
     "reason_code", "result_references", "diagnostic_reference", "attempts",
 }
 ATTEMPT_FIELDS = {"attempt_no", "state", "failure_code", "evidence_reference"}
+SUBMIT_RECEIPT = {"job_id", "operation_kind", "request_identity"}
+CANCEL_RECEIPT = {"job_id", "cancellation"}
+# Everything a completed Job holds that needs the read scope to be observed.
+PROTECTED_MARKERS = (
+    "result:sha256", "evidence:", "handler_failed", "diagnostic", "attempts", "attempt_no",
+    "failure_code", "evidence_reference", "result_references", "reason_code",
+    "SUCCEEDED", "FAILED", "RUNNING", "QUEUED", "CANCELLED", "RECOVERY_REQUIRED",
+)
 
 
 def succeeds(_admission):
@@ -207,12 +215,15 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
     async def test_submit_of_a_registered_kind_returns_the_deterministic_queued_job(self) -> None:
         result = self.ok(await self.call("submit", submit_body()))
         self.assertEqual(expected_admission().job_id, result["job_id"])
-        self.assertEqual("QUEUED", result["state"])
-        self.assertEqual(STATUS_FIELDS, set(result))
-        self.assertEqual([], result["attempts"])
+        # A receipt: what the caller submitted, never an observation of the Job.
+        self.assertEqual(SUBMIT_RECEIPT, set(result))
+        self.assertEqual((KIND, "request:1"), (result["operation_kind"], result["request_identity"]))
         store = self.open_store()
         self.assertEqual((result["job_id"],), store.queued_job_ids())
         self.assertEqual(JobState.QUEUED, store.get(result["job_id"]).state)
+        # The state is available, with the read scope, from status.
+        status = self.ok(await self.call("status", {"job_id": result["job_id"]}))
+        self.assertEqual("QUEUED", status["state"])
 
     async def test_an_identical_resubmission_returns_the_same_job_and_adds_nothing(self) -> None:
         first = self.ok(await self.call("submit", submit_body()))
@@ -223,13 +234,15 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         other = self.ok(await self.call("submit", submit_body(request_identity="request:2")))
         self.assertNotEqual(first["job_id"], other["job_id"])
 
-    async def test_a_resubmission_after_the_job_moved_reports_where_it_is(self) -> None:
+    async def test_a_resubmission_after_the_job_moved_gives_the_same_receipt(self) -> None:
         job = self.ok(await self.call("submit", submit_body()))
         store = self.open_store()
         store.claim(job["job_id"])
         again = self.ok(await self.call("submit", submit_body(), request_id="req-2"))
-        self.assertEqual(("RUNNING", job["job_id"]), (again["state"], again["job_id"]))
-        self.assertEqual([1], [a["attempt_no"] for a in again["attempts"]])
+        self.assertEqual(job, again)  # nothing about the move leaks to a submitter
+        self.assertEqual(SUBMIT_RECEIPT, set(again))
+        status = self.ok(await self.call("status", {"job_id": job["job_id"]}))
+        self.assertEqual(("RUNNING", [1]), (status["state"], [a["attempt_no"] for a in status["attempts"]]))
 
     async def test_a_conflicting_stored_admission_fails_closed(self) -> None:
         job = self.ok(await self.call("submit", submit_body()))
@@ -353,9 +366,11 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(state=state.value):
                 job, store = self.seed(state, request_identity=f"request:{state.value}")
                 cancelled = self.ok(await self.call("cancel", {"job_id": job.job_id}))
-                self.assertEqual("CANCELLED", cancelled["state"])
-                self.assertEqual("cancelled_by_request", cancelled["reason_code"])
-                self.assertEqual(JobState.CANCELLED, store.get(job.job_id).state)
+                self.assertEqual(CANCEL_RECEIPT, set(cancelled))
+                self.assertEqual("recorded", cancelled["cancellation"])
+                record = store.get(job.job_id)
+                self.assertEqual((JobState.CANCELLED, "cancelled_by_request"),
+                                 (record.state, record.reason_code))
                 self.assertNotIn(job.job_id, store.queued_job_ids())
                 # Idempotent: a repeat reports the same outcome.
                 self.assertEqual(
@@ -365,27 +380,97 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_while_running_only_records_a_request(self) -> None:
         job, store = self.seed(JobState.RUNNING)
         requested = self.ok(await self.call("cancel", {"job_id": job.job_id}))
-        self.assertEqual("CANCELLATION_REQUESTED", requested["state"])
+        self.assertEqual(CANCEL_RECEIPT, set(requested))
         self.assertEqual(JobState.CANCELLATION_REQUESTED, store.get(job.job_id).state)
-        # The store's own attempt bookkeeping; nothing here claims the handler stopped.
+        # The same receipt whether it only requested (running) or finished
+        # (queued): which one it was is an observation, and needs status.
         self.assertEqual(
             [(1, "CANCELLATION_REQUESTED")],
-            [(a["attempt_no"], a["state"]) for a in requested["attempts"]],
+            [(a.attempt_no, a.state.value) for a in store.attempts(job.job_id)],
         )
-        again = self.ok(await self.call("cancel", {"job_id": job.job_id}))
-        self.assertEqual("CANCELLATION_REQUESTED", again["state"])
+        self.assertEqual(requested, self.ok(await self.call("cancel", {"job_id": job.job_id})))
         self.assertEqual(1, len(store.attempts(job.job_id)))
 
     async def test_cancel_refuses_terminal_jobs_and_never_decides_recovery(self) -> None:
-        for state, reason in (
-            (JobState.SUCCEEDED, "job_already_terminal"),
-            (JobState.FAILED, "job_already_terminal"),
-            (JobState.RECOVERY_REQUIRED, "job_recovery_required"),
-        ):
+        for state in (JobState.SUCCEEDED, JobState.FAILED, JobState.RECOVERY_REQUIRED):
             with self.subTest(state=state.value):
                 job, store = self.seed(state, request_identity=f"request:cancel:{state.value}")
-                self.refused(await self.call("cancel", {"job_id": job.job_id}), reason)
+                error = self.refused(
+                    await self.call("cancel", {"job_id": job.job_id}), "job_not_cancellable",
+                )
+                # One reason for all three, and no state: telling them apart is a read.
+                self.assertEqual({"reason": "job_not_cancellable"}, error["context"])
                 self.assertEqual(state, store.get(job.job_id).state)
+
+    # -- a submit-only caller must learn nothing it could only read ------------------
+
+    SUBMIT_ONLY = frozenset({SUBMIT})
+
+    def assert_no_observation(self, response):
+        wire = json.dumps(response["result"] if response["status"] == "ok" else response["error"])
+        for marker in PROTECTED_MARKERS:
+            self.assertNotIn(marker, wire, f"{marker!r} leaked to a submit-only caller")
+
+    async def test_resubmitting_a_finished_job_discloses_nothing_with_only_the_submit_scope(self) -> None:
+        for index, state in enumerate(
+            (JobState.SUCCEEDED, JobState.FAILED, JobState.RECOVERY_REQUIRED)
+        ):
+            with self.subTest(state=state.value):
+                # Neutral identity: the receipt echoes it, so it must not spell a state.
+                request = f"request:disclosure:{index}"
+                job, store = self.seed(state, request_identity=request)
+                response = await self.call(
+                    "submit", submit_body(request_identity=request), scopes=self.SUBMIT_ONLY,
+                )
+                result = self.ok(response)
+                self.assertEqual(SUBMIT_RECEIPT, set(result))
+                self.assertEqual(job.job_id, result["job_id"])
+                self.assert_no_observation(response)
+                # ...and the submission did not change the finished Job.
+                self.assertEqual(state, store.get(job.job_id).state)
+
+    async def test_cancel_discloses_nothing_with_only_the_submit_scope(self) -> None:
+        for state in (JobState.QUEUED, JobState.RUNNING, JobState.CANCELLATION_REQUESTED):
+            with self.subTest(state=state.value):
+                job, _ = self.seed(state, request_identity=f"request:cancel-leak:{state.value}")
+                response = await self.call(
+                    "cancel", {"job_id": job.job_id}, scopes=self.SUBMIT_ONLY,
+                )
+                self.assertEqual(CANCEL_RECEIPT, set(self.ok(response)))
+                self.assert_no_observation(response)
+        for state in (JobState.SUCCEEDED, JobState.FAILED, JobState.RECOVERY_REQUIRED):
+            with self.subTest(refused=state.value):
+                job, _ = self.seed(state, request_identity=f"request:cancel-refused:{state.value}")
+                response = await self.call(
+                    "cancel", {"job_id": job.job_id}, scopes=self.SUBMIT_ONLY,
+                )
+                self.refused(response, "job_not_cancellable")
+                self.assert_no_observation(response)
+
+    async def test_the_same_submit_only_caller_still_cannot_read(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:still-denied")
+        for operation in ("status", "result"):
+            with self.subTest(operation=operation):
+                socket, _ = await self.exchange(
+                    operation, {"job_id": job.job_id}, scopes=self.SUBMIT_ONLY,
+                )
+                self.assertEqual([(1008, "policy denied")], socket.close_calls)
+                self.assertEqual([], socket.responses)
+
+    async def test_a_read_only_caller_cannot_submit_or_cancel_and_still_observes(self) -> None:
+        job, store = self.seed(JobState.SUCCEEDED, request_identity="request:read-only")
+        read_only = frozenset({READ})
+        for operation, body in (
+            ("submit", submit_body(request_identity="request:read-only")),
+            ("cancel", {"job_id": job.job_id}),
+        ):
+            with self.subTest(operation=operation):
+                socket, _ = await self.exchange(operation, body, scopes=read_only)
+                self.assertEqual([(1008, "policy denied")], socket.close_calls)
+        status = self.ok(await self.call("status", {"job_id": job.job_id}, scopes=read_only))
+        self.assertEqual("SUCCEEDED", status["state"])
+        result = self.ok(await self.call("result", {"job_id": job.job_id}, scopes=read_only))
+        self.assertEqual(["result:sha256:9"], result["result_references"])
 
     # -- scopes (ADR-0069 section 2) -------------------------------------------------
 
@@ -462,7 +547,7 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         # A cancel after the fact is a refusal, not a rewrite of the outcome.
         self.refused(
             await self.call("cancel", {"job_id": submitted["job_id"]}, registry=registry),
-            "job_already_terminal",
+            "job_not_cancellable",
         )
 
 
