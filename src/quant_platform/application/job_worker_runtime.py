@@ -27,9 +27,11 @@ is gone), the Job stays ``RUNNING``, the process exits, and only then does the
 operating-system lock let the next worker recover it. ADR-0068 section 6
 states the session-only argument; the process-lifetime fence is an addition to
 it that the ADR should record (a design amendment, not made here). It is a
-single-host guarantee: the platform's server units share one machine
-(ADR-0068 section 3); two machines would need a lease the handlers can be
-fenced by, which is not designed.
+single-host guarantee: ADR-0068 section 1 makes the worker one server unit and
+forbids a remote worker pulling from the queue, but it does not say that the
+units share a machine, and a file lock cannot exclude a worker on another one.
+Cross-host exclusion would need a lease the handlers can be fenced by, which is
+not designed.
 
 No per-process attempt ownership is needed and ADR-0062 section 4's attempt
 fields are unchanged.
