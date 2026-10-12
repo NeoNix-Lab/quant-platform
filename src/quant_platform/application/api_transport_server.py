@@ -42,6 +42,14 @@ from .market_data import (
 )
 from quant_platform.canonical import canonical_bytes
 
+from .framed_result_transport import (
+    J14_MESSAGE_FAMILY,
+    J14_SCHEMA_VERSION,
+    FramedResultResumeRequest,
+    FramedResultTransferStore,
+    FramedResultTransportError,
+)
+
 
 J02_REQUEST_SCHEMA_VERSION = "j02-request-v1"
 J02_RESPONSE_SCHEMA_VERSION = "j02-response-v1"
@@ -576,8 +584,15 @@ async def handle_api_transport_connection(
     execute: MarketDataExecutor,
     remote_security: RemoteJ02SecurityConfig | None = None,
     family_handlers: FamilyHandlers | None = None,
+    framed_transfers: FramedResultTransferStore | None = None,
 ) -> None:
-    """Serve sequential J02 request/response exchanges on one WebSocket."""
+    """Serve sequential J02 request/response exchanges on one WebSocket.
+
+    ``framed_transfers`` is opt-in. When given, a J14 ``resume`` message is
+    answered with the exact remaining frames of a retained transfer (ADR-0066
+    section 3), under the scope that transfer was admitted for. Without it a
+    J14 message is an unsupported family, as before.
+    """
 
     session_id = secrets.token_hex(16)
     # Snapshot trusted composition, not a request-controlled route registry.
@@ -599,6 +614,17 @@ async def handle_api_transport_connection(
         ):
             return
         parsed = await asyncio.to_thread(_parse_message, message)
+        if (
+            framed_transfers is not None
+            and not parsed.legacy
+            and isinstance(parsed.payload, Mapping)
+            and parsed.payload.get("message_family") == J14_MESSAGE_FAMILY
+        ):
+            if not await _serve_framed_resume(
+                websocket, remote_security, session_id, parsed, framed_transfers,
+            ):
+                return
+            continue
         handler = None
         if not parsed.legacy:
             # This includes incomplete recovery without a known family. Its
@@ -659,6 +685,7 @@ async def run_api_transport_server(
     stop_event: asyncio.Event | None = None,
     execute: MarketDataExecutor | None = None,
     family_handlers: FamilyHandlers | None = None,
+    framed_transfers: FramedResultTransferStore | None = None,
 ) -> None:
     """Run the J02 server until ``stop_event`` is set."""
 
@@ -671,7 +698,7 @@ async def run_api_transport_server(
     async with websockets.serve(
         lambda websocket: handle_api_transport_connection(
             websocket, execute=executor, remote_security=remote_security,
-            family_handlers=family_handlers,
+            family_handlers=family_handlers, framed_transfers=framed_transfers,
         ),
         config.host,
         config.port,
@@ -682,6 +709,87 @@ async def run_api_transport_server(
             await asyncio.Future()
         else:
             await stop_event.wait()
+
+
+def _encode_message(message: dict[str, Any]) -> str:
+    """Encode one outbound message through the module's single serialization site."""
+
+    return handle_api_transport_message(b"", execute=_unused_executor, _family_response=message)
+
+
+def _unused_executor(_query: Any) -> Any:  # pragma: no cover - never invoked
+    raise AssertionError("a pre-built response is never executed")
+
+
+def _j14_outcome(outcome: str, transfer_id: Any) -> dict[str, Any]:
+    """A typed transport outcome (ADR-0066 section 3), attributable to a transfer."""
+
+    digest = (
+        transfer_id if isinstance(transfer_id, str) and len(transfer_id) == 64
+        and all(character in "0123456789abcdef" for character in transfer_id) else None
+    )
+    return {
+        "message_family": J14_MESSAGE_FAMILY,
+        "schema_version": J14_SCHEMA_VERSION,
+        "message_type": "outcome",
+        "outcome": outcome,
+        "transfer_id": digest,
+    }
+
+
+async def _serve_framed_resume(
+    websocket: Any,
+    security: RemoteJ02SecurityConfig | None,
+    session_id: str,
+    parsed: _ParsedMessage,
+    transfers: FramedResultTransferStore,
+) -> bool:
+    """Answer one J14 resume. ``False`` means the connection was closed (denied)."""
+
+    payload = parsed.payload
+    request = None
+    outcome: str | None = None
+    if parsed.failed or not parsed.lossless:
+        outcome = "integrity_failure"
+    else:
+        try:
+            request = FramedResultResumeRequest.from_message(payload)
+        except FramedResultTransportError as error:
+            outcome = error.outcome
+    owner = None
+    if request is not None:
+        known = transfers.retained_owner(request.transfer_id)
+        if known is None:
+            outcome = "transfer_expired"
+        else:
+            owner = known[0]
+    if security is not None:
+        if outcome is None and owner is not None:
+            # Retrieval needs the scope the transfer was admitted under.
+            allowed = await _authorize_remote_connection(
+                websocket, security, session_id=session_id, required_scope=owner,
+            )
+        else:
+            # Nothing to grant: authenticated-connection evidence only.
+            allowed = await _authorize_remote_connection(
+                websocket, security, session_id=session_id, required_scope=None,
+                unsupported_header=True,
+            )
+        if not allowed:
+            return False
+    frames = ()
+    if outcome is None:
+        try:
+            frames = transfers.resume(request, owner=owner)
+        except FramedResultTransportError as error:
+            outcome = error.outcome
+    if outcome is not None:
+        transfer_id = request.transfer_id if request is not None else payload.get("transfer_id")
+        await websocket.send(_encode_message(_j14_outcome(outcome, transfer_id)))
+        return True
+    for frame in frames:
+        await websocket.send(_encode_message(frame.message()))
+    return True
 
 
 def _message_text(message: str | bytes) -> str:

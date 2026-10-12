@@ -23,6 +23,13 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import quant_platform.application.api_transport_server as server  # noqa: E402
+from quant_platform.application.framed_result_transport import (  # noqa: E402
+    J14_MESSAGE_FAMILY,
+    J14_SCHEMA_VERSION,
+    FramedResultConfig,
+    FramedResultReceiver,
+    FramedResultTransferStore,
+)
 from quant_platform.application.durable_jobs import (  # noqa: E402
     DurableJobStore,
     EffectSafety,
@@ -156,7 +163,7 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         return job_family_handlers(self.provider(), registry)
 
     async def exchange(self, operation, request, *, scopes=ALL_SCOPES, registry=None,
-                       request_id="req-1", handlers=None):
+                       request_id="req-1", handlers=None, framed_transfers=None):
         configuration = security(principal=server.RemoteJ02Principal("deck", frozenset(scopes)))
         configuration.evidence_log._max_events = 32
         socket = Socket([json.dumps({
@@ -166,6 +173,7 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         await server.handle_api_transport_connection(
             socket, execute=MagicMock(), remote_security=configuration,
             family_handlers=handlers or self.routes(registry),
+            framed_transfers=framed_transfers,
         )
         return socket, configuration
 
@@ -511,6 +519,178 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         for (_, _, operation), route in routes.items():
             self.assertEqual(J02_JOB_SCOPES[operation], route.required_scope)
             self.assertIsNone(route.additional_scopes)
+
+    # -- result bodies as J14 transfers (ADR-0069 section 4, ADR-0066 sections 2-3) -----
+
+    FRAME_BYTES = 1024  # small frames keep the multi-frame case cheap to test
+
+    def transfers(self, **limits) -> FramedResultTransferStore:
+        return FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=self.FRAME_BYTES, **limits)
+        )
+
+    def with_bodies(self, bodies, transfers=None, resolver=None):
+        transfers = transfers if transfers is not None else self.transfers()
+        resolver = resolver or (lambda reference: bodies.get(reference))
+        registry = JobHandlerRegistry((declaration(),))
+        return job_family_handlers(
+            self.provider(), registry, result_bodies=resolver, transfers=transfers,
+        ), transfers
+
+    async def resume(self, transfers, transfer_id, index=0, *, scopes=ALL_SCOPES, payload=None):
+        configuration = security(principal=server.RemoteJ02Principal("deck", frozenset(scopes)))
+        configuration.evidence_log._max_events = 32
+        message = payload if payload is not None else {
+            "message_family": J14_MESSAGE_FAMILY, "schema_version": J14_SCHEMA_VERSION,
+            "message_type": "resume", "transfer_id": transfer_id,
+            "next_verified_chunk_index": index,
+        }
+        socket = Socket([json.dumps(message)])
+        await server.handle_api_transport_connection(
+            socket, execute=MagicMock(), remote_security=configuration,
+            family_handlers=self.routes(), framed_transfers=transfers,
+        )
+        return socket, configuration
+
+    async def result_with(self, handlers, job_id, **options):
+        return await self.call("result", {"job_id": job_id}, handlers=handlers, **options)
+
+    LARGE = {"rows": [{"n": n, "text": "x" * 20} for n in range(400)]}
+
+    async def test_a_body_that_fits_one_frame_is_delivered_inline(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-inline")
+        body = {"rows": [1, 2, 3]}
+        handlers, transfers = self.with_bodies({"result:sha256:9": body})
+        result = self.ok(await self.result_with(handlers, job.job_id))
+        self.assertEqual(["result:sha256:9"], result["result_references"])
+        self.assertEqual(
+            [{"reference": "result:sha256:9", "delivery": "inline", "body": body}], result["bodies"],
+        )
+        self.assertEqual(0, len(transfers._transfers))  # nothing retained for a small body
+
+    async def test_a_body_without_a_resolution_is_none_and_no_resolver_adds_nothing(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-none")
+        handlers, _ = self.with_bodies({})
+        result = self.ok(await self.result_with(handlers, job.job_id))
+        self.assertEqual([{"reference": "result:sha256:9", "delivery": "none"}], result["bodies"])
+        plain = self.ok(await self.result_with(self.routes(), job.job_id))
+        self.assertEqual({"job_id", "state", "result_references"}, set(plain))
+
+    async def test_a_large_body_is_a_j14_transfer_that_reassembles_exactly(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-framed")
+        handlers, transfers = self.with_bodies({"result:sha256:9": self.LARGE})
+        result = self.ok(await self.result_with(handlers, job.job_id))
+        (entry,) = result["bodies"]
+        self.assertEqual("framed", entry["delivery"])
+        self.assertEqual("result:sha256:9", entry["logical_result_identity"])  # the reference
+        self.assertGreater(entry["chunk_count"], 1)
+        self.assertNotIn("body", entry)
+
+        socket, configuration = await self.resume(transfers, entry["transfer_id"], 0)
+        self.assertEqual([], socket.close_calls)
+        self.assertEqual(entry["chunk_count"], len(socket.responses))
+        receiver = FramedResultReceiver()
+        reassembled = None
+        for frame in socket.responses:
+            self.assertEqual(J14_MESSAGE_FAMILY, frame["message_family"])
+            self.assertEqual(entry["transfer_id"], frame["transfer_id"])
+            self.assertEqual(entry["payload_sha256"], frame["payload_sha256"])
+            reassembled = receiver.receive(frame)
+        self.assertEqual(self.LARGE, reassembled)
+        self.assertEqual(
+            READ, configuration.evidence_log.events[-1].requested_scope,
+        )  # retrieval is a read, audited under the read scope
+
+    async def test_resume_returns_exactly_the_remaining_frames_and_a_resubmitted_job_reuses_the_transfer(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-resume")
+        handlers, transfers = self.with_bodies({"result:sha256:9": self.LARGE})
+        first = self.ok(await self.result_with(handlers, job.job_id))["bodies"][0]
+        again = self.ok(await self.result_with(handlers, job.job_id))["bodies"][0]
+        self.assertEqual(first, again)  # same bytes, same identity: one retained transfer
+        self.assertEqual(1, len(transfers._transfers))
+        socket, _ = await self.resume(transfers, first["transfer_id"], 2)
+        self.assertEqual([2 + n for n in range(first["chunk_count"] - 2)],
+                         [frame["chunk_index"] for frame in socket.responses])
+
+    async def test_resume_outcomes_are_typed_and_never_confirm_what_is_unknown(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-outcomes")
+        handlers, transfers = self.with_bodies({"result:sha256:9": self.LARGE})
+        entry = self.ok(await self.result_with(handlers, job.job_id))["bodies"][0]
+        for label, transfer_id, index, outcome in (
+            ("unknown transfer", "0" * 64, 0, "transfer_expired"),
+            ("index past the end", entry["transfer_id"], entry["chunk_count"] + 1, "integrity_failure"),
+        ):
+            with self.subTest(label):
+                socket, _ = await self.resume(transfers, transfer_id, index)
+                self.assertEqual([], socket.close_calls)
+                (message,) = socket.responses
+                self.assertEqual(
+                    (J14_MESSAGE_FAMILY, "outcome", outcome),
+                    (message["message_family"], message["message_type"], message["outcome"]),
+                )
+        malformed = {"message_family": J14_MESSAGE_FAMILY, "schema_version": J14_SCHEMA_VERSION,
+                     "message_type": "resume", "transfer_id": "not-a-digest",
+                     "next_verified_chunk_index": -1}
+        socket, _ = await self.resume(transfers, None, payload=malformed)
+        self.assertEqual("integrity_failure", socket.responses[0]["outcome"])
+        self.assertIsNone(socket.responses[0]["transfer_id"])  # never reflects arbitrary text
+
+    async def test_retrieval_needs_the_read_scope_the_transfer_was_admitted_under(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-scope")
+        handlers, transfers = self.with_bodies({"result:sha256:9": self.LARGE})
+        entry = self.ok(await self.result_with(handlers, job.job_id))["bodies"][0]
+        for scopes in (frozenset({SUBMIT}), frozenset({"j02.market_data.read"})):
+            with self.subTest(scopes=sorted(scopes)):
+                socket, configuration = await self.resume(
+                    transfers, entry["transfer_id"], 0, scopes=scopes,
+                )
+                self.assertEqual([(1008, "policy denied")], socket.close_calls)
+                self.assertEqual([], socket.responses)  # no frame to a caller without the scope
+                self.assertEqual(READ, configuration.evidence_log.events[-1].requested_scope)
+        granted, _ = await self.resume(transfers, entry["transfer_id"], 0, scopes=frozenset({READ}))
+        self.assertEqual(entry["chunk_count"], len(granted.responses))
+
+    async def test_j14_is_unsupported_unless_the_connection_is_composed_with_a_store(self) -> None:
+        socket, _ = await self.resume(None, "0" * 64, 0)
+        self.assertEqual([], socket.close_calls)
+        (response,) = socket.responses
+        self.assertEqual("invalid_request", response["error"]["code"])
+        self.assertNotIn("message_type", response)
+
+    async def test_transfer_admission_is_bounded_and_refused_not_retained_without_limit(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-bound")
+        small = self.transfers(max_retained_payload_bytes=1024, max_in_flight_transfers=1)
+        handlers, _ = self.with_bodies({"result:sha256:9": self.LARGE}, transfers=small)
+        response = await self.result_with(handlers, job.job_id)
+        error = self.refused(response, "transfer_refused", code="result_too_large")
+        self.assertEqual("the result would exceed the maximum J02 response size", error["message"])
+        self.assertEqual(0, len(small._transfers))
+
+    async def test_a_resolver_failure_or_a_non_canonical_body_is_an_integrity_failure(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-faults")
+
+        def explode(_reference):
+            raise RuntimeError("/srv/secret/path token=abc")
+
+        for label, resolver, reason in (
+            ("resolver raises", explode, "result_body_unavailable"),
+            ("not canonical JSON", lambda _r: {"value": {1, 2}}, "result_body_not_canonical"),
+        ):
+            with self.subTest(label):
+                handlers, _ = self.with_bodies({}, resolver=resolver)
+                response = await self.result_with(handlers, job.job_id)
+                error = self.refused(response, reason, code="integrity_failure")
+                self.assertNotIn("secret", json.dumps(error))
+                self.assertNotIn("token", json.dumps(error))
+
+    def test_a_resolver_needs_a_transfer_store_and_must_be_callable(self) -> None:
+        registry = JobHandlerRegistry((declaration(),))
+        with self.assertRaises(TypeError):
+            job_family_handlers(self.provider(), registry, result_bodies=lambda _r: None)
+        with self.assertRaises(TypeError):
+            job_family_handlers(
+                self.provider(), registry, result_bodies="resolver", transfers=self.transfers(),
+            )
 
     # -- end to end with the worker (AC5) ---------------------------------------------
 
