@@ -51,12 +51,21 @@ CREATE TABLE governed_result_outputs (
     bundle_digest text NOT NULL REFERENCES governed_result_bundles(bundle_digest),
     PRIMARY KEY (run_spec_fingerprint, execution_id, artifact_role)
 );
+-- DG-K P04b (ADR-0068 section 8): the Git commit the API recorded at startup.
+-- A single row; the worker reads it and refuses to start when its own differs.
+CREATE TABLE deployment_commit (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    git_commit text NOT NULL CHECK (length(git_commit) BETWEEN 1 AND 128),
+    recorded_at timestamptz NOT NULL DEFAULT now()
+);
 RESET ROLE;
 GRANT USAGE ON SCHEMA runtime TO runtime_reader, runtime_writer, runtime_job_writer;
 GRANT SELECT ON ALL TABLES IN SCHEMA runtime TO runtime_reader;
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA runtime TO runtime_writer;
 GRANT SELECT, INSERT, UPDATE ON runtime.durable_jobs, runtime.durable_job_attempts
     TO runtime_job_writer;
+-- The worker only reads the recorded commit; it can never write it.
+GRANT SELECT ON runtime.deployment_commit TO runtime_job_writer;
 ALTER DEFAULT PRIVILEGES FOR ROLE runtime_owner IN SCHEMA runtime
     GRANT SELECT ON TABLES TO runtime_reader;
 ALTER DEFAULT PRIVILEGES FOR ROLE runtime_owner IN SCHEMA runtime

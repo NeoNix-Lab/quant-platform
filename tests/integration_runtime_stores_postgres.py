@@ -13,8 +13,12 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import queue
 import sqlite3
+import subprocess
 import sys
+import threading
+import time
 import unittest
 
 import psycopg
@@ -22,6 +26,7 @@ from psycopg.conninfo import conninfo_to_dict
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tools"))
 
 from quant_platform.application.admitted_input import (  # noqa: E402
     AdmittedInputConflict, AdmittedInputState, AdmittedInputStore,
@@ -33,6 +38,12 @@ from quant_platform.application.governed_result_import import (  # noqa: E402
     GovernedResultEvidenceStore, GovernedResultImportError, GovernedResultImportService,
     GovernedResultRefused, ResultOutputContractV1,
 )
+from quant_platform.application.job_dispatch import DATA_LOCAL_JOB_REGISTRY  # noqa: E402
+from quant_platform.application.job_worker_runtime import (  # noqa: E402
+    WORKER_ADVISORY_LOCK_KEY, JobWorker, PostgresAdvisoryLock, PostgresCommitRecord,
+    WorkerCommitMismatch, WorkerLockHeld, record_deployment_commit,
+    recorded_deployment_commit,
+)
 from quant_platform.experiments import ExperimentRepository, RunState  # noqa: E402
 from quant_platform.experiments.accounting import (  # noqa: E402
     TrialAttemptResult, record_trial_attempt,
@@ -40,6 +51,7 @@ from quant_platform.experiments.accounting import (  # noqa: E402
 import test_admitted_input_manifest_v1 as k12  # noqa: E402
 import test_durable_job_runtime_v1 as j03  # noqa: E402
 import test_job_dispatch_v1 as dispatch  # noqa: E402
+import api_server  # noqa: E402  (tools/api_server.py: the API host's commit record)
 import test_governed_result_import_v1 as k13  # noqa: E402
 
 
@@ -56,7 +68,8 @@ class DisposableCase:
             admin.execute(
                 "TRUNCATE runtime.durable_jobs, runtime.durable_job_attempts, "
                 "runtime.admitted_inputs, runtime.governed_result_bundles, "
-                "runtime.governed_result_outputs, experiment.studies CASCADE"
+                "runtime.governed_result_outputs, runtime.deployment_commit, "
+                "experiment.studies CASCADE"
             )
 
     def connection(self, role="API", *, autocommit=True):
@@ -159,6 +172,222 @@ class PostgresDispatch(DisposableCase, dispatch.JobDispatchV1Tests):
         self.assertEqual(1, outcomes.count(JobState.RUNNING))
         self.assertEqual(5, outcomes.count("refused"))
         self.assertEqual(1, len(seed.attempts(job.job_id)))
+
+
+class PostgresWorker(DisposableCase, unittest.TestCase):
+    """#335 (P04b): the single worker's real lock, commit check and recovery."""
+
+    COMMIT = "a" * 40
+
+    def api_records(self, commit=None):
+        record_deployment_commit(self.connection("API"), commit or self.COMMIT)
+
+    def worker_parts(self, *, commit=None, stop=None):
+        connection = self.connection("WORKER")
+        stop = stop or threading.Event()
+        return JobWorker(
+            store=DurableJobStore(connection), registry=DATA_LOCAL_JOB_REGISTRY,
+            lock=PostgresAdvisoryLock(connection), commit_record=PostgresCommitRecord(connection),
+            commit=commit or self.COMMIT, stop=stop, poll_interval=0.05,
+        ), connection
+
+    def running_job(self, request="request:worker"):
+        store = DurableJobStore(self.connection("WORKER"))
+        job = store.admit(replace(j03.admission(), request_identity=request))
+        store.transition(job.job_id, JobState.QUEUED)
+        store.claim(job.job_id)
+        return job, store
+
+    def test_the_api_records_the_commit_and_the_worker_can_only_read_it(self):
+        worker = self.connection("WORKER")
+        self.assertIsNone(recorded_deployment_commit(worker))
+        self.api_records()
+        self.assertEqual(self.COMMIT, recorded_deployment_commit(worker))
+        self.api_records("b" * 40)  # a restart with another commit replaces the row
+        self.assertEqual("b" * 40, recorded_deployment_commit(worker))
+        self.assertEqual(1, self.connection("ADMIN").execute(
+            "SELECT count(*) FROM runtime.deployment_commit").fetchone()[0])
+        for statement in (
+            "INSERT INTO runtime.deployment_commit (singleton, git_commit) VALUES (true, 'x')",
+            "UPDATE runtime.deployment_commit SET git_commit = 'x'",
+            "DELETE FROM runtime.deployment_commit",
+        ):
+            with self.subTest(statement=statement):
+                with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                    self.connection("WORKER").execute(statement)
+        with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+            self.connection("INGEST").execute("SELECT * FROM runtime.deployment_commit")
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            self.connection("API").execute(
+                "INSERT INTO runtime.deployment_commit (singleton, git_commit) VALUES (false, 'x')"
+            )
+
+    def test_the_api_host_records_its_commit_at_startup(self):
+        os.environ["QP_GIT_COMMIT"] = "c" * 40
+        self.addCleanup(os.environ.pop, "QP_GIT_COMMIT", None)
+        api_server._record_commit(os.environ["RUNTIME_TEST_API_DSN"])
+        self.assertEqual("c" * 40, recorded_deployment_commit(self.connection("WORKER")))
+        # Configured but unwritable (a login without the privilege) is loud.
+        with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+            api_server._record_commit(os.environ["RUNTIME_TEST_WORKER_DSN"])
+
+    def test_the_advisory_lock_is_exclusive_session_level_and_dies_with_the_session(self):
+        first_connection, second_connection = self.connection("WORKER"), self.connection("WORKER")
+        first, second = PostgresAdvisoryLock(first_connection), PostgresAdvisoryLock(second_connection)
+        self.assertTrue(first.acquire())
+        self.assertFalse(second.acquire())
+        held = self.connection("ADMIN").execute(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted "
+            "AND objid = %s AND pid = %s",
+            (WORKER_ADVISORY_LOCK_KEY, first_connection.info.backend_pid),
+        ).fetchone()[0]
+        self.assertEqual(1, held)
+        # Session level: it survives a statement boundary / transaction end.
+        first_connection.execute("SELECT 1")
+        self.assertFalse(second.acquire())
+        first_connection.close()  # the previous worker's session ends
+        deadline = time.monotonic() + 10
+        while not second.acquire():
+            self.assertLess(time.monotonic(), deadline, "lock was not released with its session")
+            time.sleep(0.1)
+
+    def test_start_takes_the_lock_checks_the_commit_then_recovers_once(self):
+        job, _ = self.running_job()
+        self.api_records()
+        worker, connection = self.worker_parts()
+        self.assertEqual((job.job_id,), worker.start())
+        self.assertEqual(JobState.RECOVERY_REQUIRED, DurableJobStore(self.connection("API")).get(job.job_id).state)
+        # A second worker is refused while this one holds the lock...
+        other, _ = self.worker_parts()
+        with self.assertRaises(WorkerLockHeld):
+            other.start()
+        # ...and is entitled to start once it is released.
+        worker.close()
+        third, _ = self.worker_parts()
+        self.assertEqual((), third.start())
+        third.close()
+
+    def test_a_different_or_missing_recorded_commit_refuses_and_releases_the_lock(self):
+        job, store = self.running_job()
+        for label, recorded in (("differs", "d" * 40), ("missing", None)):
+            with self.subTest(label):
+                if recorded is not None:
+                    self.api_records(recorded)
+                worker, _ = self.worker_parts()
+                with self.assertRaises(WorkerCommitMismatch):
+                    worker.start()
+                self.assertEqual(JobState.RUNNING, store.get(job.job_id).state)
+                self.assertEqual(1, len(store.attempts(job.job_id)))
+                probe = PostgresAdvisoryLock(self.connection("WORKER"))
+                self.assertTrue(probe.acquire(), "the lock must not leak on a refusal")
+                probe.release()
+
+
+class PostgresWorkerProcesses(DisposableCase, unittest.TestCase):
+    """#335: the host as real processes (two-process lock proof, kill and restart)."""
+
+    COMMIT = "a" * 40
+    HOST = ROOT / "tools" / "job_worker.py"
+
+    def setUp(self):
+        DisposableCase.setUp(self)
+        record_deployment_commit(self.connection("API"), self.COMMIT)
+
+    def spawn(self, *, commit=None):
+        env = {
+            **os.environ, "QP_RUNTIME_DSN": os.environ["RUNTIME_TEST_WORKER_DSN"],
+            "QP_GIT_COMMIT": commit or self.COMMIT, "PYTHONUNBUFFERED": "1",
+        }
+        process = subprocess.Popen(
+            [sys.executable, "-u", str(self.HOST), "--poll-interval", "0.2"],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(self.reap, process)
+        lines: queue.Queue = queue.Queue()
+        threading.Thread(
+            target=lambda: [lines.put(line.rstrip("\n")) for line in process.stdout], daemon=True,
+        ).start()
+        process.lines = lines
+        return process
+
+    @staticmethod
+    def reap(process):
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=10)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+
+    def wait_for(self, process, text, timeout=30):
+        deadline = time.monotonic() + timeout
+        seen = []
+        while time.monotonic() < deadline:
+            try:
+                line = process.lines.get(timeout=0.2)
+            except queue.Empty:
+                if process.poll() is not None and process.lines.empty():
+                    break
+                continue
+            seen.append(line)
+            if text in line:
+                return
+        self.fail(f"{text!r} not seen; output={seen!r} exit={process.poll()!r}")
+
+    def seed_running_job(self, request):
+        store = DurableJobStore(self.connection("WORKER"))
+        job = store.admit(replace(j03.admission(), request_identity=request))
+        store.transition(job.job_id, JobState.QUEUED)
+        store.claim(job.job_id)
+        return job, store
+
+    def test_a_second_worker_exits_nonzero_without_touching_any_job(self):
+        first = self.spawn()
+        self.wait_for(first, "J03_WORKER: READY")
+        job, store = self.seed_running_job("request:two-process")  # after worker 1's recovery
+        before = (store.get(job.job_id), store.attempts(job.job_id))
+        second = self.spawn()
+        self.assertEqual(2, second.wait(timeout=30))
+        self.assertIn("REFUSED", second.stderr.read())
+        self.assertEqual(before, (store.get(job.job_id), store.attempts(job.job_id)))
+        self.assertEqual(JobState.RUNNING, store.get(job.job_id).state)
+        self.assertIsNone(first.poll(), "the first worker must be unaffected")
+
+    def test_a_worker_with_another_commit_refuses_to_start_and_touches_nothing(self):
+        job, store = self.seed_running_job("request:commit")
+        before = (store.get(job.job_id), store.attempts(job.job_id))
+        process = self.spawn(commit="b" * 40)
+        self.assertEqual(3, process.wait(timeout=30))
+        self.assertIn("differs", process.stderr.read())
+        self.assertEqual(before, (store.get(job.job_id), store.attempts(job.job_id)))
+        # The lock was released: a matching worker can start right away.
+        good = self.spawn()
+        self.wait_for(good, "J03_WORKER: READY")
+
+    def test_a_running_job_left_by_a_killed_worker_becomes_recovery_required_once(self):
+        first = self.spawn()
+        self.wait_for(first, "J03_WORKER: READY")
+        job, store = self.seed_running_job("request:killed")  # in flight when it dies
+        first.kill()
+        first.wait(timeout=10)
+        deadline = time.monotonic() + 30
+        while True:  # the dead session's lock is released by the server
+            second = self.spawn()
+            try:
+                self.wait_for(second, "J03_WORKER: READY", timeout=15)
+                break
+            except AssertionError:
+                self.assertLess(time.monotonic(), deadline, "no worker could start")
+                self.assertEqual(2, second.poll(), "only a held lock may delay start")
+                time.sleep(0.3)
+        recovered = store.get(job.job_id)
+        self.assertEqual(JobState.RECOVERY_REQUIRED, recovered.state)
+        self.assertEqual("restart_recovery_required", recovered.reason_code)
+        attempts = store.attempts(job.job_id)
+        self.assertEqual([(1, JobState.RECOVERY_REQUIRED)], [(a.attempt_no, a.state) for a in attempts])
+        time.sleep(1.0)  # the running worker must not redispatch it
+        self.assertEqual(JobState.RECOVERY_REQUIRED, store.get(job.job_id).state)
+        self.assertEqual(attempts, store.attempts(job.job_id))
 
 
 class PostgresInputs(DisposableCase, k12.AdmittedInputManifestV1Tests):

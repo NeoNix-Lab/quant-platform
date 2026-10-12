@@ -21,12 +21,30 @@ sys.path.insert(0, str(ROOT / "src"))
 from quant_platform.application import (  # noqa: E402
     DEFAULT_MAX_RESULT_ROWS,
     ApiTransportServerConfig,
+    deployment_commit,
+    open_runtime_connection,
+    record_deployment_commit,
     run_api_transport_server,
 )
 
 
 def _default_dsn() -> str:
     return os.environ.get("CATALOG_DSN", "")
+
+
+def _record_commit(dsn: str) -> None:
+    """ADR-0068 section 8: record this deployment's commit in ``runtime``.
+
+    Opt-in with a runtime DSN. When one is configured a failed write stops the
+    API: a worker that cannot compare commits must not be left to start.
+    """
+    commit = deployment_commit(ROOT)
+    connection = open_runtime_connection(dsn)
+    try:
+        record_deployment_commit(connection, commit)
+    finally:
+        connection.close()
+    print(f"deployment_commit={commit}")
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -57,6 +75,10 @@ async def _run(args: argparse.Namespace) -> int:
     print(f"port={config.port}")
     print(f"batch_size={config.batch_size}")
     print(f"max_result_rows={config.max_result_rows}")
+    if args.runtime_dsn:
+        _record_commit(args.runtime_dsn)
+    else:
+        print("deployment_commit=not recorded (no --runtime-dsn / QP_RUNTIME_DSN)")
     await run_api_transport_server(config, stop_event=stop_event)
     print("J02_API_TRANSPORT_SERVER: STOPPED")
     return 0
@@ -67,6 +89,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default=os.environ.get("QP_API_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("QP_API_PORT", "8765")))
     parser.add_argument("--dsn", default=_default_dsn(), help="Catalog DSN; defaults to CATALOG_DSN")
+    parser.add_argument(
+        "--runtime-dsn",
+        default=os.environ.get("QP_RUNTIME_DSN", ""),
+        help="runtime DSN of the API login; when set, the deployment commit is recorded at startup",
+    )
     parser.add_argument("--batch-size", type=int, default=int(os.environ.get("QP_API_BATCH_SIZE", "65536")))
     parser.add_argument(
         "--max-result-rows",
