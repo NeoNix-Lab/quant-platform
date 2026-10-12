@@ -247,6 +247,82 @@ scope, `db/init/` and the `tools/` hosts were read directly.
 `tests/test_process_topology_contract_v1.py` guards the decisions above; it is
 a design regression guard, not an implementation proof.
 
+## Amendment 1 (issue #335) — worker exclusion is bound to the process lifetime
+
+**Date:** 2026-10-12
+
+Recorded at the maintainer's direction during the review of the P04b
+implementation (PR #352); it takes effect when that PR is merged.
+
+Review of the single-worker host found that section 6's argument does not hold.
+Section 6 argues that "the lock is released only when the previous worker's
+session ends, every `RUNNING` Job seen at that moment belongs to a dead
+process". A session can end while the process lives: network loss, a
+terminated backend, a server restart. The lock
+is then free, a successor takes it, and the store's *global*
+`recover_after_restart` marks `RECOVERY_REQUIRED` a Job that the first process
+is still working, after which the successor may start further handlers beside
+it. Reproduced against PostgreSQL with a handler active when its backend was
+terminated.
+
+Section 6 is amended only for how "exactly one worker" is enforced. The units,
+the closed registry, ADR-0062 (lifecycle and attempt fields), and the
+one-worker rule are unchanged.
+
+1. **Two locks, one entitlement.** The worker holds the PostgreSQL
+   session-level advisory lock **and** an operating-system lock on a file. The
+   operating-system lock is released only when the worker *process* ends,
+   however it ends; the session lock only when its session ends. Starting
+   requires both, taken before the commit check and before any Job is read.
+2. **The file is named by the database, not by the DSN.** Its name derives from
+   the cluster's system identifier and the database's OID, read from the
+   server, so every spelling of a DSN (host name or address, default or
+   explicit port, URI or key/value form, a service file, `PGHOST`) leads to one
+   file. It lives in a fixed system lock directory (`/run/lock`, else
+   `/var/lock`; `%PROGRAMDATA%\quant-platform\locks` on Windows) or in the
+   directory the operator names for the database's workers, identical for all
+   of them. It is never taken from `TMPDIR`, and there is no fallback: with no
+   suitable directory the worker does not start.
+3. **Verified before every dispatch.** A worker confirms that it still holds
+   both locks before each dispatch. If a lock is lost, or cannot be confirmed
+   because the session is gone, it dispatches nothing further and exits with a
+   failure status. An in-flight handler is not interrupted: it runs to its end,
+   its outcome cannot be recorded without the session, the Job stays
+   `RUNNING`, and the next worker recovers it only after this process has
+   exited.
+4. **Why recovery is then correct.** A successor can hold both locks only after
+   the previous process has exited, so every `RUNNING` Job it sees belongs to a
+   dead process, and the store's global recovery is correct without
+   per-process attempt ownership. ADR-0062 section 4 is unchanged.
+
+**Accepted constraint: one host, one filesystem view.** The operating-system
+lock excludes workers that share the host and the lock directory. It does not
+exclude a worker on another machine or in a container with a private lock
+directory. Running J03 workers from more than one host is therefore not
+supported in v1 and requires its own ADR with a fencing lease that handlers can
+be checked against; this is consistent with section 1 ("no remote worker pulls
+from the server's J03 queue") and with the evidence trigger for more than one
+worker.
+
+**Section 8 is clarified.** The API records its commit in the `runtime` schema
+(`runtime.deployment_commit`, one row) **before** it serves, and does not start
+when it has no runtime DSN or the write fails; otherwise a previous
+deployment's record would stay in place and a worker on the old commit would be
+accepted against it. The worker can read that row and can never write it.
+
+**Not changed, and not claimed.** The fence stops a second worker from
+starting while the first lives. It does not make a handler's own external
+writes conditional on holding the lock; that remains each handler's
+responsibility under ADR-0062 section 4 (effect safety), and no handler
+registers without its own issue. Identity bytes, the J03 lifecycle, the
+attempt fields and the handler registry rules are untouched.
+
+Evidence: `tests/integration_runtime_stores_postgres.py` terminates the backend
+of a worker with an active handler and shows that a successor reached through a
+different DSN spelling is refused until that process ends and then recovers the
+Job exactly once; `tests/test_job_worker_runtime_v1.py` covers the lock order,
+the per-dispatch check and the fail-closed API host.
+
 ## Related
 
-Governance issue #318; design gate #319. Amends no ADR.
+Governance issue #318; design gate #319. Amends no ADR. Amendment 1: issue #335 (P04b), PR #352.

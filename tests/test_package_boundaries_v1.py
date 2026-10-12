@@ -95,6 +95,7 @@ OWNERS = {
     "quant_platform.application.conformity": "application",
     "quant_platform.application.durable_jobs": "application",
     "quant_platform.application.job_dispatch": "application",
+    "quant_platform.application.job_worker_runtime": "application",
     "quant_platform.application.runtime_store": "application",
     "quant_platform.application.golden_conformity": "application",
     "quant_platform.application.golden_replay": "application",
@@ -273,8 +274,8 @@ APPLICATION = "quant_platform.application"
 # third-party libraries it links.
 THIRD_PARTY = {"psycopg", "pyarrow", "websockets"}
 # ADR-0068 section 7 / P03: declare long-running hosts individually. CLI and
-# proof scripts remain ordinary tools; P04b must add its worker deliberately.
-SERVER_HOSTS = {"api_server", "live_ingest_server"}
+# proof scripts remain ordinary tools. P04b declared its single J03 worker here.
+SERVER_HOSTS = {"api_server", "live_ingest_server", "job_worker"}
 
 # ASS-03 is complete when no tools bypass the application seam.
 TOOLS_PENDING_ASS03 = set()
@@ -532,7 +533,7 @@ class PackageBoundaryTests(unittest.TestCase):
 
     def test_declared_server_hosts_exist_and_respect_their_boundary(self):
         scripts = script_inventory()
-        self.assertTrue({"api_server", "live_ingest_server"}.issubset(SERVER_HOSTS))
+        self.assertTrue({"api_server", "live_ingest_server", "job_worker"}.issubset(SERVER_HOSTS))
         for host in SERVER_HOSTS:
             with self.subTest(host=host):
                 self.assertIn(host, scripts)

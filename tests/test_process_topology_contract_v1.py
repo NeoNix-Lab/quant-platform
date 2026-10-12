@@ -48,6 +48,44 @@ class ProcessTopologyContractV1Tests(unittest.TestCase):
         ):
             self.assertIn(required_text, adr)
 
+    def test_amendment_1_binds_worker_exclusion_to_the_process_lifetime(self) -> None:
+        adr = (ROOT / "docs/decisions/ADR-0068-process-topology-v1.md").read_text(encoding="utf-8")
+        original, _, amendment = adr.partition("## Amendment 1 (issue #335)")
+        self.assertTrue(amendment, "Amendment 1 must be recorded in the ADR")
+        # The superseded argument stays visible in section 6; the amendment owns the fix.
+        self.assertIn("released only when the previous\nworker's session ends", original)
+
+        for required_text in (
+            "A session can end while the process lives",
+            "**Two locks, one entitlement.**",
+            "operating-system lock on a file",
+            "released only when the worker *process* ends",
+            "**The file is named by the database, not by the DSN.**",
+            "It is never taken from `TMPDIR`",
+            "there is no fallback",
+            "**Verified before every dispatch.**",
+            "the Job stays\n   `RUNNING`",
+            "**Accepted constraint: one host, one filesystem view.**",
+            "requires its own ADR with a fencing lease",
+            "**Section 8 is clarified.**",
+            "does not start\nwhen it has no runtime DSN or the write fails",
+            "ADR-0062 section 4 is unchanged.",
+        ):
+            self.assertIn(" ".join(required_text.split()), " ".join(amendment.split()))
+
+    def test_amendment_1_does_not_widen_the_topology(self) -> None:
+        adr = (ROOT / "docs/decisions/ADR-0068-process-topology-v1.md").read_text(encoding="utf-8")
+        _, _, amendment = adr.partition("## Amendment 1 (issue #335)")
+        flat = " ".join(amendment.split())
+        # It strengthens how one worker is enforced; it adds no unit, no second
+        # worker and no effect fencing for handlers.
+        for required_text in (
+            "The units, the closed registry, ADR-0062",
+            "Running J03 workers from more than one host is therefore not supported in v1",
+            "that remains each handler's responsibility under ADR-0062 section 4",
+        ):
+            self.assertIn(required_text, flat)
+
 
 if __name__ == "__main__":
     unittest.main()
