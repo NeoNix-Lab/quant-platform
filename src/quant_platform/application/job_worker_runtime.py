@@ -298,7 +298,18 @@ class JobWorker:
                 # A lost session must not become a second active worker: no
                 # further handler starts. (An in-flight one cannot be recalled.)
                 raise WorkerLockLost("the worker no longer holds its lock")
-            result = self.dispatcher.dispatch_next()
+            try:
+                result = self.dispatcher.dispatch_next()
+            except Exception as error:
+                # The session can end between the check above and a store call,
+                # or under a running handler whose outcome then cannot be
+                # recorded. That is the same event as a lost lock, so it is
+                # reported as one; any other failure keeps its own type.
+                if self._lock_unconfirmable():
+                    raise WorkerLockLost(
+                        "the worker lost its lock during a dispatch"
+                    ) from error
+                raise
             if result.job is not None:
                 dispatched += 1
                 # A stop request is honoured only here, after the outcome of the
@@ -306,6 +317,12 @@ class JobWorker:
                 continue
             self.stop.wait(self.poll_interval)
         return dispatched
+
+    def _lock_unconfirmable(self) -> bool:
+        try:
+            return not self.lock.held()
+        except Exception:
+            return True
 
     def close(self) -> None:
         """Release the lock (idempotent). The session ending releases it too."""

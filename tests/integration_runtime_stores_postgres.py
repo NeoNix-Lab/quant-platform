@@ -401,7 +401,8 @@ class PostgresWorker(DisposableCase, unittest.TestCase):
         release.set()
         thread.join(30)
         self.assertFalse(thread.is_alive())
-        self.assertIsInstance(failure.get("error"), Exception)
+        # Its outcome could not be recorded: that is a lost lock, not a defect.
+        self.assertIsInstance(failure.get("error"), WorkerLockLost)
         self.assertEqual(1, len(executions))
         self.assertEqual(JobState.QUEUED, seed.get(other.job_id).state)
 

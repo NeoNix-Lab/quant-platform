@@ -386,6 +386,34 @@ class WorkerFencingTests(unittest.TestCase):
             worker.run()
         self.assertEqual([], self.calls)
 
+    def test_a_session_lost_during_a_dispatch_is_reported_as_a_lost_lock(self) -> None:
+        # The check before the dispatch passes, then the session ends under the
+        # store call (a race the idle-loop test only sometimes hits).
+        lock = Lock(self.journal)
+        worker = self.worker(lock)
+        worker.start()
+        self.queued()
+
+        def connection_dies(*_args, **_kwargs):
+            lock.lost = True
+            raise ConnectionError("terminating connection due to administrator command")
+
+        with mock.patch.object(worker.dispatcher, "dispatch_next", side_effect=connection_dies):
+            with self.assertRaises(WorkerLockLost) as raised:
+                worker.run()
+        self.assertIsInstance(raised.exception.__cause__, ConnectionError)
+
+    def test_an_unrelated_failure_with_the_lock_still_held_keeps_its_own_type(self) -> None:
+        lock = Lock(self.journal)
+        worker = self.worker(lock)
+        worker.start()
+
+        with mock.patch.object(
+            worker.dispatcher, "dispatch_next", side_effect=ValueError("a real defect"),
+        ):
+            with self.assertRaisesRegex(ValueError, "a real defect"):
+                worker.run()
+
     def test_the_lock_is_checked_before_every_dispatch_not_only_at_start(self) -> None:
         lock = Lock(self.journal)
         worker = self.worker(lock)
