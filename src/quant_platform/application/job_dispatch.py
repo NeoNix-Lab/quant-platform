@@ -201,81 +201,139 @@ class JobDispatcher:
         self.registry.handler_for(admission)
         return self.store.admit(admission)
 
-    def dispatch_next(self, *, scan_limit: int = 100) -> DispatchResult:
-        """Claim and run the first registered ``QUEUED`` Job, if any."""
+    def dispatch_next(self, *, page_size: int = 100) -> DispatchResult:
+        """Claim and run the first registered ``QUEUED`` Job, if any.
+
+        The queue is walked in keyset pages of ``page_size`` until a
+        registered Job is claimed or it is exhausted, so Jobs the registry does
+        not declare can delay a call but never starve the ones that it does.
+        Skipped Jobs are neither run nor altered.
+        """
 
         skipped = 0
-        for job_id in self.store.queued_job_ids(scan_limit):
-            admission = self.store.get(job_id).admission
-            try:
-                handler = self.registry.handler_for(admission)
-            except JobHandlerNotRegistered:
-                skipped += 1
-                continue
-            try:
-                self.store.claim(job_id)
-            except DurableJobConflict:
-                continue  # No longer QUEUED: not ours to run.
-            return DispatchResult(self._run(job_id, admission, handler), skipped)
-        return DispatchResult(None, skipped)
+        after: str | None = None
+        while True:
+            page = self.store.queued_job_ids(page_size, after=after)
+            if not page:
+                return DispatchResult(None, skipped)
+            for job_id in page:
+                admission = self.store.get(job_id).admission
+                try:
+                    handler = self.registry.handler_for(admission)
+                except JobHandlerNotRegistered:
+                    skipped += 1
+                    continue
+                try:
+                    self.store.claim(job_id)
+                except DurableJobConflict:
+                    continue  # No longer QUEUED: not ours to run.
+                return DispatchResult(self._run(job_id, admission, handler), skipped)
+            after = page[-1]
 
     def _run(self, job_id: str, admission: JobAdmission, handler: JobHandler) -> JobRecord:
         # The attempt is already durable as RUNNING (claim committed it).
         try:
             outcome = handler.execute(admission)
         except JobHandlerFailure as failure:
-            return self._fail(job_id, failure.reason_code, failure.diagnostic_reference)
+            return self._record(job_id, _Failed(failure.reason_code, failure.diagnostic_reference))
         except Exception:
-            return self._fail(job_id, REASON_HANDLER_FAILED)
+            return self._record(job_id, _Failed(REASON_HANDLER_FAILED))
         # BaseException (interpreter exit, KeyboardInterrupt) is deliberately not
         # caught: the Job stays RUNNING and restart recovery marks it
         # RECOVERY_REQUIRED, never SUCCEEDED and never silently redispatched.
-        current = self.store.get(job_id)
-        if isinstance(outcome, JobCancelled):
-            return self._acknowledge_cancellation(current, outcome)
-        if (
-            not isinstance(outcome, JobResult)
-            or not outcome.result_references
-            or any(not isinstance(item, str) or not item.strip() for item in outcome.result_references)
-        ):
-            return self._fail(job_id, REASON_HANDLER_RESULT_INVALID)
-        if current.state is JobState.CANCELLATION_REQUESTED:
+        return self._record(job_id, _settle(outcome))
+
+    def _record(self, job_id: str, outcome: "_Succeeded | _Failed | _Cancelled") -> JobRecord:
+        """Record a finished handler's outcome against the Job's *current* state.
+
+        A cancellation request can arrive at any moment while the handler runs
+        or while this call is deciding. The decision is therefore derived from
+        the state each ``transition`` itself validates: if the state changed
+        between the read and the write the transition is refused, and the
+        decision is made again from the new state. It cannot loop: the only
+        concurrent change is the one-way ``RUNNING -> CANCELLATION_REQUESTED``.
+        """
+
+        for _ in range(3):
+            current = self.store.get(job_id)
+            state, options = outcome.decide(current.state)
+            try:
+                return self.store.transition(job_id, state, **options)
+            except DurableJobConflict:
+                if self.store.get(job_id).state is current.state:
+                    raise  # Not a race: a genuine refusal.
+        return self.store.get(job_id)  # pragma: no cover - the state is one-way
+
+
+@dataclass(frozen=True, slots=True)
+class _Succeeded:
+    result_references: tuple[str, ...]
+    diagnostic_reference: str | None
+
+    def decide(self, current: JobState) -> tuple[JobState, dict]:
+        if current is JobState.CANCELLATION_REQUESTED:
             # ADR-0062 section 5: success cannot follow a cancellation request;
             # the handler's effects happened, so no cancellation is inferred.
-            return self.store.transition(
-                job_id, JobState.RECOVERY_REQUIRED,
-                reason_code=REASON_COMPLETED_AFTER_CANCELLATION_REQUEST,
-            )
-        try:
-            _bounded_optional(outcome.diagnostic_reference, "diagnostic_reference")
-        except ValueError:
-            return self._fail(job_id, REASON_HANDLER_RESULT_INVALID)
-        return self.store.transition(
-            job_id, JobState.SUCCEEDED,
-            result_references=tuple(outcome.result_references),
-            diagnostic_reference=outcome.diagnostic_reference,
-        )
+            return JobState.RECOVERY_REQUIRED, {
+                "reason_code": REASON_COMPLETED_AFTER_CANCELLATION_REQUEST,
+            }
+        return JobState.SUCCEEDED, {
+            "result_references": self.result_references,
+            "diagnostic_reference": self.diagnostic_reference,
+        }
 
-    def _acknowledge_cancellation(self, current: JobRecord, outcome: JobCancelled) -> JobRecord:
-        try:
-            reason = _bounded_text(outcome.reason_code, "reason_code")
-            diagnostic = _bounded_optional(outcome.diagnostic_reference, "diagnostic_reference")
-        except ValueError:
-            return self._fail(current.job_id, REASON_HANDLER_RESULT_INVALID)
-        if current.state is not JobState.CANCELLATION_REQUESTED:
+
+@dataclass(frozen=True, slots=True)
+class _Failed:
+    reason_code: str
+    diagnostic_reference: str | None = None
+
+    def decide(self, current: JobState) -> tuple[JobState, dict]:
+        return JobState.FAILED, {
+            "reason_code": self.reason_code, "diagnostic_reference": self.diagnostic_reference,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _Cancelled:
+    reason_code: str
+    diagnostic_reference: str | None
+
+    def decide(self, current: JobState) -> tuple[JobState, dict]:
+        if current is not JobState.CANCELLATION_REQUESTED:
             # An acknowledgement of a request nobody recorded proves nothing.
-            return self._fail(current.job_id, REASON_CANCELLATION_NOT_REQUESTED)
-        return self.store.transition(
-            current.job_id, JobState.CANCELLED, reason_code=reason, diagnostic_reference=diagnostic,
-        )
+            return JobState.FAILED, {"reason_code": REASON_CANCELLATION_NOT_REQUESTED}
+        return JobState.CANCELLED, {
+            "reason_code": self.reason_code, "diagnostic_reference": self.diagnostic_reference,
+        }
 
-    def _fail(
-        self, job_id: str, reason_code: str, diagnostic_reference: str | None = None,
-    ) -> JobRecord:
-        return self.store.transition(
-            job_id, JobState.FAILED,
-            reason_code=reason_code, diagnostic_reference=diagnostic_reference,
+
+def _settle(outcome: object) -> "_Succeeded | _Failed | _Cancelled":
+    """Validate what a handler returned, whatever it returned, into an outcome.
+
+    Anything that is not exactly a ``JobResult`` with a non-empty tuple/list of
+    bounded non-empty strings (a bare ``str`` is an iterable of characters, not
+    a reference list) or a well-formed ``JobCancelled`` is an invalid result.
+    """
+
+    invalid = _Failed(REASON_HANDLER_RESULT_INVALID)
+    try:
+        if isinstance(outcome, JobCancelled):
+            return _Cancelled(
+                _bounded_text(outcome.reason_code, "reason_code"),
+                _bounded_optional(outcome.diagnostic_reference, "diagnostic_reference"),
+            )
+        if not isinstance(outcome, JobResult):
+            return invalid
+        references = outcome.result_references
+        if not isinstance(references, (tuple, list)) or not references:
+            return invalid
+        checked = tuple(_bounded_text(item, "result_reference") for item in references)
+        return _Succeeded(
+            checked, _bounded_optional(outcome.diagnostic_reference, "diagnostic_reference"),
         )
+    except Exception:
+        return invalid
 
 
 def _bounded_text(value: object, field: str) -> str:

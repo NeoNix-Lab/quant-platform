@@ -186,18 +186,23 @@ class DurableJobStore:
             row[4], self._evidence_from_storage(row[5]),
         ))
 
-    def queued_job_ids(self, limit: int = 100) -> tuple[str, ...]:
+    def queued_job_ids(self, limit: int = 100, *, after: str | None = None) -> tuple[str, ...]:
         """Identities of ``QUEUED`` Jobs, in deterministic ``job_id`` order.
 
         Read-only. The order is not a queue position: ADR-0062 section 2
         excludes queue positions from identity, and no ordering is promised
-        beyond determinism.
+        beyond determinism. ``after`` is a keyset cursor: pass the last
+        ``job_id`` of the previous page to continue strictly after it, so a
+        caller can walk every ``QUEUED`` Job in bounded pages.
         """
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise ValueError("limit must be a positive integer")
+        if after is not None and not isinstance(after, str):
+            raise ValueError("after must be a job_id or None")
         rows = self._db.execute(
-            "SELECT job_id FROM durable_jobs WHERE state = ? ORDER BY job_id LIMIT ?",
-            (JobState.QUEUED.value, limit),
+            "SELECT job_id FROM durable_jobs WHERE state = ? AND job_id > ? "
+            "ORDER BY job_id LIMIT ?",
+            (JobState.QUEUED.value, after or "", limit),
         ).fetchall()
         return tuple(str(row[0]) for row in rows)
 

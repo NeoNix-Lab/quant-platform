@@ -336,6 +336,128 @@ class JobDispatchV1Tests(unittest.TestCase):
             with self.subTest(limit=bad):
                 with self.assertRaises(ValueError):
                     store.queued_job_ids(bad)
+        # A keyset cursor walks every QUEUED Job in bounded pages.
+        walked, cursor = [], None
+        while True:
+            page = store.queued_job_ids(3, after=cursor)
+            if not page:
+                break
+            walked.extend(page)
+            cursor = page[-1]
+        self.assertEqual(sorted(ids), walked)
+        self.assertEqual((), store.queued_job_ids(3, after=max(ids)))
+        with self.assertRaises(ValueError):
+            store.queued_job_ids(3, after=5)
+
+    # -- review findings on 0e18080 -------------------------------------------
+
+    def test_a_result_container_must_be_a_tuple_or_list_of_references(self) -> None:
+        # A bare str is an iterable of characters: it must not become one
+        # reference per character. A non-iterable must not leave the Job RUNNING.
+        for label, outcome in {
+            "bare string": JobResult("result:sha256:1"),
+            "integer": JobResult(42),
+            "none": JobResult(None),
+            "set": JobResult({"result:sha256:1"}),
+            "generator": JobResult(iter(("result:sha256:1",))),
+            "mixed": JobResult(("result:sha256:1", 5)),
+            "oversized reference": JobResult(("r" * 513,)),
+        }.items():
+            with self.subTest(label):
+                dispatcher, store = self.dispatcher(lambda _a, outcome=outcome: outcome)
+                job = self.queued(dispatcher, request=f"request:container:{label}")
+                recorded = dispatcher.dispatch_next().job
+                self.assertEqual(JobState.FAILED, recorded.state)
+                self.assertEqual("handler_result_invalid", recorded.reason_code)
+                self.assertEqual((), recorded.result_references)
+                self.assertEqual(JobState.FAILED, store.attempts(job.job_id)[0].state)
+        dispatcher, store = self.dispatcher(lambda _a: JobResult(["result:sha256:1", "result:sha256:2"]))
+        self.queued(dispatcher, request="request:container:list")
+        accepted = dispatcher.dispatch_next().job
+        self.assertEqual(JobState.SUCCEEDED, accepted.state)
+        self.assertEqual(("result:sha256:1", "result:sha256:2"), accepted.result_references)
+
+    def sorted_after(self, candidates, floor: str) -> JobAdmission:
+        """A registered admission whose job_id sorts after ``floor``."""
+        for index in range(20000):
+            candidate = admission(request=f"request:valid:{index}")
+            if candidate.job_id > floor:
+                return candidate
+        raise AssertionError("no candidate sorted after the floor")  # pragma: no cover
+
+    def test_unregistered_jobs_cannot_starve_a_registered_one(self) -> None:
+        store = self.store()
+        foreign = []
+        for index in range(105):  # more than one default page
+            job = store.admit(admission(kind="catalog-compaction-v1", request=f"request:f{index}"))
+            store.transition(job.job_id, JobState.QUEUED)
+            foreign.append(job.job_id)
+        valid = self.sorted_after(None, max(foreign))
+        dispatcher = JobDispatcher(store, JobHandlerRegistry((handler(succeeds),)))
+        queued = dispatcher.admit(valid)
+        store.transition(queued.job_id, JobState.QUEUED)
+        self.assertGreater(queued.job_id, max(foreign))
+        first = dispatcher.dispatch_next()
+        self.assertIsNotNone(first.job)
+        self.assertEqual(valid.job_id, first.job.job_id)
+        self.assertEqual(JobState.SUCCEEDED, first.job.state)
+        self.assertEqual(105, first.skipped_unregistered)
+        for job_id in foreign:
+            self.assertEqual(JobState.QUEUED, store.get(job_id).state)
+        self.assertEqual(0, sum(len(store.attempts(job_id)) for job_id in foreign))
+        # Nothing registered is left: the unregistered ones are reported, not run.
+        idle = dispatcher.dispatch_next()
+        self.assertIsNone(idle.job)
+        self.assertEqual(105, idle.skipped_unregistered)
+
+    def test_a_small_page_size_still_reaches_every_queued_job(self) -> None:
+        store = self.store()
+        foreign = []
+        for index in range(10):
+            job = store.admit(admission(kind="catalog-compaction-v1", request=f"request:g{index}"))
+            store.transition(job.job_id, JobState.QUEUED)
+            foreign.append(job.job_id)
+        valid = self.sorted_after(None, max(foreign))
+        dispatcher = JobDispatcher(store, JobHandlerRegistry((handler(succeeds),)))
+        store.transition(dispatcher.admit(valid).job_id, JobState.QUEUED)
+        result = dispatcher.dispatch_next(page_size=3)
+        self.assertEqual(valid.job_id, result.job.job_id)
+        self.assertEqual(10, result.skipped_unregistered)
+        with self.assertRaises(ValueError):
+            dispatcher.dispatch_next(page_size=0)
+
+    def test_a_cancellation_between_the_read_and_the_save_is_not_left_stuck(self) -> None:
+        observer = self.store()
+        calls = []
+
+        def execute(_admission):
+            calls.append(1)
+            return JobResult(("result:sha256:1",))
+
+        dispatcher, store = self.dispatcher(execute)
+        job = self.queued(dispatcher)
+        original = store.transition
+        racing = {"armed": True}
+
+        def transition_after_a_cancellation_request(job_id, state, **options):
+            if racing["armed"] and state is JobState.SUCCEEDED:
+                racing["armed"] = False
+                # After the dispatcher read RUNNING, before it saved the success.
+                observer.transition(job_id, JobState.CANCELLATION_REQUESTED)
+            return original(job_id, state, **options)
+
+        store.transition = transition_after_a_cancellation_request
+        outcome = dispatcher.dispatch_next().job
+        self.assertFalse(racing["armed"], "the race was not exercised")
+        self.assertEqual(JobState.RECOVERY_REQUIRED, outcome.state)
+        self.assertEqual("completed_after_cancellation_request", outcome.reason_code)
+        self.assertEqual(
+            [(1, JobState.RECOVERY_REQUIRED)],
+            [(a.attempt_no, a.state) for a in store.attempts(job.job_id)],
+        )
+        # Not re-run, not stuck: the handler ran once and nothing is dispatchable.
+        self.assertIsNone(dispatcher.dispatch_next().job)
+        self.assertEqual([1], calls)
 
     # -- cancellation (ADR-0062 section 5) -----------------------------------
 
