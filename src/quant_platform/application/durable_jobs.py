@@ -186,6 +186,34 @@ class DurableJobStore:
             row[4], self._evidence_from_storage(row[5]),
         ))
 
+    def queued_job_ids(self, limit: int = 100) -> tuple[str, ...]:
+        """Identities of ``QUEUED`` Jobs, in deterministic ``job_id`` order.
+
+        Read-only. The order is not a queue position: ADR-0062 section 2
+        excludes queue positions from identity, and no ordering is promised
+        beyond determinism.
+        """
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        rows = self._db.execute(
+            "SELECT job_id FROM durable_jobs WHERE state = ? ORDER BY job_id LIMIT ?",
+            (JobState.QUEUED.value, limit),
+        ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
+    def claim(self, job_id: str) -> JobRecord:
+        """``QUEUED -> RUNNING`` and its durable attempt, or a refusal.
+
+        Unlike ``transition``, which treats a repeated state as an idempotent
+        success, a claim of a Job that is not ``QUEUED`` is always refused, so
+        two callers can never both be told they own the same attempt.
+        """
+        with self._db.transaction():
+            current = self.get(job_id)
+            if current.state != JobState.QUEUED:
+                raise DurableJobConflict("only a QUEUED job can be claimed")
+            return self.transition(job_id, JobState.RUNNING)
+
     def transition(
         self,
         job_id: str,

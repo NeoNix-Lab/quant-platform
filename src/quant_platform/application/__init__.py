@@ -47,6 +47,17 @@ from .durable_jobs import (
     JobState,
     TERMINAL_JOB_STATES,
 )
+from .job_dispatch import (
+    DATA_LOCAL_JOB_REGISTRY,
+    DispatchResult,
+    JobCancelled,
+    JobDispatcher,
+    JobHandler,
+    JobHandlerFailure,
+    JobHandlerNotRegistered,
+    JobHandlerRegistry,
+    JobResult,
+)
 from .admitted_input import (
     AdmittedInputConflict,
     AdmittedInputError,
@@ -247,6 +258,15 @@ __all__ = [
     "GovernedResultRegistration",
     "ResultOutputContractV1",
     "ResultOutputEvidenceV1",
+    "DATA_LOCAL_JOB_REGISTRY",
+    "DispatchResult",
+    "JobCancelled",
+    "JobDispatcher",
+    "JobHandler",
+    "JobHandlerFailure",
+    "JobHandlerNotRegistered",
+    "JobHandlerRegistry",
+    "JobResult",
     "DurableJobConflict",
     "DurableJobError",
     "DurableJobNotFound",

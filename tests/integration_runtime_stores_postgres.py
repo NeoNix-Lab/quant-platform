@@ -39,6 +39,7 @@ from quant_platform.experiments.accounting import (  # noqa: E402
 )
 import test_admitted_input_manifest_v1 as k12  # noqa: E402
 import test_durable_job_runtime_v1 as j03  # noqa: E402
+import test_job_dispatch_v1 as dispatch  # noqa: E402
 import test_governed_result_import_v1 as k13  # noqa: E402
 
 
@@ -133,6 +134,31 @@ class PostgresJobs(DisposableCase, j03.DurableJobRuntimeV1Tests):
         self.assertEqual(failed, after_failure.get(second.job_id))
         self.assertEqual((attempt,), after_failure.attempts(second.job_id))
         self.assertEqual((reason, diagnostic), (attempt.failure_code, attempt.evidence_reference))
+
+
+class PostgresDispatch(DisposableCase, dispatch.JobDispatchV1Tests):
+    """#334: the backend-neutral dispatch contract on the runtime schema, as the worker role."""
+
+    def store(self):
+        return DurableJobStore(self.connection("WORKER"))
+
+    def test_concurrent_claims_of_one_queued_job_have_exactly_one_winner(self):
+        seed = self.store()
+        job = seed.admit(dispatch.admission())
+        seed.transition(job.job_id, JobState.QUEUED)
+
+        def claim(_):
+            with connect("WORKER") as connection:
+                try:
+                    return DurableJobStore(connection).claim(job.job_id).state
+                except DurableJobConflict:
+                    return "refused"
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            outcomes = list(pool.map(claim, range(6)))
+        self.assertEqual(1, outcomes.count(JobState.RUNNING))
+        self.assertEqual(5, outcomes.count("refused"))
+        self.assertEqual(1, len(seed.attempts(job.job_id)))
 
 
 class PostgresInputs(DisposableCase, k12.AdmittedInputManifestV1Tests):
