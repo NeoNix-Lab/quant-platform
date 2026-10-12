@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 from contextlib import redirect_stderr, redirect_stdout
+import tempfile
 import os
 from pathlib import Path
 import signal
@@ -38,11 +39,16 @@ from quant_platform.application.job_dispatch import (  # noqa: E402
 )
 from quant_platform.application.job_worker_runtime import (  # noqa: E402
     WORKER_ADVISORY_LOCK_KEY,
+    CompositeWorkerLock,
     JobWorker,
+    ProcessLifetimeLock,
     WorkerCommitMismatch,
     WorkerLockHeld,
+    WorkerLockLost,
+    default_process_lock_path,
     deployment_commit,
 )
+import api_server  # noqa: E402  (the API host under test)
 import job_worker  # noqa: E402  (the host under test)
 
 KIND = "catalog-maintenance-v1"
@@ -61,16 +67,23 @@ def admission(request: str = "request:1") -> JobAdmission:
 class Lock:
     def __init__(self, journal, *, available=True):
         self.journal, self.available = journal, available
-        self.held = False
+        self.is_held = False   # what the fake "server" says
+        self.lost = False      # the session ended under a live process
+        self.held_error = None
 
     def acquire(self):
         self.journal.append("lock.acquire")
-        self.held = self.available
+        self.is_held = self.available
         return self.available
+
+    def held(self):
+        if self.held_error is not None:
+            raise self.held_error
+        return self.is_held and not self.lost
 
     def release(self):
         self.journal.append("lock.release")
-        self.held = False
+        self.is_held = False
 
 
 class Record:
@@ -133,7 +146,7 @@ class JobWorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(["lock.acquire"], self.journal)  # no commit read either
         self.assertEqual(JobState.RUNNING, self.store.get(job.job_id).state)
         self.assertEqual(1, len(self.store.attempts(job.job_id)))
-        self.assertFalse(lock.held)
+        self.assertFalse(lock.is_held)
 
     def test_a_commit_that_differs_or_is_unrecorded_refuses_and_releases_the_lock(self) -> None:
         for label, recorded in {"differs": "f" * 40, "unrecorded": None}.items():
@@ -148,7 +161,7 @@ class JobWorkerLifecycleTests(unittest.TestCase):
                 self.assertEqual(
                     ["lock.acquire", "commit.read", "lock.release"], self.journal,
                 )
-                self.assertFalse(lock.held)
+                self.assertFalse(lock.is_held)
                 self.assertEqual(JobState.RUNNING, self.store.get(job.job_id).state)
 
     def test_recovery_runs_once_and_the_recovered_job_is_not_redispatched(self) -> None:
@@ -192,7 +205,7 @@ class JobWorkerLifecycleTests(unittest.TestCase):
         threading.Timer(0.3, self.stop.set).start()
         self.assertEqual(3, worker.serve())
         self.assertEqual({JobState.SUCCEEDED}, {self.store.get(j.job_id).state for j in jobs})
-        self.assertFalse(lock.held)  # serve() always releases
+        self.assertFalse(lock.is_held)  # serve() always releases
 
     def test_a_stop_request_lets_the_in_flight_handler_finish_and_be_recorded(self) -> None:
         entered = threading.Event()
@@ -225,7 +238,7 @@ class JobWorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(1, result["dispatched"])
         states = sorted(self.store.get(j.job_id).state.value for j in (first, second))
         self.assertEqual(["QUEUED", "SUCCEEDED"], states)  # the next one was not started
-        self.assertFalse(lock.held)
+        self.assertFalse(lock.is_held)
 
     def test_a_crash_inside_run_still_releases_the_lock(self) -> None:
         def execute(_admission):
@@ -236,7 +249,7 @@ class JobWorkerLifecycleTests(unittest.TestCase):
         self.store.transition(job.job_id, JobState.QUEUED)
         with self.assertRaises(KeyboardInterrupt):
             worker.serve()
-        self.assertFalse(lock.held)
+        self.assertFalse(lock.is_held)
         self.assertEqual(JobState.RUNNING, self.store.get(job.job_id).state)
 
     def test_close_is_idempotent(self) -> None:
@@ -320,6 +333,227 @@ class WorkerHostTests(unittest.TestCase):
     def test_the_shipped_registry_the_host_runs_is_the_empty_closed_one(self) -> None:
         self.assertIs(DATA_LOCAL_JOB_REGISTRY, job_worker.DATA_LOCAL_JOB_REGISTRY)
         self.assertEqual(0, len(DATA_LOCAL_JOB_REGISTRY))
+
+class WorkerFencingTests(unittest.TestCase):
+    """A lost session must never become a second active worker (review of 52ddf4b)."""
+
+    def setUp(self) -> None:
+        self.journal: list[str] = []
+        self.store = DurableJobStore(sqlite3.connect(":memory:"))
+        self.stop = threading.Event()
+        self.calls: list[int] = []
+
+    def worker(self, lock):
+        def execute(_admission):
+            self.calls.append(1)
+            return JobResult(("result:sha256:1",))
+
+        registry = JobHandlerRegistry((
+            JobHandler(KIND, "v1", IDENTITY, EffectSafety.PURE_REPLAYABLE, execute),
+        ))
+        return JobWorker(
+            store=self.store, registry=registry, lock=lock,
+            commit_record=Record(self.journal, COMMIT), commit=COMMIT, stop=self.stop,
+            poll_interval=0.01,
+        )
+
+    def queued(self, request="request:1"):
+        job = self.store.admit(admission(request))
+        self.store.transition(job.job_id, JobState.QUEUED)
+        return job
+
+    def test_a_worker_that_lost_its_lock_dispatches_nothing_further(self) -> None:
+        lock = Lock(self.journal)
+        worker = self.worker(lock)
+        worker.start()
+        job = self.queued()
+        lock.lost = True  # the session ended; the process is still alive
+        with self.assertRaises(WorkerLockLost):
+            worker.run()
+        self.assertEqual([], self.calls)
+        self.assertEqual(JobState.QUEUED, self.store.get(job.job_id).state)
+        self.assertEqual((), self.store.attempts(job.job_id))
+
+    def test_a_lock_that_cannot_be_confirmed_counts_as_lost(self) -> None:
+        lock = Lock(self.journal)
+        worker = self.worker(lock)
+        worker.start()
+        self.queued()
+        lock.held_error = ConnectionError("the session is gone")
+        with self.assertRaises(WorkerLockLost):
+            worker.run()
+        self.assertEqual([], self.calls)
+
+    def test_the_lock_is_checked_before_every_dispatch_not_only_at_start(self) -> None:
+        lock = Lock(self.journal)
+        worker = self.worker(lock)
+        worker.start()
+        first, second = self.queued("request:a"), self.queued("request:b")
+        outcomes = []
+        original = self.store.claim
+
+        def claim_then_lose_the_lock(job_id):
+            outcomes.append(job_id)
+            record = original(job_id)
+            lock.lost = True  # lost while the first Job is being run
+            return record
+
+        self.store.claim = claim_then_lose_the_lock
+        with self.assertRaises(WorkerLockLost):
+            worker.run()
+        self.assertEqual(1, len(outcomes))  # the second Job was never claimed
+        self.assertEqual(1, len(self.calls))  # the in-flight one ran to its end
+        states = sorted(self.store.get(j.job_id).state.value for j in (first, second))
+        self.assertEqual(["QUEUED", "SUCCEEDED"], states)
+
+
+class ProcessLifetimeLockTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.path = Path(self._directory.name) / "nested" / "worker.lock"
+
+    def test_it_is_exclusive_between_holders_and_reusable_after_release(self) -> None:
+        first, second = ProcessLifetimeLock(self.path), ProcessLifetimeLock(self.path)
+        self.addCleanup(first.release)
+        self.addCleanup(second.release)
+        self.assertFalse(first.held())
+        self.assertTrue(first.acquire())
+        self.assertTrue(first.acquire())  # idempotent for its holder
+        self.assertTrue(first.held())
+        self.assertFalse(second.acquire())
+        self.assertFalse(second.held())
+        first.release()
+        self.assertFalse(first.held())
+        self.assertTrue(second.acquire())
+        self.assertTrue(second.held())
+
+    @unittest.skipIf(os.name == "nt", "an open, locked file cannot be unlinked on Windows")
+    def test_an_unlinked_lock_file_is_no_longer_held(self) -> None:
+        lock = ProcessLifetimeLock(self.path)
+        self.addCleanup(lock.release)
+        self.assertTrue(lock.acquire())
+        self.path.unlink()  # a temporary-file cleaner
+        self.assertFalse(lock.held())
+        successor = ProcessLifetimeLock(self.path)
+        self.addCleanup(successor.release)
+        self.assertTrue(successor.acquire())  # the successor would lock a new file
+
+    def test_it_is_released_when_the_holder_process_dies(self) -> None:
+        import subprocess
+
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import sys, time\n"
+             f"sys.path.insert(0, r'{ROOT / 'src'}')\n"
+             "from quant_platform.application.job_worker_runtime import ProcessLifetimeLock\n"
+             f"lock = ProcessLifetimeLock(r'{self.path}')\n"
+             "assert lock.acquire()\n"
+             "print('held', flush=True)\n"
+             "time.sleep(60)\n"],
+            stdout=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        self.assertEqual("held", holder.stdout.readline().strip())
+        probe = ProcessLifetimeLock(self.path)
+        self.addCleanup(probe.release)
+        self.assertFalse(probe.acquire(), "a live process must hold the lock")
+        holder.kill()
+        holder.wait(timeout=10)
+        self.assertTrue(probe.acquire(), "the kernel releases it with the process")
+
+
+class CompositeWorkerLockTests(unittest.TestCase):
+    def test_acquire_in_order_release_in_reverse_and_held_needs_all(self) -> None:
+        journal: list[str] = []
+        first, second = Lock(journal), Lock(journal)
+        composite = CompositeWorkerLock([first, second])
+        self.assertFalse(composite.held())
+        self.assertTrue(composite.acquire())
+        self.assertTrue(composite.held())
+        second.lost = True
+        self.assertFalse(composite.held())
+        second.lost = False
+        composite.release()
+        self.assertEqual(["lock.acquire", "lock.acquire", "lock.release", "lock.release"], journal)
+        self.assertFalse(first.is_held or second.is_held)
+
+    def test_a_refusal_releases_what_was_already_taken(self) -> None:
+        journal: list[str] = []
+        taken, refused = Lock(journal), Lock(journal, available=False)
+        composite = CompositeWorkerLock([taken, refused])
+        self.assertFalse(composite.acquire())
+        self.assertFalse(taken.is_held)
+        self.assertFalse(composite.held())
+        with self.assertRaises(ValueError):
+            CompositeWorkerLock([])
+
+    def test_the_default_lock_path_is_per_database_and_ignores_credentials(self) -> None:
+        a = default_process_lock_path("postgresql://u:p1@127.0.0.1:5432/runtime")
+        b = default_process_lock_path("postgresql://other:secret@127.0.0.1:5432/runtime")
+        c = default_process_lock_path("postgresql://u:p1@127.0.0.1:5433/runtime")
+        d = default_process_lock_path("postgresql://u:p1@127.0.0.1:5432/another")
+        self.assertEqual(a, b)
+        self.assertEqual(4, len({a, c, d}) + 1)
+        self.assertNotIn("secret", str(a))
+
+
+class ApiHostFailsClosedTests(unittest.TestCase):
+    """The API must not start unless it has recorded its commit (review of 52ddf4b)."""
+
+    def run_host(self, argv, **environment):
+        out, err = io.StringIO(), io.StringIO()
+        base = {"QP_RUNTIME_DSN": "", "QP_GIT_COMMIT": COMMIT, "CATALOG_DSN": ""}
+        with mock.patch.dict(os.environ, {**base, **environment}), \
+                mock.patch.object(api_server, "run_api_transport_server") as transport, \
+                mock.patch.object(api_server, "open_runtime_connection") as connect, \
+                redirect_stdout(out), redirect_stderr(err):
+            code = api_server.main(argv)
+        return code, transport, connect, err.getvalue()
+
+    def test_without_a_runtime_dsn_it_refuses_before_anything_binds_or_connects(self) -> None:
+        for argv in ([], ["--runtime-dsn", ""], ["--runtime-dsn", "   "]):
+            with self.subTest(argv=argv):
+                code, transport, connect, err = self.run_host(argv)
+                self.assertEqual(api_server.EXIT_RUNTIME_NOT_CONFIGURED, code)
+                self.assertNotEqual(0, code)
+                transport.assert_not_called()
+                connect.assert_not_called()
+                self.assertIn("runtime DSN is required", err)
+
+    def test_a_configured_runtime_dsn_records_the_commit_before_the_transport_starts(self) -> None:
+        order: list[str] = []
+        connection = mock.Mock()
+        connection.close.side_effect = lambda: order.append("close")
+
+        def record(conn, commit):
+            order.append(f"record:{commit}")
+
+        async def serve(*_args, **_kwargs):
+            order.append("transport")
+
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"QP_GIT_COMMIT": COMMIT, "QP_RUNTIME_DSN": ""}), \
+                mock.patch.object(api_server, "open_runtime_connection", return_value=connection), \
+                mock.patch.object(api_server, "record_deployment_commit", side_effect=record), \
+                mock.patch.object(api_server, "run_api_transport_server", side_effect=serve), \
+                redirect_stdout(out):
+            code = api_server.main(["--runtime-dsn", "postgresql://api@localhost/runtime"])
+        self.assertEqual(0, code)
+        self.assertEqual([f"record:{COMMIT}", "close", "transport"], order)
+
+    def test_a_failed_record_stops_the_api_without_starting_the_transport(self) -> None:
+        with mock.patch.dict(os.environ, {"QP_GIT_COMMIT": COMMIT, "QP_RUNTIME_DSN": ""}), \
+                mock.patch.object(api_server, "open_runtime_connection", return_value=mock.Mock()), \
+                mock.patch.object(
+                    api_server, "record_deployment_commit", side_effect=RuntimeError("denied"),
+                ), \
+                mock.patch.object(api_server, "run_api_transport_server") as transport, \
+                redirect_stdout(io.StringIO()):
+            with self.assertRaises(RuntimeError):
+                api_server.main(["--runtime-dsn", "postgresql://api@localhost/runtime"])
+        transport.assert_not_called()
 
 
 if __name__ == "__main__":

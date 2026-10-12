@@ -9,17 +9,22 @@ dgk331_disposable. Existing J03/K12/K13 test methods are reused unchanged.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextlib import redirect_stdout
 from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import io
 import queue
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
@@ -32,17 +37,19 @@ from quant_platform.application.admitted_input import (  # noqa: E402
     AdmittedInputConflict, AdmittedInputState, AdmittedInputStore,
 )
 from quant_platform.application.durable_jobs import (  # noqa: E402
-    DurableJobConflict, DurableJobStore, JobState,
+    DurableJobConflict, DurableJobStore, EffectSafety, JobState,
 )
 from quant_platform.application.governed_result_import import (  # noqa: E402
     GovernedResultEvidenceStore, GovernedResultImportError, GovernedResultImportService,
     GovernedResultRefused, ResultOutputContractV1,
 )
-from quant_platform.application.job_dispatch import DATA_LOCAL_JOB_REGISTRY  # noqa: E402
+from quant_platform.application.job_dispatch import (  # noqa: E402
+    DATA_LOCAL_JOB_REGISTRY, JobHandler, JobHandlerRegistry, JobResult,
+)
 from quant_platform.application.job_worker_runtime import (  # noqa: E402
-    WORKER_ADVISORY_LOCK_KEY, JobWorker, PostgresAdvisoryLock, PostgresCommitRecord,
-    WorkerCommitMismatch, WorkerLockHeld, record_deployment_commit,
-    recorded_deployment_commit,
+    WORKER_ADVISORY_LOCK_KEY, CompositeWorkerLock, JobWorker, PostgresAdvisoryLock,
+    PostgresCommitRecord, ProcessLifetimeLock, WorkerCommitMismatch, WorkerLockHeld,
+    WorkerLockLost, record_deployment_commit, recorded_deployment_commit,
 )
 from quant_platform.experiments import ExperimentRepository, RunState  # noqa: E402
 from quant_platform.experiments.accounting import (  # noqa: E402
@@ -281,6 +288,175 @@ class PostgresWorker(DisposableCase, unittest.TestCase):
                 probe = PostgresAdvisoryLock(self.connection("WORKER"))
                 self.assertTrue(probe.acquire(), "the lock must not leak on a refusal")
                 probe.release()
+
+
+
+    # -- review of 52ddf4b: fencing and fail-closed commit record -----------------
+
+    def fenced_worker(self, registry, lock_path):
+        """A worker on its own (terminable) connection, with the two-part lock."""
+        connection = connect("WORKER")
+        self.addCleanup(connection.close)
+        worker = JobWorker(
+            store=DurableJobStore(connection), registry=registry,
+            lock=CompositeWorkerLock([
+                ProcessLifetimeLock(lock_path), PostgresAdvisoryLock(connection),
+            ]),
+            commit_record=PostgresCommitRecord(connection), commit=self.COMMIT,
+            stop=threading.Event(), poll_interval=0.05,
+        )
+        return worker, connection
+
+    def lock_file(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        return Path(directory) / "worker.lock"
+
+    def wait_until_advisory_lock_is_free(self):
+        admin = self.connection("ADMIN")
+        deadline = time.monotonic() + 10
+        while admin.execute(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted AND objid = %s",
+            (WORKER_ADVISORY_LOCK_KEY,),
+        ).fetchone()[0]:
+            self.assertLess(time.monotonic(), deadline, "the session lock was not released")
+            time.sleep(0.05)
+
+    def test_a_lost_session_under_an_active_handler_cannot_admit_a_second_worker(self):
+        self.api_records()
+        entered, release = threading.Event(), threading.Event()
+        executions = []
+
+        def execute(received):
+            executions.append(received.request_identity)
+            entered.set()
+            release.wait(60)
+            return JobResult(("result:sha256:1",))
+
+        registry = JobHandlerRegistry((
+            JobHandler(dispatch.KIND, "v1", dispatch.IDENTITY, EffectSafety.PURE_REPLAYABLE, execute),
+        ))
+        seed = DurableJobStore(self.connection("WORKER"))
+        jobs = []
+        for request in ("request:fence:first", "request:fence:second"):
+            job = seed.admit(dispatch.admission(request=request))
+            seed.transition(job.job_id, JobState.QUEUED)
+            jobs.append(job)
+        lock_path = self.lock_file()
+
+        first, first_connection = self.fenced_worker(registry, lock_path)
+        failure = {}
+
+        def serve():
+            try:
+                first.serve()
+            except BaseException as error:  # noqa: BLE001 - captured for the assertions
+                failure["error"] = error
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        self.assertTrue(entered.wait(30), "the handler never started")
+        running = [job for job in jobs if seed.get(job.job_id).state is JobState.RUNNING]
+        self.assertEqual(1, len(running))
+
+        # The database session of the worker ends while its handler is active.
+        self.connection("ADMIN").execute(
+            "SELECT pg_terminate_backend(%s)", (first_connection.info.backend_pid,)
+        )
+        self.wait_until_advisory_lock_is_free()
+
+        # A successor must NOT be admitted: the process is alive and still working.
+        second, _ = self.fenced_worker(registry, lock_path)
+        with self.assertRaises(WorkerLockHeld):
+            second.start()
+        self.assertEqual(JobState.RUNNING, seed.get(running[0].job_id).state)
+        self.assertEqual(
+            [JobState.RUNNING], [a.state for a in seed.attempts(running[0].job_id)],
+        )
+        other = next(job for job in jobs if job is not running[0])
+        self.assertEqual(JobState.QUEUED, seed.get(other.job_id).state)
+        self.assertEqual(1, len(executions), "a second handler must not have started")
+
+        # The in-flight handler ends; it cannot record (its session is gone) and the
+        # worker stops without starting the other Job; only then may a successor run.
+        release.set()
+        thread.join(30)
+        self.assertFalse(thread.is_alive())
+        self.assertIsInstance(failure.get("error"), Exception)
+        self.assertEqual(1, len(executions))
+        self.assertEqual(JobState.QUEUED, seed.get(other.job_id).state)
+
+        third, _ = self.fenced_worker(registry, lock_path)
+        self.assertEqual((running[0].job_id,), third.start())
+        self.assertEqual(JobState.RECOVERY_REQUIRED, seed.get(running[0].job_id).state)
+        self.assertEqual(JobState.QUEUED, seed.get(other.job_id).state)
+        self.assertEqual(1, len(executions))
+        third.close()
+
+    def test_an_idle_worker_whose_session_is_terminated_stops_with_lock_lost(self):
+        self.api_records()
+        worker, connection = self.fenced_worker(DATA_LOCAL_JOB_REGISTRY, self.lock_file())
+        worker.start()
+        failure = {}
+
+        def run():
+            try:
+                worker.run()
+            except BaseException as error:  # noqa: BLE001
+                failure["error"] = error
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        time.sleep(0.3)
+        self.connection("ADMIN").execute(
+            "SELECT pg_terminate_backend(%s)", (connection.info.backend_pid,)
+        )
+        thread.join(15)
+        self.assertFalse(thread.is_alive(), "an unconfirmable lock must stop the worker")
+        self.assertIsInstance(failure.get("error"), WorkerLockLost)
+
+    def test_the_api_host_replaces_a_stale_record_and_a_worker_on_the_old_commit_is_refused(self):
+        old, new = "a" * 40, "b" * 40
+        self.api_records(old)  # the previous deployment's record
+        started = []
+
+        async def transport(*_args, **_kwargs):
+            started.append(recorded_deployment_commit(self.connection("WORKER")))
+
+        with mock.patch.dict(os.environ, {"QP_GIT_COMMIT": new, "QP_RUNTIME_DSN": ""}), \
+                mock.patch.object(api_server, "run_api_transport_server", side_effect=transport), \
+                redirect_stdout(io.StringIO()):
+            code = api_server.main(["--runtime-dsn", os.environ["RUNTIME_TEST_API_DSN"]])
+        self.assertEqual(0, code)
+        # The record already named the new commit when the transport started.
+        self.assertEqual([new], started)
+        stale, _ = self.worker_parts(commit=old)
+        with self.assertRaises(WorkerCommitMismatch):
+            stale.start()
+        current, _ = self.worker_parts(commit=new)
+        current.start()
+        current.close()
+
+    def test_the_api_host_without_a_runtime_dsn_starts_no_transport_and_keeps_no_stale_record(self):
+        self.api_records("a" * 40)
+        started = []
+
+        async def transport(*_args, **_kwargs):
+            started.append(1)
+
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"QP_GIT_COMMIT": "b" * 40, "QP_RUNTIME_DSN": ""}), \
+                mock.patch.object(api_server, "run_api_transport_server", side_effect=transport), \
+                mock.patch("sys.stderr", err), redirect_stdout(io.StringIO()):
+            code = api_server.main([])
+        self.assertEqual(api_server.EXIT_RUNTIME_NOT_CONFIGURED, code)
+        self.assertEqual([], started)
+        self.assertIn("runtime DSN is required", err.getvalue())
+        # Nothing was written, and so nothing can be mistaken for the new commit:
+        # the worker on the new commit is refused until a real API start records it.
+        stale_view, _ = self.worker_parts(commit="b" * 40)
+        with self.assertRaises(WorkerCommitMismatch):
+            stale_view.start()
 
 
 class PostgresWorkerProcesses(DisposableCase, unittest.TestCase):
