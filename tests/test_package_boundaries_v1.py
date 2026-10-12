@@ -94,6 +94,7 @@ OWNERS = {
     "quant_platform.application.composition": "application",
     "quant_platform.application.conformity": "application",
     "quant_platform.application.durable_jobs": "application",
+    "quant_platform.application.runtime_store": "application",
     "quant_platform.application.golden_conformity": "application",
     "quant_platform.application.golden_replay": "application",
     "quant_platform.application.golden_supervised": "application",
