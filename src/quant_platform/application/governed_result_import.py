@@ -204,7 +204,21 @@ class GovernedResultEvidenceStore:
         return self._db.postgres
 
     def assert_admissible(self, bundle: GovernedResultBundleV1) -> None:
-        """Refuse a conflicting accepted bundle before I02 receives a mutation."""
+        """Refuse a conflicting accepted bundle before I02 receives a mutation.
+
+        One consistent read: it runs inside the store's transaction, so it holds
+        the same advisory lock as ``record`` and no import can commit between
+        its reads. Without that, an *identical* import committing between the
+        bundle read and the output read looked like a conflicting one and an
+        idempotent resubmission was refused (#354). The lock is released when
+        this returns, before any registration transaction opens.
+        """
+
+        with self._db.transaction():
+            self._check_admissible(bundle)
+
+    def _check_admissible(self, bundle: GovernedResultBundleV1) -> None:
+        """The check itself; callers hold the store's transaction."""
 
         row = self._db.execute(
             "SELECT payload FROM governed_result_bundles WHERE bundle_digest = ?", (bundle.bundle_digest,)
@@ -228,7 +242,7 @@ class GovernedResultEvidenceStore:
         """Persist one accepted immutable bundle after the I02 owner succeeds."""
 
         with self._db.transaction():
-            self.assert_admissible(bundle)
+            self._check_admissible(bundle)
             existing = self._db.execute(
                 "SELECT 1 FROM governed_result_bundles WHERE bundle_digest = ?", (bundle.bundle_digest,)
             ).fetchone()
