@@ -5,11 +5,20 @@ compares the deck's complete declared input manifest with the server's sealed
 admission, then verifies each result checksum, and only then calls the I02
 Experiment owner.  Its SQLite evidence ledger retains the accepted immutable
 bundle and prevents a later, conflicting result from sharing a Run/output role.
+
+Atomicity (ADR-0068 section 4). With the PostgreSQL evidence ledger, the
+Experiment registration and the bundle evidence commit or roll back together
+in one transaction on one connection: the service refuses to be composed with
+an Experiment repository on a different connection, so a crash between the two
+writes can no longer leave an Experiment without its evidence. The SQLite
+ledger is a hermetic test double only and is explicitly NOT atomic with the
+Experiment repository: there the two writes are separate commits.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
@@ -188,6 +197,12 @@ class GovernedResultEvidenceStore:
                 "FOREIGN KEY (bundle_digest) REFERENCES governed_result_bundles(bundle_digest))"
             )
 
+    @property
+    def is_postgresql(self) -> bool:
+        """Whether this ledger is the production PostgreSQL implementation."""
+
+        return self._db.postgres
+
     def assert_admissible(self, bundle: GovernedResultBundleV1) -> None:
         """Refuse a conflicting accepted bundle before I02 receives a mutation."""
 
@@ -255,6 +270,13 @@ class GovernedResultImportService:
             raise TypeError("evidence_store must be a GovernedResultEvidenceStore")
         if not callable(verify_output_checksum):
             raise TypeError("verify_output_checksum must be callable")
+        if evidence_store.is_postgresql and experiments.connection is not evidence_store.connection:
+            # Fail closed at composition: separate connections would silently
+            # restore the crash window between the two commits.
+            raise ValueError(
+                "PostgreSQL K13 registration requires the Experiment repository "
+                "and the evidence store to share one connection"
+            )
         contracts = tuple(output_contracts)
         if not contracts:
             raise ValueError("output_contracts must not be empty")
@@ -278,19 +300,28 @@ class GovernedResultImportService:
         self._validate_run_compatibility(bundle.run_identity, admission)
         self._validate_outputs(bundle)
         self.evidence_store.assert_admissible(bundle)
-        try:
-            run_record = record_trial_attempt(
-                self.experiments,
-                TrialAttemptResult(
-                    bundle.run_identity,
-                    RunState.SUCCEEDED,
-                    artifact_identities=tuple(output.registration.identity for output in bundle.outputs),
-                ),
-                artifact_registrations=tuple(output.registration for output in bundle.outputs),
-            )
-        except Exception as error:
-            raise GovernedResultImportError("Experiment registration failed") from error
-        self.evidence_store.record(bundle)
+        # PostgreSQL: one transaction on one connection, so the Experiment write
+        # and the evidence record are all-or-nothing and an identical
+        # resubmission after any failure converges. SQLite test double: no
+        # shared transaction exists, so the writes remain two commits.
+        boundary = (
+            self.experiments.caller_owned_transaction()
+            if self.evidence_store.is_postgresql else nullcontext()
+        )
+        with boundary:
+            try:
+                run_record = record_trial_attempt(
+                    self.experiments,
+                    TrialAttemptResult(
+                        bundle.run_identity,
+                        RunState.SUCCEEDED,
+                        artifact_identities=tuple(output.registration.identity for output in bundle.outputs),
+                    ),
+                    artifact_registrations=tuple(output.registration for output in bundle.outputs),
+                )
+            except Exception as error:
+                raise GovernedResultImportError("Experiment registration failed") from error
+            self.evidence_store.record(bundle)
         return GovernedResultRegistration(bundle.bundle_digest, run_record)
 
     def _validate_admission(self, bundle: GovernedResultBundleV1) -> AdmittedInputManifestV1:
