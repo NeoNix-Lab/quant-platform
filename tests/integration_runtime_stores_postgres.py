@@ -825,6 +825,71 @@ class PostgresResults(DisposableCase, k13.GovernedResultImportV1Tests):
         with connect("API") as connection:
             self.assertEqual(1, connection.execute("SELECT count(*) FROM runtime.governed_result_bundles").fetchone()[0])
 
+    def test_the_pre_check_is_one_consistent_read_against_an_identical_commit(self):
+        """#354, deterministically: an identical import cannot commit between the reads."""
+        bundle = self.bundle()
+        winner = GovernedResultEvidenceStore(self.connection())
+        checker_connection = self.connection()
+        checker = GovernedResultEvidenceStore(checker_connection)
+        real_execute = checker._db.execute
+        observed = {"fired": False, "finished_during_check": None, "error": None}
+        racing = threading.Thread(target=lambda: self._record_capturing(winner, bundle, observed))
+
+        def interleaved(statement, parameters=()):
+            result = real_execute(statement, parameters)
+            if not observed["fired"] and "FROM governed_result_bundles" in statement:
+                observed["fired"] = True  # the checker has just seen "no such bundle"
+                racing.start()
+                racing.join(0.5)          # give the identical import every chance to commit
+                observed["finished_during_check"] = not racing.is_alive()
+            return result
+
+        checker._db.execute = interleaved
+        checker.assert_admissible(bundle)  # must not refuse an identical bundle
+        racing.join(30)
+        self.assertTrue(observed["fired"], "the interleaving was not exercised")
+        self.assertFalse(
+            observed["finished_during_check"],
+            "an identical import committed between the pre-check's reads",
+        )
+        self.assertFalse(racing.is_alive())
+        self.assertIsNone(observed["error"])
+        with connect("ADMIN") as admin:
+            self.assertEqual(1, admin.execute(
+                "SELECT count(*) FROM runtime.governed_result_bundles").fetchone()[0])
+
+    @staticmethod
+    def _record_capturing(store, bundle, observed):
+        try:
+            store.record(bundle)
+        except BaseException as error:  # noqa: BLE001 - reported by the test
+            observed["error"] = error
+
+    def test_concurrent_identical_imports_converge_across_many_rounds(self):
+        bundle = self.bundle()
+
+        def run_import(_):
+            with connect("API") as connection:
+                service = GovernedResultImportService(
+                    AdmittedInputStore(connection), ExperimentRepository(connection),
+                    GovernedResultEvidenceStore(connection),
+                    lambda evidence: evidence.content_checksum,
+                    (ResultOutputContractV1("metrics", "metrics", "metrics-v1"),),
+                )
+                return service.import_result(bundle)
+
+        for round_number in range(6):
+            with connect("ADMIN") as admin:
+                admin.execute(
+                    "TRUNCATE runtime.governed_result_bundles, runtime.governed_result_outputs, "
+                    "experiment.studies CASCADE"
+                )
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                results = list(pool.map(run_import, range(6)))
+            with self.subTest(round=round_number):
+                self.assertEqual(1, len(set(results)))
+                self.assertEqual(self.ONE_IMPORT, self.import_counts())
+
     def test_corrupt_bundle_payload_is_refused(self):
         bundle = self.bundle()
         self.evidence.record(bundle)
