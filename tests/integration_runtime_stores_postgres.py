@@ -30,10 +30,13 @@ from quant_platform.application.durable_jobs import (  # noqa: E402
     DurableJobConflict, DurableJobStore, JobState,
 )
 from quant_platform.application.governed_result_import import (  # noqa: E402
-    GovernedResultEvidenceStore, GovernedResultImportService, GovernedResultRefused,
-    ResultOutputContractV1,
+    GovernedResultEvidenceStore, GovernedResultImportError, GovernedResultImportService,
+    GovernedResultRefused, ResultOutputContractV1,
 )
-from quant_platform.experiments import ExperimentRepository  # noqa: E402
+from quant_platform.experiments import ExperimentRepository, RunState  # noqa: E402
+from quant_platform.experiments.accounting import (  # noqa: E402
+    TrialAttemptResult, record_trial_attempt,
+)
 import test_admitted_input_manifest_v1 as k12  # noqa: E402
 import test_durable_job_runtime_v1 as j03  # noqa: E402
 import test_governed_result_import_v1 as k13  # noqa: E402
@@ -141,13 +144,158 @@ class PostgresResults(DisposableCase, k13.GovernedResultImportV1Tests):
     def setUp(self):
         DisposableCase.setUp(self)
         self.admissions = AdmittedInputStore(self.connection())
-        self.evidence = GovernedResultEvidenceStore(self.connection())
-        self.experiments = ExperimentRepository(self.connection(autocommit=False))
+        # ADR-0068 s4 / #332: the Experiment write and the evidence record share
+        # one autocommit connection so that they can be one transaction.
+        self.shared = self.connection()
+        self.evidence = GovernedResultEvidenceStore(self.shared)
+        self.experiments = ExperimentRepository(self.shared)
         self.service = GovernedResultImportService(
             self.admissions, self.experiments, self.evidence,
             lambda evidence: evidence.content_checksum,
             (ResultOutputContractV1("metrics", "metrics", "metrics-v1"),),
         )
+
+    # -- #332: atomic K13 registration (ADR-0068 s4) ---------------------------
+
+    TABLES = (
+        "experiment.run_specs", "experiment.runs", "experiment.artifacts",
+        "runtime.governed_result_bundles", "runtime.governed_result_outputs",
+    )
+    NOTHING = dict.fromkeys(TABLES, 0)
+    ONE_IMPORT = {
+        "experiment.runs": 1, "experiment.artifacts": 1,
+        "runtime.governed_result_bundles": 1, "runtime.governed_result_outputs": 1,
+    }
+
+    def counts(self):
+        """Committed row counts, read through an independent connection."""
+        with connect("ADMIN") as admin:
+            return {
+                name: admin.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
+                for name in self.TABLES
+            }
+
+    def import_counts(self):
+        return {
+            name: count for name, count in self.counts().items()
+            if name != "experiment.run_specs"
+        }
+
+    def inject_after_experiment_write(self, error):
+        """Fail the evidence write: the Experiment write has already happened."""
+        def fault(bundle):
+            raise error
+        self.evidence.record = fault
+
+    def test_fault_between_experiment_and_evidence_leaves_neither_row(self):
+        bundle = self.bundle()
+        self.inject_after_experiment_write(RuntimeError("injected before evidence"))
+        with self.assertRaisesRegex(RuntimeError, "injected before evidence"):
+            self.service.import_result(bundle)
+        self.assertEqual(self.NOTHING, self.counts())
+        # The connection is reusable: the transaction ended, it is not left aborted.
+        self.assertEqual(
+            psycopg.pq.TransactionStatus.IDLE, self.shared.info.transaction_status,
+        )
+
+    def test_fault_after_evidence_write_also_rolls_back_the_experiment(self):
+        bundle = self.bundle()
+        record = self.evidence.record
+
+        def record_then_fail(candidate):
+            record(candidate)
+            raise RuntimeError("injected after evidence")
+
+        self.evidence.record = record_then_fail
+        with self.assertRaisesRegex(RuntimeError, "injected after evidence"):
+            self.service.import_result(bundle)
+        self.assertEqual(self.NOTHING, self.counts())
+
+    def test_fault_inside_the_experiment_write_leaves_no_partial_experiment(self):
+        bundle = self.bundle()
+
+        def fail_artifact(*args, **kwargs):
+            raise RuntimeError("injected artifact failure")
+
+        # By now the run spec and the Run are written and the Run is SUCCEEDED.
+        self.experiments._ensure_artifact = fail_artifact
+        with self.assertRaises(GovernedResultImportError):
+            self.service.import_result(bundle)
+        self.assertEqual(self.NOTHING, self.counts())
+
+    def test_resubmission_after_a_fault_matches_an_uninterrupted_import(self):
+        bundle = self.bundle()
+        self.inject_after_experiment_write(RuntimeError("injected"))
+        with self.assertRaises(RuntimeError):
+            self.service.import_result(bundle)
+        del self.evidence.record  # drop the instance attribute shadowing the method
+        recovered = self.service.import_result(bundle)
+        self.assertEqual(RunState.SUCCEEDED, recovered.run_record.state)
+        self.assertEqual(self.ONE_IMPORT, self.import_counts())
+        after_recovery = self.counts()
+        # Uninterrupted import of the same bundle from an empty state.
+        with connect("ADMIN") as admin:
+            admin.execute(
+                "TRUNCATE runtime.governed_result_bundles, runtime.governed_result_outputs, "
+                "experiment.studies CASCADE"
+            )
+        self.assertEqual(self.NOTHING, self.counts())
+        uninterrupted = self.service.import_result(bundle)
+        self.assertEqual(uninterrupted, recovered)
+        self.assertEqual(after_recovery, self.counts())
+        # An exact resubmission of an accepted bundle stays idempotent.
+        self.assertEqual(recovered, self.service.import_result(bundle))
+        self.assertEqual(after_recovery, self.counts())
+
+    def test_without_a_shared_transaction_the_experiment_survives_the_fault(self):
+        # Control: the pre-#332 composition (separate per-call commits). This is
+        # the crash window the shared transaction closes, and shows the tests
+        # above fail when the transaction boundary is removed.
+        bundle = self.bundle()
+        separate = ExperimentRepository(self.connection(autocommit=False))
+        record_trial_attempt(
+            separate,
+            TrialAttemptResult(
+                bundle.run_identity, RunState.SUCCEEDED,
+                artifact_identities=tuple(o.registration.identity for o in bundle.outputs),
+            ),
+            artifact_registrations=tuple(o.registration for o in bundle.outputs),
+        )
+        # ...the process dies here: no evidence write.
+        counts = self.counts()
+        self.assertEqual(1, counts["experiment.runs"])
+        self.assertEqual(1, counts["experiment.artifacts"])
+        self.assertEqual(0, counts["runtime.governed_result_bundles"])
+
+    def test_postgresql_composition_requires_one_shared_connection(self):
+        other = ExperimentRepository(self.connection(autocommit=False))
+        with self.assertRaisesRegex(ValueError, "share one connection"):
+            GovernedResultImportService(
+                self.admissions, other, self.evidence,
+                lambda evidence: evidence.content_checksum,
+                (ResultOutputContractV1("metrics", "metrics", "metrics-v1"),),
+            )
+
+    def test_concurrent_identical_imports_converge_without_deadlock(self):
+        bundle = self.bundle()
+
+        def run_import(_):
+            connection = connect("API")
+            try:
+                service = GovernedResultImportService(
+                    AdmittedInputStore(connection), ExperimentRepository(connection),
+                    GovernedResultEvidenceStore(connection),
+                    lambda evidence: evidence.content_checksum,
+                    (ResultOutputContractV1("metrics", "metrics", "metrics-v1"),),
+                )
+                return service.import_result(bundle)
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(run_import, range(4)))
+        self.assertEqual(1, len(set(results)))
+        self.assertEqual(self.ONE_IMPORT, self.import_counts())
 
     def test_payload_bytes_and_identities_match_sqlite_and_survive_reconnect(self):
         bundle = self.bundle()
