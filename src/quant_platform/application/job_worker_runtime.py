@@ -18,7 +18,11 @@ handler still producing effects. The worker therefore also holds an
 operating-system lock on a file, which the kernel releases exactly when the
 process dies, so a live process always excludes a successor even after its
 database session is gone. The two are one composite lock; either being
-unavailable refuses the start.
+unavailable refuses the start. The file's name comes from the *server's* own
+identity (cluster system identifier and database OID), never from the DSN, and
+its directory is a fixed system one (or the operator's explicit
+``--lock-dir``), never ``TMPDIR``: workers that reach one database by
+different spellings or environments still contend for one file.
 
 A worker also verifies that it still holds the composite lock before every
 dispatch and stops, fatally, when it does not. An in-flight handler cannot be
@@ -48,16 +52,13 @@ belong to the ``tools/job_worker.py`` host; handlers belong to their own issues.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-import hashlib
 import os
 from pathlib import Path
 import subprocess
-import tempfile
 import threading
 from typing import Any, Protocol
 
 from psycopg import Connection, connect
-from psycopg.conninfo import conninfo_to_dict
 
 from .durable_jobs import DurableJobStore
 from .job_dispatch import JobDispatcher, JobHandlerRegistry
@@ -370,20 +371,52 @@ def deployment_commit(root: Path) -> str:
     return _commit_text(result.stdout.strip())
 
 
-def default_process_lock_path(dsn: str) -> Path:
-    """A per-database lock-file path, so one database has one worker per host.
+def database_fence_identity(connection: Connection) -> str:
+    """The identity of *the database*, asked of the server it is.
 
-    Keyed by the DSN's server identity (never its credentials). Deployments
-    should set ``--lock-file`` to a path under a runtime directory that no
-    temporary-file cleaner touches; the held-check detects an unlinked file.
+    The cluster's system identifier plus the database's own OID. It does not
+    depend on how a DSN spells the server (host name or address, default or
+    explicit port, key/value or URI form, a service file, ``PGHOST``), so every
+    worker of one database derives the same fence name by construction.
     """
 
-    parts = conninfo_to_dict(dsn)
-    identity = "|".join(
-        str(parts.get(key, "")) for key in ("host", "hostaddr", "port", "dbname")
-    )
-    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / f"quant-platform-j03-worker-{digest}.lock"
+    row = connection.execute(
+        "SELECT (SELECT system_identifier FROM pg_control_system()), "
+        "(SELECT oid FROM pg_database WHERE datname = current_database())"
+    ).fetchone()
+    if row is None or row[0] is None or row[1] is None:
+        raise RuntimeError("the database identity is unavailable; refusing to derive a fence")
+    return f"{int(row[0])}-{int(row[1])}"
+
+
+def default_lock_directory() -> Path:
+    """A fixed, system-wide directory for the process-lifetime lock file.
+
+    Deliberately not ``tempfile.gettempdir()``: that follows ``TMPDIR``/``TEMP``
+    and a per-service private ``/tmp``, so two workers could resolve different
+    directories and exclude nothing. There is no fallback: with no suitable
+    directory the worker refuses to start and the operator names one.
+    """
+
+    if os.name == "nt":
+        return Path(os.environ.get("PROGRAMDATA") or r"C:\ProgramData") / "quant-platform" / "locks"
+    for candidate in ("/run/lock", "/var/lock"):
+        if os.path.isdir(candidate) and os.access(candidate, os.W_OK):
+            return Path(candidate)
+    raise RuntimeError("no system lock directory is writable: name one with --lock-dir")
+
+
+def process_lock_path(connection: Connection, directory: str | os.PathLike[str] | None = None) -> Path:
+    """The process-lifetime lock file of this database.
+
+    Name: derived from the server (see :func:`database_fence_identity`).
+    Directory: the explicit one, else :func:`default_lock_directory`. Every
+    worker of one database must see the same directory; that, and a shared
+    filesystem view of it, is the single-host assumption of this fence.
+    """
+
+    base = Path(directory) if directory else default_lock_directory()
+    return base / f"quant-platform-j03-worker-{database_fence_identity(connection)}.lock"
 
 
 def _commit_text(value: Any) -> str:
@@ -415,9 +448,11 @@ __all__ = [
     "WorkerLockHeld",
     "WorkerLockLost",
     "WorkerStartRefused",
-    "default_process_lock_path",
+    "database_fence_identity",
+    "default_lock_directory",
     "deployment_commit",
     "open_runtime_connection",
+    "process_lock_path",
     "record_deployment_commit",
     "recorded_deployment_commit",
 ]

@@ -15,7 +15,8 @@ The lock is two locks: a PostgreSQL session lock and an operating-system file
 lock that the kernel releases only when this process dies. A lost database
 session therefore cannot let a second worker recover and re-run work that this
 process's handler is still performing; the successor starts only after this
-process is gone. Set --lock-file to a path no temporary-file cleaner touches.
+process is gone. The lock file is named after the database (its cluster identity),
+not the DSN, and lives in a fixed system directory (--lock-dir to override).
 
 SIGTERM/SIGINT request a stop: the in-flight handler finishes and its outcome
 is recorded before the process exits. A handler is never interrupted
@@ -46,9 +47,9 @@ from quant_platform.application import (  # noqa: E402
     WorkerCommitMismatch,
     WorkerLockHeld,
     WorkerLockLost,
-    default_process_lock_path,
     deployment_commit,
     open_runtime_connection,
+    process_lock_path,
 )
 
 EXIT_LOCK_HELD = 2
@@ -79,7 +80,7 @@ def run(args: argparse.Namespace, *, stop: threading.Event | None = None) -> int
         # the database session. Both, so a lost session cannot admit a successor
         # while this process is still running a handler.
         lock=CompositeWorkerLock([
-            ProcessLifetimeLock(args.lock_file or default_process_lock_path(args.dsn)),
+            ProcessLifetimeLock(process_lock_path(connection, args.lock_dir or None)),
             PostgresAdvisoryLock(connection),
         ]),
         commit_record=PostgresCommitRecord(connection),
@@ -122,8 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Git commit of this deployment; defaults to QP_GIT_COMMIT, then `git rev-parse HEAD`",
     )
     parser.add_argument(
-        "--lock-file", default=os.environ.get("QP_WORKER_LOCK_FILE", ""),
-        help="process-lifetime lock file; defaults to a per-database file in the temp directory",
+        "--lock-dir", default=os.environ.get("QP_WORKER_LOCK_DIR", ""),
+        help="directory of the process-lifetime lock file (the file name comes from the "
+             "database itself); defaults to the system lock directory, never TMPDIR. "
+             "Every worker of one database must use the same directory.",
     )
     parser.add_argument(
         "--poll-interval", type=float, default=float(os.environ.get("QP_WORKER_POLL_SECONDS", "1.0")),

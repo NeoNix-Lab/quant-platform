@@ -49,7 +49,8 @@ from quant_platform.application.job_dispatch import (  # noqa: E402
 from quant_platform.application.job_worker_runtime import (  # noqa: E402
     WORKER_ADVISORY_LOCK_KEY, CompositeWorkerLock, JobWorker, PostgresAdvisoryLock,
     PostgresCommitRecord, ProcessLifetimeLock, WorkerCommitMismatch, WorkerLockHeld,
-    WorkerLockLost, record_deployment_commit, recorded_deployment_commit,
+    WorkerLockLost, database_fence_identity, process_lock_path, record_deployment_commit,
+    recorded_deployment_commit,
 )
 from quant_platform.experiments import ExperimentRepository, RunState  # noqa: E402
 from quant_platform.experiments.accounting import (  # noqa: E402
@@ -293,24 +294,40 @@ class PostgresWorker(DisposableCase, unittest.TestCase):
 
     # -- review of 52ddf4b: fencing and fail-closed commit record -----------------
 
-    def fenced_worker(self, registry, lock_path):
-        """A worker on its own (terminable) connection, with the two-part lock."""
-        connection = connect("WORKER")
+    def fenced_worker(self, registry, lock_directory, *, dsn=None):
+        """A worker on its own (terminable) connection, with the two-part lock.
+
+        ``dsn`` may spell the server differently from other workers': the lock
+        file is named by the server's own identity, so they still contend.
+        """
+        connection = psycopg.connect(dsn or os.environ["RUNTIME_TEST_WORKER_DSN"], autocommit=True)
         self.addCleanup(connection.close)
         worker = JobWorker(
             store=DurableJobStore(connection), registry=registry,
             lock=CompositeWorkerLock([
-                ProcessLifetimeLock(lock_path), PostgresAdvisoryLock(connection),
+                ProcessLifetimeLock(process_lock_path(connection, lock_directory)),
+                PostgresAdvisoryLock(connection),
             ]),
             commit_record=PostgresCommitRecord(connection), commit=self.COMMIT,
             stop=threading.Event(), poll_interval=0.05,
         )
         return worker, connection
 
-    def lock_file(self):
+    def lock_dir(self):
         directory = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, directory, True)
-        return Path(directory) / "worker.lock"
+        return Path(directory)
+
+    def equivalent_dsns(self):
+        """Three spellings of the worker login's DSN that name the same server."""
+        info = conninfo_to_dict(os.environ["RUNTIME_TEST_WORKER_DSN"])
+        user, password = info["user"], info["password"]
+        host, port, dbname = info["host"], info["port"], info["dbname"]
+        return (
+            os.environ["RUNTIME_TEST_WORKER_DSN"],
+            f"host={host} hostaddr={host} port={port} dbname={dbname} user={user} password={password}",
+            f"postgresql://{user}:{password}@{host}:{port}/{dbname}?connect_timeout=5&application_name=other",
+        )
 
     def wait_until_advisory_lock_is_free(self):
         admin = self.connection("ADMIN")
@@ -342,9 +359,9 @@ class PostgresWorker(DisposableCase, unittest.TestCase):
             job = seed.admit(dispatch.admission(request=request))
             seed.transition(job.job_id, JobState.QUEUED)
             jobs.append(job)
-        lock_path = self.lock_file()
+        lock_directory = self.lock_dir()
 
-        first, first_connection = self.fenced_worker(registry, lock_path)
+        first, first_connection = self.fenced_worker(registry, lock_directory)
         failure = {}
 
         def serve():
@@ -366,7 +383,9 @@ class PostgresWorker(DisposableCase, unittest.TestCase):
         self.wait_until_advisory_lock_is_free()
 
         # A successor must NOT be admitted: the process is alive and still working.
-        second, _ = self.fenced_worker(registry, lock_path)
+        second, _ = self.fenced_worker(
+            registry, lock_directory, dsn=self.equivalent_dsns()[1],
+        )
         with self.assertRaises(WorkerLockHeld):
             second.start()
         self.assertEqual(JobState.RUNNING, seed.get(running[0].job_id).state)
@@ -386,7 +405,9 @@ class PostgresWorker(DisposableCase, unittest.TestCase):
         self.assertEqual(1, len(executions))
         self.assertEqual(JobState.QUEUED, seed.get(other.job_id).state)
 
-        third, _ = self.fenced_worker(registry, lock_path)
+        third, _ = self.fenced_worker(
+            registry, lock_directory, dsn=self.equivalent_dsns()[2],
+        )
         self.assertEqual((running[0].job_id,), third.start())
         self.assertEqual(JobState.RECOVERY_REQUIRED, seed.get(running[0].job_id).state)
         self.assertEqual(JobState.QUEUED, seed.get(other.job_id).state)
@@ -395,7 +416,7 @@ class PostgresWorker(DisposableCase, unittest.TestCase):
 
     def test_an_idle_worker_whose_session_is_terminated_stops_with_lock_lost(self):
         self.api_records()
-        worker, connection = self.fenced_worker(DATA_LOCAL_JOB_REGISTRY, self.lock_file())
+        worker, connection = self.fenced_worker(DATA_LOCAL_JOB_REGISTRY, self.lock_dir())
         worker.start()
         failure = {}
 
@@ -414,6 +435,35 @@ class PostgresWorker(DisposableCase, unittest.TestCase):
         thread.join(15)
         self.assertFalse(thread.is_alive(), "an unconfirmable lock must stop the worker")
         self.assertIsInstance(failure.get("error"), WorkerLockLost)
+
+    def test_equivalent_dsns_share_one_fence_name_and_directory_follows_the_override(self):
+        names, identities = set(), set()
+        for dsn in self.equivalent_dsns():
+            with psycopg.connect(dsn, autocommit=True) as connection:
+                identities.add(database_fence_identity(connection))
+                names.add(process_lock_path(connection, "/shared/locks").name)
+        self.assertEqual(1, len(identities))
+        self.assertEqual(1, len(names))
+        # The identity is the real server's: it matches what the admin session sees.
+        with connect("ADMIN") as admin:
+            self.assertEqual(identities, {database_fence_identity(admin)})
+
+    def test_workers_reaching_one_database_by_different_dsns_exclude_each_other(self):
+        self.api_records()
+        directory = self.lock_dir()
+        workers = [self.fenced_worker(DATA_LOCAL_JOB_REGISTRY, directory, dsn=dsn)[0]
+                   for dsn in self.equivalent_dsns()]
+        workers[0].start()
+        for other in workers[1:]:
+            with self.assertRaises(WorkerLockHeld):
+                other.start()
+        workers[0].close()
+        # Released: a new worker, through yet another spelling, may now start.
+        successor, _ = self.fenced_worker(
+            DATA_LOCAL_JOB_REGISTRY, directory, dsn=self.equivalent_dsns()[1],
+        )
+        successor.start()
+        successor.close()
 
     def test_the_api_host_replaces_a_stale_record_and_a_worker_on_the_old_commit_is_refused(self):
         old, new = "a" * 40, "b" * 40
@@ -468,11 +518,16 @@ class PostgresWorkerProcesses(DisposableCase, unittest.TestCase):
     def setUp(self):
         DisposableCase.setUp(self)
         record_deployment_commit(self.connection("API"), self.COMMIT)
+        self.lock_directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.lock_directory, True)
 
     def spawn(self, *, commit=None):
         env = {
             **os.environ, "QP_RUNTIME_DSN": os.environ["RUNTIME_TEST_WORKER_DSN"],
             "QP_GIT_COMMIT": commit or self.COMMIT, "PYTHONUNBUFFERED": "1",
+            # A shared, explicit lock directory: the file name still comes from
+            # the database, so spawned workers contend for one file.
+            "QP_WORKER_LOCK_DIR": self.lock_directory,
         }
         process = subprocess.Popen(
             [sys.executable, "-u", str(self.HOST), "--poll-interval", "0.2"],

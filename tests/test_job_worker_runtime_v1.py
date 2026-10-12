@@ -45,8 +45,10 @@ from quant_platform.application.job_worker_runtime import (  # noqa: E402
     WorkerCommitMismatch,
     WorkerLockHeld,
     WorkerLockLost,
-    default_process_lock_path,
+    database_fence_identity,
+    default_lock_directory,
     deployment_commit,
+    process_lock_path,
 )
 import api_server  # noqa: E402  (the API host under test)
 import job_worker  # noqa: E402  (the host under test)
@@ -489,14 +491,74 @@ class CompositeWorkerLockTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CompositeWorkerLock([])
 
-    def test_the_default_lock_path_is_per_database_and_ignores_credentials(self) -> None:
-        a = default_process_lock_path("postgresql://u:p1@127.0.0.1:5432/runtime")
-        b = default_process_lock_path("postgresql://other:secret@127.0.0.1:5432/runtime")
-        c = default_process_lock_path("postgresql://u:p1@127.0.0.1:5433/runtime")
-        d = default_process_lock_path("postgresql://u:p1@127.0.0.1:5432/another")
+
+class FenceIdentityTests(unittest.TestCase):
+    """The fence is named by the database itself, not by how a DSN spells it."""
+
+    class Server:
+        """A connection that answers the identity query like a server would."""
+
+        def __init__(self, system_identifier, database_oid):
+            self.row = (system_identifier, database_oid)
+            self.queries = []
+
+        def execute(self, statement, parameters=()):
+            self.queries.append(statement)
+            return self
+
+        def fetchone(self):
+            return self.row
+
+    def test_the_name_depends_only_on_the_server_identity(self) -> None:
+        directory = Path("/shared/locks")
+        a = process_lock_path(self.Server(7695735687838217780, 16384), directory)
+        b = process_lock_path(self.Server(7695735687838217780, 16384), directory)
+        other_database = process_lock_path(self.Server(7695735687838217780, 16385), directory)
+        other_cluster = process_lock_path(self.Server(1, 16384), directory)
         self.assertEqual(a, b)
-        self.assertEqual(4, len({a, c, d}) + 1)
-        self.assertNotIn("secret", str(a))
+        self.assertEqual(3, len({a, other_database, other_cluster}))
+        self.assertEqual(directory, a.parent)
+        self.assertIn("7695735687838217780-16384", a.name)
+
+    def test_the_identity_is_read_from_the_server_never_from_a_dsn(self) -> None:
+        server = self.Server(5, 6)
+        self.assertEqual("5-6", database_fence_identity(server))
+        (query,) = server.queries
+        self.assertIn("pg_control_system()", query)
+        self.assertIn("current_database()", query)
+        for row in ((None, 6), (5, None)):
+            with self.subTest(row=row):
+                with self.assertRaisesRegex(RuntimeError, "identity is unavailable"):
+                    database_fence_identity(self.Server(*row))
+
+    def test_the_default_directory_ignores_the_temporary_directory_environment(self) -> None:
+        def resolve(**environment):
+            with mock.patch.dict(os.environ, environment):
+                try:
+                    return default_lock_directory()
+                except RuntimeError:
+                    return "unavailable"
+
+        baseline = resolve()
+        self.assertEqual(baseline, resolve(TMPDIR="/somewhere/else", TEMP="/x", TMP="/y"))
+        self.assertEqual(baseline, resolve(TMPDIR=str(ROOT), TEMP=str(ROOT), TMP=str(ROOT)))
+        if baseline != "unavailable":
+            import tempfile as _tempfile
+
+            self.assertNotEqual(Path(_tempfile.gettempdir()), baseline)
+
+    def test_without_a_system_lock_directory_the_default_refuses_instead_of_guessing(self) -> None:
+        if os.name == "nt":
+            self.skipTest("the Windows default is a fixed ProgramData path")
+        with mock.patch("os.path.isdir", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "--lock-dir"):
+                default_lock_directory()
+
+    def test_an_explicit_directory_overrides_only_the_directory(self) -> None:
+        server = self.Server(5, 6)
+        path = process_lock_path(server, "/operator/chosen")
+        self.assertEqual(Path("/operator/chosen"), path.parent)
+        self.assertTrue(path.name.endswith("5-6.lock"))
 
 
 class ApiHostFailsClosedTests(unittest.TestCase):
