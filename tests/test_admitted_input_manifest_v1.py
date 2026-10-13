@@ -103,6 +103,26 @@ class AdmittedInputManifestV1Tests(unittest.TestCase):
         self.assertEqual(sealed.admission_id, delivered.admission_id)
         self.assertEqual(AdmittedInputState.DELIVERED, delivered.state)
 
+    def test_a_reported_delivery_failure_ends_the_attempt_and_retries_the_same_admission(self) -> None:
+        store = self.store()
+        sealed = store.seal(store.admit(manifest()).admission_id)
+
+        with self.assertRaisesRegex(AdmittedInputConflict, "DELIVERY_PENDING"):
+            store.record_delivery_failure(sealed.admission_id, "delivery_interrupted")
+        store.begin_delivery(sealed.admission_id)
+        with self.assertRaises(ValueError):
+            store.record_delivery_failure(sealed.admission_id, " ")
+        failed = store.record_delivery_failure(sealed.admission_id, "content_hash_mismatch:member:1")
+
+        self.assertEqual(AdmittedInputState.DELIVERY_FAILED, failed.state)
+        self.assertEqual("content_hash_mismatch:member:1", failed.delivery_failure_reason)
+        self.assertEqual(sealed.manifest.canonical_payload_v1, failed.manifest.canonical_payload_v1)
+        with self.assertRaisesRegex(AdmittedInputConflict, "DELIVERY_PENDING"):
+            store.record_delivery_failure(sealed.admission_id, "again")
+        retry = store.begin_delivery(sealed.admission_id)
+        self.assertEqual(AdmittedInputState.DELIVERY_PENDING, retry.state)
+        self.assertIsNone(retry.delivery_failure_reason)
+
     def test_expired_admission_cannot_be_revived(self) -> None:
         store = self.store()
         admitted = store.admit(manifest())

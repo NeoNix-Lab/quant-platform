@@ -234,6 +234,25 @@ class AdmittedInputStore:
             )
         return self.get(admission_id)
 
+    def record_delivery_failure(self, admission_id: str, reason: str) -> AdmittedInputRecord:
+        """Record that the deck reports a pending delivery as failed (ADR-0064 section 2).
+
+        Like a digest mismatch, it ends the attempt as ``DELIVERY_FAILED``; the
+        sealed admission is untouched and may be delivered again.
+        """
+
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must be a non-empty string")
+        with self._db.transaction():
+            current = self.get(admission_id)
+            if current.state != AdmittedInputState.DELIVERY_PENDING:
+                raise AdmittedInputConflict("delivery result requires DELIVERY_PENDING")
+            self._db.execute(
+                "UPDATE admitted_inputs SET state = ?, delivery_failure_reason = ? WHERE admission_id = ?",
+                (AdmittedInputState.DELIVERY_FAILED.value, reason, admission_id),
+            )
+        return self.get(admission_id)
+
     def expire(self, admission_id: str) -> AdmittedInputRecord:
         with self._db.transaction():
             current = self.get(admission_id)
