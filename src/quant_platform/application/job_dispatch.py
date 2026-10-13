@@ -151,6 +151,19 @@ class JobHandlerRegistry:
     def __len__(self) -> int:
         return len(self._by_kind)
 
+    def declaration(self, operation_kind: str) -> JobHandler:
+        """What the registry declares for a kind (contract, implementation, safety).
+
+        For composition that must build an admission from a deck's statement of
+        *what* to run, so that the implementation identity and effect-safety
+        class stay server-owned.
+        """
+
+        handler = self._by_kind.get(operation_kind) if isinstance(operation_kind, str) else None
+        if handler is None:
+            raise JobHandlerNotRegistered("operation kind is not declared by the closed registry")
+        return handler
+
     def handler_for(self, admission: JobAdmission) -> JobHandler:
         """The handler that declares exactly this admission, or a refusal."""
 

@@ -12,7 +12,7 @@ authorizes the header's scope before invoking any semantic request decoder.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import asyncio
@@ -41,6 +41,14 @@ from .market_data import (
     RepresentationRef,
 )
 from quant_platform.canonical import canonical_bytes
+
+from .framed_result_transport import (
+    J14_MESSAGE_FAMILY,
+    J14_SCHEMA_VERSION,
+    FramedResultResumeRequest,
+    FramedResultTransferStore,
+    FramedResultTransportError,
+)
 
 
 J02_REQUEST_SCHEMA_VERSION = "j02-request-v1"
@@ -576,13 +584,27 @@ async def handle_api_transport_connection(
     execute: MarketDataExecutor,
     remote_security: RemoteJ02SecurityConfig | None = None,
     family_handlers: FamilyHandlers | None = None,
+    framed_transfers: FramedResultTransferStore | None = None,
+    framed_resume_scopes: Collection[str] | None = None,
 ) -> None:
-    """Serve sequential J02 request/response exchanges on one WebSocket."""
+    """Serve sequential J02 request/response exchanges on one WebSocket.
+
+    ``framed_transfers`` is opt-in and goes with ``framed_resume_scopes`` and
+    ``remote_security``: a J14 ``resume`` message is answered with the exact
+    remaining frames of a retained transfer (ADR-0066 section 3) only to an
+    authenticated peer, only for a transfer admitted under a scope, and only
+    when the peer holds that scope. The peer must hold one of
+    ``framed_resume_scopes`` before the message is decoded at all. Without
+    ``framed_transfers`` a J14 message is an unsupported family, as before.
+    """
 
     session_id = secrets.token_hex(16)
     # Snapshot trusted composition, not a request-controlled route registry.
     routes = dict(family_handlers or {})
     _validate_family_routes(routes, remote_security)
+    resume_scopes = _validate_framed_composition(
+        framed_transfers, framed_resume_scopes, remote_security,
+    )
     if remote_security is not None and not await _authorize_remote_connection(
         websocket, remote_security, session_id=session_id, required_scope=None
     ):
@@ -599,6 +621,18 @@ async def handle_api_transport_connection(
         ):
             return
         parsed = await asyncio.to_thread(_parse_message, message)
+        if (
+            framed_transfers is not None
+            and not parsed.legacy
+            and isinstance(parsed.payload, Mapping)
+            and parsed.payload.get("message_family") == J14_MESSAGE_FAMILY
+        ):
+            if not await _serve_framed_resume(
+                websocket, remote_security, session_id, parsed, framed_transfers,
+                resume_scopes,
+            ):
+                return
+            continue
         handler = None
         if not parsed.legacy:
             # This includes incomplete recovery without a known family. Its
@@ -659,6 +693,8 @@ async def run_api_transport_server(
     stop_event: asyncio.Event | None = None,
     execute: MarketDataExecutor | None = None,
     family_handlers: FamilyHandlers | None = None,
+    framed_transfers: FramedResultTransferStore | None = None,
+    framed_resume_scopes: Collection[str] | None = None,
 ) -> None:
     """Run the J02 server until ``stop_event`` is set."""
 
@@ -666,12 +702,14 @@ async def run_api_transport_server(
     # Invalid composition must stop the process at startup, not surface as a
     # ValueError inside every connection handler.
     _validate_family_routes(dict(family_handlers or {}), remote_security)
+    _validate_framed_composition(framed_transfers, framed_resume_scopes, remote_security)
     executor = execute or compose_market_data_executor(config)
     ssl_context = remote_security.build_server_ssl_context() if remote_security is not None else None
     async with websockets.serve(
         lambda websocket: handle_api_transport_connection(
             websocket, execute=executor, remote_security=remote_security,
-            family_handlers=family_handlers,
+            family_handlers=family_handlers, framed_transfers=framed_transfers,
+            framed_resume_scopes=framed_resume_scopes,
         ),
         config.host,
         config.port,
@@ -682,6 +720,130 @@ async def run_api_transport_server(
             await asyncio.Future()
         else:
             await stop_event.wait()
+
+
+def _encode_message(message: dict[str, Any]) -> str:
+    """Encode one outbound message through the module's single serialization site."""
+
+    return handle_api_transport_message(b"", execute=_unused_executor, _family_response=message)
+
+
+def _unused_executor(_query: Any) -> Any:  # pragma: no cover - never invoked
+    raise AssertionError("a pre-built response is never executed")
+
+
+def _digest_or_none(value: Any) -> str | None:
+    """``value`` if it is a lowercase SHA-256 hex digest, else ``None``."""
+
+    if (
+        isinstance(value, str) and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    ):
+        return value
+    return None
+
+
+def _j14_outcome(outcome: str, transfer_id: Any) -> dict[str, Any]:
+    """A typed transport outcome (ADR-0066 section 3), attributable to a transfer."""
+
+    return {
+        "message_family": J14_MESSAGE_FAMILY,
+        "schema_version": J14_SCHEMA_VERSION,
+        "message_type": "outcome",
+        "outcome": outcome,
+        "transfer_id": _digest_or_none(transfer_id),
+    }
+
+
+def _validate_framed_composition(
+    transfers: FramedResultTransferStore | None,
+    resume_scopes: Collection[str] | None,
+    remote_security: RemoteJ02SecurityConfig | None,
+) -> frozenset[str]:
+    """Fail composition early: J14 retrieval is never an unauthenticated route."""
+
+    if transfers is None:
+        if resume_scopes:
+            raise ValueError("framed_resume_scopes requires framed_transfers")
+        return frozenset()
+    if not isinstance(transfers, FramedResultTransferStore):
+        raise TypeError("framed_transfers must be a FramedResultTransferStore")
+    if remote_security is None:
+        # A retained result is observation data. Like the family routes
+        # (ADR-0069 section 1), it has no meaning on an unauthenticated listener.
+        raise ValueError("framed transfers require remote_security (TLS/mTLS authorization)")
+    if isinstance(resume_scopes, str) or not resume_scopes:
+        raise ValueError("framed transfers require framed_resume_scopes")
+    scopes = frozenset(resume_scopes)
+    if not scopes <= J02_REMOTE_SCOPES:
+        raise ValueError("framed_resume_scopes must be J02 remote scopes")
+    return scopes
+
+
+async def _serve_framed_resume(
+    websocket: Any,
+    security: RemoteJ02SecurityConfig,
+    session_id: str,
+    parsed: _ParsedMessage,
+    transfers: FramedResultTransferStore,
+    resume_scopes: frozenset[str],
+) -> bool:
+    """Answer one J14 resume. ``False`` means the connection was closed (denied).
+
+    Authorization comes strictly before decoding. First the peer must hold a
+    scope a transfer can be admitted under, whatever the message says (so a
+    malformed message gets no more than a well-formed one). Then, from the raw
+    ``transfer_id`` alone, the scope that transfer was admitted under must be
+    held *before* the resume decoder runs. A transfer with no scope, or one
+    outside ``resume_scopes``, is never served over the wire and is
+    indistinguishable from an expired one.
+    """
+
+    if not await _authorize_remote_connection(
+        websocket, security, session_id=session_id, required_scope=None,
+        required_any=resume_scopes, record_allow=False,
+    ):
+        return False
+    payload = parsed.payload
+    retained = transfers.retained_owner(_digest_or_none(payload.get("transfer_id")) or "")
+    owner = retained[0] if retained is not None and retained[0] in resume_scopes else None
+    if owner is not None:
+        # Retrieval needs the scope the transfer was admitted under.
+        allowed = await _authorize_remote_connection(
+            websocket, security, session_id=session_id, required_scope=owner,
+        )
+    else:
+        # Nothing to grant: authenticated-connection evidence only.
+        allowed = await _authorize_remote_connection(
+            websocket, security, session_id=session_id, required_scope=None,
+            unsupported_header=True,
+        )
+    if not allowed:
+        return False
+    request = None
+    outcome: str | None = None
+    if parsed.failed or not parsed.lossless:
+        outcome = "integrity_failure"
+    else:
+        try:
+            request = FramedResultResumeRequest.from_message(payload)
+        except FramedResultTransportError as error:
+            outcome = error.outcome
+    if outcome is None and owner is None:
+        outcome = "transfer_expired"
+    frames = ()
+    if outcome is None:
+        try:
+            frames = transfers.resume(request, owner=owner)
+        except FramedResultTransportError as error:
+            outcome = error.outcome
+    if outcome is not None:
+        transfer_id = request.transfer_id if request is not None else payload.get("transfer_id")
+        await websocket.send(_encode_message(_j14_outcome(outcome, transfer_id)))
+        return True
+    for frame in frames:
+        await websocket.send(_encode_message(frame.message()))
+    return True
 
 
 def _message_text(message: str | bytes) -> str:
@@ -1025,20 +1187,29 @@ async def _authorize_remote_connection(
     required_scope: str | None = J02_MARKET_DATA_READ_SCOPE,
     record_allow: bool = True,
     unsupported_header: bool = False,
+    required_any: frozenset[str] | None = None,
 ) -> bool:
-    """Authorize an already TLS-authenticated peer before JSON decoding starts."""
+    """Authorize an already TLS-authenticated peer before JSON decoding starts.
+
+    ``required_any`` admits a peer holding at least one of the given scopes (a
+    pre-decode admission where the exact scope depends on the message); a
+    denial records that scope when there is exactly one, else no operation scope.
+    """
     ssl_object = websocket.transport.get_extra_info("ssl_object")
     certificate_der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
     fingerprint = certificate_fingerprint(certificate_der) if certificate_der else None
     principal = security.principals_by_fingerprint.get(fingerprint) if fingerprint is not None else None
-    allowed = (
-        principal is not None
-        and not principal.revoked
-        and (
-            required_scope in principal.scopes if required_scope is not None
-            else bool(principal.scopes & J02_REMOTE_SCOPES)
-        )
-    )
+    if required_any is not None and required_scope is None and len(required_any) == 1:
+        (required_scope,) = required_any
+        required_any = None
+    if required_any is not None:
+        scope_held = principal is not None and bool(principal.scopes & required_any)
+        unsupported_header = True  # the evidence names no single operation scope
+    elif required_scope is not None:
+        scope_held = principal is not None and required_scope in principal.scopes
+    else:
+        scope_held = principal is not None and bool(principal.scopes & J02_REMOTE_SCOPES)
+    allowed = principal is not None and not principal.revoked and scope_held
     tls_version = ssl_object.version() if ssl_object is not None else None
     cipher = ssl_object.cipher() if ssl_object is not None else None
     cipher_name = cipher[0] if cipher is not None else None

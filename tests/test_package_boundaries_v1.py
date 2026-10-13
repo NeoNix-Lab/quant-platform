@@ -95,6 +95,7 @@ OWNERS = {
     "quant_platform.application.conformity": "application",
     "quant_platform.application.durable_jobs": "application",
     "quant_platform.application.job_dispatch": "application",
+    "quant_platform.application.job_transport": "application",
     "quant_platform.application.job_worker_runtime": "application",
     "quant_platform.application.runtime_store": "application",
     "quant_platform.application.golden_conformity": "application",

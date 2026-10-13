@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import hashlib
 import json
+import threading
 import time
 from typing import Any
 
@@ -190,34 +191,68 @@ class FramedResultTransferStore:
             raise TypeError("clock must be callable")
         self._config = config
         self._clock = clock
-        self._transfers: dict[str, tuple[float, tuple[FramedResultFrame, ...], int]] = {}
+        # transfer_id -> (expiry, frames, payload bytes, owner). ``owner`` is the
+        # authorization class that may resume it (a J02 scope), or None. The
+        # store is reached from worker threads, so every access holds the lock.
+        self._transfers: dict[str, tuple[float, tuple[FramedResultFrame, ...], int, str | None]] = {}
+        self._lock = threading.RLock()
 
-    def admit(self, *, logical_result_identity: str, result: Any) -> tuple[FramedResultFrame, ...]:
-        self._expire()
-        frames = frame_complete_result(logical_result_identity=logical_result_identity, result=result, config=self._config)
-        transfer_id = frames[0].transfer_id
-        retained = self._transfers.get(transfer_id)
-        if retained is not None:
-            return retained[1]
-        payload_bytes = sum(len(frame.chunk_payload) for frame in frames)
-        if (
-            payload_bytes > self._config.max_retained_payload_bytes
-            or len(self._transfers) >= self._config.max_in_flight_transfers
-            or self._retained_payload_bytes + payload_bytes > self._config.max_retained_payload_bytes
-        ):
-            raise FramedResultTransportError("transfer_refused", transfer_id=transfer_id)
-        self._transfers[transfer_id] = (self._clock() + self._config.retention_seconds, frames, payload_bytes)
-        return frames
+    @property
+    def config(self) -> FramedResultConfig:
+        return self._config
 
-    def resume(self, request: FramedResultResumeRequest) -> tuple[FramedResultFrame, ...]:
-        self._expire()
-        retained = self._transfers.get(request.transfer_id)
-        if retained is None:
-            raise FramedResultTransportError("transfer_expired", transfer_id=request.transfer_id)
-        frames = retained[1]
-        if request.next_verified_chunk_index > len(frames):
-            raise FramedResultTransportError("integrity_failure", transfer_id=request.transfer_id)
-        return frames[request.next_verified_chunk_index :]
+    def admit(
+        self, *, logical_result_identity: str, result: Any, owner: str | None = None,
+    ) -> tuple[FramedResultFrame, ...]:
+        if owner is not None and (not isinstance(owner, str) or not owner):
+            raise ValueError("owner must be a non-empty string when supplied")
+        with self._lock:
+            self._expire()
+            frames = frame_complete_result(
+                logical_result_identity=logical_result_identity, result=result, config=self._config,
+            )
+            transfer_id = frames[0].transfer_id
+            retained = self._transfers.get(transfer_id)
+            if retained is not None:
+                if retained[3] != owner:
+                    # Same bytes under the same logical identity but another
+                    # authorization class: never widen or reassign a transfer.
+                    raise FramedResultTransportError("transfer_refused", transfer_id=transfer_id)
+                return retained[1]
+            payload_bytes = sum(len(frame.chunk_payload) for frame in frames)
+            if (
+                payload_bytes > self._config.max_retained_payload_bytes
+                or len(self._transfers) >= self._config.max_in_flight_transfers
+                or self._retained_payload_bytes + payload_bytes > self._config.max_retained_payload_bytes
+            ):
+                raise FramedResultTransportError("transfer_refused", transfer_id=transfer_id)
+            self._transfers[transfer_id] = (
+                self._clock() + self._config.retention_seconds, frames, payload_bytes, owner,
+            )
+            return frames
+
+    def retained_owner(self, transfer_id: str) -> tuple[str | None] | None:
+        """``(owner,)`` of a retained transfer; ``None`` if unknown or expired."""
+
+        with self._lock:
+            self._expire()
+            retained = self._transfers.get(transfer_id)
+            return None if retained is None else (retained[3],)
+
+    def resume(
+        self, request: FramedResultResumeRequest, *, owner: str | None = None,
+    ) -> tuple[FramedResultFrame, ...]:
+        with self._lock:
+            self._expire()
+            retained = self._transfers.get(request.transfer_id)
+            # An owned transfer is not resumable by another class, and says only
+            # what an expired one says: it must not confirm that it exists.
+            if retained is None or retained[3] != owner:
+                raise FramedResultTransportError("transfer_expired", transfer_id=request.transfer_id)
+            frames = retained[1]
+            if request.next_verified_chunk_index > len(frames):
+                raise FramedResultTransportError("integrity_failure", transfer_id=request.transfer_id)
+            return frames[request.next_verified_chunk_index :]
 
     @property
     def _retained_payload_bytes(self) -> int:

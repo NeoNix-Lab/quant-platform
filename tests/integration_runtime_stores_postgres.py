@@ -9,7 +9,7 @@ dgk331_disposable. Existing J03/K12/K13 test methods are reused unchanged.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from dataclasses import replace
 import json
 import os
@@ -59,6 +59,7 @@ from quant_platform.experiments.accounting import (  # noqa: E402
 import test_admitted_input_manifest_v1 as k12  # noqa: E402
 import test_durable_job_runtime_v1 as j03  # noqa: E402
 import test_job_dispatch_v1 as dispatch  # noqa: E402
+import test_job_transport_v1 as job_transport  # noqa: E402
 import api_server  # noqa: E402  (tools/api_server.py: the API host's commit record)
 import test_governed_result_import_v1 as k13  # noqa: E402
 
@@ -620,6 +621,47 @@ class PostgresWorkerProcesses(DisposableCase, unittest.TestCase):
         time.sleep(1.0)  # the running worker must not redispatch it
         self.assertEqual(JobState.RECOVERY_REQUIRED, store.get(job.job_id).state)
         self.assertEqual(attempts, store.attempts(job.job_id))
+
+
+class PostgresJobTransport(DisposableCase, job_transport.JobTransportV1Tests):
+    """#340: the j02-job-v1 contract on the runtime schema with the real roles.
+
+    The family runs as the API login (admission, status, cancel); the worker
+    under it is the real #335 lifecycle as the worker login, with the real
+    two-part lock.
+    """
+
+    def open_store(self):
+        return DurableJobStore(self.connection("API"))
+
+    def provider(self):
+        @contextmanager
+        def session():
+            connection = connect("API")
+            try:
+                yield DurableJobStore(connection)
+            finally:
+                connection.close()
+        return session
+
+    def corrupt_payload(self, job_id):
+        with connect("ADMIN") as admin:
+            admin.execute("UPDATE runtime.durable_jobs SET payload = '{}' WHERE job_id = %s", (job_id,))
+
+    def make_worker(self, registry, stop):
+        record_deployment_commit(self.connection("API"), "c" * 40)
+        connection = self.connection("WORKER")
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        return JobWorker(
+            store=DurableJobStore(connection), registry=registry,
+            lock=CompositeWorkerLock([
+                ProcessLifetimeLock(process_lock_path(connection, directory)),
+                PostgresAdvisoryLock(connection),
+            ]),
+            commit_record=PostgresCommitRecord(connection), commit="c" * 40,
+            stop=stop, poll_interval=0.01,
+        )
 
 
 class PostgresInputs(DisposableCase, k12.AdmittedInputManifestV1Tests):

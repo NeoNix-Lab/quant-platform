@@ -118,6 +118,69 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         with self.assertRaisesRegex(FramedResultTransportError, "transfer_refused"):
             admitted.admit(logical_result_identity="result:2", result={"payload": "b"})
 
+    def test_an_owned_transfer_resumes_only_for_its_owner_and_otherwise_looks_expired(self) -> None:
+        # #340: a transfer admitted for a scope is retrievable under that scope
+        # only, and saying "expired" for a mismatch confirms nothing.
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        frames = store.admit(
+            logical_result_identity="result:1", result={"payload": "abcdefgh"}, owner="j02.jobs.read",
+        )
+        request = FramedResultResumeRequest(frames[0].transfer_id, 0)
+        self.assertEqual(("j02.jobs.read",), store.retained_owner(frames[0].transfer_id))
+        self.assertEqual(frames, store.resume(request, owner="j02.jobs.read"))
+        for wrong in (None, "j02.admitted_input.read", "j02.jobs.submit"):
+            with self.subTest(owner=wrong):
+                with self.assertRaisesRegex(FramedResultTransportError, "transfer_expired"):
+                    store.resume(request, owner=wrong)
+        self.assertIsNone(store.retained_owner("0" * 64))
+
+    def test_the_same_bytes_cannot_be_readmitted_for_another_owner(self) -> None:
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        store.admit(logical_result_identity="result:1", result={"p": "abcdefgh"}, owner="a")
+        self.assertEqual(
+            store.admit(logical_result_identity="result:1", result={"p": "abcdefgh"}, owner="a"),
+            store.admit(logical_result_identity="result:1", result={"p": "abcdefgh"}, owner="a"),
+        )
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_refused"):
+            store.admit(logical_result_identity="result:1", result={"p": "abcdefgh"}, owner="b")
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_refused"):
+            store.admit(logical_result_identity="result:1", result={"p": "abcdefgh"})
+        with self.assertRaises(ValueError):
+            store.admit(logical_result_identity="result:2", result={"p": "x"}, owner="")
+
+    def test_an_unowned_transfer_keeps_its_previous_behavior(self) -> None:
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        frames = store.admit(logical_result_identity="result:1", result={"payload": "abcdefgh"})
+        self.assertEqual((None,), store.retained_owner(frames[0].transfer_id))
+        self.assertEqual(frames[1:], store.resume(FramedResultResumeRequest(frames[0].transfer_id, 1)))
+        self.assertEqual(4, store.config.frame_payload_bytes)
+
+    def test_concurrent_admission_and_resume_are_consistent(self) -> None:
+        import threading
+
+        store = FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=8, max_in_flight_transfers=64)
+        )
+        errors = []
+
+        def work(index):
+            try:
+                frames = store.admit(
+                    logical_result_identity=f"result:{index % 8}", result={"n": index % 8, "p": "x" * 40},
+                    owner="scope",
+                )
+                for frame in frames:
+                    store.resume(FramedResultResumeRequest(frame.transfer_id, 0), owner="scope")
+            except BaseException as error:  # noqa: BLE001
+                errors.append(error)
+
+        threads = [threading.Thread(target=work, args=(n,)) for n in range(64)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual([], errors)
+
 
 if __name__ == "__main__":
     unittest.main()
