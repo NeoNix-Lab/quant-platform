@@ -1030,6 +1030,39 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             document = await self.fetch(descriptor)
             self.assertEqual(descriptor["content_hash"], document["content_hash"])
 
+    async def test_a_reservation_that_expires_while_the_transition_waits_publishes_nothing(self) -> None:
+        now = [0.0]
+        self.transfers = FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=FRAME_BYTES, retention_seconds=10),
+            clock=lambda: now[0],
+        )
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        begin = AdmittedInputStore.begin_delivery
+        waited = []
+
+        def slow_transition(store, admitted_id):
+            if not waited:
+                waited.append(True)
+                now[0] += 60.0  # the store lock was held for longer than retention
+            return begin(store, admitted_id)
+
+        with patch.object(AdmittedInputStore, "begin_delivery", slow_transition):
+            response = await self.call("deliver", {"admission_id": admission_id})
+        # Never "ok" with transfers that are already gone.
+        self.refused(response, "transfer_expired", code="integrity_failure")
+        self.assertEqual({}, dict(self.transfers._transfers))
+        self.assertEqual({}, dict(self.transfers._pending))
+        stored = self.open_store().get(admission_id)
+        self.assertEqual(AdmittedInputState.DELIVERY_FAILED, stored.state)
+        self.assertEqual("transfer_expired", stored.delivery_failure_reason)
+        # It is a failed attempt like any other: the sealed admission delivers again.
+        delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.assertEqual("DELIVERY_PENDING", delivery["state"])
+        for descriptor in delivery["members"]:
+            document = await self.fetch(descriptor)
+            self.assertEqual(descriptor["content_hash"], document["content_hash"])
+
     async def test_a_loser_does_not_withdraw_what_the_winner_published_from_the_same_bytes(self) -> None:
         admitted = await self.admit()
         admission_id = admitted["admission_id"]

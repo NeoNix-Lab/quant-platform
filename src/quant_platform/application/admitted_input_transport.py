@@ -590,7 +590,19 @@ class AdmittedInputTransport:
         # The attempt is recorded: only now are the members published. What the
         # reservation did not create (an earlier or a concurrent delivery's
         # transfers) was never ours to withdraw, and release left it alone.
-        reservation.commit()
+        try:
+            reservation.commit()
+        except FramedResultTransportError as error:
+            # The reservation expired (or a copy was replaced) while the
+            # transition waited: nothing is published and no descriptor is
+            # returned. The attempt that was just recorded is ended honestly, so
+            # that the same sealed admission is delivered again.
+            reservation.release()
+            try:
+                store.record_delivery_failure(admission_id, "transfer_expired")
+            except (AdmittedInputConflict, AdmittedInputExpired):
+                pass  # it has moved on by itself; nothing more to end
+            raise _integrity("transfer_expired") from error
         descriptors = [
             {
                 "member_index": index,

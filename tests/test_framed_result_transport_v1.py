@@ -253,6 +253,97 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         self.assertEqual({}, dict(store._pending))
         reservation.release()  # still safe
 
+    def test_a_stale_reservation_cannot_publish_a_later_copy_of_the_same_transfer(self) -> None:
+        now = [0.0]
+        store = FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=4, retention_seconds=10),
+            clock=lambda: now[0],
+        )
+        first = ("result:1", {"p": "abcdefgh"})
+        second = ("result:2", {"p": "ijklmnop"})
+        stale = store.reserve_many([first], owner="a")
+        transfer_id = stale.frames[0][0].transfer_id
+        now[0] = 11.0  # the stale reservation expires
+        fresh = store.reserve_many([first, second], owner="a")  # recreates the same id
+        second_id = fresh.frames[1][0].transfer_id
+
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_expired"):
+            stale.commit()
+        # Nothing of the new reservation was published by the stale one.
+        self.assertIsNone(store.retained_owner(transfer_id))
+        self.assertIsNone(store.retained_owner(second_id))
+        stale.release()  # and it withdraws nothing of the new copy either
+        self.assertIn(transfer_id, store._transfers)
+        fresh.release()
+        self.assertEqual({}, dict(store._transfers))
+        self.assertEqual({}, dict(store._pending))
+
+        # The same, when the stale reservation had only reused a committed copy.
+        committed = store.admit(logical_result_identity="result:1", result=first[1], owner="a")
+        holder = store.reserve_many([first], owner="a")
+        now[0] = 100.0  # the committed copy expires under it
+        replacement = store.reserve_many([first, second], owner="a")
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_expired"):
+            holder.commit()
+        self.assertIsNone(store.retained_owner(committed[0].transfer_id))
+        replacement.commit()
+        self.assertEqual(("a",), store.retained_owner(committed[0].transfer_id))
+        self.assertEqual(("a",), store.retained_owner(second_id))
+
+    def test_a_reservation_whose_copy_was_replaced_and_published_elsewhere_fails_too(self) -> None:
+        now = [0.0]
+        store = FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=4, retention_seconds=10),
+            clock=lambda: now[0],
+        )
+        item = ("result:1", {"p": "abcdefgh"})
+        stale = store.reserve_many([item], owner="a")
+        now[0] = 11.0
+        # The same bytes are admitted again, and committed, by someone else: a
+        # valid transfer, but not the copy this reservation was holding.
+        replacement = store.admit(logical_result_identity=item[0], result=item[1], owner="a")
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_expired"):
+            stale.commit()
+        self.assertEqual(replacement, store.resume(
+            FramedResultResumeRequest(replacement[0].transfer_id, 0), owner="a"))
+        stale.release()  # and it removes nothing of the replacement
+        self.assertEqual(("a",), store.retained_owner(replacement[0].transfer_id))
+
+    def test_a_commit_is_all_or_nothing_and_retention_runs_from_publication(self) -> None:
+        now = [0.0]
+        store = FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=4, retention_seconds=10),
+            clock=lambda: now[0],
+        )
+        reservation = store.reserve_many(
+            [("result:1", {"p": "abcdefgh"}), ("result:2", {"p": "ijklmnop"})], owner="a",
+        )
+        ids = [frames[0].transfer_id for frames in reservation.frames]
+        now[0] = 9.0
+        reservation.commit()  # still inside its own reservation window
+        now[0] = 15.0  # past the reservation's expiry, inside the published one
+        self.assertEqual(("a",), store.retained_owner(ids[0]))
+        self.assertEqual(("a",), store.retained_owner(ids[1]))
+        now[0] = 19.5
+        self.assertIsNone(store.retained_owner(ids[0]))
+
+        now[0] = 100.0
+        partial = store.reserve_many(
+            [("result:3", {"p": "qrstuvwx"}), ("result:4", {"p": "yzabcdef"})], owner="a",
+        )
+        # One of the two is lost before the commit: neither may be published.
+        lost = partial.frames[1][0].transfer_id
+        del store._transfers[lost]
+        del store._pending[lost]
+        del store._generations[lost]
+        kept = partial.frames[0][0].transfer_id
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_expired"):
+            partial.commit()
+        self.assertIsNone(store.retained_owner(kept))
+        self.assertIn(kept, store._pending)  # still provisional, not published
+        partial.release()
+        self.assertEqual({}, dict(store._transfers))
+
     def test_an_unowned_transfer_keeps_its_previous_behavior(self) -> None:
         store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
         frames = store.admit(logical_result_identity="result:1", result={"payload": "abcdefgh"})
