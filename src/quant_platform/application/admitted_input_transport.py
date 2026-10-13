@@ -603,6 +603,9 @@ class AdmittedInputTransport:
             except (AdmittedInputConflict, AdmittedInputExpired):
                 pass  # it has moved on by itself; nothing more to end
             raise _integrity("transfer_expired") from error
+        except BaseException:
+            reservation.release()
+            raise
         descriptors = [
             {
                 "member_index": index,

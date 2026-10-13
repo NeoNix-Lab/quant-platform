@@ -344,6 +344,58 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         partial.release()
         self.assertEqual({}, dict(store._transfers))
 
+    def test_an_admission_whose_commit_fails_releases_everything_it_reserved(self) -> None:
+        class Racy(FramedResultTransferStore):
+            """Expires the reused member between the reservation and the commit."""
+
+            def __init__(self, *args, always, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.always = always
+                self.fired = 0
+
+            def _commit(self, lease, transfer_ids, seen, held):
+                if self.fired == 0 or self.always:
+                    self.fired += 1
+                    for transfer_id in transfer_ids:
+                        # The first attempt loses a reused, committed member; a
+                        # persistent failure loses the first member every time.
+                        if transfer_id not in held or (self.always and transfer_id == transfer_ids[0]):
+                            # exactly what the store's own expiry removes
+                            self._transfers.pop(transfer_id, None)
+                            self._generations.pop(transfer_id, None)
+                            self._pending.pop(transfer_id, None)
+                return super()._commit(lease, transfer_ids, seen, held)
+
+        config = FramedResultConfig(
+            frame_payload_bytes=4, max_in_flight_transfers=3, max_retained_payload_bytes=64,
+        )
+        reused = ("result:0", {"p": "abcdefgh"})
+        batch = [reused, ("result:1", {"p": "ijklmnop"}), ("result:2", {"p": "qrstuvwx"})]
+
+        # The expiry is transient: the batch is admitted whole on the next try.
+        store = Racy(config, always=False)
+        store.admit(logical_result_identity=reused[0], result=reused[1], owner="a")
+        admitted = store.admit_many(batch, owner="a")
+        self.assertEqual(3, len(admitted))
+        self.assertEqual({}, dict(store._pending))
+        for frames in admitted:
+            self.assertEqual(("a",), store.retained_owner(frames[0].transfer_id))
+
+        # When it keeps failing, nothing of it stays held: no capacity, no slot.
+        store = Racy(config, always=False)
+        store.admit(logical_result_identity=reused[0], result=reused[1], owner="a")
+        store.always = True
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_refused"):
+            store.admit_many(batch, owner="a")
+        self.assertEqual({}, dict(store._pending))
+        self.assertEqual({}, dict(store._transfers))
+        self.assertEqual({}, dict(store._generations))
+        self.assertEqual(0, store._retained_payload_bytes)
+        # The next batch is not refused for capacity that nobody holds.
+        store.always = False
+        store.fired = 1
+        self.assertEqual(3, len(store.admit_many(batch, owner="a")))
+
     def test_an_unowned_transfer_keeps_its_previous_behavior(self) -> None:
         store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
         frames = store.admit(logical_result_identity="result:1", result={"payload": "abcdefgh"})

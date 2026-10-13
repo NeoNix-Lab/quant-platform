@@ -230,9 +230,26 @@ class FramedResultTransferStore:
         """
 
         with self._lock:  # reserve and commit as one step: nothing can intervene
-            reservation = self.reserve_many(items, owner=owner)
-            reservation.commit()
-        return reservation.frames
+            for _ in range(2):
+                reservation = self.reserve_many(items, owner=owner)
+                try:
+                    reservation.commit()
+                except BaseException as error:
+                    # Whatever failed, nothing of this attempt stays held: a
+                    # reservation that is not released occupies capacity until
+                    # its own expiry and refuses the next batch.
+                    reservation.release()
+                    if not (
+                        isinstance(error, FramedResultTransportError)
+                        and error.outcome == "transfer_expired"
+                    ):
+                        raise
+                    # A reused member expired between the reservation and the
+                    # commit. Nothing is left of it, so one more attempt
+                    # recreates it as a new copy.
+                    continue
+                return reservation.frames
+        raise FramedResultTransportError("transfer_refused")
 
     def reserve_many(
         self, items: Sequence[tuple[str, Any]], *, owner: str | None = None,
