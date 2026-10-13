@@ -6,6 +6,7 @@ import base64
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
+import itertools
 import json
 import threading
 import time
@@ -195,6 +196,12 @@ class FramedResultTransferStore:
         # authorization class that may resume it (a J02 scope), or None. The
         # store is reached from worker threads, so every access holds the lock.
         self._transfers: dict[str, tuple[float, tuple[FramedResultFrame, ...], int, str | None]] = {}
+        # transfer_id -> the open reservations that hold it provisionally. A
+        # provisional transfer occupies capacity but is not resumable and is not
+        # visible to anyone until a reservation commits it; releasing the last
+        # one removes it. A committed transfer is never in this map.
+        self._pending: dict[str, set[int]] = {}
+        self._leases = itertools.count(1)
         self._lock = threading.RLock()
 
     @property
@@ -217,10 +224,27 @@ class FramedResultTransferStore:
         Already-retained identical transfers are reused, not duplicated.
         """
 
+        reservation = self.reserve_many(items, owner=owner)
+        reservation.commit()
+        return reservation.frames
+
+    def reserve_many(
+        self, items: Sequence[tuple[str, Any]], *, owner: str | None = None,
+    ) -> "FramedResultReservation":
+        """Hold a batch provisionally, so that publication can follow a decision.
+
+        Capacity is taken now (or the whole batch is refused and nothing is
+        held), but nothing is resumable until :meth:`FramedResultReservation.commit`.
+        :meth:`FramedResultReservation.release` removes exactly what this
+        reservation alone was holding: a transfer that was already committed, or
+        that another reservation holds or has committed, is never touched.
+        """
+
         if owner is not None and (not isinstance(owner, str) or not owner):
             raise ValueError("owner must be a non-empty string when supplied")
         with self._lock:
             self._expire()
+            lease = next(self._leases)
             reused: dict[str, tuple[FramedResultFrame, ...]] = {}
             created: dict[str, tuple[FramedResultFrame, ...]] = {}
             retained_bytes = self._retained_payload_bytes
@@ -256,10 +280,32 @@ class FramedResultTransferStore:
                 self._transfers[transfer_id] = (
                     expiry, frames, sum(len(frame.chunk_payload) for frame in frames), owner,
                 )
-            return tuple(
+                self._pending[transfer_id] = {lease}
+            for transfer_id in reused:
+                holders = self._pending.get(transfer_id)
+                if holders is not None:  # reusing another reservation's provisional hold
+                    holders.add(lease)
+            frames_in_order = tuple(
                 created[transfer_id] if transfer_id in created else reused[transfer_id]
                 for transfer_id in ordered
             )
+            return FramedResultReservation(self, lease, tuple(ordered), frames_in_order)
+
+    def _commit(self, lease: int, transfer_ids: tuple[str, ...]) -> None:
+        with self._lock:
+            for transfer_id in transfer_ids:
+                self._pending.pop(transfer_id, None)
+
+    def _release(self, lease: int, transfer_ids: tuple[str, ...]) -> None:
+        with self._lock:
+            for transfer_id in transfer_ids:
+                holders = self._pending.get(transfer_id)
+                if holders is None or lease not in holders:
+                    continue  # committed, or never ours to remove
+                holders.discard(lease)
+                if not holders:
+                    del self._pending[transfer_id]
+                    self._transfers.pop(transfer_id, None)
 
     def retained_owner(self, transfer_id: str) -> tuple[str | None] | None:
         """``(owner,)`` of a retained transfer; ``None`` if unknown or expired."""
@@ -267,7 +313,9 @@ class FramedResultTransferStore:
         with self._lock:
             self._expire()
             retained = self._transfers.get(transfer_id)
-            return None if retained is None else (retained[3],)
+            if retained is None or transfer_id in self._pending:
+                return None
+            return (retained[3],)
 
     def resume(
         self, request: FramedResultResumeRequest, *, owner: str | None = None,
@@ -276,8 +324,12 @@ class FramedResultTransferStore:
             self._expire()
             retained = self._transfers.get(request.transfer_id)
             # An owned transfer is not resumable by another class, and says only
-            # what an expired one says: it must not confirm that it exists.
-            if retained is None or retained[3] != owner:
+            # what an expired one says: it must not confirm that it exists. A
+            # provisionally held one is not published yet, and says the same.
+            if (
+                retained is None or retained[3] != owner
+                or request.transfer_id in self._pending
+            ):
                 raise FramedResultTransportError("transfer_expired", transfer_id=request.transfer_id)
             frames = retained[1]
             if request.next_verified_chunk_index > len(frames):
@@ -293,6 +345,35 @@ class FramedResultTransferStore:
         for transfer_id, retained in tuple(self._transfers.items()):
             if retained[0] <= now:
                 del self._transfers[transfer_id]
+                self._pending.pop(transfer_id, None)
+
+
+class FramedResultReservation:
+    """A provisional hold on a batch of transfers; see ``reserve_many``."""
+
+    def __init__(
+        self, store: FramedResultTransferStore, lease: int, transfer_ids: tuple[str, ...],
+        frames: tuple[tuple[FramedResultFrame, ...], ...],
+    ) -> None:
+        self._store = store
+        self._lease = lease
+        self._transfer_ids = transfer_ids
+        self.frames = frames
+        self._closed = False
+
+    def commit(self) -> None:
+        """Publish the batch: it becomes retained and resumable. Idempotent."""
+
+        if not self._closed:
+            self._closed = True
+            self._store._commit(self._lease, self._transfer_ids)
+
+    def release(self) -> None:
+        """Withdraw what this reservation alone holds. A no-op after commit."""
+
+        if not self._closed:
+            self._closed = True
+            self._store._release(self._lease, self._transfer_ids)
 
 
 class FramedResultReceiver:
@@ -367,6 +448,7 @@ __all__ = [
     "FramedResultConfig",
     "FramedResultFrame",
     "FramedResultReceiver",
+    "FramedResultReservation",
     "FramedResultResumeRequest",
     "FramedResultTransferStore",
     "FramedResultTransportError",

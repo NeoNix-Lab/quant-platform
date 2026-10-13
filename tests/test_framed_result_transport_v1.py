@@ -194,6 +194,65 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         with self.assertRaises(ValueError):
             store.admit_many([("result:3", {"p": "x"})], owner="")
 
+    def test_a_reservation_is_invisible_until_committed_and_released_cleanly(self) -> None:
+        store = FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=4, max_in_flight_transfers=4)
+        )
+        items = [("result:1", {"p": "abcdefgh"}), ("result:2", {"p": "ijklmnop"})]
+        reservation = store.reserve_many(items, owner="a")
+        transfer_id = reservation.frames[0][0].transfer_id
+        # Capacity is taken, but nothing is retained for anyone to resume.
+        self.assertEqual(2, len(store._transfers))
+        self.assertIsNone(store.retained_owner(transfer_id))
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_expired"):
+            store.resume(FramedResultResumeRequest(transfer_id, 0), owner="a")
+        reservation.release()
+        self.assertEqual({}, dict(store._transfers))
+        self.assertEqual({}, dict(store._pending))
+        reservation.release()  # idempotent
+
+        committed = store.reserve_many(items, owner="a")
+        committed.commit()
+        self.assertEqual(("a",), store.retained_owner(transfer_id))
+        self.assertEqual(committed.frames[0], store.resume(
+            FramedResultResumeRequest(transfer_id, 0), owner="a"))
+        committed.release()  # a no-op once committed: published work is not withdrawn
+        self.assertEqual(2, len(store._transfers))
+
+    def test_releasing_a_reservation_never_removes_what_is_not_solely_its_own(self) -> None:
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        existing = store.admit(logical_result_identity="result:0", result={"p": "abcdefgh"}, owner="a")
+        mine = store.reserve_many(
+            [("result:0", {"p": "abcdefgh"}), ("result:1", {"p": "ijklmnop"})], owner="a",
+        )
+        other = store.reserve_many([("result:1", {"p": "ijklmnop"})], owner="a")
+        shared = mine.frames[1][0].transfer_id
+        mine.release()
+        # The committed one is untouched, and the one the other still holds stays.
+        self.assertEqual(existing, store.resume(
+            FramedResultResumeRequest(existing[0].transfer_id, 0), owner="a"))
+        self.assertIn(shared, store._transfers)
+        other.commit()
+        self.assertEqual(("a",), store.retained_owner(shared))
+        # The last holder going away is what removes a provisional transfer.
+        solo = store.reserve_many([("result:2", {"p": "qrstuvwx"})], owner="a")
+        solo_id = solo.frames[0][0].transfer_id
+        solo.release()
+        self.assertNotIn(solo_id, store._transfers)
+
+    def test_an_expired_provisional_transfer_is_forgotten(self) -> None:
+        now = [0.0]
+        store = FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=4, retention_seconds=10),
+            clock=lambda: now[0],
+        )
+        reservation = store.reserve_many([("result:1", {"p": "abcdefgh"})], owner="a")
+        now[0] = 11.0
+        self.assertIsNone(store.retained_owner(reservation.frames[0][0].transfer_id))
+        self.assertEqual({}, dict(store._transfers))
+        self.assertEqual({}, dict(store._pending))
+        reservation.release()  # still safe
+
     def test_an_unowned_transfer_keeps_its_previous_behavior(self) -> None:
         store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
         frames = store.admit(logical_result_identity="result:1", result={"payload": "abcdefgh"})

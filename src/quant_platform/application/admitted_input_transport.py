@@ -493,12 +493,25 @@ class AdmittedInputTransport:
             raise _integrity("manifest_not_deliverable")
         if [member.content_hash for member in declared] != list(manifest.content_hashes):
             raise _integrity("members_not_in_manifest")
-        named = set(manifest.natural_partition_identities) | set(manifest.logical_input_identities)
-        if any(
-            member.identity not in named or len(member.identity) > MAX_TEXT_LENGTH
-            for member in declared
-        ):
+        if any(len(member.identity) > MAX_TEXT_LENGTH for member in declared):
             raise _integrity("member_identity_not_in_manifest")
+        partitions = manifest.natural_partition_identities
+        if partitions:
+            # The manifest's own pairs: natural partition *i* is content hash
+            # *i* (the DataGateway keeps them aligned, in this order, in the
+            # canonical payload). An identity that is merely *known* to the
+            # manifest, attached to another partition's bytes, is a swap.
+            if len(partitions) != len(manifest.content_hashes):
+                raise _integrity("manifest_not_deliverable")
+            if [member.identity for member in declared] != list(partitions):
+                raise _integrity("member_identity_mismatch")
+        else:
+            # No partition list: logical identities are stored sorted, so the
+            # manifest carries no pairing to check a member against. A single
+            # input identity is the only attribution that is then verifiable.
+            only = manifest.logical_input_identities
+            if len(only) != 1 or any(member.identity != only[0] for member in declared):
+                raise _integrity("member_attribution_unverifiable")
         return declared
 
     def _check_bounds(self, lengths: tuple[int, ...]) -> None:
@@ -555,14 +568,29 @@ class AdmittedInputTransport:
                 },
             ))
         try:
-            # One unit: every member is retained, or the store is left exactly
-            # as it was. A refused delivery never leaves a partial, resumable set.
-            admitted = self._transfers.admit_many(
+            # Held, not published: capacity is taken, or the whole batch is
+            # refused and nothing is held. Nothing is resumable yet.
+            reservation = self._transfers.reserve_many(
                 documents, owner=J02_ADMITTED_INPUT_SCOPE,
             )
         except FramedResultTransportError as error:
             # ADR-0066 section 3: refuse admission rather than retain without bound.
             raise _too_large("transfer_refused") from error
+        try:
+            record = store.begin_delivery(admission_id)
+        except AdmittedInputExpired as error:
+            reservation.release()
+            raise _refusal("admission_expired") from error
+        except AdmittedInputConflict as error:
+            reservation.release()
+            raise _refusal("delivery_not_available") from error
+        except BaseException:
+            reservation.release()
+            raise
+        # The attempt is recorded: only now are the members published. What the
+        # reservation did not create (an earlier or a concurrent delivery's
+        # transfers) was never ours to withdraw, and release left it alone.
+        reservation.commit()
         descriptors = [
             {
                 "member_index": index,
@@ -574,14 +602,8 @@ class AdmittedInputTransport:
                 "payload_sha256": frames[0].payload_sha256,
                 "chunk_count": frames[0].chunk_count,
             }
-            for index, (member, frames) in enumerate(zip(members, admitted))
+            for index, (member, frames) in enumerate(zip(members, reservation.frames))
         ]
-        try:
-            record = store.begin_delivery(admission_id)
-        except AdmittedInputExpired as error:
-            raise _refusal("admission_expired") from error
-        except AdmittedInputConflict as error:
-            raise _refusal("delivery_not_available") from error
         return {
             "admission_id": record.admission_id,
             "manifest_digest": manifest.manifest_digest,

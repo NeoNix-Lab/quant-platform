@@ -875,7 +875,15 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             "an identity the manifest does not name": (declared(lambda m: (
                 member("partition-v1:2099-01-01", hashes(m)[0], 21),
                 member("partition-v1:2024-01-02", hashes(m)[1], 3072),
-            )), "member_identity_not_in_manifest"),
+            )), "member_identity_mismatch"),
+            "known identities exchanged between partitions": (declared(lambda m: (
+                member("partition-v1:2024-01-02", hashes(m)[0], 21),
+                member("partition-v1:2024-01-01", hashes(m)[1], 3072),
+            )), "member_identity_mismatch"),
+            "an identity of the manifest's other fields": (declared(lambda m: (
+                member("dataset-v1:bybit:BTCUSDT", hashes(m)[0], 21),
+                member("dataset-v1:bybit:BTCUSDT", hashes(m)[1], 3072),
+            )), "member_identity_mismatch"),
             "not members": (declared(lambda m: ("a", "b")), "members_unavailable"),
             "an authority that raises": (declared(lambda m: 1 / 0), "members_unavailable"),
         }
@@ -888,6 +896,171 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         # Nothing was sealed by any of them, and an honest authority still seals.
         self.assertEqual("SEALED", (await self.admit())["state"])
         self.assertEqual([], base.read_calls)
+
+    async def test_exchanged_partition_identities_are_refused_at_delivery_too(self) -> None:
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+
+        class Exchanged(Authority):
+            def members(self, manifest):
+                first, second = super().members(manifest)
+                return (
+                    AdmittedInputMember(second.identity, first.content_hash, first.byte_length),
+                    AdmittedInputMember(first.identity, second.content_hash, second.byte_length),
+                )
+
+        response = await self.call(
+            "deliver", {"admission_id": admission_id}, handlers=self.routes(authority=Exchanged()),
+        )
+        self.refused(response, "member_identity_mismatch", code="integrity_failure")
+        self.assertEqual(AdmittedInputState.SEALED, self.state(admission_id))
+        self.assertEqual(0, len(self.transfers._transfers))
+        # What the honest authority delivers is each partition with its own bytes.
+        delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        for index, descriptor in enumerate(delivery["members"]):
+            document = await self.fetch(descriptor)
+            self.assertEqual(f"partition-v1:2024-01-0{index + 1}", document["member_identity"])
+            self.assertEqual(
+                admitted["manifest"]["natural_partition_identities"][index],
+                document["member_identity"],
+            )
+            self.assertEqual(
+                admitted["manifest"]["content_hashes"][index], document["content_hash"],
+            )
+
+    async def test_artifacts_are_attributed_only_when_the_manifest_can_verify_it(self) -> None:
+        class TwoArtifacts(ArtifactAuthority):
+            def manifest(self, request):
+                good = super().manifest(request)
+                return AdmittedInputManifestV1(
+                    logical_input_identities=(
+                        self.ARTIFACT, "feature-artifact-v1:sha256:" + "cd" * 32,
+                    ),
+                    natural_partition_identities=(), schema_identity=None, schema_version=None,
+                    schema_hash=None, manifest_hashes=(), content_hashes=good.content_hashes,
+                    declared_coverage=None, request_identity="request-v1:two", result_identity=None,
+                    definition_identities=(), implementation_identity=None, git_identity=None,
+                    operation_identity=good.operation_identity, profile_identity=None,
+                )
+
+        class Elsewhere(ArtifactAuthority):
+            def members(self, manifest):
+                return tuple(
+                    AdmittedInputMember(
+                        "feature-artifact-v1:sha256:" + "ef" * 32, member.content_hash,
+                        member.byte_length,
+                    )
+                    for member in super().members(manifest)
+                )
+
+        # Two logical identities, sorted in the stored payload: no pairing exists
+        # to check a member against, so none is accepted on the authority's word.
+        response = await self.call(
+            "admit", admit_body(dataset=None, artifact_identities=[ArtifactAuthority.ARTIFACT]),
+            handlers=self.routes(authority=TwoArtifacts()),
+        )
+        self.refused(response, "member_attribution_unverifiable", code="integrity_failure")
+        # One identity: members must name that identity, not another one.
+        response = await self.call(
+            "admit", admit_body(dataset=None, artifact_identities=[ArtifactAuthority.ARTIFACT]),
+            handlers=self.routes(authority=Elsewhere()),
+        )
+        self.refused(response, "member_attribution_unverifiable", code="integrity_failure")
+
+    async def test_a_delivery_that_loses_the_race_publishes_nothing(self) -> None:
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        store_provider = self.provider()
+        authority = self.authority
+        original = authority.read_member
+        fired = []
+
+        def another_operation_starts_and_expires_it(manifest, index):
+            data = original(manifest, index)
+            if index == 1 and not fired:
+                fired.append(True)
+                with store_provider() as store:
+                    store.begin_delivery(admission_id)
+                    store.expire(admission_id)
+            return data
+
+        authority.read_member = another_operation_starts_and_expires_it
+        response = await self.call("deliver", {"admission_id": admission_id})
+        self.refused(response, "admission_expired")
+        self.assertEqual(AdmittedInputState.EXPIRED, self.state(admission_id))
+        self.assertEqual({}, dict(self.transfers._transfers))  # nothing was published
+        self.assertEqual({}, dict(self.transfers._pending))
+
+    async def test_a_lost_race_leaves_earlier_and_concurrent_transfers_alone(self) -> None:
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        authority = self.authority
+        # An earlier attempt published these same members and then failed.
+        first = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.ok(await self.call("acknowledge", {
+            "admission_id": admission_id, "outcome": "failed", "manifest_digest": None,
+            "failure_reason": "delivery_interrupted", "failed_member_index": None,
+        }))
+        earlier = dict(self.transfers._transfers)
+        self.assertEqual(2, len(earlier))
+
+        # A second delivery of the same admission starts while this one reads,
+        # and wins. The loser must withdraw nothing the winner published.
+        inner = AdmittedInputTransport(
+            self.provider(), authority.resolve, authority.members, authority.read_member,
+            transfers=self.transfers,
+        )
+        original = authority.read_member
+        concurrent = []
+
+        def concurrent_winner(manifest, index):
+            data = original(manifest, index)
+            if index == 1 and not concurrent:
+                concurrent.append(inner.execute("deliver", admission_id))
+            return data
+
+        authority.read_member = concurrent_winner
+        response = await self.call("deliver", {"admission_id": admission_id})
+        self.refused(response, "delivery_not_available")
+        (winner,) = concurrent
+        self.assertEqual("DELIVERY_PENDING", winner["state"])
+        self.assertEqual(first["members"], winner["members"])  # the same transfers
+        self.assertEqual(earlier, dict(self.transfers._transfers))  # none added or removed
+        for descriptor in winner["members"]:  # and every one still resumable
+            document = await self.fetch(descriptor)
+            self.assertEqual(descriptor["content_hash"], document["content_hash"])
+
+    async def test_a_loser_does_not_withdraw_what_the_winner_published_from_the_same_bytes(self) -> None:
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        # No earlier attempt: the loser's own reservation is what *created* the
+        # transfers the winner then reuses and publishes, between the loser's
+        # reservation and its state transition.
+        inner = AdmittedInputTransport(
+            self.provider(), self.authority.resolve, self.authority.members,
+            self.authority.read_member, transfers=self.transfers,
+        )
+        begin = AdmittedInputStore.begin_delivery
+        concurrent = []
+
+        started = []
+
+        def winner_first(store, admitted_id):
+            if not started:
+                started.append(True)
+                concurrent.append(inner.execute("deliver", admitted_id))
+            return begin(store, admitted_id)
+
+        with patch.object(AdmittedInputStore, "begin_delivery", winner_first):
+            response = await self.call("deliver", {"admission_id": admission_id})
+        self.refused(response, "delivery_not_available")
+        (winner,) = concurrent
+        self.assertEqual(2, len(self.transfers._transfers))
+        self.assertEqual({}, dict(self.transfers._pending))  # all committed, none held
+        for descriptor in winner["members"]:
+            document = await self.fetch(descriptor)
+            self.assertEqual(descriptor["content_hash"], document["content_hash"])
+        self.assertEqual(AdmittedInputState.DELIVERY_PENDING, self.state(admission_id))
 
     async def test_a_member_whose_length_differs_from_its_declaration_is_never_delivered(self) -> None:
         admitted = await self.admit()
