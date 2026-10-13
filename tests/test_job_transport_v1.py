@@ -8,6 +8,7 @@ PostgreSQL runtime schema and its real roles.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 import json
 from pathlib import Path
@@ -16,7 +17,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -28,6 +29,7 @@ from quant_platform.application.framed_result_transport import (  # noqa: E402
     J14_SCHEMA_VERSION,
     FramedResultConfig,
     FramedResultReceiver,
+    FramedResultResumeRequest,
     FramedResultTransferStore,
 )
 from quant_platform.application.durable_jobs import (  # noqa: E402
@@ -163,7 +165,8 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         return job_family_handlers(self.provider(), registry)
 
     async def exchange(self, operation, request, *, scopes=ALL_SCOPES, registry=None,
-                       request_id="req-1", handlers=None, framed_transfers=None):
+                       request_id="req-1", handlers=None, framed_transfers=None,
+                       framed_resume_scopes=None):
         configuration = security(principal=server.RemoteJ02Principal("deck", frozenset(scopes)))
         configuration.evidence_log._max_events = 32
         socket = Socket([json.dumps({
@@ -173,7 +176,7 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         await server.handle_api_transport_connection(
             socket, execute=MagicMock(), remote_security=configuration,
             family_handlers=handlers or self.routes(registry),
-            framed_transfers=framed_transfers,
+            framed_transfers=framed_transfers, framed_resume_scopes=framed_resume_scopes,
         )
         return socket, configuration
 
@@ -537,7 +540,8 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             self.provider(), registry, result_bodies=resolver, transfers=transfers,
         ), transfers
 
-    async def resume(self, transfers, transfer_id, index=0, *, scopes=ALL_SCOPES, payload=None):
+    async def resume(self, transfers, transfer_id, index=0, *, scopes=ALL_SCOPES, payload=None,
+                     resume_scopes=frozenset({READ})):
         configuration = security(principal=server.RemoteJ02Principal("deck", frozenset(scopes)))
         configuration.evidence_log._max_events = 32
         message = payload if payload is not None else {
@@ -549,8 +553,32 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         await server.handle_api_transport_connection(
             socket, execute=MagicMock(), remote_security=configuration,
             family_handlers=self.routes(), framed_transfers=transfers,
+            framed_resume_scopes=resume_scopes if transfers is not None else None,
         )
         return socket, configuration
+
+    def resume_message(self, transfer_id, **fields):
+        message = {
+            "message_family": J14_MESSAGE_FAMILY, "schema_version": J14_SCHEMA_VERSION,
+            "message_type": "resume", "transfer_id": transfer_id, "next_verified_chunk_index": 0,
+        }
+        message.update(fields)
+        return message
+
+    async def decoder_calls(self, transfers, payloads, *, scopes, resume_scopes=frozenset({READ})):
+        """Run each payload through a connection; return (sockets, decoder call count)."""
+
+        sockets = []
+        with patch.object(
+            FramedResultResumeRequest, "from_message",
+            wraps=FramedResultResumeRequest.from_message,
+        ) as decoder:
+            for payload in payloads:
+                socket, _ = await self.resume(
+                    transfers, None, payload=payload, scopes=scopes, resume_scopes=resume_scopes,
+                )
+                sockets.append(socket)
+        return sockets, decoder.call_count
 
     async def result_with(self, handlers, job_id, **options):
         return await self.call("result", {"job_id": job_id}, handlers=handlers, **options)
@@ -649,6 +677,167 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(READ, configuration.evidence_log.events[-1].requested_scope)
         granted, _ = await self.resume(transfers, entry["transfer_id"], 0, scopes=frozenset({READ}))
         self.assertEqual(entry["chunk_count"], len(granted.responses))
+
+    def malformed_resumes(self, transfer_id):
+        """Every way a resume can be wrong, all naming a transfer that exists."""
+
+        return {
+            "negative index": self.resume_message(transfer_id, next_verified_chunk_index=-1),
+            "string index": self.resume_message(transfer_id, next_verified_chunk_index="0"),
+            "float index": self.resume_message(transfer_id, next_verified_chunk_index=1.5),
+            "missing index": {
+                key: value for key, value in self.resume_message(transfer_id).items()
+                if key != "next_verified_chunk_index"
+            },
+            "wrong schema version": self.resume_message(transfer_id, schema_version="j14-v0"),
+            "wrong message type": self.resume_message(transfer_id, message_type="frame"),
+            "extra nonsense": self.resume_message(transfer_id, next_verified_chunk_index=[0]),
+        }
+
+    async def test_resume_is_authorized_before_it_is_decoded(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-predecode")
+        handlers, transfers = self.with_bodies({"result:sha256:9": self.LARGE})
+        entry = self.ok(await self.result_with(handlers, job.job_id))["bodies"][0]
+        payloads = {
+            "well formed": self.resume_message(entry["transfer_id"]),
+            **self.malformed_resumes(entry["transfer_id"]),
+            "unknown transfer": self.resume_message("0" * 64),
+            "not a digest": self.resume_message("not-a-digest"),
+            "no transfer id": {
+                key: value for key, value in self.resume_message("x").items() if key != "transfer_id"
+            },
+        }
+        # Without any scope a transfer can be admitted under, nothing is decoded
+        # and nothing is answered: a malformed message gets no more than a valid one.
+        sockets, decoded = await self.decoder_calls(
+            transfers, list(payloads.values()), scopes=frozenset({SUBMIT}),
+        )
+        self.assertEqual(0, decoded)
+        for label, socket in zip(payloads, sockets):
+            with self.subTest(label):
+                self.assertEqual([(1008, "policy denied")], socket.close_calls)
+                self.assertEqual([], socket.responses)
+
+    async def test_resume_decoding_waits_for_the_scope_of_the_transfer_it_names(self) -> None:
+        job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-owner-first")
+        handlers, transfers = self.with_bodies({"result:sha256:9": self.LARGE})
+        entry = self.ok(await self.result_with(handlers, job.job_id))["bodies"][0]
+        market = "j02.market_data.read"
+        both = frozenset({READ, market})
+        # This caller holds a resumable scope, just not the one this transfer needs.
+        named = {
+            "well formed": self.resume_message(entry["transfer_id"]),
+            **self.malformed_resumes(entry["transfer_id"]),
+        }
+        sockets, decoded = await self.decoder_calls(
+            transfers, list(named.values()), scopes=frozenset({market}), resume_scopes=both,
+        )
+        self.assertEqual(0, decoded)
+        for label, socket in zip(named, sockets):
+            with self.subTest(label):
+                self.assertEqual([(1008, "policy denied")], socket.close_calls)
+                self.assertEqual([], socket.responses)
+        # With a resumable scope and nothing named that exists, the decoder is
+        # reached and answers with a typed outcome rather than a closed socket.
+        unnamed = [self.resume_message("0" * 64), self.resume_message("not-a-digest")]
+        sockets, decoded = await self.decoder_calls(
+            transfers, unnamed, scopes=frozenset({market}), resume_scopes=both,
+        )
+        self.assertGreater(decoded, 0)
+        for socket in sockets:
+            self.assertEqual([], socket.close_calls)
+            self.assertIn(socket.responses[0]["outcome"], {"transfer_expired", "integrity_failure"})
+        # A denial for a set of scopes names no single operation scope.
+        _, configuration = await self.resume(
+            transfers, entry["transfer_id"], scopes=frozenset({SUBMIT}), resume_scopes=both,
+        )
+        self.assertEqual(
+            server.J02_EVIDENCE_NO_OPERATION_SCOPE, configuration.evidence_log.events[-1].requested_scope,
+        )
+        self.assertEqual("deny", configuration.evidence_log.events[-1].decision)
+
+    async def test_a_transfer_without_a_scope_is_never_served_over_the_wire(self) -> None:
+        transfers = self.transfers()
+        (frame, *_) = transfers.admit(logical_result_identity="result:sha256:9", result=self.LARGE)
+        self.assertEqual((None,), transfers.retained_owner(frame.transfer_id))
+        # An in-process holder of the store can still resume it; the wire cannot.
+        for label, scopes in (
+            ("submit only", frozenset({SUBMIT})),
+            ("read", frozenset({READ})),
+            ("every job scope", ALL_SCOPES),
+        ):
+            with self.subTest(label):
+                socket, _ = await self.resume(transfers, frame.transfer_id, 0, scopes=scopes)
+                frames = [r for r in socket.responses if r.get("message_type") == "frame"]
+                self.assertEqual([], frames)
+                if SUBMIT in scopes and READ not in scopes:
+                    self.assertEqual([(1008, "policy denied")], socket.close_calls)
+                else:
+                    self.assertEqual([], socket.close_calls)
+                    (message,) = socket.responses
+                    self.assertEqual("transfer_expired", message["outcome"])
+                    # Exactly what an unknown transfer says.
+                    unknown, _ = await self.resume(transfers, "0" * 64, 0, scopes=scopes)
+                    self.assertEqual(
+                        {**unknown.responses[0], "transfer_id": frame.transfer_id}, message,
+                    )
+
+    async def test_a_transfer_admitted_for_a_scope_the_connection_does_not_resume_is_expired(self) -> None:
+        transfers = self.transfers()
+        other = "j02.admitted_input.read"
+        (frame, *_) = transfers.admit(
+            logical_result_identity="input:sha256:7", result=self.LARGE, owner=other,
+        )
+        # Holds the owner scope but the connection is not composed to resume it.
+        socket, _ = await self.resume(
+            transfers, frame.transfer_id, 0, scopes=frozenset({READ, other}),
+        )
+        self.assertEqual([], socket.close_calls)
+        self.assertEqual("transfer_expired", socket.responses[0]["outcome"])
+        # Composed for it, the same caller receives it.
+        socket, _ = await self.resume(
+            transfers, frame.transfer_id, 0, scopes=frozenset({other}),
+            resume_scopes=frozenset({other}),
+        )
+        self.assertEqual("frame", socket.responses[0]["message_type"])
+
+    async def test_framed_transfers_are_never_composed_without_authentication(self) -> None:
+        transfers = self.transfers()
+        unauthenticated = Socket([json.dumps(self.resume_message("0" * 64))])
+        with self.assertRaises(ValueError):
+            await server.handle_api_transport_connection(
+                unauthenticated, execute=MagicMock(), remote_security=None,
+                framed_transfers=transfers, framed_resume_scopes=frozenset({READ}),
+            )
+        self.assertEqual([], unauthenticated.responses)  # nothing was served
+        with self.assertRaises(ValueError):
+            await server.run_api_transport_server(
+                server.ApiTransportServerConfig(), stop_event=asyncio.Event(),
+                execute=MagicMock(), framed_transfers=transfers,
+                framed_resume_scopes=frozenset({READ}),
+            )
+        configuration = security(principal=server.RemoteJ02Principal("deck", ALL_SCOPES))
+        for label, scopes in (
+            ("no scopes", None),
+            ("empty scopes", frozenset()),
+            ("a bare string", READ),
+            ("not a J02 scope", frozenset({"admin"})),
+        ):
+            with self.subTest(label), self.assertRaises(ValueError):
+                await server.handle_api_transport_connection(
+                    Socket([]), execute=MagicMock(), remote_security=configuration,
+                    framed_transfers=transfers, framed_resume_scopes=scopes,
+                )
+        with self.assertRaises(ValueError):  # scopes for nothing
+            await server.handle_api_transport_connection(
+                Socket([]), execute=MagicMock(), remote_security=configuration,
+                framed_resume_scopes=frozenset({READ}),
+            )
+        with self.assertRaises(TypeError):
+            await server.handle_api_transport_connection(
+                Socket([]), execute=MagicMock(), remote_security=configuration,
+                framed_transfers=object(), framed_resume_scopes=frozenset({READ}),
+            )
 
     async def test_j14_is_unsupported_unless_the_connection_is_composed_with_a_store(self) -> None:
         socket, _ = await self.resume(None, "0" * 64, 0)
