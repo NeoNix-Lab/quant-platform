@@ -352,8 +352,10 @@ class FramedResultTransportV1Tests(unittest.TestCase):
                 super().__init__(*args, **kwargs)
                 self.always = always
                 self.fired = 0
+                self.commits = 0
 
             def _commit(self, lease, transfer_ids, seen, held):
+                self.commits += 1
                 if self.fired == 0 or self.always:
                     self.fired += 1
                     for transfer_id in transfer_ids:
@@ -375,7 +377,10 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         # The expiry is transient: the batch is admitted whole on the next try.
         store = Racy(config, always=False)
         store.admit(logical_result_identity=reused[0], result=reused[1], owner="a")
+        store.fired = store.commits = 0  # the set-up admission must not use the loss up
         admitted = store.admit_many(batch, owner="a")
+        self.assertEqual(2, store.commits)  # the first commit lost a member, the retry won
+        self.assertEqual(1, store.fired)
         self.assertEqual(3, len(admitted))
         self.assertEqual({}, dict(store._pending))
         for frames in admitted:
@@ -385,6 +390,7 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         store = Racy(config, always=False)
         store.admit(logical_result_identity=reused[0], result=reused[1], owner="a")
         store.always = True
+        store.fired = store.commits = 0
         with self.assertRaisesRegex(FramedResultTransportError, "transfer_refused"):
             store.admit_many(batch, owner="a")
         self.assertEqual({}, dict(store._pending))

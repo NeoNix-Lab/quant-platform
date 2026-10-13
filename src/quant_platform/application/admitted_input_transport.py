@@ -595,13 +595,13 @@ class AdmittedInputTransport:
         except FramedResultTransportError as error:
             # The reservation expired (or a copy was replaced) while the
             # transition waited: nothing is published and no descriptor is
-            # returned. The attempt that was just recorded is ended honestly, so
-            # that the same sealed admission is delivered again.
+            # returned. The attempt is deliberately *not* ended here. K12 keeps
+            # one state per admission and no attempt identity, so a write made
+            # now, after a wait of unknown length, could land on a later attempt
+            # that has since begun and succeeded. Like any lost response, the
+            # pending attempt is ended by the deck's own acknowledgement of a
+            # failure, after which the sealed admission is delivered again.
             reservation.release()
-            try:
-                store.record_delivery_failure(admission_id, "transfer_expired")
-            except (AdmittedInputConflict, AdmittedInputExpired):
-                pass  # it has moved on by itself; nothing more to end
             raise _integrity("transfer_expired") from error
         except BaseException:
             reservation.release()

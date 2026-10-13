@@ -1053,15 +1053,64 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         self.refused(response, "transfer_expired", code="integrity_failure")
         self.assertEqual({}, dict(self.transfers._transfers))
         self.assertEqual({}, dict(self.transfers._pending))
-        stored = self.open_store().get(admission_id)
-        self.assertEqual(AdmittedInputState.DELIVERY_FAILED, stored.state)
-        self.assertEqual("transfer_expired", stored.delivery_failure_reason)
-        # It is a failed attempt like any other: the sealed admission delivers again.
+        # The server does not end the attempt by itself: it is pending, like one
+        # whose response was lost, and the deck ends it with its own failure.
+        self.assertEqual(AdmittedInputState.DELIVERY_PENDING, self.state(admission_id))
+        self.refused(
+            await self.call("deliver", {"admission_id": admission_id}), "delivery_not_available",
+        )
+        self.ok(await self.call("acknowledge", {
+            "admission_id": admission_id, "outcome": "failed", "manifest_digest": None,
+            "failure_reason": "transfer_expired", "failed_member_index": None,
+        }))
+        # It is then a failed attempt like any other: the sealed admission delivers again.
         delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
         self.assertEqual("DELIVERY_PENDING", delivery["state"])
         for descriptor in delivery["members"]:
             document = await self.fetch(descriptor)
             self.assertEqual(descriptor["content_hash"], document["content_hash"])
+
+    async def test_a_late_failure_of_one_attempt_never_ends_the_retry_that_succeeded(self) -> None:
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        inner = AdmittedInputTransport(
+            self.provider(), self.authority.resolve, self.authority.members,
+            self.authority.read_member, transfers=self.transfers,
+        )
+        begin = AdmittedInputStore.begin_delivery
+        retry = []
+        started = []
+
+        def retry_succeeds_before_the_first_attempt_publishes(store, admitted_id):
+            record = begin(store, admitted_id)
+            if not started:
+                started.append(True)
+                # The deck gives up on this attempt and the retry delivers...
+                failure = inner.decode("acknowledge", {
+                    "admission_id": admitted_id, "outcome": "failed", "manifest_digest": None,
+                    "failure_reason": "delivery_interrupted", "failed_member_index": None,
+                })
+                inner.execute("acknowledge", failure)
+                retry.append(inner.execute("deliver", admitted_id))
+                # ...and then this first attempt loses its transfers before it commits.
+                self.transfers._transfers.clear()
+                self.transfers._pending.clear()
+                self.transfers._generations.clear()
+            return record
+
+        with patch.object(AdmittedInputStore, "begin_delivery", retry_succeeds_before_the_first_attempt_publishes):
+            response = await self.call("deliver", {"admission_id": admission_id})
+        # The first attempt fails, and says so...
+        self.refused(response, "transfer_expired", code="integrity_failure")
+        # ...without touching the retry's state: its own acknowledgement still works.
+        self.assertEqual(AdmittedInputState.DELIVERY_PENDING, self.state(admission_id))
+        result = self.ok(await self.call("acknowledge", {
+            "admission_id": admission_id, "outcome": "delivered",
+            "manifest_digest": admitted["manifest_digest"],
+            "failure_reason": None, "failed_member_index": None,
+        }))
+        self.assertEqual("DELIVERED", result["state"])
+        self.assertEqual(AdmittedInputState.DELIVERED, self.state(admission_id))
 
     async def test_a_loser_does_not_withdraw_what_the_winner_published_from_the_same_bytes(self) -> None:
         admitted = await self.admit()
