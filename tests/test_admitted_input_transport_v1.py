@@ -37,10 +37,11 @@ from quant_platform.application.admitted_input_transport import (  # noqa: E402
     J02_ADMITTED_INPUT_RESPONSE_VERSION,
     J02_ADMITTED_INPUT_SCOPE,
     AdmittedInputBounds,
+    AdmittedInputMember,
     AdmittedInputRequest,
-    AdmittedInputResolution,
     AdmittedInputTransport,
     admitted_input_family_handlers,
+    aligned_partition_members,
 )
 from quant_platform.application.framed_result_transport import (  # noqa: E402
     J14_MESSAGE_FAMILY,
@@ -53,6 +54,9 @@ from quant_platform.application.framed_result_transport import (  # noqa: E402
 from quant_platform.application.market_data import (  # noqa: E402
     ConsumerApiError,
     ConsumerErrorCode,
+    ConsumerMarketDataQuery,
+    RepresentationRef,
+    resolve_market_data_request,
 )
 from test_api_transport_families_v1 import Socket  # noqa: E402
 from test_remote_j02_security_v1 import security  # noqa: E402
@@ -82,11 +86,11 @@ def admit_body(**overrides):
 
 
 class Authority:
-    """A server authority test double: resolves a request, and reads members."""
+    """A server authority test double: resolves a request, declares and reads members."""
 
     def __init__(self, members=None):
         # The second member is several J14 frames once base64-wrapped.
-        self.members = list(members) if members is not None else [
+        self.members_bytes = list(members) if members is not None else [
             b"alpha-partition-bytes", bytes(range(256)) * 12,
         ]
         self.resolve_calls: list[AdmittedInputRequest] = []
@@ -101,11 +105,11 @@ class Authority:
         return AdmittedInputManifestV1(
             logical_input_identities=logical,
             natural_partition_identities=tuple(
-                f"partition-v1:2024-01-0{n + 1}" for n in range(len(self.members))
+                f"partition-v1:2024-01-0{n + 1}" for n in range(len(self.members_bytes))
             ),
             schema_identity="trades@1", schema_version="1", schema_hash="schema-sha256:abc",
             manifest_hashes=("manifest-sha256:abc",),
-            content_hashes=tuple(hashlib.sha256(data).hexdigest() for data in self.members),
+            content_hashes=tuple(hashlib.sha256(data).hexdigest() for data in self.members_bytes),
             declared_coverage={"start": "2024-01-01T00:00:00Z", "end": "2024-01-03T00:00:00Z"},
             request_identity="request-v1:alpha", result_identity=None,
             definition_identities=("definition-v1:trades",),
@@ -116,13 +120,41 @@ class Authority:
 
     def resolve(self, request):
         self.resolve_calls.append(request)
-        return AdmittedInputResolution(
-            self.manifest(request), tuple(len(data) for data in self.members),
+        return self.manifest(request)
+
+    def members(self, manifest):
+        return aligned_partition_members(
+            manifest, tuple(len(data) for data in self.members_bytes),
         )
 
     def read_member(self, manifest, index):
         self.read_calls.append(index)
-        return self.tampered.get(index, self.members[index])
+        return self.tampered.get(index, self.members_bytes[index])
+
+
+class ArtifactAuthority(Authority):
+    """An artifact-only manifest: no natural partitions, members declared by the authority."""
+
+    ARTIFACT = "feature-artifact-v1:sha256:" + "ab" * 32
+
+    def manifest(self, request):
+        return AdmittedInputManifestV1(
+            logical_input_identities=(self.ARTIFACT,),
+            natural_partition_identities=(),
+            schema_identity=None, schema_version=None, schema_hash=None,
+            manifest_hashes=(),
+            content_hashes=tuple(hashlib.sha256(data).hexdigest() for data in self.members_bytes),
+            declared_coverage=None, request_identity="request-v1:artifact", result_identity=None,
+            definition_identities=(), implementation_identity=None, git_identity=None,
+            operation_identity=request.operation_identity, profile_identity=None,
+        )
+
+    def members(self, manifest):
+        # The artifact's own output members, identified by the artifact it names.
+        return tuple(
+            AdmittedInputMember(self.ARTIFACT, hashlib.sha256(data).hexdigest(), len(data))
+            for data in self.members_bytes
+        )
 
 
 class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
@@ -155,7 +187,7 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
     def routes(self, authority=None, transfers=None, bounds=AdmittedInputBounds()):
         authority = authority or self.authority
         return admitted_input_family_handlers(
-            self.provider(), authority.resolve, authority.read_member,
+            self.provider(), authority.resolve, authority.members, authority.read_member,
             transfers=transfers or self.transfers, bounds=bounds,
         )
 
@@ -240,11 +272,17 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
 
     def test_composition_is_explicit_and_validated(self) -> None:
         authority = self.authority
-        good = (self.provider(), authority.resolve, authority.read_member)
+        good = (self.provider(), authority.resolve, authority.members, authority.read_member)
         with self.assertRaises(TypeError):
             admitted_input_family_handlers("provider", *good[1:], transfers=self.transfers)
         with self.assertRaises(TypeError):
-            admitted_input_family_handlers(good[0], "resolver", good[2], transfers=self.transfers)
+            admitted_input_family_handlers(
+                good[0], "resolver", good[2], good[3], transfers=self.transfers,
+            )
+        with self.assertRaises(TypeError):
+            admitted_input_family_handlers(
+                good[0], good[1], None, good[3], transfers=self.transfers,
+            )
         with self.assertRaises(TypeError):
             admitted_input_family_handlers(*good, transfers=None)
         with self.assertRaises(TypeError):
@@ -295,6 +333,33 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             result["manifest"]["logical_input_identities"],
         )
 
+    async def test_an_artifact_only_manifest_is_delivered_with_its_declared_members(self) -> None:
+        authority = ArtifactAuthority([b"artifact-output-one", bytes(range(200)) * 9])
+        handlers = self.routes(authority=authority)
+        body = admit_body(dataset=None, artifact_identities=[ArtifactAuthority.ARTIFACT])
+        admitted = self.ok(await self.call("admit", body, handlers=handlers))
+        # The in-process K12 API admits and seals it with no natural partition.
+        self.assertEqual([], admitted["manifest"]["natural_partition_identities"])
+        self.assertEqual("SEALED", admitted["state"])
+        delivery = self.ok(await self.call(
+            "deliver", {"admission_id": admitted["admission_id"]}, handlers=handlers,
+        ))
+        self.assertEqual("DELIVERY_PENDING", delivery["state"])
+        self.assertEqual(2, len(delivery["members"]))
+        for index, descriptor in enumerate(delivery["members"]):
+            with self.subTest(member=index):
+                self.assertEqual(ArtifactAuthority.ARTIFACT, descriptor["member_identity"])
+                self.assertEqual(
+                    f"{ADMITTED_INPUT_MEMBER_SCHEMA}:{admitted['admission_id']}:{index}",
+                    descriptor["logical_result_identity"],
+                )
+                document = await self.fetch(descriptor)
+                data = base64.b64decode(document["bytes"], validate=True)
+                self.assertEqual(authority.members_bytes[index], data)
+                self.assertEqual(
+                    admitted["manifest"]["content_hashes"][index], hashlib.sha256(data).hexdigest(),
+                )
+
     async def test_readmission_is_idempotent_and_never_moves_a_delivery_back(self) -> None:
         first = await self.admit()
         self.assertEqual(first, await self.admit())
@@ -302,6 +367,63 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         again = await self.admit()
         self.assertEqual(first["admission_id"], again["admission_id"])
         self.assertEqual("DELIVERY_PENDING", again["state"])  # not resealed, not reset
+
+    async def test_a_separated_symbol_is_the_same_query_on_the_wire_as_in_process(self) -> None:
+        dataset = admit_body()["dataset"]
+        for instrument in ("BTC/USD", "ETH/USDT", "BTC/USDT:USDT", "BRK.B"):
+            with self.subTest(instrument):
+                canonical = ConsumerMarketDataQuery(
+                    venue="bybit", instrument=instrument,
+                    start="2024-01-01T00:00:00Z", end="2024-01-03T00:00:00Z",
+                    representation=RepresentationRef(kind="trades", version=1),
+                )
+                resolve_market_data_request(canonical)  # the Consumer API accepts it
+                calls = len(self.authority.resolve_calls)
+                self.ok(await self.call(
+                    "admit", admit_body(dataset={**dataset, "instrument": instrument}),
+                ))
+                self.assertEqual(calls + 1, len(self.authority.resolve_calls))
+                self.assertEqual(canonical, self.authority.resolve_calls[-1].dataset)
+
+    async def test_a_symbol_is_not_a_way_to_name_a_path(self) -> None:
+        dataset = admit_body()["dataset"]
+        for instrument in (
+            "/srv/storage/BTCUSD", "BTC/USD/EXTRA", "BTC//USD", "BTC/", "/USD", "../BTC",
+            "BTC/..", "./BTC", "private-export.parquet", "BTC/USD.parquet", "BTC\\USD",
+            "file://BTC/USD", "~/BTC",
+        ):
+            with self.subTest(instrument):
+                self.refused(
+                    await self.call("admit", admit_body(dataset={**dataset, "instrument": instrument})),
+                    "locator_not_accepted",
+                )
+        self.assertEqual([], self.authority.resolve_calls)
+
+    async def test_a_locator_named_definition_field_never_reaches_the_authority(self) -> None:
+        dataset = admit_body()["dataset"]
+
+        def definition(**fields):
+            return admit_body(dataset={
+                **dataset, "representation": {"kind": "trades", "version": 1, "definition": fields},
+            })
+
+        for label, body in {
+            "path": definition(path="private-export.parquet"),
+            "path and root": definition(path="private-export.parquet", storage_root="private-root"),
+            "camel case": definition(filePath="export"),
+            "dashed": definition(**{"catalog-uuid": "x"}),
+            "mount": definition(mount="data"),
+            "file suffix value": definition(source="private-export.parquet"),
+        }.items():
+            with self.subTest(label):
+                self.refused(await self.call("admit", body), "locator_not_accepted")
+        self.assertEqual([], self.authority.resolve_calls)
+        # Names that only *contain* a locator word are semantic, and pass.
+        self.ok(await self.call("admit", definition(profile="default", direction=1, windowed=True)))
+        self.assertEqual(
+            {"profile": "default", "direction": 1, "windowed": True},
+            self.authority.resolve_calls[-1].dataset.representation.definition,
+        )
 
     async def test_a_locator_in_the_request_is_invalid_before_the_authority_runs(self) -> None:
         dataset = admit_body()["dataset"]
@@ -317,6 +439,7 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             "transport url field": admit_body(transport_url="wss://server/export"),
             "locator in dataset": with_dataset(path="/srv/storage"),
             "path as instrument": with_dataset(instrument="../../etc/passwd"),
+            "absolute path as instrument": with_dataset(instrument="/srv/storage/BTCUSDT"),
             "path as venue": with_dataset(venue="/srv/storage/bybit"),
             "windows drive as instrument": with_dataset(instrument="C:\\data\\BTCUSDT"),
             "uuid as instrument": with_dataset(instrument="123e4567-e89b-12d3-a456-426614174000"),
@@ -441,9 +564,9 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
                         "member_index": index,
                         "member_identity": manifest["natural_partition_identities"][index],
                         "content_hash": manifest["content_hashes"][index],
-                        "byte_length": len(self.authority.members[index]),
+                        "byte_length": len(self.authority.members_bytes[index]),
                         "encoding": "base64",
-                        "bytes": base64.b64encode(self.authority.members[index]).decode(),
+                        "bytes": base64.b64encode(self.authority.members_bytes[index]).decode(),
                     },
                     document,
                 )
@@ -483,7 +606,7 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
     async def test_a_member_that_does_not_match_its_manifest_hash_is_never_delivered(self) -> None:
         admitted = await self.admit()
         admission_id = admitted["admission_id"]
-        self.authority.tampered[1] = self.authority.members[1][:-1] + b"\x00"
+        self.authority.tampered[1] = self.authority.members_bytes[1][:-1] + b"\x00"
         response = await self.call("deliver", {"admission_id": admission_id})
         self.refused(response, "member_content_mismatch", code="integrity_failure")
         self.assertEqual(AdmittedInputState.SEALED, self.state(admission_id))  # unchanged
@@ -494,8 +617,8 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
 
     async def test_deliver_is_bounded_by_the_bytes_it_actually_reads(self) -> None:
         admitted = await self.admit()
-        self.authority.members[1] = bytes(range(256)) * 20  # grew since it was admitted
-        self.authority.tampered[1] = self.authority.members[1]
+        self.authority.members_bytes[1] = bytes(range(256)) * 20  # grew since it was admitted
+        self.authority.tampered[1] = self.authority.members_bytes[1]
         response = await self.call(
             "deliver", {"admission_id": admitted["admission_id"]},
             handlers=self.routes(bounds=AdmittedInputBounds(max_member_bytes=3000, max_total_bytes=4000)),
@@ -510,12 +633,18 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         ))
         # Another holder already uses one of the two transfer slots.
         small.admit(logical_result_identity="result:sha256:other", result={"n": 1})
+        before = dict(small._transfers)
         response = await self.call(
             "deliver", {"admission_id": admitted["admission_id"]},
             handlers=self.routes(transfers=small, bounds=AdmittedInputBounds(max_members=2)),
         )
         self.refused(response, "transfer_refused", code="result_too_large")
         self.assertEqual(AdmittedInputState.SEALED, self.state(admitted["admission_id"]))
+        # Nothing of this delivery was retained: no resumable partial set, and the
+        # slot the other holder left free is still free.
+        self.assertEqual(before, dict(small._transfers))
+        self.assertEqual(1, len(small._transfers))
+        small.admit(logical_result_identity="result:sha256:next", result={"n": 2})
 
     # -- acknowledge (AC3) -------------------------------------------------------
 
@@ -719,33 +848,65 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("error", response["status"])
         self.assertEqual("no_coverage", response["error"]["code"])
 
-    async def test_a_manifest_that_cannot_be_delivered_is_refused_before_sealing(self) -> None:
-        class Unaligned(Authority):
-            def manifest(self, request):
-                good = super().manifest(request)
-                return AdmittedInputManifestV1(
-                    logical_input_identities=good.logical_input_identities,
-                    natural_partition_identities=good.natural_partition_identities[:1],
-                    schema_identity="trades@1", schema_version="1", schema_hash="schema-sha256:abc",
-                    manifest_hashes=("manifest-sha256:abc",), content_hashes=good.content_hashes,
-                    declared_coverage=None, request_identity=None, result_identity=None,
-                    definition_identities=(), implementation_identity=None, git_identity=None,
-                    operation_identity="strategy-compose-v1", profile_identity=None,
+    async def test_members_that_are_not_exactly_the_manifests_are_refused_before_sealing(self) -> None:
+        base = Authority()
+
+        def declared(builder):
+            class Declared(Authority):
+                def members(self, manifest):
+                    return builder(manifest)
+            return Declared()
+
+        member = AdmittedInputMember
+        hashes = lambda m: list(m.content_hashes)  # noqa: E731
+        cases = {
+            "none declared": (declared(lambda m: ()), "manifest_not_deliverable"),
+            "a hash the manifest does not hold": (declared(lambda m: (
+                member("partition-v1:2024-01-01", "0" * 64, 1),
+                member("partition-v1:2024-01-02", hashes(m)[1], 3072),
+            )), "members_not_in_manifest"),
+            "a hash left out": (declared(lambda m: (
+                member("partition-v1:2024-01-01", hashes(m)[0], 21),
+            )), "members_not_in_manifest"),
+            "a different order": (declared(lambda m: (
+                member("partition-v1:2024-01-02", hashes(m)[1], 3072),
+                member("partition-v1:2024-01-01", hashes(m)[0], 21),
+            )), "members_not_in_manifest"),
+            "an identity the manifest does not name": (declared(lambda m: (
+                member("partition-v1:2099-01-01", hashes(m)[0], 21),
+                member("partition-v1:2024-01-02", hashes(m)[1], 3072),
+            )), "member_identity_not_in_manifest"),
+            "not members": (declared(lambda m: ("a", "b")), "members_unavailable"),
+            "an authority that raises": (declared(lambda m: 1 / 0), "members_unavailable"),
+        }
+        for label, (authority, reason) in cases.items():
+            with self.subTest(label):
+                response = await self.call(
+                    "admit", admit_body(), handlers=self.routes(authority=authority),
                 )
+                self.refused(response, reason, code="integrity_failure")
+        # Nothing was sealed by any of them, and an honest authority still seals.
+        self.assertEqual("SEALED", (await self.admit())["state"])
+        self.assertEqual([], base.read_calls)
 
-        class Counted(Authority):
-            def resolve(self, request):
-                resolution = super().resolve(request)
-                return AdmittedInputResolution(resolution.manifest, (1,))  # not one per member
+    async def test_a_member_whose_length_differs_from_its_declaration_is_never_delivered(self) -> None:
+        admitted = await self.admit()
+        self.authority.tampered[0] = self.authority.members_bytes[0] + b"!"
+        # Even with a matching hash the declared length is the authority's own
+        # statement, and the bytes read are held to it.
+        class Declared(Authority):
+            def members(self, manifest):
+                return aligned_partition_members(manifest, (len(b"alpha-partition-bytes"), 3072))
 
+        declared = Declared()
+        declared.tampered = {0: self.authority.tampered[0]}
         response = await self.call(
-            "admit", admit_body(), handlers=self.routes(authority=Unaligned()),
+            "deliver", {"admission_id": admitted["admission_id"]},
+            handlers=self.routes(authority=declared),
         )
-        self.refused(response, "manifest_not_deliverable", code="integrity_failure")
-        response = await self.call(
-            "admit", admit_body(), handlers=self.routes(authority=Counted()),
-        )
-        self.refused(response, "resolution_inconsistent", code="integrity_failure")
+        self.refused(response, "member_length_mismatch", code="integrity_failure")
+        self.assertEqual(AdmittedInputState.SEALED, self.state(admitted["admission_id"]))
+        self.assertEqual(0, len(self.transfers._transfers))
 
 
 if __name__ == "__main__":

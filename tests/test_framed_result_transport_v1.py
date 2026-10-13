@@ -148,6 +148,52 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         with self.assertRaises(ValueError):
             store.admit(logical_result_identity="result:2", result={"p": "x"}, owner="")
 
+    def test_a_batch_is_admitted_whole_or_not_at_all(self) -> None:
+        # #341: a caller that needs several transfers together must never leave a
+        # partial, resumable set behind when the store refuses part of it.
+        config = FramedResultConfig(frame_payload_bytes=4, max_in_flight_transfers=3)
+        store = FramedResultTransferStore(config)
+        existing = store.admit(logical_result_identity="result:0", result={"p": "abcdefgh"}, owner="a")
+        before = dict(store._transfers)
+        batch = [(f"result:{n}", {"p": "abcdefgh", "n": n}) for n in (1, 2, 3)]
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_refused"):
+            store.admit_many(batch, owner="a")  # three new ones, two slots left
+        self.assertEqual(before, dict(store._transfers))  # untouched, existing one kept
+        self.assertEqual(existing, store.admit(
+            logical_result_identity="result:0", result={"p": "abcdefgh"}, owner="a",
+        ))
+
+        admitted = store.admit_many(batch[:2], owner="a")
+        self.assertEqual(
+            [frames[0].logical_result_identity for frames in admitted], ["result:1", "result:2"],
+        )  # in the order given
+        self.assertEqual(3, len(store._transfers))
+
+    def test_a_batch_reuses_identical_transfers_and_counts_them_once(self) -> None:
+        store = FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=4, max_in_flight_transfers=2)
+        )
+        first = store.admit(logical_result_identity="result:1", result={"p": "abcdefgh"}, owner="a")
+        admitted = store.admit_many(
+            [("result:1", {"p": "abcdefgh"}), ("result:2", {"p": "x"}), ("result:2", {"p": "x"})],
+            owner="a",
+        )
+        self.assertEqual(first, admitted[0])
+        self.assertEqual(admitted[1], admitted[2])
+        self.assertEqual(2, len(store._transfers))
+
+    def test_a_batch_naming_another_owners_transfer_admits_nothing(self) -> None:
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        store.admit(logical_result_identity="result:1", result={"p": "abcdefgh"}, owner="b")
+        before = dict(store._transfers)
+        with self.assertRaisesRegex(FramedResultTransportError, "transfer_refused"):
+            store.admit_many(
+                [("result:2", {"p": "x"}), ("result:1", {"p": "abcdefgh"})], owner="a",
+            )
+        self.assertEqual(before, dict(store._transfers))
+        with self.assertRaises(ValueError):
+            store.admit_many([("result:3", {"p": "x"})], owner="")
+
     def test_an_unowned_transfer_keeps_its_previous_behavior(self) -> None:
         store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
         frames = store.admit(logical_result_identity="result:1", result={"payload": "abcdefgh"})

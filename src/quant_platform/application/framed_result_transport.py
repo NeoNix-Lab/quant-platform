@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -204,32 +204,62 @@ class FramedResultTransferStore:
     def admit(
         self, *, logical_result_identity: str, result: Any, owner: str | None = None,
     ) -> tuple[FramedResultFrame, ...]:
+        return self.admit_many(((logical_result_identity, result),), owner=owner)[0]
+
+    def admit_many(
+        self, items: Sequence[tuple[str, Any]], *, owner: str | None = None,
+    ) -> tuple[tuple[FramedResultFrame, ...], ...]:
+        """Admit a batch of complete results as one unit: all of them, or none.
+
+        A refusal (:class:`FramedResultTransportError` ``transfer_refused``)
+        leaves the store exactly as it was, so a caller that needs several
+        transfers together never leaves a partial, resumable set behind.
+        Already-retained identical transfers are reused, not duplicated.
+        """
+
         if owner is not None and (not isinstance(owner, str) or not owner):
             raise ValueError("owner must be a non-empty string when supplied")
         with self._lock:
             self._expire()
-            frames = frame_complete_result(
-                logical_result_identity=logical_result_identity, result=result, config=self._config,
-            )
-            transfer_id = frames[0].transfer_id
-            retained = self._transfers.get(transfer_id)
-            if retained is not None:
-                if retained[3] != owner:
-                    # Same bytes under the same logical identity but another
-                    # authorization class: never widen or reassign a transfer.
+            reused: dict[str, tuple[FramedResultFrame, ...]] = {}
+            created: dict[str, tuple[FramedResultFrame, ...]] = {}
+            retained_bytes = self._retained_payload_bytes
+            ordered: list[str] = []
+            for logical_result_identity, result in items:
+                frames = frame_complete_result(
+                    logical_result_identity=logical_result_identity, result=result,
+                    config=self._config,
+                )
+                transfer_id = frames[0].transfer_id
+                ordered.append(transfer_id)
+                retained = self._transfers.get(transfer_id)
+                if retained is not None:
+                    if retained[3] != owner:
+                        # Same bytes under the same logical identity but another
+                        # authorization class: never widen or reassign a transfer.
+                        raise FramedResultTransportError("transfer_refused", transfer_id=transfer_id)
+                    reused[transfer_id] = retained[1]
+                    continue
+                if transfer_id in created:
+                    continue
+                payload_bytes = sum(len(frame.chunk_payload) for frame in frames)
+                if (
+                    payload_bytes > self._config.max_retained_payload_bytes
+                    or len(self._transfers) + len(created) >= self._config.max_in_flight_transfers
+                    or retained_bytes + payload_bytes > self._config.max_retained_payload_bytes
+                ):
                     raise FramedResultTransportError("transfer_refused", transfer_id=transfer_id)
-                return retained[1]
-            payload_bytes = sum(len(frame.chunk_payload) for frame in frames)
-            if (
-                payload_bytes > self._config.max_retained_payload_bytes
-                or len(self._transfers) >= self._config.max_in_flight_transfers
-                or self._retained_payload_bytes + payload_bytes > self._config.max_retained_payload_bytes
-            ):
-                raise FramedResultTransportError("transfer_refused", transfer_id=transfer_id)
-            self._transfers[transfer_id] = (
-                self._clock() + self._config.retention_seconds, frames, payload_bytes, owner,
+                created[transfer_id] = frames
+                retained_bytes += payload_bytes
+            expiry = self._clock() + self._config.retention_seconds
+            for transfer_id, frames in created.items():
+                self._transfers[transfer_id] = (
+                    expiry, frames, sum(len(frame.chunk_payload) for frame in frames), owner,
+                )
+            return tuple(
+                created[transfer_id] if transfer_id in created else reused[transfer_id]
+                for transfer_id in ordered
             )
-            return frames
 
     def retained_owner(self, transfer_id: str) -> tuple[str | None] | None:
         """``(owner,)`` of a retained transfer; ``None`` if unknown or expired."""

@@ -22,23 +22,32 @@ operations, all under ``j02.admitted_input.read`` and all initiated by the deck:
   reported failure (``DELIVERY_FAILED``). A later ``deliver`` is a new attempt
   on the same sealed admission; the manifest never changes.
 
-Members. A manifest has no member list of its own, so this transport enumerates
-them from the two fields the DataGateway keeps aligned: member *i* is
-``natural_partition_identities[i]`` and its bytes must hash (SHA-256, lowercase
-hex, as the catalog's ``content_sha256``) to ``content_hashes[i]``. A manifest
-whose partitions and content hashes are not aligned and non-empty is refused
-before sealing; nothing is delivered that cannot be verified.
+Members. A manifest has no member list of its own (and its logical identities
+are stored sorted, so no positional pairing of identities to hashes can be
+trusted), so the *server's authority* declares them: ``members(manifest)`` names,
+for each content hash the manifest holds, the member identity and byte length.
+The transport accepts a declaration only when it is exactly the manifest's own
+``content_hashes``, in the manifest's order, and every identity is one the
+manifest already names (a natural partition or a logical input identity); it
+never invents a member or a pairing. A member's bytes must hash (SHA-256,
+lowercase hex, as the catalog's ``content_sha256``) to its content hash, and
+:func:`aligned_partition_members` is the DataGateway's own partition/hash
+alignment for the common dataset case. A manifest the authority cannot declare
+completely is refused before sealing; nothing is delivered that cannot be
+verified.
 
-Two server-owned seams are composed, not implemented here (each handler issue
+Three server-owned seams are composed, not implemented here (each handler issue
 supplies its own, like the ``result_bodies`` resolver of ``j02-job-v1``):
 
-- ``resolve(request) -> AdmittedInputResolution``: the semantic request resolved
-  against the server's authority, as the sealed manifest plus the byte length of
-  each member (so oversized requests are refused before sealing);
+- ``resolve(request) -> AdmittedInputManifestV1``: the semantic request resolved
+  against the server's authority;
+- ``members(manifest) -> tuple[AdmittedInputMember, ...]``: the declared members
+  of a sealed manifest, with their byte lengths (so oversized requests are
+  refused before sealing);
 - ``read_member(manifest, index) -> bytes``: the member's exact bytes.
 
-The deck supplies neither a locator nor a length, and neither seam is reachable
-by name from the wire. Composition is explicit and opt-in
+The deck supplies neither a locator nor a length, and no seam is reachable by
+name from the wire. Composition is explicit and opt-in
 (:func:`admitted_input_family_handlers`): no host wires it implicitly, and the
 same ``transfers`` store must be given to the connection handler
 (``framed_transfers=``, ``framed_resume_scopes`` containing
@@ -109,10 +118,19 @@ _UUID = re.compile(
     r"[0-9a-fA-F]{12}|[0-9a-fA-F]{32})(?![0-9a-fA-F])"
 )
 _DRIVE = re.compile(r"^[A-Za-z]:")
-# A field *named* like a locator is a locator request, whatever its value.
-_LOCATOR_KEY_PARTS = (
-    "path", "uuid", "root", "locator", "url", "uri", "dir", "file", "mount", "handle",
-)
+# A field *named* like a locator is a locator request, whatever its value. Names
+# are compared as whole words (``storage_root``, ``filePath``), so ``profile``
+# or ``direction`` are not mistaken for ``file`` or ``dir``.
+_LOCATOR_WORDS = frozenset({
+    "path", "paths", "uuid", "guid", "root", "locator", "url", "uri", "dir",
+    "directory", "folder", "file", "filename", "filepath", "mount", "handle",
+})
+_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+# A value that ends in a data-file extension is a file name, not an identity.
+_DATA_FILE_SUFFIXES = frozenset({
+    "parquet", "csv", "tsv", "json", "jsonl", "ndjson", "gz", "zst", "zip", "tar",
+    "feather", "arrow", "db", "sqlite", "bin", "pkl", "npy", "h5", "hdf5",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,19 +148,39 @@ class AdmittedInputRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class AdmittedInputResolution:
-    """The server authority's answer to one request."""
+class AdmittedInputMember:
+    """One deliverable member of a sealed manifest, as the server's authority declares it."""
 
-    manifest: AdmittedInputManifestV1
-    member_byte_lengths: tuple[int, ...]
+    identity: str
+    content_hash: str
+    byte_length: int
 
     def __post_init__(self) -> None:
-        if not isinstance(self.manifest, AdmittedInputManifestV1):
-            raise TypeError("manifest must be an AdmittedInputManifestV1")
-        lengths = tuple(self.member_byte_lengths)
-        if any(type(value) is not int or value < 0 for value in lengths):
-            raise ValueError("member_byte_lengths must be non-negative integers")
-        object.__setattr__(self, "member_byte_lengths", lengths)
+        if type(self.identity) is not str or not self.identity:
+            raise ValueError("identity must be a non-empty string")
+        if type(self.content_hash) is not str or not _DIGEST.fullmatch(self.content_hash):
+            raise ValueError("content_hash must be lowercase SHA-256 hexadecimal")
+        if type(self.byte_length) is not int or self.byte_length < 0:
+            raise ValueError("byte_length must be a non-negative integer")
+
+
+def aligned_partition_members(
+    manifest: AdmittedInputManifestV1, byte_lengths: tuple[int, ...],
+) -> tuple[AdmittedInputMember, ...]:
+    """Members of a dataset manifest: natural partition *i* with content hash *i*.
+
+    The DataGateway keeps ``natural_partitions`` and ``content_hashes`` aligned
+    (H01 refuses them otherwise); this is that alignment, offered to an
+    authority that holds each partition's length. Misaligned input is refused.
+    """
+
+    identities, hashes = manifest.natural_partition_identities, manifest.content_hashes
+    if len(identities) != len(hashes) or len(hashes) != len(byte_lengths):
+        raise ValueError("partitions, content hashes and byte lengths must align")
+    return tuple(
+        AdmittedInputMember(identity, content_hash, length)
+        for identity, content_hash, length in zip(identities, hashes, byte_lengths)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +198,8 @@ class AdmittedInputBounds:
             raise ValueError("max_member_bytes must not exceed max_total_bytes")
 
 
-AdmittedInputResolver = Callable[[AdmittedInputRequest], AdmittedInputResolution]
+AdmittedInputResolver = Callable[[AdmittedInputRequest], AdmittedInputManifestV1]
+AdmittedInputMembers = Callable[[AdmittedInputManifestV1], tuple[AdmittedInputMember, ...]]
 AdmittedInputMemberReader = Callable[[AdmittedInputManifestV1, int], bytes]
 
 
@@ -191,16 +230,34 @@ def _too_large(reason: str) -> ConsumerApiError:
     )
 
 
-def _text(value: Any) -> str:
+def _is_locator_name(key: Any) -> bool:
+    return any(word.lower() in _LOCATOR_WORDS for word in _WORD.findall(str(key)))
+
+
+def _text(value: Any, *, symbol: bool = False) -> str:
+    """Bounded identity text. ``symbol`` admits one inner ``/`` (``BTC/USD``).
+
+    An instrument is a catalog key that only a lookup interprets, and the
+    Consumer API's own vocabulary has separated symbols; a path never gets
+    that far, because anything locator-shaped is refused here first.
+    """
+
     if (
         type(value) is not str or not value or value != value.strip()
         or len(value) > MAX_TEXT_LENGTH
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
         raise ValueError("bounded non-empty text required")
+    if symbol:
+        parts = value.split("/")
+        slashes_ok = len(parts) <= 2 and all(part and part not in (".", "..") for part in parts)
+    else:
+        slashes_ok = "/" not in value
+    suffix = value.rsplit(".", 1)[-1].lower() if "." in value else ""
     if (
-        "/" in value or "\\" in value or ".." in value or value.startswith("~")
-        or _DRIVE.match(value) or _UUID.search(value)
+        not slashes_ok or "\\" in value or ".." in value or value.startswith("~")
+        or _DRIVE.match(value) or _UUID.search(value) or "://" in value
+        or suffix in _DATA_FILE_SUFFIXES
     ):
         raise _LocatorRejected("a locator is not an identity")
     return value
@@ -212,7 +269,7 @@ def _only(body: Any, required: set[str], optional: set[str] = frozenset()) -> Ma
     keys = set(body)
     unexpected = keys - required - optional
     if unexpected:
-        if any(part in str(key).lower() for key in unexpected for part in _LOCATOR_KEY_PARTS):
+        if any(_is_locator_name(key) for key in unexpected):
             raise _LocatorRejected("a locator field is not accepted")
         raise ValueError("the request object fields do not match")
     if not required <= keys:
@@ -227,6 +284,8 @@ def _definition(value: Any) -> dict[str, Any]:
         raise ValueError("representation definition must be a small object")
     document: dict[str, Any] = {}
     for key, item in value.items():
+        if _is_locator_name(key):
+            raise _LocatorRejected("a locator field is not accepted")
         name = _text(key)
         if type(item) is str:
             item = _text(item)
@@ -243,7 +302,7 @@ def _query(value: Any) -> ConsumerMarketDataQuery:
         raise ValueError("representation version must be an integer")
     return ConsumerMarketDataQuery(
         venue=_text(item["venue"]),
-        instrument=_text(item["instrument"]),
+        instrument=_text(item["instrument"], symbol=True),
         start=_text(item["start"]),
         end=_text(item["end"]),
         representation=RepresentationRef(
@@ -312,18 +371,6 @@ def _acknowledgement(body: Any) -> _Acknowledgement:
     raise ValueError("outcome must be delivered or failed")
 
 
-def _members(manifest: AdmittedInputManifestV1) -> tuple[tuple[str, str], ...]:
-    """``(identity, content hash)`` per member, or a refusal that nothing is deliverable."""
-
-    identities, hashes = manifest.natural_partition_identities, manifest.content_hashes
-    if (
-        not identities or len(identities) != len(hashes)
-        or any(len(identity) > MAX_TEXT_LENGTH for identity in identities)
-    ):
-        raise _integrity("manifest_not_deliverable")
-    return tuple(zip(identities, hashes))
-
-
 def _record_document(record: AdmittedInputRecord) -> dict[str, Any]:
     return {
         "admission_id": record.admission_id,
@@ -341,6 +388,7 @@ class AdmittedInputTransport:
         self,
         store_provider: AdmittedInputStoreProvider,
         resolve: AdmittedInputResolver,
+        members: AdmittedInputMembers,
         read_member: AdmittedInputMemberReader,
         *,
         transfers: FramedResultTransferStore,
@@ -348,8 +396,8 @@ class AdmittedInputTransport:
     ):
         if not callable(store_provider):
             raise TypeError("store_provider must be callable")
-        if not callable(resolve) or not callable(read_member):
-            raise TypeError("resolve and read_member must be callable")
+        if not callable(resolve) or not callable(members) or not callable(read_member):
+            raise TypeError("resolve, members and read_member must be callable")
         if not isinstance(transfers, FramedResultTransferStore):
             raise TypeError("transfers must be a FramedResultTransferStore")
         if not isinstance(bounds, AdmittedInputBounds):
@@ -367,6 +415,7 @@ class AdmittedInputTransport:
             raise ValueError("delivery bounds exceed what the transfer store retains")
         self._provider = store_provider
         self._resolve = resolve
+        self._members = members
         self._read_member = read_member
         self._transfers = transfers
         self._bounds = bounds
@@ -401,20 +450,16 @@ class AdmittedInputTransport:
 
     def _admit(self, store: AdmittedInputStore, request: AdmittedInputRequest) -> dict[str, Any]:
         try:
-            resolution = self._resolve(request)
+            manifest = self._resolve(request)
         except ConsumerApiError:
             raise  # the frozen Consumer API vocabulary passes through unchanged
         except Exception as error:  # The authority's own text is never forwarded.
             raise _integrity("admission_unavailable") from error
-        if not isinstance(resolution, AdmittedInputResolution):
+        if not isinstance(manifest, AdmittedInputManifestV1):
             raise _integrity("admission_unavailable")
-        manifest = resolution.manifest
-        members = _members(manifest)
-        lengths = resolution.member_byte_lengths
-        if len(lengths) != len(members):
-            raise _integrity("resolution_inconsistent")
+        members = self._declared_members(manifest)
         # Refused before sealing: nothing oversized becomes an admission.
-        self._check_bounds(lengths)
+        self._check_bounds(tuple(member.byte_length for member in members))
         try:
             record = store.admit(manifest)
             if record.state is AdmittedInputState.ADMITTED:
@@ -424,6 +469,37 @@ class AdmittedInputTransport:
         except AdmittedInputConflict as error:
             raise _integrity("admission_conflict") from error
         return _record_document(record)
+
+    def _declared_members(self, manifest: AdmittedInputManifestV1) -> tuple[AdmittedInputMember, ...]:
+        """The authority's members, accepted only if they are exactly the manifest's own.
+
+        Complete (every content hash the manifest holds), in the manifest's
+        order, and naming only identities the manifest already carries: the
+        transport adds no member and no pairing of its own.
+        """
+
+        try:
+            declared = self._members(manifest)
+        except ConsumerApiError:
+            raise
+        except Exception as error:  # The authority's own text is never forwarded.
+            raise _integrity("members_unavailable") from error
+        if type(declared) not in (tuple, list) or not all(
+            isinstance(member, AdmittedInputMember) for member in declared
+        ):
+            raise _integrity("members_unavailable")
+        declared = tuple(declared)
+        if not declared:
+            raise _integrity("manifest_not_deliverable")
+        if [member.content_hash for member in declared] != list(manifest.content_hashes):
+            raise _integrity("members_not_in_manifest")
+        named = set(manifest.natural_partition_identities) | set(manifest.logical_input_identities)
+        if any(
+            member.identity not in named or len(member.identity) > MAX_TEXT_LENGTH
+            for member in declared
+        ):
+            raise _integrity("member_identity_not_in_manifest")
+        return declared
 
     def _check_bounds(self, lengths: tuple[int, ...]) -> None:
         bounds = self._bounds
@@ -443,29 +519,62 @@ class AdmittedInputTransport:
         if record.state not in (AdmittedInputState.SEALED, AdmittedInputState.DELIVERY_FAILED):
             raise _refusal("delivery_not_available")
         manifest = record.manifest
-        members = _members(manifest)
+        members = self._declared_members(manifest)
+        if len(members) > self._bounds.max_members:
+            raise _too_large("member_count_exceeded")
         # Everything is read and verified before anything is retained or the
         # state moves: a corrupted member leaves the admission SEALED and no
         # partial input exists.
-        if len(members) > self._bounds.max_members:
-            raise _too_large("member_count_exceeded")
         documents = []
         total = 0
-        for index, (identity, content_hash) in enumerate(members):
+        for index, member in enumerate(members):
             data = self._member_bytes(manifest, index)
-            # The admitted lengths are the server's own estimate; the bytes
-            # actually read are held to the same bounds, member by member.
+            # The declared lengths are the authority's own statement; the bytes
+            # actually read are held to it, and to the same bounds, member by member.
             total += len(data)
             if len(data) > self._bounds.max_member_bytes:
                 raise _too_large("member_bytes_exceeded")
             if total > self._bounds.max_total_bytes:
                 raise _too_large("total_bytes_exceeded")
-            if hashlib.sha256(data).hexdigest() != content_hash:
+            if len(data) != member.byte_length:
+                raise _integrity("member_length_mismatch")
+            if hashlib.sha256(data).hexdigest() != member.content_hash:
                 raise _integrity("member_content_mismatch")
-            documents.append((index, identity, content_hash, data))
+            documents.append((
+                f"{ADMITTED_INPUT_MEMBER_SCHEMA}:{record.admission_id}:{index}",
+                {
+                    "schema_version": ADMITTED_INPUT_MEMBER_SCHEMA,
+                    "admission_id": record.admission_id,
+                    "manifest_digest": manifest.manifest_digest,
+                    "member_index": index,
+                    "member_identity": member.identity,
+                    "content_hash": member.content_hash,
+                    "byte_length": len(data),
+                    "encoding": "base64",
+                    "bytes": base64.b64encode(data).decode("ascii"),
+                },
+            ))
+        try:
+            # One unit: every member is retained, or the store is left exactly
+            # as it was. A refused delivery never leaves a partial, resumable set.
+            admitted = self._transfers.admit_many(
+                documents, owner=J02_ADMITTED_INPUT_SCOPE,
+            )
+        except FramedResultTransportError as error:
+            # ADR-0066 section 3: refuse admission rather than retain without bound.
+            raise _too_large("transfer_refused") from error
         descriptors = [
-            self._retain(record, index, identity, content_hash, data)
-            for index, identity, content_hash, data in documents
+            {
+                "member_index": index,
+                "member_identity": member.identity,
+                "content_hash": member.content_hash,
+                "byte_length": member.byte_length,
+                "logical_result_identity": frames[0].logical_result_identity,
+                "transfer_id": frames[0].transfer_id,
+                "payload_sha256": frames[0].payload_sha256,
+                "chunk_count": frames[0].chunk_count,
+            }
+            for index, (member, frames) in enumerate(zip(members, admitted))
         ]
         try:
             record = store.begin_delivery(admission_id)
@@ -490,41 +599,6 @@ class AdmittedInputTransport:
         if type(data) is not bytes:
             raise _integrity("member_unavailable")
         return data
-
-    def _retain(
-        self, record: AdmittedInputRecord, index: int, identity: str, content_hash: str,
-        data: bytes,
-    ) -> dict[str, Any]:
-        logical_identity = f"{ADMITTED_INPUT_MEMBER_SCHEMA}:{record.admission_id}:{index}"
-        document = {
-            "schema_version": ADMITTED_INPUT_MEMBER_SCHEMA,
-            "admission_id": record.admission_id,
-            "manifest_digest": record.manifest.manifest_digest,
-            "member_index": index,
-            "member_identity": identity,
-            "content_hash": content_hash,
-            "byte_length": len(data),
-            "encoding": "base64",
-            "bytes": base64.b64encode(data).decode("ascii"),
-        }
-        try:
-            first = self._transfers.admit(
-                logical_result_identity=logical_identity, result=document,
-                owner=J02_ADMITTED_INPUT_SCOPE,
-            )[0]
-        except FramedResultTransportError as error:
-            # ADR-0066 section 3: refuse admission rather than retain without bound.
-            raise _too_large("transfer_refused") from error
-        return {
-            "member_index": index,
-            "member_identity": identity,
-            "content_hash": content_hash,
-            "byte_length": len(data),
-            "logical_result_identity": first.logical_result_identity,
-            "transfer_id": first.transfer_id,
-            "payload_sha256": first.payload_sha256,
-            "chunk_count": first.chunk_count,
-        }
 
     def _acknowledge(self, store: AdmittedInputStore, request: _Acknowledgement) -> dict[str, Any]:
         record = self._get(store, request.admission_id)
@@ -567,6 +641,7 @@ class AdmittedInputTransport:
 def admitted_input_family_handlers(
     store_provider: AdmittedInputStoreProvider,
     resolve: AdmittedInputResolver,
+    members: AdmittedInputMembers,
     read_member: AdmittedInputMemberReader,
     *,
     transfers: FramedResultTransferStore,
@@ -575,15 +650,15 @@ def admitted_input_family_handlers(
     """Explicit server composition only; no host and no other family is added.
 
     ``store_provider`` yields a store per request (its own connection, closed on
-    exit). ``resolve`` and ``read_member`` are the server-owned seams described
-    in the module docstring. ``transfers`` retains each delivered member as a J14
+    exit). ``resolve``, ``members`` and ``read_member`` are the server-owned
+    seams described in the module docstring. ``transfers`` retains each delivered member as a J14
     transfer owned by :data:`J02_ADMITTED_INPUT_SCOPE`; the *same* store must be
     given to the connection handler (``framed_transfers=``) with
     ``framed_resume_scopes`` containing that scope, or nothing can be fetched.
     """
 
     transport = AdmittedInputTransport(
-        store_provider, resolve, read_member, transfers=transfers, bounds=bounds,
+        store_provider, resolve, members, read_member, transfers=transfers, bounds=bounds,
     )
     return {
         (J02_ADMITTED_INPUT_FAMILY, J02_ADMITTED_INPUT_REQUEST_VERSION, operation): J02FamilyHandler(
@@ -598,8 +673,8 @@ def admitted_input_family_handlers(
 __all__ = [
     "ADMITTED_INPUT_MEMBER_SCHEMA",
     "AdmittedInputBounds",
+    "AdmittedInputMember",
     "AdmittedInputRequest",
-    "AdmittedInputResolution",
     "AdmittedInputTransport",
     "FAILURE_REASONS",
     "J02_ADMITTED_INPUT_FAMILY",
@@ -608,4 +683,5 @@ __all__ = [
     "J02_ADMITTED_INPUT_RESPONSE_VERSION",
     "J02_ADMITTED_INPUT_SCOPE",
     "admitted_input_family_handlers",
+    "aligned_partition_members",
 ]
