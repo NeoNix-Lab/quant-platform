@@ -855,6 +855,88 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("the result would exceed the maximum J02 response size", error["message"])
         self.assertEqual(0, len(small._transfers))
 
+    def seed_with_references(self, request_identity, references):
+        job, store = self.seed(JobState.RUNNING, request_identity=request_identity)
+        store.transition(job.job_id, JobState.SUCCEEDED, result_references=tuple(references))
+        return job
+
+    OTHER_LARGE = {"rows": [{"n": n, "text": "y" * 20} for n in range(400)]}
+
+    async def test_a_multi_body_result_is_refused_without_publishing_part_of_it(self) -> None:
+        references = ("result:sha256:11", "result:sha256:12")
+        job = self.seed_with_references("request:multi-refused", references)
+        # Room for one transfer only: the second body is refused.
+        small = self.transfers(max_in_flight_transfers=1)
+        handlers, _ = self.with_bodies(
+            {references[0]: self.LARGE, references[1]: self.OTHER_LARGE}, transfers=small,
+        )
+        response = await self.result_with(handlers, job.job_id)
+        self.refused(response, "transfer_refused", code="result_too_large")
+        # Nothing of this call is retained, held or resumable.
+        self.assertEqual({}, dict(small._transfers))
+        self.assertEqual({}, dict(small._pending))
+
+    async def test_a_resolver_failing_on_a_later_reference_leaves_nothing_published(self) -> None:
+        references = ("result:sha256:21", "result:sha256:22", "result:sha256:23")
+        job = self.seed_with_references("request:multi-resolver", references)
+
+        def resolver(reference):
+            if reference == references[2]:
+                raise RuntimeError("/srv/secret/path token=abc")
+            return self.LARGE if reference == references[0] else self.OTHER_LARGE
+
+        for label, failing in (
+            ("resolver raises", resolver),
+            ("not canonical JSON", lambda r: {"value": {1, 2}} if r == references[2] else resolver(r)),
+        ):
+            with self.subTest(label):
+                handlers, transfers = self.with_bodies({}, resolver=failing)
+                response = await self.result_with(handlers, job.job_id)
+                self.assertEqual("integrity_failure", response["error"]["code"])
+                self.assertEqual({}, dict(transfers._transfers))
+                self.assertEqual({}, dict(transfers._pending))
+
+    async def test_a_refused_multi_body_result_never_withdraws_a_retained_transfer(self) -> None:
+        references = ("result:sha256:31", "result:sha256:32")
+        job = self.seed_with_references("request:multi-retained", references)
+        # Capacity for the first body only; another result already retained it.
+        small = self.transfers(max_in_flight_transfers=1)
+        earlier = small.admit(
+            logical_result_identity=references[0], result=self.LARGE, owner=READ,
+        )
+        before = dict(small._transfers)
+        handlers, _ = self.with_bodies(
+            {references[0]: self.LARGE, references[1]: self.OTHER_LARGE}, transfers=small,
+        )
+        response = await self.result_with(handlers, job.job_id)
+        self.refused(response, "transfer_refused", code="result_too_large")
+        self.assertEqual(before, dict(small._transfers))  # the earlier one is untouched
+        socket, _ = await self.resume(small, earlier[0].transfer_id)
+        self.assertEqual(len(earlier), len(socket.responses))  # and still resumable
+
+    async def test_a_multi_body_result_that_fits_keeps_its_deliveries_and_reuses_retained(self) -> None:
+        references = ("result:sha256:41", "result:sha256:42", "result:sha256:43", "result:sha256:44")
+        job = self.seed_with_references("request:multi-fits", references)
+        bodies = {
+            references[0]: {"rows": [1, 2, 3]},      # inline
+            references[1]: self.LARGE,               # framed
+            references[3]: self.OTHER_LARGE,         # framed (references[2] has none)
+        }
+        handlers, transfers = self.with_bodies(bodies)
+        first = self.ok(await self.result_with(handlers, job.job_id))
+        self.assertEqual(
+            ["inline", "framed", "none", "framed"], [item["delivery"] for item in first["bodies"]],
+        )
+        self.assertEqual(references, tuple(item["reference"] for item in first["bodies"]))
+        self.assertEqual(2, len(transfers._transfers))
+        # The same result again is the same descriptors and the same retained set.
+        again = self.ok(await self.result_with(handlers, job.job_id))
+        self.assertEqual(first["bodies"], again["bodies"])
+        self.assertEqual(2, len(transfers._transfers))
+        for item in (first["bodies"][1], first["bodies"][3]):
+            socket, _ = await self.resume(transfers, item["transfer_id"])
+            self.assertEqual(item["chunk_count"], len(socket.responses))
+
     async def test_a_resolver_failure_or_a_non_canonical_body_is_an_integrity_failure(self) -> None:
         job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-faults")
 

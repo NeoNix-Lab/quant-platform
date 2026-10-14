@@ -317,47 +317,64 @@ class JobTransport:
             "result_references": list(record.result_references),
         }
         if self._bodies is not None:
-            document["bodies"] = [self._body(reference) for reference in record.result_references]
+            document["bodies"] = self._deliveries(record.result_references)
         return document
 
-    def _body(self, reference: str) -> dict[str, Any]:
-        """One reference's delivery: nothing, the body inline, or a J14 transfer."""
+    def _deliveries(self, references: tuple[str, ...]) -> list[dict[str, Any]]:
+        """The delivery of every reference, published as one unit.
 
-        try:
-            body = self._bodies(reference)
-        except Exception as error:  # A resolver's own message is never forwarded.
-            raise _integrity("result_body_unavailable") from error
-        if body is None:
-            return {"reference": reference, "delivery": "none"}
-        try:
-            frames = frame_complete_result(
-                logical_result_identity=reference, result=body, config=self._transfers.config,
-            )
-        except (TypeError, ValueError, ArithmeticError, RecursionError) as error:
-            raise _integrity("result_body_not_canonical") from error
-        if len(frames) == 1:
-            # One frame is one message: nothing to frame, nothing to retain.
-            return {"reference": reference, "delivery": "inline", "body": body}
-        try:
-            frames = self._transfers.admit(
-                logical_result_identity=reference, result=body, owner=J02_JOB_SCOPES["result"],
-            )
-        except FramedResultTransportError as error:
-            # ADR-0066 section 3: refuse admission rather than retain without bound.
-            raise ConsumerApiError(
-                ConsumerErrorCode.RESULT_TOO_LARGE,
-                "the result would exceed the maximum J02 response size",
-                context={"reason": "transfer_refused"},
-            ) from error
-        first = frames[0]
-        return {
-            "reference": reference,
-            "delivery": "framed",
-            "logical_result_identity": first.logical_result_identity,
-            "transfer_id": first.transfer_id,
-            "payload_sha256": first.payload_sha256,
-            "chunk_count": first.chunk_count,
-        }
+        Every body is resolved and checked first; the framed ones are then
+        admitted as a single batch, so a refusal (or a resolver that fails on a
+        later reference) publishes nothing of this call, and never withdraws a
+        transfer that was already retained.
+        """
+
+        deliveries: list[dict[str, Any] | None] = []
+        framed: list[tuple[int, str, Any]] = []  # (position, reference, body)
+        for reference in references:
+            try:
+                body = self._bodies(reference)
+            except Exception as error:  # A resolver's own message is never forwarded.
+                raise _integrity("result_body_unavailable") from error
+            if body is None:
+                deliveries.append({"reference": reference, "delivery": "none"})
+                continue
+            try:
+                frames = frame_complete_result(
+                    logical_result_identity=reference, result=body, config=self._transfers.config,
+                )
+            except (TypeError, ValueError, ArithmeticError, RecursionError) as error:
+                raise _integrity("result_body_not_canonical") from error
+            if len(frames) == 1:
+                # One frame is one message: nothing to frame, nothing to retain.
+                deliveries.append({"reference": reference, "delivery": "inline", "body": body})
+            else:
+                framed.append((len(deliveries), reference, body))
+                deliveries.append(None)
+        if framed:
+            try:
+                admitted = self._transfers.admit_many(
+                    [(reference, body) for _, reference, body in framed],
+                    owner=J02_JOB_SCOPES["result"],
+                )
+            except FramedResultTransportError as error:
+                # ADR-0066 section 3: refuse admission rather than retain without bound.
+                raise ConsumerApiError(
+                    ConsumerErrorCode.RESULT_TOO_LARGE,
+                    "the result would exceed the maximum J02 response size",
+                    context={"reason": "transfer_refused"},
+                ) from error
+            for (position, reference, _), frames in zip(framed, admitted):
+                first = frames[0]
+                deliveries[position] = {
+                    "reference": reference,
+                    "delivery": "framed",
+                    "logical_result_identity": first.logical_result_identity,
+                    "transfer_id": first.transfer_id,
+                    "payload_sha256": first.payload_sha256,
+                    "chunk_count": first.chunk_count,
+                }
+        return deliveries  # type: ignore[return-value]
 
     def _cancel(self, store: DurableJobStore, job_id: str) -> dict[str, Any]:
         # Decided from the state each transition itself validates: a race with a
