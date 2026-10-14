@@ -46,6 +46,22 @@ supplies its own, like the ``result_bodies`` resolver of ``j02-job-v1``):
   refused before sealing);
 - ``read_member(manifest, index) -> bytes``: the member's exact bytes.
 
+Known limits, from the independent audit of this family (issue #357 closes
+them; **do not compose this family in a host before it does**):
+
+- K12 keeps one state per admission and no attempt identity. An acknowledgement
+  that is late or duplicated for an *older* attempt is applied to the current
+  one, and a delivery that is still running can publish after the admission
+  was ended by another operation. The server never ends an attempt by itself.
+- J14 ``resume`` of a member does not consult the admission: delivered members
+  stay resumable until the J14 retention, also after ``EXPIRED``.
+- A ``ConsumerApiError`` raised by an authority seam reaches the wire as the
+  authority wrote it; the seams are trusted server code and must raise only
+  public, stable messages until the projection of #357 exists.
+- ``ok`` on ``deliver`` means "published at the time of the response"; a
+  ``transfer_expired`` at ``resume`` is a normal outcome (failure acknowledgement,
+  then a new ``deliver``).
+
 The deck supplies neither a locator nor a length, and no seam is reachable by
 name from the wire. Composition is explicit and opt-in
 (:func:`admitted_input_family_handlers`): no host wires it implicitly, and the
