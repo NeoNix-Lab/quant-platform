@@ -61,6 +61,7 @@ import test_durable_job_runtime_v1 as j03  # noqa: E402
 import test_job_dispatch_v1 as dispatch  # noqa: E402
 import test_admitted_input_transport_v1 as admitted_transport  # noqa: E402
 import test_job_transport_v1 as job_transport  # noqa: E402
+import test_result_import_transport_v1 as result_import  # noqa: E402
 import api_server  # noqa: E402  (tools/api_server.py: the API host's commit record)
 import test_governed_result_import_v1 as k13  # noqa: E402
 
@@ -691,6 +692,48 @@ class PostgresAdmittedInputTransport(
             finally:
                 connection.close()
         return session
+
+
+class PostgresResultImportTransport(
+    DisposableCase, result_import.ResultImportTransportV1Tests
+):
+    """#342: the j02-result-import-v1 contract on the runtime schema as the API login.
+
+    K13 registers the Experiment write and the evidence row in one transaction on
+    one connection (ADR-0068 s4), so the service shares one autocommit connection
+    with its repository and ledger.
+    """
+
+    def setUp(self):
+        DisposableCase.setUp(self)
+        result_import.ResultImportTransportV1Tests.setUp(self)
+
+    def build_backend(self):
+        self.admissions = AdmittedInputStore(self.connection())
+        self.shared = self.connection()
+        self.evidence = GovernedResultEvidenceStore(self.shared)
+        self.experiments = ExperimentRepository(self.shared)
+
+    def service_session(self, verify=None):
+        verifier = self.staging.verify_output if verify is None else verify
+
+        @contextmanager
+        def session():
+            yield GovernedResultImportService(
+                self.admissions, self.experiments, self.evidence, verifier, result_import.CONTRACTS,
+            )
+        return session
+
+    def bundle_rows(self):
+        with connect("ADMIN") as admin:
+            return admin.execute("SELECT count(*) FROM runtime.governed_result_bundles").fetchone()[0]
+
+    def stored_payload(self, bundle_digest):
+        with connect("ADMIN") as admin:
+            return admin.execute(
+                "SELECT payload FROM runtime.governed_result_bundles WHERE bundle_digest = %s",
+                (bundle_digest,),
+            ).fetchone()[0]
 
 
 class PostgresResults(DisposableCase, k13.GovernedResultImportV1Tests):
