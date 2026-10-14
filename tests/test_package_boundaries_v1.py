@@ -602,7 +602,14 @@ class PackageBoundaryTests(unittest.TestCase):
         clients = client_inventory()
         self.assertIn("clients/tui/market_data_tui.py", clients)
         self.assertIn("clients/app_ui/app.js", clients)
+        self.assertIn("clients/deck/deck_handoff_client.py", clients)
         self.assertEqual([], client_import_violations(clients))
+        # The deck client is a separate trust surface (ADR-0069 section 8): the
+        # scan above must really see an import of the platform inside it.
+        injected = {
+            "clients/deck/deck_handoff_client.py": "from quant_platform.application import x\n",
+        }
+        self.assertTrue(client_import_violations(injected))
 
     def test_migration_ledgers_describe_real_unmigrated_modules(self):
         scripts = script_inventory()
