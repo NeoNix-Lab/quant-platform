@@ -39,9 +39,15 @@ Known limits (v1, recorded rather than hidden):
   holds the output (an output that was not registered "stays deck-local
   evidence", ADR-0069 section 6) and uploads it again. A registered bundle is
   durable in the K13 ledger regardless.
-- An identical re-submission after the staged bytes expired is refused as
-  ``output_not_staged`` until the deck uploads the bytes again; the bytes are
-  never read back from the registration.
+- An identical re-submission of an *accepted* bundle never needs the staged
+  bytes: the family recognizes it by the K13 ledger (the whole canonical
+  payload, not a digest or a Run/role pair), and the owner then re-checks
+  admission, identity and conflicts and returns the same registration. Its
+  outputs were verified against bytes when it was first registered. A new
+  bundle still needs every checksum to be staged.
+- Any integrity failure of an upload retires the partial transfer it names
+  (ADR-0066 section 3: the incomplete transfer is unusable); a payload that is
+  already complete is not touched by a corrupted request.
 - Retention values are operational defaults, not ADR values
   (``[DA CONFERMARE]``): :class:`StagingBounds`.
 - The request does not carry the uploader's identity to the staging store
@@ -60,8 +66,8 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 import hashlib
 import re
@@ -110,7 +116,6 @@ DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_STAGED_BYTES = 32 * 1024 * 1024
 DEFAULT_MAX_IN_FLIGHT_UPLOADS = 8
 DEFAULT_STAGING_RETENTION_SECONDS = 900
-DEFAULT_REGISTERED_RETENTION_SECONDS = 3600
 MAX_TEXT_LENGTH = 1024
 MAX_ITEMS = 1024
 MAX_OUTPUTS = 64
@@ -183,12 +188,11 @@ class StagingBounds:
     max_staged_bytes: int = DEFAULT_MAX_STAGED_BYTES
     max_in_flight_uploads: int = DEFAULT_MAX_IN_FLIGHT_UPLOADS
     retention_seconds: int = DEFAULT_STAGING_RETENTION_SECONDS
-    registered_retention_seconds: int = DEFAULT_REGISTERED_RETENTION_SECONDS
 
     def __post_init__(self) -> None:
         for name in (
             "frame_payload_bytes", "max_output_bytes", "max_staged_bytes",
-            "max_in_flight_uploads", "retention_seconds", "registered_retention_seconds",
+            "max_in_flight_uploads", "retention_seconds",
         ):
             value = getattr(self, name)
             if type(value) is not int or value < 1:
@@ -221,7 +225,6 @@ class _Upload:
 class _Staged:
     data: bytes
     expiry: float
-    registered: bool = False
 
 
 def output_identity(payload_sha256: str) -> str:
@@ -272,10 +275,9 @@ class StagedOutputStore:
     """Bounded, expiring, content-addressed staging of uploaded output bytes.
 
     Not canonical: nothing here is an artifact until a successful ``submit``
-    names it, and nothing reads staged bytes back to a caller. Unreferenced
-    bytes expire after ``retention_seconds``; bytes that a registration
-    referenced are kept ``registered_retention_seconds`` (so an identical
-    re-submission verifies again). Every access holds one lock: the store is
+    names it, and nothing reads staged bytes back to a caller. Bytes expire
+    after ``retention_seconds``; an accepted bundle does not depend on them
+    (see the module docstring). Every access holds one lock: the store is
     reached from worker threads.
     """
 
@@ -291,6 +293,9 @@ class StagedOutputStore:
         self._uploads: dict[str, _Upload] = {}
         self._staged: dict[str, _Staged] = {}
         self._lock = threading.RLock()
+        # Checksums that a call on this thread may treat as already verified:
+        # only those of a bundle the K13 ledger holds in full (see ``recorded``).
+        self._local = threading.local()
 
     @property
     def bounds(self) -> StagingBounds:
@@ -301,47 +306,62 @@ class StagedOutputStore:
     def receive(self, chunk: UploadChunk) -> dict[str, Any]:
         """Accept one chunk; the progress document says what the client does next."""
 
+        with self._lock:
+            try:
+                return self._receive(chunk)
+            except _Refused as refusal:
+                # ADR-0066 section 3: after an integrity failure the incomplete
+                # transfer is unusable. Only the partial one is retired; a
+                # completed payload is never touched by a corrupted request.
+                if refusal.kind == "integrity" or refusal.reason == "output_too_large":
+                    self._uploads.pop(chunk.transfer_id, None)
+                raise
+
+    def invalidate(self, *transfer_ids: str) -> None:
+        """Retire the *partial* uploads with these ids (a corrupted request names them)."""
+
+        with self._lock:
+            for transfer_id in transfer_ids:
+                self._uploads.pop(transfer_id, None)
+
+    def _receive(self, chunk: UploadChunk) -> dict[str, Any]:
+        """The checks and the state change; the caller holds the lock."""
+
         bounds = self._bounds
         size, count, index = len(chunk.payload), chunk.chunk_count, chunk.chunk_index
         if size > bounds.frame_payload_bytes or (index < count - 1 and size != bounds.frame_payload_bytes):
             raise _Refused("integrity", "chunk_layout_mismatch")
         if (count - 1) * bounds.frame_payload_bytes + 1 > bounds.max_output_bytes:
             raise _Refused("too_large", "output_too_large")
-        checksum = CHECKSUM_PREFIX + chunk.payload_sha256
-        with self._lock:
-            now = self._clock()
-            self._expire(now)
-            staged = self._staged.get(checksum)
-            if staged is not None:
-                return self._repeat(staged, chunk, now)
-            upload = self._uploads.get(chunk.transfer_id)
-            if upload is None:
-                if len(self._uploads) >= bounds.max_in_flight_uploads:
-                    raise _Refused("too_large", "too_many_uploads")
-                fresh = _Upload(
-                    chunk.payload_sha256, count, now + bounds.retention_seconds, {},
-                )
-            elif upload.chunk_count != count or upload.payload_sha256 != chunk.payload_sha256:
-                del self._uploads[chunk.transfer_id]
-                raise _Refused("integrity", "transfer_metadata_mismatch")
-            else:
-                fresh = None
-            current = upload if upload is not None else fresh
-            known = current.chunks.get(index)
-            if known is not None:
-                if known != chunk.payload:
-                    self._uploads.pop(chunk.transfer_id, None)
-                    raise _Refused("integrity", "chunk_conflict")
-            else:
-                if self._held() + size > bounds.max_staged_bytes:
-                    raise _Refused("too_large", "staging_full")
-                current.chunks[index] = chunk.payload
-                current.held += size
-            if fresh is not None:
-                self._uploads[chunk.transfer_id] = fresh
-            if len(current.chunks) < count:
-                return self._progress(chunk, current.chunks, complete=False)
-            return self._complete(chunk, current, now)
+        now = self._clock()
+        self._expire(now)
+        staged = self._staged.get(CHECKSUM_PREFIX + chunk.payload_sha256)
+        if staged is not None:
+            return self._repeat(staged, chunk, now)
+        upload = self._uploads.get(chunk.transfer_id)
+        if upload is None:
+            if len(self._uploads) >= bounds.max_in_flight_uploads:
+                raise _Refused("too_large", "too_many_uploads")
+            fresh = _Upload(chunk.payload_sha256, count, now + bounds.retention_seconds, {})
+        elif upload.chunk_count != count or upload.payload_sha256 != chunk.payload_sha256:
+            raise _Refused("integrity", "transfer_metadata_mismatch")
+        else:
+            fresh = None
+        current = upload if upload is not None else fresh
+        known = current.chunks.get(index)
+        if known is not None:
+            if known != chunk.payload:
+                raise _Refused("integrity", "chunk_conflict")
+        else:
+            if self._held() + size > bounds.max_staged_bytes:
+                raise _Refused("too_large", "staging_full")
+            current.chunks[index] = chunk.payload
+            current.held += size
+        if fresh is not None:
+            self._uploads[chunk.transfer_id] = fresh
+        if len(current.chunks) < count:
+            return self._progress(chunk, current.chunks, complete=False)
+        return self._complete(chunk, current, now)
 
     def _complete(self, chunk: UploadChunk, upload: _Upload, now: float) -> dict[str, Any]:
         del self._uploads[chunk.transfer_id]
@@ -365,8 +385,7 @@ class StagedOutputStore:
             or staged.data[offset : offset + size] != chunk.payload
         ):
             raise _Refused("integrity", "chunk_conflict")
-        if not staged.registered:
-            staged.expiry = max(staged.expiry, now + self._bounds.retention_seconds)
+        staged.expiry = max(staged.expiry, now + self._bounds.retention_seconds)
         return self._progress(chunk, {}, complete=True, byte_length=len(staged.data))
 
     def _progress(
@@ -397,9 +416,14 @@ class StagedOutputStore:
         This is the ``verify_output_checksum`` seam of
         :class:`GovernedResultImportService`: a checksum with no staged payload
         raises (the owner refuses the bundle); a staged payload is hashed again,
-        not trusted by its key.
+        not trusted by its key. The one exception is :meth:`recorded`: inside
+        it, the checksums of a bundle the ledger already holds are returned as
+        declared, because they were verified against bytes when it was first
+        registered.
         """
 
+        if evidence.content_checksum in getattr(self._local, "recorded", frozenset()):
+            return evidence.content_checksum
         with self._lock:
             self._expire(self._clock())
             staged = self._staged.get(evidence.content_checksum)
@@ -408,16 +432,21 @@ class StagedOutputStore:
             raise StagedOutputMissing("the output is not staged")
         return CHECKSUM_PREFIX + hashlib.sha256(data).hexdigest()
 
-    def mark_registered(self, checksums: Sequence[str]) -> None:
-        """Keep the referenced payloads for the registered retention."""
+    @contextmanager
+    def recorded(self, checksums: Sequence[str]) -> Iterator[None]:
+        """Within this block, on this thread, these checksums need no staged bytes.
 
-        with self._lock:
-            now = self._clock()
-            for checksum in checksums:
-                staged = self._staged.get(checksum)
-                if staged is not None and staged.expiry > now:
-                    staged.registered = True
-                    staged.expiry = max(staged.expiry, now + self._bounds.registered_retention_seconds)
+        For a bundle that the K13 ledger holds in full: re-submitting an
+        accepted bundle must not depend on transient bytes. The caller, not
+        this store, establishes that; nothing else is relaxed.
+        """
+
+        previous = getattr(self._local, "recorded", frozenset())
+        self._local.recorded = previous | frozenset(checksums)
+        try:
+            yield
+        finally:
+            self._local.recorded = previous
 
     def staged_checksums(self) -> tuple[str, ...]:
         with self._lock:
@@ -698,7 +727,20 @@ def bundle_from_wire(body: Any) -> GovernedResultBundleV1:
     )
 
 
-def _upload_chunk(body: Any) -> UploadChunk:
+@dataclass(frozen=True, slots=True)
+class _CorruptChunk:
+    """A well-shaped chunk whose bytes or identity do not verify.
+
+    Decoding is pure, so the refusal is *carried* to ``execute``, which retires
+    the partial transfers it names (the claimed id and the one its payload
+    digest implies) before raising the integrity failure.
+    """
+
+    reason: str
+    transfer_ids: tuple[str, ...]
+
+
+def _upload_chunk(body: Any) -> UploadChunk | _CorruptChunk:
     try:
         item = _object(body, {
             "transfer_id", "logical_result_identity", "payload_sha256", "chunk_index",
@@ -719,20 +761,21 @@ def _upload_chunk(body: Any) -> UploadChunk:
         raise _refusal("invalid_request_shape") from error
     # From here the body is shaped: what is wrong is the *bytes*, which J14
     # treats as an integrity failure of the transfer.
+    digest = item["payload_sha256"]
+    named = tuple(dict.fromkeys((item["transfer_id"], upload_transfer_id(digest))))
     try:
         payload = base64.b64decode(item["chunk_base64"], validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise _integrity("chunk_not_base64") from error
+    except (binascii.Error, ValueError):
+        return _CorruptChunk("chunk_not_base64", named)
     if not payload:
-        raise _integrity("chunk_empty")
+        return _CorruptChunk("chunk_empty", named)
     if hashlib.sha256(payload).hexdigest() != item["chunk_sha256"]:
-        raise _integrity("chunk_digest_mismatch")
-    digest = item["payload_sha256"]
+        return _CorruptChunk("chunk_digest_mismatch", named)
     if (
         item["logical_result_identity"] != output_identity(digest)
         or item["transfer_id"] != upload_transfer_id(digest)
     ):
-        raise _integrity("transfer_identity_mismatch")
+        return _CorruptChunk("transfer_identity_mismatch", named)
     return UploadChunk(item["transfer_id"], digest, index, count, payload)
 
 
@@ -771,7 +814,10 @@ class ResultImportTransport:
             return self._upload(decoded)
         return self._submit(decoded)
 
-    def _upload(self, chunk: UploadChunk) -> dict[str, Any]:
+    def _upload(self, chunk: UploadChunk | _CorruptChunk) -> dict[str, Any]:
+        if isinstance(chunk, _CorruptChunk):
+            self._staging.invalidate(*chunk.transfer_ids)
+            raise _integrity(chunk.reason)
         try:
             return self._staging.receive(chunk)
         except _Refused as refusal:
@@ -796,14 +842,21 @@ class ResultImportTransport:
                 raise _integrity("import_service_not_staged")
             self._check_replay_contracts(service, bundle)
             try:
-                registration = service.import_result(bundle)
+                # An accepted bundle is recognized by the durable ledger in full
+                # (its whole canonical payload) and never needs the transient
+                # staged bytes again; every other bundle is verified against them.
+                recorded = service.evidence_store.is_recorded(bundle)
+                with (
+                    self._staging.recorded([output.content_checksum for output in bundle.outputs])
+                    if recorded else nullcontext()
+                ):
+                    registration = service.import_result(bundle)
             except GovernedResultRefused as error:
                 raise _refusal(_REFUSAL_REASONS.get(str(error), "bundle_refused")) from error
             except GovernedResultImportError as error:
                 raise _integrity("registration_failed") from error
             except Exception as error:  # A store's own text is never forwarded.
                 raise _integrity("registration_unavailable") from error
-        self._staging.mark_registered([output.content_checksum for output in bundle.outputs])
         run = registration.run_record
         return {
             "bundle_digest": registration.bundle_digest,

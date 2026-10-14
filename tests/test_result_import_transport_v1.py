@@ -76,7 +76,7 @@ def checksum(data: bytes) -> str:
 def bounds(**overrides) -> StagingBounds:
     values = dict(
         frame_payload_bytes=FRAME, max_output_bytes=8 * FRAME, max_staged_bytes=20 * FRAME,
-        max_in_flight_uploads=3, retention_seconds=100, registered_retention_seconds=1000,
+        max_in_flight_uploads=3, retention_seconds=100,
     )
     values.update(overrides)
     return StagingBounds(**values)
@@ -314,6 +314,76 @@ class ResultImportTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((), self.staging.staged_checksums())
         self.assertEqual(0, self.staging.in_flight())
 
+    async def test_every_integrity_failure_retires_the_partial_transfer(self) -> None:
+        data = bytes(range(256)) * 10  # three chunks: 1024, 1024, 512
+        bodies = upload_chunks(data, frame_payload_bytes=FRAME)
+        flipped = bytearray(base64.b64decode(bodies[1]["chunk_base64"]))
+        flipped[0] ^= 0xFF
+        short = base64.b64decode(bodies[1]["chunk_base64"])[:-1]
+        cases = {
+            "chunk_digest_mismatch": {
+                **bodies[1], "chunk_base64": base64.b64encode(bytes(flipped)).decode(),
+            },
+            "chunk_not_base64": {**bodies[1], "chunk_base64": "!!not base64!!"},
+            "chunk_empty": {**bodies[1], "chunk_base64": ""},
+            "transfer_identity_mismatch": {**bodies[1], "logical_result_identity": "other"},
+            "wrong transfer id (derived one is retired)": {**bodies[1], "transfer_id": "0" * 64},
+            "payload digest changed (claimed one is retired)": {
+                **bodies[1], "payload_sha256": "1" * 64,
+            },
+            "chunk_layout_mismatch": {
+                **bodies[1], "chunk_base64": base64.b64encode(short).decode(),
+                "chunk_sha256": hashlib.sha256(short).hexdigest(),
+            },
+        }
+        for label, bad in cases.items():
+            with self.subTest(label):
+                self.use_staging(bounds())
+                self.ok(await self.call("upload_output", bodies[0]))
+                self.assertEqual((1, FRAME), (self.staging.in_flight(), self.staging._held()))
+                error = await self.call("upload_output", bad)
+                self.assertEqual("integrity_failure", error["error"]["code"], error)
+                # Nothing of the failed transfer is held, and it is not resumable...
+                self.assertEqual((0, 0), (self.staging.in_flight(), self.staging._held()))
+                self.ok(await self.call("upload_output", bodies[1]))
+                progress = self.ok(await self.call("upload_output", bodies[2]))
+                self.assertFalse(progress["complete"])  # ...chunk 0 has to be sent again
+                self.assertEqual(0, progress["next_chunk_index"])
+                self.assertEqual((), self.staging.staged_checksums())
+                self.ok(await self.call("upload_output", bodies[0]))
+                self.assertEqual((checksum(data),), self.staging.staged_checksums())
+
+    async def test_a_conflicting_oversized_claim_retires_the_partial_transfer(self) -> None:
+        data = bytes(range(256)) * 10
+        bodies = upload_chunks(data, frame_payload_bytes=FRAME)
+        self.ok(await self.call("upload_output", bodies[0]))
+        # The same transfer announced with a chunk count the bounds cannot hold.
+        claim = {**bodies[1], "chunk_count": 100}
+        self.refused(
+            await self.call("upload_output", claim), "output_too_large", code="result_too_large",
+        )
+        self.assertEqual((0, 0), (self.staging.in_flight(), self.staging._held()))
+
+    async def test_a_corrupted_request_never_retires_a_completed_or_another_payload(self) -> None:
+        data = bytes(range(256)) * 10
+        await self.upload(data)
+        other = upload_chunks(b"o" * (2 * FRAME), frame_payload_bytes=FRAME)
+        self.ok(await self.call("upload_output", other[0]))  # an unrelated partial upload
+        bodies = upload_chunks(data, frame_payload_bytes=FRAME)
+        flipped = bytearray(base64.b64decode(bodies[1]["chunk_base64"]))
+        flipped[0] ^= 0xFF
+        for label, bad in (
+            ("digest", {**bodies[1], "chunk_base64": base64.b64encode(bytes(flipped)).decode()}),
+            ("layout", {**bodies[1], "chunk_count": 2}),
+        ):
+            with self.subTest(label):
+                response = await self.call("upload_output", bad)
+                self.assertEqual("integrity_failure", response["error"]["code"])
+                self.assertEqual((checksum(data),), self.staging.staged_checksums())
+                self.assertEqual(1, self.staging.in_flight())  # the unrelated partial one
+        bundle = self.bundle((output(run(), checksum(data)),))
+        self.ok(await self.submit(bundle))  # and the completed payload still verifies
+
     async def test_a_payload_whose_digest_is_wrong_is_discarded_at_completion(self) -> None:
         data = bytes(range(256)) * 6  # 1536 bytes, two chunks
         bodies = upload_chunks(data, frame_payload_bytes=FRAME)
@@ -536,18 +606,76 @@ class ResultImportTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         self.refused(await self.submit(bundle), "output_checksum_mismatch")
         self.assertNothingRegistered(bundle.run_identity)
 
-    async def test_registered_bytes_outlive_the_staging_retention_for_a_resubmission(self) -> None:
+    async def test_an_accepted_bundle_is_resubmitted_without_staged_bytes(self) -> None:
+        data = b"a" * 2500  # several chunks
+        await self.upload(data)
+        bundle = self.bundle((output(run(), checksum(data)),))
+        first = self.ok(await self.submit(bundle))
+        # (1) the staged bytes expired; the registration and the admission did not.
+        self.now = 1001.0
+        self.assertEqual((), self.staging.staged_checksums())
+        self.assertEqual(first, self.ok(await self.submit(bundle)))
+        # (2) a restart: a new, empty staging store on the same durable state.
+        self.staging = StagedOutputStore(bounds(), clock=lambda: self.now)
+        self.assertEqual(first, self.ok(await self.submit(bundle)))
+        self.assertEqual((), self.staging.staged_checksums())  # nothing was staged to do it
+        self.assertEqual(1, self.bundle_rows())
+        self.assertEqual(1, len(self.runs(bundle.run_identity)))
+        # The relaxation is exactly the recorded bundle's checksums, for that call:
+        # a bundle that is not the recorded one needs staged bytes again.
+        other_run = run("deck-run-2")
+        for label, candidate in (
+            ("a new run with the same bytes", self.bundle(
+                (output(other_run, checksum(data)),), identity=other_run,
+                consumed=bundle.consumed_manifest,
+            )),
+            ("the same run, other evidence", self.bundle(
+                (output(bundle.run_identity, checksum(data)),), identity=bundle.run_identity,
+                consumed=bundle.consumed_manifest, metrics_evidence={"sharpe": "9.9"},
+            )),
+        ):
+            with self.subTest(label):
+                self.refused(await self.submit(candidate), "output_not_staged")
+        self.assertEqual(1, self.bundle_rows())
+        self.assertEqual((), self.staging.staged_checksums())
+
+    async def test_an_accepted_bundle_still_goes_through_the_owners_checks(self) -> None:
         data = b"metrics-bytes"
         await self.upload(data)
         bundle = self.bundle((output(run(), checksum(data)),))
         first = self.ok(await self.submit(bundle))
-        self.now = 500.0  # past retention (100), within the registered retention (1000)
-        self.assertEqual((checksum(data),), self.staging.staged_checksums())
-        self.assertEqual(first, self.ok(await self.submit(bundle)))
-        self.now = 2000.0  # past the registered retention
-        self.assertEqual((), self.staging.staged_checksums())
-        self.refused(await self.submit(bundle), "output_not_staged")
-        self.assertEqual(1, self.bundle_rows())  # the registration is durable regardless
+        self.now = 1001.0  # the staged bytes are gone
+        with patch.object(
+            GovernedResultImportService, "_validate_admission",
+            autospec=True, side_effect=GovernedResultImportService._validate_admission,
+        ) as admission, patch.object(
+            GovernedResultEvidenceStore, "assert_admissible",
+            autospec=True, side_effect=GovernedResultEvidenceStore.assert_admissible,
+        ) as conflicts:
+            self.assertEqual(first, self.ok(await self.submit(bundle)))
+        # Recovery is the owner's idempotent registration, not a shortcut around it.
+        self.assertEqual(1, admission.call_count)
+        self.assertEqual(1, conflicts.call_count)
+
+    async def test_recording_is_compared_by_the_whole_payload(self) -> None:
+        data = b"metrics-bytes"
+        await self.upload(data)
+        bundle = self.bundle((output(run(), checksum(data)),))
+        self.assertFalse(self.evidence.is_recorded(bundle))
+        self.ok(await self.submit(bundle))
+        self.assertTrue(self.evidence.is_recorded(bundle))
+        # Same digest, another stored payload: a conflict, never a match.
+        from quant_platform.application.governed_result_import import GovernedResultRefused
+        different = self.bundle(
+            (output(run(), checksum(data)),), metrics_evidence={"sharpe": "9.9"},
+        )
+        self.assertNotEqual(bundle.canonical_payload_v1, different.canonical_payload_v1)
+        recorded_digest = bundle.bundle_digest
+        with patch.object(
+            GovernedResultBundleV1, "bundle_digest", new=property(lambda self: recorded_digest),
+        ):
+            with self.assertRaises(GovernedResultRefused):
+                self.evidence.is_recorded(different)
 
     async def test_every_k13_refusal_has_a_stable_reason_and_changes_nothing(self) -> None:
         data = b"metrics-bytes"
