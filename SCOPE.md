@@ -1,139 +1,138 @@
-# Scope: DG-K — Process Topology v1
+# Scope: DG-L — FEI Technical Feature Provider v1
 
-Status: **Part A (design gate) CLOSED — ADR-0068 and ADR-0069 ACCEPTED (#319, 2026-10-10). Part B implementation inventory AUTHORIZED; its implementation issues are not yet opened (maintainer direction 2026-10-10: reconcile without generating issues).**
+Status: **Part A (design gate) OPEN — registered by governance issue #362; design gate #363 is HOLD until this registration is merged. Part B is a CANDIDATE inventory: nothing in it is authorized for implementation until the design-gate ADR is `ACCEPTED` and a later reconciliation authorizes it.**
 
-Scope kind: this document has two parts. Part A recorded the DG-K design gate registered by governance issue #318 and closed by #319. Part B is the implementation inventory that gate makes implementable. No implementation may start until its own implementation issue exists, cites the governing ADR section below, and targets the DG-K integration branch.
+Scope kind: this document has two parts. Part A is the DG-L design gate that decides how a composite technical feature (the FEI) is bound to representations, how its recursive quantities are bounded, and where its interpretation layer ends. Part B is the candidate implementation inventory that gate would make implementable. No implementation may start until its own implementation issue exists, cites the governing ADR section, and targets the DG-L integration branch.
 
 ---
 
 ## Historical scope archive
 
-This file previously recorded **Wave 8 — Full Platform API & Remote Service Topology v1** (CLOSED — operator closeout, issue #327/PR #328, 2026-10-10; implementation promoted to `main` by PR #322 and PR #326; no Golden proof claimed), and then **this same DG-K scope while its design gate was still open** (governance issue #318). Both are preserved in git history (`git log -- SCOPE.md`). `SCOPE.md` is overwritten in place for each governance reconciliation.
+This file previously recorded **DG-K — Process Topology v1** (design gate closed by ADR-0068 and ADR-0069, #319; Part B `P01`-`P06` authorized). DG-K is a distinct line: it continues on `implement/dgk`, where its `SCOPE.md` is intact, and it is preserved in git history (`git log -- SCOPE.md`). `SCOPE.md` is overwritten in place for each governance reconciliation (repository convention); on `implement/fei` it records the FEI line only. Wave 8 and earlier scopes are likewise in history.
 
 ---
 
 ## Why this scope exists
 
-ADR-0024 §6 left process topology, host placement and service split open. The Wave 8 closeout (#327) credited `J03`, `J10`, `J12`, `J13`, `K12` and `K13` only within explicit bounds: no J03 dispatch or worker, no J02 carriage of the consumer seams, no byte transfer between server and deck, and a non-atomic K13 registration across PostgreSQL and SQLite. The maintainer's direction (2026-10-07, refined 2026-10-10) is a modular monolith deployed as a small fixed set of processes, with heavy compute on the deck and the server kept as free as possible.
+The maintainer proposes the FEI: a multi-scale, Ichimoku-based composite observable (three cloud scales, static distance/thickness features, recursive dynamics, twist rhythm and polarity, and categorical axes). `PRODUCT.md` §5 names "Technical indicators" as a Feature Engine provider family (ADR-0003), but no technical provider exists and `E07` ("Generic provider extension") waits for "a real second provider". The FEI is that second provider. A validation of the proposal against accepted contracts (ADR-0003, -0006, -0009, -0013, -0021, -0026, -0034, -0037, -0051 and `CANDLE_DEFINITION.md`) found that it cannot be adopted as specified: index-based scale grouping versus UTC-epoch candles, unbounded recursive memory versus the `current/point/window` support model, floating-point arithmetic versus exact equivalence, value sentinels versus non-observation, a length-dependent tail clamp (replay ≠ live), and decision outputs (posture, urgency, corridor direction) inside a feature.
 
 ---
 
-## Owner decisions (inputs the design gate honored)
+## Owner decisions (inputs the design gate must honor)
 
-1. P01 preserves every existing identity hash; RFC 8785 is one profile, for `J14` and new contracts only.
-2. P03 keeps executable hosts in `tools/`.
-3. P04 v1 runs exactly one J03 worker process.
-4. P05 belongs to DG-K, not Wave 8 (2026-10-08).
-5. The server stays as free as possible: server-side J03 handlers are data-local only; replay, sweeps, training and large PBO run on the deck, on the deck's own initiative; the server never delegates jobs to the deck or any other machine (2026-10-10).
-6. `J11` is not planned: replay runs only on the deck over `K12`-admitted inputs, results return through `K13` (2026-10-10).
+1. **FEI is a feature.** Like `h01_imbalance`, but composite: an explicit composite InputContract over per-scale cloud features. The gate decides only whether it is delivered as one composite `FeatureDefinition` or a `FeatureSetDefinition` of component definitions (ADR-0016, ADR-0035 precedent).
+2. **Finite-window support.** Every recursive quantity has a declared window length, seed rule and warm-up as identity-bearing parameters. No new support primitive; ADR-0026 is not amended for this.
+3. **Generic provider.** The FEI is delivered through the generic provider extension `E07`, without a plugin framework: the minimum seam the second provider needs.
+4. **Distinct line.** DG-L is distinct work from DG-K. `SCOPE.md` is overwritten on `implement/fei`; DG-K stays intact on `implement/dgk`.
+5. **Anchoring.** `implement/fei` was cut from `implement/dgk` @ `9db9637`. It is re-anchored on `main` immediately after DG-K is promoted to `main` and **before** `implement/fei` is promoted. No DG-L slice depends on DG-K code.
 
 ---
 
-## Part A — Design gate outcome, CLOSED
+## Part A — Design gate (OPEN)
 
-| Gate | Issue | ADR | Disposition | One-line resolution |
+One design-gate issue, **#363**, produces one ADR (number assigned at acceptance) that states, without `[TBD]`:
+
+1. **Binding.** Scales are epoch-aligned CandleDefinition representations at `D·m_s`, bound through a composite InputContract with `FINAL_ONLY`; index grouping is rejected; behavior on a missing/omitted bucket is declared.
+2. **Boundary.** The provider emits observables and optionally categorical axes; posture, urgency and corridor direction/shift/target are not feature outputs.
+3. **Finite window.** Window length, seed and warm-up per recursive quantity; results before warm-up are non-observations.
+4. **Numerics.** The `NumericalEquivalence` kind, its tolerance and the minimum-history rule bounding the truncation residual for `m ∈ {1, 5, 30}`.
+5. **Non-observation.** Mapping of WARMUP and evidence states (`REAL/SEEDED/NONE`) to non-observation or explicit enum values, and the `eqScore`/`direction` rule when a scale is unavailable.
+6. **Parity.** Replay and incremental evaluation are identical for the same declared support; length-dependent tail clamps are forbidden.
+7. **Calibration.** Threshold values and auto-tune are not part of the family contract; auto-tune is fold-contained (F06/F07) and any predictive claim requires ADR-0037 evidence.
+
+Valid closes: an `ACCEPTED` ADR, or an explicit disposition keeping the FEI outside the platform with a recorded evidence trigger.
+
+---
+
+## Part B — Candidate DG-L implementation inventory
+
+Provisional atoms, `OPEN_BLOCKING`/`MISSING` until the Part A ADR is `ACCEPTED`. Each later receives its own implementation issue; **this reconciliation opens none and authorizes none**.
+
+| Atom | Capability | Governing authority | Requires | Sequencing note |
 |---|---|---|---|---|
-| **DG-K** topology | #319 | ADR-0068 | ACCEPTED | Five units (ingest, platform API, exactly one J03 worker, PostgreSQL, deck compute); domain packages stay in-process libraries; `runtime` schema with per-unit roles and atomic K13 registration; four named identity byte profiles that change no existing bytes; closed data-local J03 handler registry; single worker enforced by a PostgreSQL advisory lock; hosts stay in `tools/`. |
-| **DG-K** wire and handoff | #319 | ADR-0069 | ACCEPTED | Additive J02 message families authorized before decode, one least-privilege scope per family; synchronous `J10`/`J12`/`J13` with unchanged budgets; J03 submit/status/result/cancel; deck-initiated `K12` delivery and `K13` submission; feature-provider code identity in replay result bundles; deck client outside `src/quant_platform`. |
-
-Answers to the nine DG-K questions are in ADR-0068 §1-§9 and ADR-0069 §1-§9; `OPEN_DECISIONS.md` (DG-K) records them in summary. Neither ADR amends another ADR or changes an existing identity. Work that ADR-0065 Amendments 1 and 2 left for "a separate J03 dispatch design gate" (over-budget PBO and training) is resolved as deck work, not server J03 work (ADR-0068 §3).
-
----
-
-## Part B — Authorized DG-K implementation inventory
-
-Each atom below has an `ACCEPTED` governing ADR. Each later receives its own implementation issue; **this reconciliation opens none**.
-
-| Atom | Capability | Governing ADR | Requires | Sequencing note |
-|---|---|---|---|---|
-| `P01` | Canonical identity serializer v1 | ADR-0068 §5 | — | Independent. Byte parity on every pinned identity and a two-`PYTHONHASHSEED` cross-process proof are acceptance. |
-| `P02` | Runtime store on PostgreSQL v1 | ADR-0068 §4 | `J03`, `K12`, `K13` (on `main`) | Independent. Must establish atomic K13 registration and confirm no production SQLite runtime state is lost. |
-| `P03` | Executable host boundaries v1 | ADR-0068 §7 | — | Independent. Boundary-test rules only; no host moves. |
-| `P04a` | J03 handler registry and dispatch v1 | ADR-0068 §6 | `P01`, `P02` | Start gate: HOLD until `P01` and `P02` are merged. Data-local handlers only. |
-| `P04b` | Single J03 worker process v1 | ADR-0068 §6, §8 | `P03`, `P04a` | Start gate: HOLD until `P03` and `P04a` are merged. |
-| `P05a` | J02 carriage of synchronous J10/J12/J13 v1 | ADR-0069 §1-§3 | `J02`, `J09` (on `main`) | Independent. |
-| `P05b` | J02 submit/status/result for J03 data-local jobs v1 | ADR-0069 §1, §2, §4 | `P04b` | Start gate: HOLD until `P04b` is merged. |
-| `P06` | Deck handoff over J02 v1 | ADR-0069 §1, §2, §5-§8 | `J09`, `J14` (on `main`), `P02` | Start gate: HOLD until `P02` is merged. |
+| `T01` | `ichimoku-cloud-v1`: single-scale causal cloud | Part A ADR; ADR-0026, ADR-0021 | `E02`, `E04`, `D02`, `D03`, `E07` | Start gate: HOLD until the Part A ADR is `ACCEPTED`. |
+| `T02` | `fei-static-v1`: multi-scale static observables | Part A ADR; ADR-0026 | `T01` | HOLD until `T01` is merged. |
+| `T03` | `fei-dynamics-v1`: finite-memory derivatives | Part A ADR | `T02` | HOLD until `T02` is merged. |
+| `T04` | `fei-rhythm-v1`: twist rhythm, polarity, evidence state | Part A ADR | `T02` | HOLD until `T02` is merged; independent of `T03`. |
+| `T05` | `fei-axes-v1`: categorical ZONE, TRAVEL, STATE, thinness | Part A ADR; ADR-0009, ADR-0051 | `T02`, `T03`, `T04` | HOLD until all three are merged. No decisions in outputs. |
+| `T06` | FEI conformity proof (replay = incremental, range independence, reference vectors) | Part A ADR; ADR-0013 | `T05` | HOLD until `T05` is merged; reference vectors `[DA CONFERMARE]`. |
 
 ```text
-P01 ──┐
-P02 ──┼─> P04a ─> P04b ─> P05b
-P03 ──┘     (P04b also requires P03)
-P05a       (J02/J09 on main)
-P06        (J09, J14 on main; requires P02)
+E07 ─┐
+T01 ─> T02 ─┬─> T03 ─┐
+            └─> T04 ─┴─> T05 ─> T06
 ```
 
-Immediately startable once their issues exist: `P01`, `P02`, `P03`, `P05a`.
+`E07` is re-statused by this reconciliation from `OPEN_DEFERABLE` to `OPEN_BLOCKING` under DG-L (its evidence trigger, a real second provider, is met by the FEI); its minimum seam is decided by the Part A ADR.
 
 ### Integration branch
 
-Default proposed by this reconciliation: one integration branch `implement/dgk` cut from `main` when the first Part B issue opens; atomic slices use `agent/issue-<N>-<slug>` from it and target it (`AGENTS.md`, Branching). DG-K is a design-gate line, not a numbered wave; the maintainer may rename the branch before it is created.
+`implement/fei` (exists; cut from `implement/dgk` @ `9db9637`). Atomic slices use `agent/issue-<N>-<slug>` from it and target it (`AGENTS.md`, Branching). Re-anchoring on `main` is an exit criterion (below).
 
 ---
 
 ## Authority
 
 - `AGENTS.md`
-- governance issue #318; design-gate issue #319; Wave 8 closeout #327
-- ADR-0068 (process topology v1), ADR-0069 (J02 carriage of consumer seams and deck handoff v1)
-- ADR-0018, ADR-0024, ADR-0043, ADR-0050 (and Amendment 1), ADR-0055, ADR-0057, ADR-0058, ADR-0062 through ADR-0067
-- `docs/product/ROADMAP.md`, `docs/product/CAPABILITY_DAG.md` (`DG-K` section; `P` atoms), `docs/architecture/OPEN_DECISIONS.md` (`DG-K`)
+- governance issue #362; design-gate issue #363
+- ADR-0003, ADR-0006, ADR-0009, ADR-0013, ADR-0016, ADR-0021, ADR-0026, ADR-0034, ADR-0035, ADR-0037, ADR-0051
+- `docs/contracts/CANDLE_DEFINITION.md`, `docs/contracts/CORE_CONTRACTS.md`
+- `docs/product/ROADMAP.md`, `docs/product/CAPABILITY_DAG.md` (`DG-L` section; `T` atoms; `E07`), `docs/architecture/OPEN_DECISIONS.md` (`DG-L`)
 
-Accepted ADRs and frozen contracts remain normative. No Part B issue may change an existing identity, ADR-0062's lifecycle or attempt model, ADR-0064's sealed-input identity, ADR-0043's host placement, J02 v1, or the frozen Consumer API.
+Accepted ADRs and frozen contracts remain normative. No DG-L issue may change an existing identity, CandleDefinition v1, FeatureDefinition v1 identity bytes, FeatureArtifact (E04) identity, or ADR-0026's support model.
 
 ---
 
 ## Baseline and Credited State
 
 ```text
-main @ 56f6375 (Wave 8 governance closeout #327 / PR #328 merged)
-Wave 8: J03,J09,J10,J12,J13,J14,J15,K12,K13 COMPLETE within recorded bounds
-DG-K: ADR-0068, ADR-0069 ACCEPTED (#319); P01-P06 FROZEN / MISSING
+implement/fei @ 9db9637 (cut from implement/dgk; Merge of PR #359)
+main @ 731ae97
+E02, E04, E06, D02, D03, D04: COMPLETE
+DG-K: ADR-0068, ADR-0069 ACCEPTED; P01-P06 FROZEN (own line, implement/dgk)
+DG-L: Part A OPEN (#363); T01-T06 OPEN_BLOCKING / MISSING; E07 OPEN_BLOCKING / MISSING
 ```
 
-Credit, do not reimplement or re-prove absent invalidating evidence: every atom `COMPLETE` in `CAPABILITY_DAG.md`, within the bound its row records. `J14`'s RFC 8785 framing, `J15`'s `clients/omega` location, #313's replay identity parity tests and the K12/K13 server logic are reused as evidence, not rebuilt.
+Credit, do not reimplement or re-prove absent invalidating evidence: every atom `COMPLETE` in `CAPABILITY_DAG.md`, within the bound its row records. `E02` FeatureDefinition v1, `E04` FeatureArtifact v1 and the `h01_imbalance` composition (`E06`) are reused as evidence and precedent, not rebuilt.
 
 ---
 
 ## Explicit non-claims
 
-- `P01`-`P06` are `FROZEN`/`MISSING`: decided, not built. No implementation issue exists yet.
-- `J10`/`J12`/`J13` remain unreachable over J02 until `P05a` is implemented; `K13` stays non-atomic until `P02`.
-- `J11` is not planned and remains `OPEN_DEFERABLE`/`MISSING`.
-- Omega remote use of ADR-0069 families needs its own ADR-0067 amendment and is not authorized.
-- `J07`/`J08` (Wave 10), `I06`/`I07` (Wave 9), `A13`-`A15` and second venue are untouched.
+- `T01`-`T06` and the re-statused `E07` are decided nowhere yet: no ADR exists and no implementation issue is authorized.
+- The FEI's predictive value is not claimed; the source specification carries no out-of-sample evidence, and its thresholds are tuned on one instrument and timeframe (BTC, 30 minutes).
+- No new support primitive, plugin framework or provider registry is introduced by this reconciliation.
+- DG-K, Wave 9 (`I06`/`I07`), Wave 10 (`J07`/`J08`), `A13`-`A15` and second venue are untouched.
 
 ---
 
 ## Mutation policy
 
-- Each Part B implementation issue produces code and tests for exactly one atom.
-- Branch `agent/issue-<N>-<slug>` (or `codex/issue-<N>-<slug>`) from the DG-K integration branch and target it, not `main`.
+- Each DG-L implementation issue (once authorized) produces code and tests for exactly one atom.
+- Branch `agent/issue-<N>-<slug>` (or `codex/issue-<N>-<slug>`) from `implement/fei` and target it, not `main`.
 - Do not mutate `SCOPE.md`, `ROADMAP.md`, `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md` or `OPEN_DECISIONS.md` as part of implementation work (`AGENTS.md` Governance boundary). Governance PRs use a `governance/` or `admin/` head branch.
-- Start gates in the Part B table are binding: `P04a` after `P01`+`P02`; `P04b` after `P03`+`P04a`; `P05b` after `P04b`; `P06` after `P02`.
+- Start gates in the Part B table are binding.
 
 ---
 
 ## Exit criteria for this scope
 
-- Part A: **met** — ADR-0068 and ADR-0069 `ACCEPTED` (#319), reconciled here.
-- Part B: each of the eight atoms is implemented, merged into the integration branch and promoted to `main`, within the acceptance its governing ADR section states, followed by a governance closeout.
+- Part A: the design-gate ADR is `ACCEPTED` (or closed with the recorded alternative disposition).
+- Part B: each authorized atom is implemented and merged into `implement/fei`, within the acceptance its ADR states, followed by a governance closeout.
+- **Re-anchoring:** after DG-K is promoted to `main` and before `implement/fei` is promoted, `implement/fei` is re-anchored on `main`, and the promotion diff contains only DG-L changes.
+- Promotion of `implement/fei` to `main` is a closeout PR after governance reconciliation.
 
 ---
 
 ## Out of Scope
 
-- a message broker, a distributed scheduler, a generic executor or a remote-execution framework;
-- server-to-deck (or server-to-any-machine) job delegation, and remote workers pulling from the server J03 queue;
-- one deployed service per domain package;
-- a canonical-storage migration to the deck (ADR-0057 §6); moving runtime stores to PostgreSQL is not that migration;
-- changing any existing identity bytes (an ADR-0018 contract evolution);
-- the `J11` replay seam (not planned) and `D05` bar-input replay;
-- a binary transport family or a second transport stack;
-- L2 acquisition, publication and live daemon semantics (`A13`-`A15`);
-- Omega remote use of ADR-0069 families (ADR-0067 amendment);
-- `J07`/`J08`, `I06`/`I07`, second venue, multi-asset execution;
-- repository mirroring outside Git history.
+- POSTURE, urgency and the corridor's LONG/SHORT direction, shift (`corrShift`) and target: research label or `execution_policy` (ADR-0009, ADR-0051), not feature outputs;
+- threshold auto-tune and any validation of the FEI's predictive value (a later validation issue after `T06`, under F06/F07 and ADR-0037);
+- a plugin/provider framework beyond the minimum seam `E07` needs;
+- changing CandleDefinition v1, FeatureDefinition v1 identity bytes or FeatureArtifact identity;
+- a new support primitive (ADR-0026 is unchanged);
+- DG-K implementation work, which stays on `implement/dgk`;
+- live/paper execution, RL, second venue, `L1`/`L2`/`L3` depth.
 
 ---
 
@@ -141,7 +140,8 @@ Credit, do not reimplement or re-prove absent invalidating evidence: every atom 
 
 Stop and report rather than implement or decide unilaterally if:
 
-- an implementation issue cannot satisfy its ADR-0068/ADR-0069 section without weakening an accepted ADR or changing an existing identity;
-- a Part B issue starts before its start gate is met;
-- a handler outside ADR-0068 §6's data-local registry rule is proposed for J03;
-- implementing an atom would require answering a design question the ADRs leave open.
+- a DG-L issue cannot satisfy the Part A ADR without weakening an accepted ADR or changing an existing identity;
+- a DG-L issue starts before its start gate is met;
+- a feature output would encode a trading decision (posture, urgency, direction) or a threshold-dependent action;
+- a computation depends on array length, request-range start or seed state beyond its declared window and warm-up;
+- implementing an atom would require answering a design question the Part A ADR leaves open.

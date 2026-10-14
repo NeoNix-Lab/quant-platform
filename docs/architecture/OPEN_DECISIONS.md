@@ -657,6 +657,64 @@ this gate: L2 acquisition semantics (`A13`-`A15`), `J11`, `D05` bar-input
 replay, and Omega remote use of `P05`/`P06` (needs its own ADR-0067
 amendment).
 
+## DG-L — FEI Technical Feature Provider v1 — OPEN_BLOCKING (design gate #363)
+
+Registered by governance issue #362 on `implement/fei`. The maintainer proposes
+the FEI: a multi-scale Ichimoku-based composite observable. Validated against
+ADR-0003, ADR-0006, ADR-0009, ADR-0013, ADR-0021, ADR-0026, ADR-0034, ADR-0037,
+ADR-0051 and `CANDLE_DEFINITION.md`, it cannot be adopted as specified. This
+section registers the gate; it decides nothing. The single design-gate issue is
+#363 (one ADR). It gates the candidate atoms `T01`-`T06` in `CAPABILITY_DAG.md`
+(names provisional) and re-statuses `E07`.
+
+Owner decisions, fixed inputs to the gate (not open questions):
+
+1. The FEI is a *feature*, like `h01_imbalance`, but composite. The gate decides
+   only whether it is one composite `FeatureDefinition` or a
+   `FeatureSetDefinition` of component definitions.
+2. Recursive quantities use finite-window support: window length, seed and
+   warm-up are identity-bearing parameters; no new support primitive and no
+   ADR-0026 amendment.
+3. The FEI is delivered through the generic provider extension `E07`, with no
+   plugin framework: the minimum seam the second provider needs.
+4. DG-L is distinct from DG-K. `SCOPE.md` is overwritten on `implement/fei`;
+   DG-K's scope is intact on `implement/dgk`.
+5. `implement/fei` (cut from `implement/dgk` @ `9db9637`) is re-anchored on
+   `main` immediately after DG-K is promoted and before `implement/fei` is
+   promoted. No DG-L slice depends on DG-K code.
+
+Question set for #363 (each answered without `[TBD]`):
+
+1. How are scales bound to epoch-aligned CandleDefinition representations at
+   `D·m_s` through a composite InputContract with `FINAL_ONLY`, and what happens
+   on a missing/omitted bucket (index grouping is rejected)?
+2. Which outputs are features: observables and optional categorical axes versus
+   posture, urgency and corridor direction/shift/target (not features)?
+3. What are window length, seed rule and warm-up for each recursive quantity,
+   and which results before warm-up are non-observations?
+4. Which `NumericalEquivalence` kind and tolerance apply, and which
+   minimum-history rule bounds the truncation residual for `m` in {1, 5, 30}
+   (the E04 equivalence is exact `Fraction`)?
+5. How do WARMUP and evidence states (`REAL`/`SEEDED`/`NONE`) map to
+   non-observation or explicit enum values, and what is `eqScore`/`direction`
+   when a scale is unavailable (renormalize weights, or require all three)?
+6. How is replay/incremental parity guaranteed, and which length-dependent
+   computations (the projected-domain tail clamp `min(n-1, i+phi_s)`) are
+   forbidden? Note: the projected point at `i + d*m_s` equals the causal cloud
+   at `i`, so the projected domain adds nothing but the clamp.
+7. Where does calibration end: threshold values and auto-tune are outside the
+   family contract; auto-tune is fold-contained (F06/F07) and any predictive
+   claim needs ADR-0037 evidence.
+
+Stop conditions: the ADR would change an existing identity, CandleDefinition v1,
+FeatureDefinition v1 identity bytes or ADR-0026's support model; a feature
+output would encode a trading decision; a computation depends on array length
+or request-range start beyond its declared window and warm-up.
+
+Evidence trigger kept outside this gate: validation of the FEI's predictive
+value on more than one instrument/timeframe (F06/F07, ADR-0037) after `T06`.
+
+
 ## Explicitly deferable decisions
 
 The following are classified and therefore not roadmap unknowns:
@@ -679,7 +737,9 @@ Wait for a real next schema/version requirement.
 
 ### Feature provider extension (`E07`)
 
-Wait for a real second provider/capability need; no generic plugin framework now.
+Re-statused `OPEN_BLOCKING` by DG-L (#362): the FEI is the real second
+provider/capability need this decision waited for. Its minimum seam is decided
+by the DG-L design gate (#363); there is still no generic plugin framework.
 
 ### Multi-asset execution (`H06`)
 
