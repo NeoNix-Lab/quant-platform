@@ -59,6 +59,7 @@ from quant_platform.experiments.accounting import (  # noqa: E402
 import test_admitted_input_manifest_v1 as k12  # noqa: E402
 import test_durable_job_runtime_v1 as j03  # noqa: E402
 import test_job_dispatch_v1 as dispatch  # noqa: E402
+import test_admitted_input_transport_v1 as admitted_transport  # noqa: E402
 import test_job_transport_v1 as job_transport  # noqa: E402
 import api_server  # noqa: E402  (tools/api_server.py: the API host's commit record)
 import test_governed_result_import_v1 as k13  # noqa: E402
@@ -667,6 +668,29 @@ class PostgresJobTransport(DisposableCase, job_transport.JobTransportV1Tests):
 class PostgresInputs(DisposableCase, k12.AdmittedInputManifestV1Tests):
     def store(self):
         return AdmittedInputStore(self.connection())
+
+
+class PostgresAdmittedInputTransport(
+    DisposableCase, admitted_transport.AdmittedInputTransportV1Tests
+):
+    """#341: the j02-admitted-input-v1 contract on the runtime schema as the API login."""
+
+    def setUp(self):
+        DisposableCase.setUp(self)
+        admitted_transport.AdmittedInputTransportV1Tests.setUp(self)
+
+    def open_store(self):
+        return AdmittedInputStore(self.connection("API"))
+
+    def provider(self):
+        @contextmanager
+        def session():
+            connection = connect("API")
+            try:
+                yield AdmittedInputStore(connection)
+            finally:
+                connection.close()
+        return session
 
 
 class PostgresResults(DisposableCase, k13.GovernedResultImportV1Tests):
