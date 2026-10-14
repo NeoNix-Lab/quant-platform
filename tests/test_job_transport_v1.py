@@ -31,6 +31,7 @@ from quant_platform.application.framed_result_transport import (  # noqa: E402
     FramedResultReceiver,
     FramedResultResumeRequest,
     FramedResultTransferStore,
+    frame_complete_result,
 )
 from quant_platform.application.durable_jobs import (  # noqa: E402
     DurableJobStore,
@@ -996,6 +997,45 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(item["reference"], document["ref"])
             self.assertEqual(400, len(document["rows"]))
             self.assertEqual(digests[item["reference"]], socket.responses[0]["payload_sha256"])
+
+    async def test_a_snapshot_keeps_the_exact_numbers_and_the_original_framing(self) -> None:
+        # Floats whose canonical token is an integer beyond the safe domain
+        # (1e16, 1e20, 2**53) must survive the snapshot: they were valid, and
+        # the published transfer is the very framing of the value as returned.
+        values = (1e20, -1e20, 1e16, 9007199254740992.0, 1e21, 1.25, 0.1, 5, True, None)
+        config = self.transfers().config
+        for value in values:
+            with self.subTest(value=value):
+                reference = f"result:sha256:num-{abs(hash(repr(value))) % 10**8}"
+                job = self.seed_with_references(f"request:num-{reference}", (reference,))
+                body = {"number": value, "padding": "x" * 2000, "nested": [value, {"v": value}]}
+                expected = frame_complete_result(
+                    logical_result_identity=reference, result=body, config=config,
+                )
+                handlers, transfers = self.with_bodies({reference: body})
+                result = self.ok(await self.result_with(handlers, job.job_id))
+                (entry,) = result["bodies"]
+                self.assertEqual("framed", entry["delivery"])
+                self.assertEqual(expected[0].payload_sha256, entry["payload_sha256"])
+                self.assertEqual(expected[0].transfer_id, entry["transfer_id"])
+                socket, _ = await self.resume(transfers, entry["transfer_id"])
+                receiver = FramedResultReceiver()
+                reassembled = None
+                for frame in socket.responses:
+                    reassembled = receiver.receive(frame)
+                self.assertEqual(json.loads(json.dumps(body)), reassembled)
+
+    async def test_a_body_with_tuples_is_delivered_as_before(self) -> None:
+        reference = "result:sha256:tuples"
+        job = self.seed_with_references("request:tuples", (reference,))
+        body = {"rows": tuple(({"n": n, "t": "q" * 20},) for n in range(400))}
+        handlers, transfers = self.with_bodies({reference: body})
+        (entry,) = self.ok(await self.result_with(handlers, job.job_id))["bodies"]
+        self.assertEqual("framed", entry["delivery"])
+        expected = frame_complete_result(
+            logical_result_identity=reference, result=body, config=transfers.config,
+        )
+        self.assertEqual(expected[0].payload_sha256, entry["payload_sha256"])
 
     async def test_a_resolver_failure_or_a_non_canonical_body_is_an_integrity_failure(self) -> None:
         job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-faults")

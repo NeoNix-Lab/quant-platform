@@ -44,7 +44,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
-import json
+import copy
 from typing import Any
 
 from .api_transport_server import J02FamilyHandler
@@ -330,10 +330,11 @@ class JobTransport:
         transfer that was already retained.
 
         A resolver's return value is never kept: a resolver may hand back one
-        buffer it reuses, or mutate what it returned. What is checked, inlined
-        and published is a snapshot decoded from the very canonical bytes that
-        were framed at the time of the check, and the published transfer must
-        carry the digest of that check.
+        buffer it reuses, or mutate what it returned. Each body is copied at
+        once, and that private copy is what is checked, inlined and published
+        (a copy, not a re-parse of the canonical bytes: numbers keep their
+        exact types, so the copy canonicalizes to the very bytes it was framed
+        as). The published transfer must still carry the digest of the check.
         """
 
         deliveries: list[dict[str, Any] | None] = []
@@ -347,14 +348,12 @@ class JobTransport:
                 deliveries.append({"reference": reference, "delivery": "none"})
                 continue
             try:
+                snapshot = copy.deepcopy(body)
                 frames = frame_complete_result(
-                    logical_result_identity=reference, result=body, config=self._transfers.config,
+                    logical_result_identity=reference, result=snapshot,
+                    config=self._transfers.config,
                 )
-            except (TypeError, ValueError, ArithmeticError, RecursionError) as error:
-                raise _integrity("result_body_not_canonical") from error
-            try:
-                snapshot = json.loads(b"".join(frame.chunk_payload for frame in frames))
-            except ValueError as error:
+            except (TypeError, ValueError, ArithmeticError, RecursionError, copy.Error) as error:
                 raise _integrity("result_body_not_canonical") from error
             if len(frames) == 1:
                 # One frame is one message: nothing to frame, nothing to retain.
