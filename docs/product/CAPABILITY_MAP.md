@@ -49,7 +49,13 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Features | FeatureArtifact/materialization | FROZEN | COMPLETE | Feature Engine | E04 | ADR-0034; deterministic identity, SupportShape, FINAL-only sealing, attributable-evidence caller discipline. |
 | Features | H01 pure imbalance kernel | RESOLVED | COMPLETE | Feature Engine | E05 | Narrow Legacy Harvest ADOPT boundary. |
 | Features | H01 canonical integration | FROZEN | COMPLETE | Feature Engine | E06 | ADR-0035; Diagonal + Stacked are independent FINAL-Footprint features in one `h01_imbalance@1` FeatureSet; implemented, issue #83/PR #88. |
-| Features | Generic provider extension | OPEN_DEFERABLE | MISSING | Feature Engine | E07 | Wait for a real second provider. |
+| Features | Generic provider extension | OPEN_BLOCKING | MISSING | Feature Engine | E07 | Re-statused from `OPEN_DEFERABLE` by DG-L (#362): the FEI is the real second provider; minimum seam decided by the DG-L design gate (#363); no plugin framework. |
+| Features | `ichimoku-cloud-v1` single-scale causal cloud | OPEN_BLOCKING | MISSING | Feature Engine | T01 | DG-L candidate (#362/#363); finite window, CLOSED epoch-aligned candles, non-observation before warm-up. |
+| Features | `fei-static-v1` multi-scale static observables | OPEN_BLOCKING | MISSING | Feature Engine | T02 | DG-L candidate; composite over three cloud scales; `dist`, `thick`, `spread`, `eqScore`, `direction`. |
+| Features | `fei-dynamics-v1` finite-memory derivatives | OPEN_BLOCKING | MISSING | Feature Engine | T03 | DG-L candidate; EMA derivatives with declared window, seed and warm-up. |
+| Features | `fei-rhythm-v1` twist rhythm, polarity, evidence | OPEN_BLOCKING | MISSING | Feature Engine | T04 | DG-L candidate; explicit `REAL/SEEDED/NONE` evidence state. |
+| Features | `fei-axes-v1` categorical axes and thinness | OPEN_BLOCKING | MISSING | Feature Engine | T05 | DG-L candidate; ZONE/TRAVEL/STATE; no posture, urgency or corridor direction. |
+| Features | FEI conformity proof | OPEN_BLOCKING | MISSING | Feature Engine | T06 | DG-L candidate; replay = incremental, range independence, reference vectors. |
 | Research | HypothesisSpec | RESOLVED | COMPLETE | Research | F01 | Depends on FeatureDefinition for the canonical vertical. |
 | Research | EventSpec/detection | RESOLVED | COMPLETE | Research | F02 | Requires FeatureArtifact for the full vertical; implemented, issue #85/PR #89. |
 | Research | OutcomeSpec/Outcome | FROZEN | COMPLETE | Research | F03 | ADR-0038 ratifies canonical Outcome v1 semantics and EOD evidence; implementation issue #86/PR #90, adversarial closeout issue #102/PR #103. |
@@ -151,6 +157,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | `DG-J` Remote Service Topology design-gate line (issues #282-#287, parent #281) | RESOLVED for all six gates | Six design-gate issues on `implement/omega` each produced one ACCEPTED ADR: G1/`J09` (ADR-0063, #283/PR #290), G2/`J03` (ADR-0062, #282/PR #289), G3/`K12`+`K13` (ADR-0064, #284/PR #291), G4/`J10`,`J12`,`J13` (ADR-0065, #285/PR #292; `J11` explicitly deferred), G5/`J14` (ADR-0066, #286/PR #293), G6/`J15` (ADR-0067, #287/PR #294). Issue #288 reconciles these outcomes into governance state and authorizes the Wave 8 implementation inventory; `implement/omega` is closed as the bounded design-integration line for this scope. |
 | Wave 8 Full Platform API & Remote Service Topology | COMPLETE (operator closeout #327) | J03/J09/J10/J12/J13/J14/J15/K12/K13 implemented by PR #307-#312, #315, #320, #321 and promoted by PR #322; owner-accepted extras #313/#314 by PR #323/#324 via `implement/wave-8.1` and PR #326. J10/J12/J13 are in-process seams only; no Wave 8 Golden proof artifact is claimed. PR #317 (A14 L2 groundwork) does not complete A14. |
 | `DG-K` Process Topology v1 design gate (governance #318, design gate #319) | RESOLVED | ADR-0068 (process topology v1) and ADR-0069 (J02 carriage of consumer seams and deck handoff v1) accepted; P01-P06 `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B; no implementation issue opened yet. |
+| `DG-L` FEI Technical Feature Provider v1 design gate (governance #362, design gate #363) | OPEN | Registered on `implement/fei`; ADR pending; candidate atoms T01-T06 and `E07` `OPEN_BLOCKING`/`MISSING`; no implementation authorized. Distinct from DG-K, which continues on `implement/dgk`. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
@@ -183,5 +190,11 @@ planned. J07, J08, RL, broker/live execution, second venue
 and L1/L2/L3 market depth remain outside every closed scope (`A14` has
 groundwork from PR #317 only). Frontier/readiness state is **not concurrent
 implementation authorization**.
+
+On `implement/fei` the current scope is DG-L FEI Technical Feature Provider v1
+(registered by #362; design gate #363). It authorizes an ADR only; candidate
+atoms `T01`-`T06` and the re-statused `E07` are `OPEN_BLOCKING`/`MISSING`, and
+no implementation issue is authorized. `SCOPE.md` on that branch records DG-L;
+the DG-K scope is on `implement/dgk`.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.

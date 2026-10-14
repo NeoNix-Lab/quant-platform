@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 8 — Full Platform API & Remote Service Topology v1 CLOSED by operator closeout (issue #327): `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` implemented and promoted to `main` (PR #322, #326), within the bounds recorded in their rows; no Wave 8 Golden proof claimed; `J11` remains `OPEN_DEFERABLE` (not planned, owner decision 2026-10-10). DG-K Process Topology v1 is resolved by ADR-0068 and ADR-0069 (#319); atoms `P01`-`P06` are `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B, with no implementation issue opened yet.**
+Status: **CANONICAL; Wave 8 — Full Platform API & Remote Service Topology v1 CLOSED by operator closeout (issue #327): `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` implemented and promoted to `main` (PR #322, #326), within the bounds recorded in their rows; no Wave 8 Golden proof claimed; `J11` remains `OPEN_DEFERABLE` (not planned, owner decision 2026-10-10). DG-K Process Topology v1 is resolved by ADR-0068 and ADR-0069 (#319); atoms `P01`-`P06` are `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B (on `implement/dgk`), with no implementation issue opened yet. DG-L FEI Technical Feature Provider v1 is registered as an open design gate (issue #362; design gate #363) with candidate atoms `T01`-`T06`; `E07` is re-statused `OPEN_BLOCKING`. On `implement/fei`, `SCOPE.md` records DG-L.**
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,20 +10,30 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after the DG-K design-gate reconciliation (#319;
+Current audited inventory after the DG-L registration (issue #362;
 recomputed mechanically from the atom tables below, not by hand):
 
 ```text
-TOTAL_ATOMS                     = 104
-CLASSIFIED_ATOMS                = 104
+TOTAL_ATOMS                     = 110
+CLASSIFIED_ATOMS                = 110
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 92 / 104 = 88.5%
-OPEN_BLOCKING                   = 4
-OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 92 + 4 + 8 = 104
-ROADMAP_PLANNING_COMPLETENESS   = 104 / 104 = 100%
-IMPLEMENTATION_COMPLETE         = 78 / 104 = 75.0%
+SEMANTIC_FROZEN_OR_RESOLVED     = 92 / 110 = 83.6%
+OPEN_BLOCKING                   = 11
+OPEN_DEFERABLE                  = 7
+ROADMAP_DEFINED                 = 92 + 11 + 7 = 110
+ROADMAP_PLANNING_COMPLETENESS   = 110 / 110 = 100%
+IMPLEMENTATION_COMPLETE         = 78 / 110 = 70.9%
 ```
+
+DG-L registration (issue #362): six candidate atoms `T01`-`T06` are added as
+`OPEN_BLOCKING`/`MISSING` under the DG-L design gate (#363), and `E07` moves
+from `OPEN_DEFERABLE` to `OPEN_BLOCKING` (its evidence trigger, a real second
+provider, is met by the FEI). No other atom changes state; the lower
+percentages reflect a larger inventory, not lost progress (104 -> 110 atoms;
+semantic 88.5% -> 83.6%; implementation 75.0% -> 70.9%).
+
+Earlier, the DG-K design-gate reconciliation (#319; ADR-0068, ADR-0069) counts
+were 104 atoms, 92 decided, 4 `OPEN_BLOCKING`, 8 `OPEN_DEFERABLE`.
 
 DG-K design-gate reconciliation (#319): ADR-0068 and ADR-0069 are accepted, so
 the eight `P` atoms move from `OPEN_BLOCKING` to `FROZEN` (84 -> 92 decided).
@@ -81,6 +91,7 @@ I  Experiment / ML / RL
 J  Runtime & Interface
 K  Operations
 P  Process Topology (DG-K; ADR-0068/ADR-0069)
+T  Technical feature (DG-L candidate atoms; provisional)
 ```
 
 The implemented ownership direction remains governed by ADR-0024 and architecture tests. `application` composes existing capabilities and owns no quantitative meaning.
@@ -153,7 +164,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | E04 | FeatureArtifact/materialization | Feature Engine | E02,E03,A02 | F01,I04,E06 | FROZEN | COMPLETE | Deterministic identity, SupportShape, FINAL-only sealing; ADR-0034 |
 | E05 | H01 pure imbalance kernel | Feature Engine | Legacy Harvest audit | E06 | RESOLVED | COMPLETE | Narrow ADOPT numeric/edge semantics |
 | E06 | H01 canonical integration | Feature Engine | D06,E02,E04,E05 | H01-backed research | FROZEN | COMPLETE | ADR-0035; implemented, issue #83/PR #88 |
-| E07 | Custom/provider extension | Feature Engine | E02,real second-provider need | broader library | OPEN_DEFERABLE | MISSING | Let second provider drive minimum extension seam |
+| E07 | Custom/provider extension | Feature Engine | E02,real second-provider need | broader library, T01 | OPEN_BLOCKING | MISSING | Re-statused from `OPEN_DEFERABLE` by DG-L (#362): the FEI is the real second provider. Let it drive the minimum extension seam; no generic plugin framework. Decided by the DG-L design gate (#363) |
 
 ### F — Research & Evaluation
 
@@ -256,6 +267,23 @@ authorizes them; no implementation issue is open yet.
 | P05b | J02 submit/status/result for J03 data-local jobs v1 | API Runtime | P04b | remote data-local jobs | FROZEN | MISSING | ADR-0069 §4. Submit/status/result messages for data-local operations admitted through J03 |
 | P06 | Deck handoff over J02 v1 | API Runtime/Operations | J09,J14,P02 | deck replay/training with governed results | FROZEN | MISSING | ADR-0069 §5-§8. K12 delivery of admitted input bytes (J14 framing for large payloads) and K13 result-bundle submission, one least-privilege scope each; deck-side client verifies delivered digests and submits the bundle; the K13 bundle carries the replay feature-provider code identity. ADR-0064 §4 defines no wire shape today |
 
+### T — Technical feature (DG-L candidate atoms)
+
+Registered by governance issue #362 on `implement/fei`. Names are provisional;
+the design gate (#363) decides final names. Every atom `Requires` DG-L. Owner
+decisions fixed as inputs are recorded in `OPEN_DECISIONS.md` (DG-L): the FEI is
+a composite feature like `h01_imbalance`, with finite-window support, delivered
+through the generic provider extension `E07`.
+
+| ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
+|---|---|---|---|---|---|---|---|
+| T01 | `ichimoku-cloud-v1` single-scale causal cloud | Feature Engine | DG-L,E02,E04,D02,D03,E07 | T02 | OPEN_BLOCKING | MISSING | `T,K,SA,SB,M` and thickness from CLOSED epoch-aligned candles (`FINAL_ONLY`); declared window; non-observation before warm-up; output at a bar uses only inputs `<=` that bar |
+| T02 | `fei-static-v1` multi-scale static observables | Feature Engine | DG-L,T01 | T03,T04,T05 | OPEN_BLOCKING | MISSING | Composite InputContract over three scales; `dist`, `thick`, `spread`, `eqScore`, `direction`; no value sentinel for a missing scale; `PROVISIONAL`/`FINAL` propagation |
+| T03 | `fei-dynamics-v1` finite-memory derivatives | Feature Engine | DG-L,T02 | T05 | OPEN_BLOCKING | MISSING | EMA derivatives with identity-bearing window, seed and warm-up; `TOLERANT` equivalence with a proven residual bound for `m` in {1, 5, 30} |
+| T04 | `fei-rhythm-v1` twist rhythm, polarity, evidence | Feature Engine | DG-L,T02 | T05 | OPEN_BLOCKING | MISSING | Finite-memory twist traces; explicit `REAL/SEEDED/NONE` evidence state; seeding inert once `REAL` |
+| T05 | `fei-axes-v1` categorical ZONE, TRAVEL, STATE and thinness | Feature Engine | DG-L,T02,T03,T04 | T06 | OPEN_BLOCKING | MISSING | Thresholds as identity-bearing parameters; fixed STATE precedence; no posture, urgency or corridor direction/shift/target; no array-length dependence |
+| T06 | FEI conformity proof | Feature Engine | DG-L,T05 | FEI-backed research | OPEN_BLOCKING | MISSING | Replay equals incremental evaluation at every bar past warm-up; identical output across request start offsets; reference vectors reconciled with listed deviations |
+
 ## Dependency integrity
 
 The `Requires` relation is a DAG. In particular, operational capability and implementation sequencing are not conflated:
@@ -270,7 +298,7 @@ K08/A11/K02/K10 are now complete for the selected first live-ingest path, includ
 
 ## Decision gates
 
-There are now **12 unresolved atom decisions** (4 `OPEN_BLOCKING`: `A13`, `A14`, `I06`, `I07`; 8 `OPEN_DEFERABLE`: `A12`, `A15`, `B05`, `B08`, `C06`, `E07`, `H06`, `J11`) grouped into gate families. The `DG-J` Wave 8 gates (`G1`-`G6`) are resolved and their nine atoms are implemented (Wave 8 closeout, issue #327); `J11` is deliberately `OPEN_DEFERABLE` under ADR-0065 §5. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
+There are now **18 unresolved atom decisions** (11 `OPEN_BLOCKING`: `A13`, `A14`, `I06`, `I07`, `E07`, and DG-L's `T01`-`T06`; 7 `OPEN_DEFERABLE`: `A12`, `A15`, `B05`, `B08`, `C06`, `H06`, `J11`) grouped into gate families. The `DG-J` Wave 8 gates (`G1`-`G6`) are resolved and their nine atoms are implemented (Wave 8 closeout, issue #327); `J11` is deliberately `OPEN_DEFERABLE` under ADR-0065 §5. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
 
 A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path.
 
@@ -406,6 +434,27 @@ P05a       (requires J02/J09 only)
 P06        (requires J09, J14, P02)
 ```
 
+### DG-L — FEI Technical Feature Provider v1 — OPEN_BLOCKING (design gate #363)
+
+Registered by governance issue #362 on `implement/fei`. One design-gate issue
+(#363) must produce one ADR that fixes scale binding to epoch-aligned
+CandleDefinition representations, the provider boundary (observables and
+optional categorical axes; no posture, urgency or corridor direction), finite
+window support with declared seed and warm-up, the numerical-equivalence kind
+and warm-up bound, non-observation mapping, replay/incremental parity and the
+calibration boundary, or close with an explicit alternative disposition and
+evidence trigger. It gates `T01`-`T06` above and the re-statused `E07`. Fixed
+owner inputs: FEI is a composite feature like `h01_imbalance`; finite window;
+generic provider (`E07`); distinct line from DG-K; `implement/fei` is
+re-anchored on `main` after DG-K promotion and before FEI promotion. Full
+statement and stop conditions: `OPEN_DECISIONS.md` (DG-L).
+
+```text
+E07 ─┐
+T01 ─> T02 ─┬─> T03 ─┐
+            └─> T04 ─┴─> T05 ─> T06
+```
+
 ## Vertical milestones
 
 | ID | Path | Proposition | State |
@@ -535,6 +584,7 @@ Wave 8  Full Platform API & Remote Service Topology v1    COMPLETE (J03,J09,J10,
                                                            recorded bounds; J10/J12/J13 in-process only; J11
                                                            deferred; no Golden proof claimed; operator closeout #327)
 DG-K   Process Topology v1                               ADRs ACCEPTED (#319); P01-P06 authorized, MISSING; before Wave 9
+DG-L   FEI Technical Feature Provider v1 (design gate)   OPEN (#362/#363; T01-T06 candidate, E07 re-statused; distinct from DG-K)
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```
