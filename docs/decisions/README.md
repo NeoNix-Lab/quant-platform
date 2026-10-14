@@ -75,5 +75,6 @@ substance of an original decision. A change in substance is a supersession
 | 0067 | Omega remote client contract v1 | Accepted |
 | 0068 | Process topology v1 | Accepted |
 | 0069 | J02 carriage of consumer seams and deck handoff v1 | Accepted |
+| 0071 | FEI technical feature provider and finite-window support v1 | Accepted |
 
 See the individual ADR files for context and consequences.
