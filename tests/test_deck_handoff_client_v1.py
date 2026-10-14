@@ -69,6 +69,14 @@ class Script:
         return self._queue.pop(0)
 
 
+def strict_context() -> ssl.SSLContext:
+    """A client context of the shape the deck client accepts (the transport itself is faked)."""
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    return context
+
+
 def ok(request, result, **overrides):
     envelope = {
         "message_family": request["message_family"],
@@ -168,7 +176,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(label):
                 script = Script(lambda request, change=change: ok(request, {}, **change))
-                async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=script) as client:
+                async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
                     with self.assertRaises(deck.WireIncompatible):
                         await client.manifest("admitted-input-v1:" + "0" * 64)
                 self.assertEqual((1, 1), (script.connections, len(script.sent)))  # no retry, no probing
@@ -180,7 +188,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 "context": {"reason": "admission_not_found"}, "request_identity": "req-9",
             })
 
-        async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=Script(reply)) as client:
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=Script(reply)) as client:
             with self.assertRaises(deck.RemoteConsumerApiError) as caught:
                 await client.manifest("admitted-input-v1:" + "0" * 64)
         error = caught.exception
@@ -196,12 +204,12 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(label):
                 with self.assertRaises(deck.RemoteSecurityFailure):
-                    async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=script) as client:
+                    async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
                         await client.upload_output(b"abc")
         # Another close code is not a security verdict.
         script = Script(None, close=(1011, "internal"))
         with self.assertRaises(ConnectionClosed):
-            async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=script) as client:
+            async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
                 await client.upload_output(b"abc")
 
     async def test_an_expired_member_transfer_is_acknowledged_as_expired_and_no_bytes_are_returned(self) -> None:
@@ -229,7 +237,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             return ok(request, {"state": "DELIVERY_FAILED"})
 
         script = Script(reply)
-        async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=script) as client:
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
             admission = deck.Admission(document["admission_id"], digest, document["manifest"], "SEALED")
             with self.assertRaises(deck.DeliveryIntegrityFailure) as caught:
                 await client.fetch_inputs(admission)
@@ -248,13 +256,29 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(label):
                 script = Script(lambda request, change=change: ok(request, {**document, **change}))
-                async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=script) as client:
+                async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
                     with self.assertRaises(deck.DeliveryIntegrityFailure):
                         await client.manifest(document["admission_id"])
         script = Script(lambda request: ok(request, document))
-        async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=script) as client:
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
             admission = await client.manifest(document["admission_id"])
         self.assertEqual(document["manifest_digest"], admission.manifest_digest)
+
+    async def test_a_manifest_of_another_admission_is_refused_even_when_it_is_valid(self) -> None:
+        # B is a faithful admission with its own correct digest and id; A was asked for.
+        asked = admission_document()
+        other_fields = {**asked["manifest"], "operation_identity": "other-operation-v1"}
+        other_digest = deck.manifest_digest(other_fields)
+        other = {
+            **asked, "manifest": other_fields, "manifest_digest": other_digest,
+            "admission_id": f"admitted-input-v1:{other_digest}",
+        }
+        self.assertNotEqual(asked["admission_id"], other["admission_id"])
+        script = Script(lambda request: ok(request, other))
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            with self.assertRaises(deck.DeliveryIntegrityFailure):
+                await client.manifest(asked["admission_id"])
+        self.assertEqual(["manifest"], [item["operation"] for item in script.sent])  # no deliver, no retry
 
     async def test_an_upload_learns_the_servers_chunk_size_from_a_layout_refusal_once(self) -> None:
         payload = bytes(range(256)) * 8  # 2048 bytes
@@ -280,7 +304,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             })
 
         script = Script(reply)
-        async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=script) as client:
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
             staged = await client.upload_output(payload, frame_payload_bytes=1024)
         self.assertEqual("sha256:" + hashlib.sha256(payload).hexdigest(), staged.checksum)
         sizes = {len(base64.b64decode(item["request"]["chunk_base64"])) for item in script.sent[1:]}
@@ -296,15 +320,221 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 "byte_length": 3,
             })
 
-        async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=Script(reply)) as client:
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=Script(reply)) as client:
             with self.assertRaises(deck.WireIncompatible):
                 await client.upload_output(b"abc")
 
     async def test_submit_takes_only_the_bundle_wire_document(self) -> None:
-        async with deck.DeckHandoffClient("wss://x", ssl_context=None, connect=Script(lambda r: ok(r, {}))) as client:
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=Script(lambda r: ok(r, {}))) as client:
             for bad in ({}, {"version": "governed-result-bundle-wire-v2"}, [1]):
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
                     await client.submit(bad)
+
+
+PARTITIONS = ("partition-v1:a", "partition-v1:b")
+PARTITION_BYTES = (b"partition-a-bytes", b"partition-b-bytes")
+
+
+def sealed_admission(*, partitions=PARTITIONS, logical=("dataset-v1:BTCUSDT",), members=PARTITION_BYTES):
+    fields = {
+        **manifest_fields(), "natural_partition_identities": list(partitions),
+        "logical_input_identities": list(logical),
+        "content_hashes": [hashlib.sha256(data).hexdigest() for data in members],
+    }
+    digest = deck.manifest_digest(fields)
+    return deck.Admission(f"admitted-input-v1:{digest}", digest, fields, "SEALED")
+
+
+def delivery_script(admission, members, *, descriptor_identities, document_identities):
+    """A server that is faithful in every digest and frame, and says what it is told about identities."""
+
+    transfers: dict[str, list[str]] = {}
+    descriptors = []
+    for index, data in enumerate(members):
+        content_hash = hashlib.sha256(data).hexdigest()
+        document = {
+            "schema_version": "admitted-input-member-v1", "admission_id": admission.admission_id,
+            "manifest_digest": admission.manifest_digest, "member_index": index,
+            "member_identity": document_identities[index], "content_hash": content_hash,
+            "byte_length": len(data), "encoding": "base64",
+            "bytes": base64.b64encode(data).decode(),
+        }
+        frames = j14.frame_complete_result(
+            logical_result_identity=f"admitted-input-member-v1:{admission.admission_id}:{index}",
+            result=document, config=j14.FramedResultConfig(frame_payload_bytes=96),
+        )
+        first = frames[0]
+        transfers[first.transfer_id] = [json.dumps(frame.message()) for frame in frames]
+        descriptors.append({
+            "member_index": index, "member_identity": descriptor_identities[index],
+            "content_hash": content_hash, "byte_length": len(data),
+            "logical_result_identity": first.logical_result_identity, "transfer_id": first.transfer_id,
+            "payload_sha256": first.payload_sha256, "chunk_count": first.chunk_count,
+        })
+
+    def reply(request):
+        if request.get("message_type") == "resume":
+            return transfers[request["transfer_id"]]
+        if request["operation"] == "deliver":
+            return ok(request, {
+                "admission_id": admission.admission_id, "manifest_digest": admission.manifest_digest,
+                "state": "DELIVERY_PENDING", "members": descriptors,
+            })
+        outcome = request["request"]["outcome"]
+        return ok(request, {"state": "DELIVERED" if outcome == "delivered" else "DELIVERY_FAILED"})
+
+    return Script(reply)
+
+
+class MemberAttributionTests(unittest.IsolatedAsyncioTestCase):
+    """The identity of a member is the sealed manifest's, never the transport's own word."""
+
+    async def fetch(self, admission, **identities):
+        script = delivery_script(admission, PARTITION_BYTES, **identities)
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            try:
+                return script, await client.fetch_inputs(admission), None
+            except deck.DeliveryIntegrityFailure as failure:
+                return script, None, failure
+
+    async def test_partitions_are_returned_under_the_identities_the_manifest_pairs_with_them(self) -> None:
+        script, delivered, failure = await self.fetch(
+            sealed_admission(), descriptor_identities=PARTITIONS, document_identities=PARTITIONS,
+        )
+        self.assertIsNone(failure)
+        self.assertEqual((PARTITION_BYTES, PARTITIONS), (delivered.members, delivered.member_identities))
+        self.assertEqual("delivered", script.sent[-1]["request"]["outcome"])
+
+    async def test_a_partition_under_another_partitions_identity_is_refused_and_acknowledged(self) -> None:
+        swapped = tuple(reversed(PARTITIONS))
+        for label, identities in (
+            # The frames are re-built consistently in each case; every digest is right.
+            ("document and descriptor swapped", {"descriptor_identities": swapped, "document_identities": swapped}),
+            ("only the document swapped", {"descriptor_identities": PARTITIONS, "document_identities": swapped}),
+            ("only the descriptor swapped", {"descriptor_identities": swapped, "document_identities": PARTITIONS}),
+            (
+                "the dataset's identity in place of the partition",
+                {"descriptor_identities": ("dataset-v1:BTCUSDT",) * 2, "document_identities": ("dataset-v1:BTCUSDT",) * 2},
+            ),
+            (
+                "an identity the manifest does not know",
+                {"descriptor_identities": ("partition-v1:z",) * 2, "document_identities": ("partition-v1:z",) * 2},
+            ),
+        ):
+            with self.subTest(label):
+                script, delivered, failure = await self.fetch(sealed_admission(), **identities)
+                self.assertIsNone(delivered)
+                self.assertEqual(("transfer_integrity_failure", 0), (failure.reason, failure.member_index))
+                acknowledgement = script.sent[-1]["request"]
+                self.assertEqual(
+                    ("failed", "transfer_integrity_failure", 0),
+                    (acknowledgement["outcome"], acknowledgement["failure_reason"], acknowledgement["failed_member_index"]),
+                )
+                self.assertNotIn("delivered", [item.get("request", {}).get("outcome") for item in script.sent])
+
+    async def test_an_artifact_only_manifest_is_attributed_to_its_single_logical_identity(self) -> None:
+        artifact = "artifact-v1:model"
+        admission = sealed_admission(partitions=(), logical=(artifact,))
+        script, delivered, failure = await self.fetch(
+            admission, descriptor_identities=(artifact,) * 2, document_identities=(artifact,) * 2,
+        )
+        self.assertIsNone(failure)
+        self.assertEqual((artifact, artifact), delivered.member_identities)
+        # An identity that is not the manifest's one is still refused.
+        _, delivered, failure = await self.fetch(
+            admission, descriptor_identities=("artifact-v1:other",) * 2,
+            document_identities=("artifact-v1:other",) * 2,
+        )
+        self.assertIsNone(delivered)
+        self.assertEqual(0, failure.member_index)
+
+    async def test_a_manifest_without_a_verifiable_attribution_is_refused_before_delivery(self) -> None:
+        for label, admission in (
+            ("two logical identities, no partitions", sealed_admission(partitions=(), logical=("a:1", "b:2"))),
+            ("partitions that do not align", sealed_admission(partitions=("partition-v1:a",))),
+        ):
+            with self.subTest(label):
+                script = delivery_script(
+                    admission, PARTITION_BYTES, descriptor_identities=PARTITIONS, document_identities=PARTITIONS,
+                )
+                async with deck.DeckHandoffClient(
+                    "wss://x", ssl_context=strict_context(), connect=script,
+                ) as client:
+                    with self.assertRaises(deck.DeliveryIntegrityFailure):
+                        await client.fetch_inputs(admission)
+                self.assertEqual([], script.sent)  # nothing was delivered, so nothing is acknowledged
+
+
+class SecureEndpointTests(unittest.IsolatedAsyncioTestCase):
+    """ADR-0063 section 1: WSS, a verifying chain and name, TLS 1.3 -- before any connection."""
+
+    def refuse(self, url, context):
+        script = Script(lambda request: ok(request, admission_document()))
+        with self.assertRaises(deck.InsecureTransportConfiguration):
+            deck.DeckHandoffClient(url, ssl_context=context, connect=script)
+        self.assertEqual((0, []), (script.connections, script.sent))
+
+    def test_only_wss_to_a_named_endpoint_is_accepted(self) -> None:
+        for url in (
+            "ws://127.0.0.1:9", "http://127.0.0.1:9", "wss://", "wss://:443", "wss://user:secret@deck.example",
+            "127.0.0.1:9", "", None,
+        ):
+            with self.subTest(url=url):
+                self.refuse(url, strict_context())
+
+    def test_a_missing_or_non_verifying_or_old_context_is_refused(self) -> None:
+        def unverified_chain():
+            context = strict_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            return context
+
+        def no_hostname_check():
+            context = strict_context()
+            context.check_hostname = False
+            return context
+
+        def optional_chain():
+            context = strict_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_OPTIONAL
+            return context
+
+        def optional_with_hostname():
+            context = strict_context()
+            context.verify_mode = ssl.CERT_OPTIONAL
+            return context
+
+        def tls12():
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            return context
+
+        for label, context in (
+            ("no context", None),
+            ("a server-side context", ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)),
+            ("chain verification off", unverified_chain()),
+            ("hostname verification off", no_hostname_check()),
+            ("chain verification optional", optional_chain()),
+            ("chain verification optional, hostname checked", optional_with_hostname()),
+            ("TLS 1.2 allowed", tls12()),
+        ):
+            with self.subTest(label):
+                self.refuse("wss://deck.example:443", context)
+
+    async def test_a_context_weakened_after_construction_is_refused_on_entry(self) -> None:
+        script = Script(lambda request: ok(request, admission_document()))
+        context = strict_context()
+        client = deck.DeckHandoffClient("wss://x", ssl_context=context, connect=script)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        with self.assertRaises(deck.InsecureTransportConfiguration):
+            async with client:
+                pass
+        self.assertEqual(0, script.connections)
+
+    def test_a_verifying_tls13_client_context_is_accepted(self) -> None:
+        deck.require_secure_endpoint("wss://deck.example:443/path", strict_context())
 
 
 class VerificationTests(unittest.TestCase):
@@ -339,7 +569,7 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(self.document, json.loads(payload))
         data, identity = deck.verify_member_document(
             self.document, admission=self.admission, index=0,
-            content_hash=hashlib.sha256(self.data).hexdigest(),
+            content_hash=hashlib.sha256(self.data).hexdigest(), member_identity="partition-v1:1",
         )
         self.assertEqual((self.data, "partition-v1:1"), (data, identity))
 
@@ -411,7 +641,7 @@ class VerificationTests(unittest.TestCase):
         with self.assertRaises(deck._FrameFailure) as caught:
             deck.verify_member_document(
                 document, admission=self.admission, index=0,
-                content_hash=hashlib.sha256(self.data).hexdigest(),
+                content_hash=hashlib.sha256(self.data).hexdigest(), member_identity="partition-v1:1",
             )
         self.assertEqual("content_hash_mismatch", caught.exception.reason)
 
@@ -425,13 +655,31 @@ class VerificationTests(unittest.TestCase):
             ("another encoding", {"encoding": "hex"}),
             ("another schema", {"schema_version": "admitted-input-member-v2"}),
             ("not base64", {"bytes": "!!"}),
+            ("another partition's identity", {"member_identity": "partition-v1:2"}),
+            ("the dataset's identity", {"member_identity": "dataset-v1:BTCUSDT"}),
+            ("no identity", {"member_identity": None}),
         ):
             with self.subTest(label), self.assertRaises(deck._FrameFailure):
                 deck.verify_member_document(
                     {**self.document, **change}, admission=self.admission, index=0, content_hash=good,
+                    member_identity="partition-v1:1",
                 )
         with self.assertRaises(deck._FrameFailure):
-            deck.verify_member_document([], admission=self.admission, index=0, content_hash=good)
+            deck.verify_member_document(
+                [], admission=self.admission, index=0, content_hash=good, member_identity="partition-v1:1",
+            )
+
+    def test_the_transfer_id_derivation_is_checked_on_its_own(self) -> None:
+        # Every frame *and* the descriptor carry the same, non-derived id; the
+        # payload digest, chunk digests, count, identity and indexes are all
+        # right. Only the derivation of the id from (identity, payload digest)
+        # can refuse this.
+        forged = "0" * 64
+        frames = [{**message, "transfer_id": forged} for message in self.messages()]
+        with self.assertRaises(deck._FrameFailure) as caught:
+            deck.reassemble(frames, descriptor={**self.descriptor, "transfer_id": forged})
+        self.assertEqual("transfer_integrity_failure", caught.exception.reason)
+        self.assertIn("inconsistent", str(caught.exception))
 
 
 if __name__ == "__main__":

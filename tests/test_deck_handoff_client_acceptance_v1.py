@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 import shutil
 import sqlite3
+import ssl
 import sys
 import tempfile
 import unittest
@@ -157,6 +158,30 @@ class ConsistentRewrite(_Wrapped):
         data = bytearray(base64.b64decode(document["bytes"]))
         data[0] ^= 0x01
         document["bytes"] = base64.b64encode(bytes(data)).decode()  # hash and length claims untouched
+        forged = frame_complete_result(
+            logical_result_identity=descriptor["logical_result_identity"], result=document,
+            config=FramedResultConfig(frame_payload_bytes=FRAME),
+        )
+        descriptor.update(
+            transfer_id=forged[0].transfer_id, payload_sha256=forged[0].payload_sha256,
+            chunk_count=forged[0].chunk_count,
+        )
+        self._forged[forged[0].transfer_id] = [frame.message() for frame in forged]
+
+
+class ConsistentIdentityRewrite(ConsistentRewrite):
+    """Re-attributes member 0 to the other partition, with every digest and id re-derived."""
+
+    async def _forge(self, descriptor):
+        await self._ws.send(json.dumps({
+            "message_family": deck.J14_FAMILY, "schema_version": deck.J14_FAMILY,
+            "message_type": "resume", "transfer_id": descriptor["transfer_id"],
+            "next_verified_chunk_index": 0,
+        }))
+        frames = [json.loads(await self._ws.recv()) for _ in range(descriptor["chunk_count"])]
+        document = json.loads(b"".join(base64.b64decode(frame["chunk_base64"]) for frame in frames))
+        document["member_identity"] = "partition-v1:2024-01-02"
+        descriptor["member_identity"] = document["member_identity"]
         forged = frame_complete_result(
             logical_result_identity=descriptor["logical_result_identity"], result=document,
             config=FramedResultConfig(frame_payload_bytes=FRAME),
@@ -396,6 +421,91 @@ class DeckHandoffClientAcceptanceTests(unittest.IsolatedAsyncioTestCase):
                 delivered = await client.fetch_inputs(admission)
         self.assertEqual(tuple(self.authority.members_bytes), delivered.members)
         self.assertEqual(AdmittedInputState.DELIVERED, self.stored_state(admission.admission_id).state)
+
+    async def test_a_partition_cannot_be_delivered_under_another_partitions_identity(self) -> None:
+        async with self.serve() as server:
+            async with self.client(
+                server, connect=ConsistentIdentityRewrite(websockets.connect, member_index=0),
+            ) as client:
+                admission = await client.admit(
+                    dataset=DATASET, operation_identity="strategy-compose-v1",
+                    profile_identity="profile-v1:default",
+                )
+                with self.assertRaises(deck.DeliveryIntegrityFailure) as caught:
+                    await client.fetch_inputs(admission)
+        self.assertEqual(("transfer_integrity_failure", 0), (caught.exception.reason, caught.exception.member_index))
+        record = self.stored_state(admission.admission_id)
+        self.assertEqual(AdmittedInputState.DELIVERY_FAILED, record.state)
+        self.assertEqual("transfer_integrity_failure:member:0", record.delivery_failure_reason)
+
+    async def test_the_manifest_of_another_valid_admission_is_not_accepted_for_the_one_asked(self) -> None:
+        async with self.serve() as server:
+            async with self.client(server) as client:
+                first = await client.admit(
+                    dataset=DATASET, operation_identity="operation:A", profile_identity="profile:A",
+                )
+                second = await client.admit(
+                    dataset=DATASET, operation_identity="operation:B", profile_identity="profile:B",
+                )
+            self.assertNotEqual(first.admission_id, second.admission_id)
+
+            class Substitute(_Wrapped):
+                async def recv(self):
+                    envelope = json.loads(await self._ws.recv())
+                    result = envelope.get("result")
+                    if isinstance(result, dict) and "manifest" in result:
+                        envelope["result"] = {
+                            "admission_id": second.admission_id, "manifest_digest": second.manifest_digest,
+                            "manifest": dict(second.manifest), "state": second.state,
+                        }
+                    return json.dumps(envelope)
+
+            async with self.client(server, connect=Substitute(websockets.connect)) as client:
+                with self.assertRaises(deck.DeliveryIntegrityFailure):
+                    await client.manifest(first.admission_id)
+        for admission in (first, second):  # nothing was delivered
+            self.assertEqual(AdmittedInputState.SEALED, self.stored_state(admission.admission_id).state)
+
+    # -- ADR-0063 section 1: no plaintext, no non-verifying TLS ------------------------
+
+    async def test_plaintext_and_a_non_verifying_context_are_refused_before_any_connection(self) -> None:
+        connections = []
+
+        async def plaintext_server(websocket):
+            connections.append(websocket)
+
+        async with websockets.serve(plaintext_server, "127.0.0.1", 0) as listener:
+            port = listener.sockets[0].getsockname()[1]
+            with self.assertRaises(deck.InsecureTransportConfiguration):
+                deck.DeckHandoffClient(f"ws://127.0.0.1:{port}", ssl_context=self.ssl_context())
+        async with self.serve() as server:
+            port = server.sockets[0].getsockname()[1]
+            context = self.ssl_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            with self.assertRaises(deck.InsecureTransportConfiguration):
+                deck.DeckHandoffClient(f"wss://127.0.0.1:{port}", ssl_context=context)
+        self.assertEqual([], connections)
+        self.assertEqual([], self.authority.resolve_calls)
+
+    async def test_a_wrong_authority_or_name_is_still_a_remote_security_failure(self) -> None:
+        async with self.serve() as server:
+            port = server.sockets[0].getsockname()[1]
+            wrong_ca = deck.build_client_ssl_context(
+                client_certificate_path=str(self.cwd / "deck.crt"),
+                client_private_key_path=str(self.cwd / "deck.key"),
+                server_trust_anchor_path=str(self.cwd / "other_ca.crt"),
+            )
+            with self.assertRaises(deck.RemoteSecurityFailure):
+                async with deck.DeckHandoffClient(f"wss://127.0.0.1:{port}", ssl_context=wrong_ca) as client:
+                    await client.admit(dataset=DATASET, operation_identity="strategy-compose-v1")
+            # The certificate names 127.0.0.1 only; another name is not the endpoint.
+            with self.assertRaises(deck.RemoteSecurityFailure):
+                async with deck.DeckHandoffClient(
+                    f"wss://localhost:{port}", ssl_context=self.ssl_context(),
+                ) as client:
+                    await client.admit(dataset=DATASET, operation_identity="strategy-compose-v1")
+        self.assertEqual([], self.authority.resolve_calls)
 
     # -- AC3: typed failures, never a Consumer error -------------------------------
 

@@ -23,9 +23,10 @@ What it verifies before it hands a byte to the deck workload (:meth:`fetch_input
 - every J14 frame (chunk digest, ``transfer_id`` derivation, consistent
   metadata, every index exactly once, whole-payload digest) and the identity of
   the transfer (the member's logical result identity and the descriptor);
-- the member document (admission, manifest digest, index, ``byte_length``) and,
-  last, that the member bytes hash to the manifest's own content hash for that
-  index.
+- the member document (admission, manifest digest, index, ``byte_length``), the
+  member's identity against the identity the *sealed manifest* pairs with that
+  index (never the transport's own description of it) and, last, that the member
+  bytes hash to the manifest's own content hash for that index.
 
 Any failure is reported to the server with ``acknowledge`` (``failed``, with the
 reason and the member index) and raised as :class:`DeliveryIntegrityFailure`;
@@ -88,6 +89,13 @@ class WireIncompatible(Exception):
 
 class RemoteSecurityFailure(Exception):
     """TLS, mTLS or scope authorization failed; there is no application result."""
+
+
+class InsecureTransportConfiguration(ValueError):
+    """The URL or TLS context is not WSS with a verified, TLS 1.3 client context.
+
+    Raised before any connection is made or any byte is sent (ADR-0063 section 1).
+    """
 
 
 class DeliveryIntegrityFailure(Exception):
@@ -158,6 +166,29 @@ def build_client_ssl_context(
     context.load_verify_locations(cafile=server_trust_anchor_path)
     context.load_cert_chain(client_certificate_path, client_private_key_path)
     return context
+
+
+def require_secure_endpoint(url: str, ssl_context: ssl.SSLContext | None) -> None:
+    """Refuse anything but WSS over a verifying TLS 1.3 client context (ADR-0063 section 1).
+
+    A client certificate cannot be introspected from an ``SSLContext``; the
+    credential is composed by :meth:`DeckHandoffClient.from_credentials`, and
+    the J09 listener requires it.
+    """
+
+    authority = url[len("wss://"):].split("/", 1)[0].split("?", 1)[0] if (
+        isinstance(url, str) and url.startswith("wss://")
+    ) else ""
+    if not authority or authority.startswith(":") or "@" in authority:
+        raise InsecureTransportConfiguration("the deck client speaks only wss:// to a named endpoint")
+    if not isinstance(ssl_context, ssl.SSLContext) or ssl_context.protocol != ssl.PROTOCOL_TLS_CLIENT:
+        raise InsecureTransportConfiguration("a TLS client context is required")
+    if ssl_context.verify_mode != ssl.CERT_REQUIRED or ssl_context.check_hostname is not True:
+        raise InsecureTransportConfiguration(
+            "server certificate chain and hostname verification cannot be disabled"
+        )
+    if int(ssl_context.minimum_version) < int(ssl.TLSVersion.TLSv1_3):
+        raise InsecureTransportConfiguration("TLS 1.3 is the minimum accepted version")
 
 
 # -- identities the client recomputes (independent of the server) ----------------
@@ -291,13 +322,40 @@ def reassemble(frames: Sequence[Mapping[str, Any]], *, descriptor: Mapping[str, 
     return payload
 
 
+def expected_member_identities(manifest: Mapping[str, Any]) -> tuple[str, ...]:
+    """The identity the sealed manifest itself pairs with each member index.
+
+    Natural partition *i* is content hash *i*. A manifest without a partition
+    list carries no pairing, so only a single input identity is a verifiable
+    attribution; anything else is refused rather than guessed.
+    """
+
+    hashes = manifest.get("content_hashes")
+    partitions = manifest.get("natural_partition_identities")
+    if not isinstance(hashes, list) or not hashes or not all(type(h) is str for h in hashes):
+        raise DeliveryIntegrityFailure("transfer_integrity_failure", None, "manifest has no members")
+    if isinstance(partitions, list) and partitions:
+        if len(partitions) != len(hashes) or not all(type(item) is str for item in partitions):
+            raise DeliveryIntegrityFailure(
+                "transfer_integrity_failure", None, "partition identities do not align with the members",
+            )
+        return tuple(partitions)
+    only = manifest.get("logical_input_identities")
+    if not isinstance(only, list) or len(only) != 1 or type(only[0]) is not str:
+        raise DeliveryIntegrityFailure(
+            "transfer_integrity_failure", None, "the manifest carries no verifiable member attribution",
+        )
+    return (only[0],) * len(hashes)
+
+
 def verify_member_document(
-    document: Any, *, admission: Admission, index: int, content_hash: str,
+    document: Any, *, admission: Admission, index: int, content_hash: str, member_identity: str,
 ) -> tuple[bytes, str]:
     """The member's bytes and identity from a reassembled ``admitted-input-member-v1`` document.
 
     The bytes are checked against the *manifest's* content hash for this index
-    (the admission's own, not the document's), last, before anything uses them.
+    and the identity against the one the *manifest* pairs with it (the
+    admission's own, not the document's), last, before anything uses them.
     """
 
     if (
@@ -306,7 +364,7 @@ def verify_member_document(
         or document.get("manifest_digest") != admission.manifest_digest
         or document.get("member_index") != index
         or document.get("encoding") != "base64"
-        or not isinstance(document.get("member_identity"), str)
+        or document.get("member_identity") != member_identity
     ):
         raise _FrameFailure("transfer_integrity_failure", "member document does not match its admission")
     try:
@@ -317,7 +375,7 @@ def verify_member_document(
         raise _FrameFailure("transfer_integrity_failure", "byte_length does not match the bytes")
     if _digest(data) != content_hash or document.get("content_hash") != content_hash:
         raise _FrameFailure("content_hash_mismatch", "member bytes do not hash to the manifest's content hash")
-    return data, document["member_identity"]
+    return data, member_identity
 
 
 # -- the session -------------------------------------------------------------------
@@ -327,15 +385,37 @@ class DeckHandoffClient:
     """One authenticated connection carrying a handoff: use as ``async with``."""
 
     def __init__(
-        self, url: str, *, ssl_context: ssl.SSLContext | None, connect: Connector = websockets.connect,
+        self, url: str, *, ssl_context: ssl.SSLContext, connect: Connector = websockets.connect,
     ) -> None:
+        # Nothing is connected or sent before the endpoint and context are known
+        # to be WSS over a verifying TLS 1.3 client context. ``connect`` is a seam
+        # for tests; it does not widen what the endpoint may be.
+        require_secure_endpoint(url, ssl_context)
         self._url = url
         self._ssl = ssl_context
         self._connect = connect
         self._context: Any = None
         self._socket: Any = None
 
+    @classmethod
+    def from_credentials(
+        cls, url: str, *, client_certificate_path: str, client_private_key_path: str,
+        server_trust_anchor_path: str, connect: Connector = websockets.connect,
+    ) -> "DeckHandoffClient":
+        """The secure composition: the deck's mTLS credential and the platform's trust anchor."""
+
+        return cls(
+            url,
+            ssl_context=build_client_ssl_context(
+                client_certificate_path=client_certificate_path,
+                client_private_key_path=client_private_key_path,
+                server_trust_anchor_path=server_trust_anchor_path,
+            ),
+            connect=connect,
+        )
+
     async def __aenter__(self) -> "DeckHandoffClient":
+        require_secure_endpoint(self._url, self._ssl)  # the context may have been changed since
         try:
             self._context = self._connect(
                 self._url, ssl=self._ssl, max_size=J02_MAX_WIRE_MESSAGE_BYTES,
@@ -445,7 +525,13 @@ class DeckHandoffClient:
 
     async def manifest(self, admission_id: str) -> Admission:
         result = await self._call(ADMITTED_INPUT_FAMILY, "manifest", {"admission_id": admission_id})
-        return self._admission(result)
+        admission = self._admission(result)
+        if admission.admission_id != admission_id:
+            # A different, internally consistent admission is not the one asked for.
+            raise DeliveryIntegrityFailure(
+                "transfer_integrity_failure", None, "the manifest is not that of the requested admission",
+            )
+        return admission
 
     @staticmethod
     def _admission(result: Mapping[str, Any]) -> Admission:
@@ -470,9 +556,8 @@ class DeckHandoffClient:
         """Deliver, verify every member, acknowledge, and only then hand the bytes over."""
 
         manifest = admission.manifest
-        content_hashes = manifest.get("content_hashes")
-        if not isinstance(content_hashes, list) or not content_hashes:
-            raise DeliveryIntegrityFailure("transfer_integrity_failure", None, "manifest has no members")
+        identities = expected_member_identities(manifest)  # before anything is delivered
+        content_hashes = manifest["content_hashes"]
         delivery = await self._call(
             ADMITTED_INPUT_FAMILY, "deliver", {"admission_id": admission.admission_id},
         )
@@ -489,7 +574,9 @@ class DeckHandoffClient:
         verified: list[tuple[bytes, str]] = []
         for index, descriptor in enumerate(members):
             try:
-                verified.append(await self._member(admission, index, descriptor, content_hashes[index]))
+                verified.append(await self._member(
+                    admission, index, descriptor, content_hashes[index], identities[index],
+                ))
             except _FrameFailure as failure:
                 await self._acknowledge_failure(admission, failure.reason, index)
                 raise DeliveryIntegrityFailure(failure.reason, index, str(failure)) from failure
@@ -504,7 +591,7 @@ class DeckHandoffClient:
         )
 
     async def _member(
-        self, admission: Admission, index: int, descriptor: Any, content_hash: str,
+        self, admission: Admission, index: int, descriptor: Any, content_hash: str, identity: str,
     ) -> tuple[bytes, str]:
         expected = f"{MEMBER_SCHEMA}:{admission.admission_id}:{index}"
         if (
@@ -512,6 +599,7 @@ class DeckHandoffClient:
             or descriptor.get("logical_result_identity") != expected
             or descriptor.get("member_index") != index
             or descriptor.get("content_hash") != content_hash
+            or descriptor.get("member_identity") != identity
             or not _is_digest(descriptor.get("transfer_id"))
             or not _is_digest(descriptor.get("payload_sha256"))
             or type(descriptor.get("chunk_count")) is not int or descriptor["chunk_count"] < 1
@@ -537,6 +625,7 @@ class DeckHandoffClient:
             raise _FrameFailure("transfer_integrity_failure", "payload is not JSON") from error
         return verify_member_document(
             document, admission=admission, index=index, content_hash=content_hash,
+            member_identity=identity,
         )
 
     @staticmethod
@@ -625,6 +714,7 @@ __all__ = [
     "DECK_SCOPES",
     "DeckHandoffClient",
     "DeliveryIntegrityFailure",
+    "InsecureTransportConfiguration",
     "J02_MAX_WIRE_MESSAGE_BYTES",
     "RESULT_IMPORT_FAMILY",
     "RESULT_IMPORT_SCOPE",
@@ -634,9 +724,11 @@ __all__ = [
     "StagedOutput",
     "WireIncompatible",
     "build_client_ssl_context",
+    "expected_member_identities",
     "manifest_digest",
     "output_chunks",
     "reassemble",
+    "require_secure_endpoint",
     "transfer_id",
     "verify_member_document",
 ]
