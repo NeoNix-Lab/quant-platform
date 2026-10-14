@@ -937,6 +937,66 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             socket, _ = await self.resume(transfers, item["transfer_id"])
             self.assertEqual(item["chunk_count"], len(socket.responses))
 
+    async def test_a_resolver_that_reuses_its_buffer_cannot_publish_one_body_as_another(self) -> None:
+        references = ("result:sha256:51", "result:sha256:52", "result:sha256:53")
+        job = self.seed_with_references("request:multi-buffer", references)
+        small = {"rows": [1, 2, 3]}
+        bodies = {references[0]: self.LARGE, references[1]: self.OTHER_LARGE, references[2]: small}
+        buffer: dict = {}
+
+        def reusing(reference):
+            # One mutable object, refilled for each reference (and left holding
+            # the last one when the result is assembled).
+            buffer.clear()
+            buffer.update(bodies[reference])
+            return buffer
+
+        handlers, transfers = self.with_bodies({}, resolver=reusing)
+        result = self.ok(await self.result_with(handlers, job.job_id))
+        first, second, third = result["bodies"]
+        self.assertEqual(
+            ["framed", "framed", "inline"], [item["delivery"] for item in (first, second, third)],
+        )
+        # Each framed transfer is its own reference's body, whole.
+        for item, expected in ((first, self.LARGE), (second, self.OTHER_LARGE)):
+            self.assertEqual("framed", item["delivery"])
+            socket, _ = await self.resume(transfers, item["transfer_id"])
+            receiver = FramedResultReceiver()
+            reassembled = None
+            for frame in socket.responses:
+                reassembled = receiver.receive(frame)
+            self.assertEqual(expected, reassembled, item["reference"])
+            self.assertEqual(item["reference"], socket.responses[0]["logical_result_identity"])
+        # The inline body is its own, not whatever the buffer holds at the end.
+        self.assertEqual({"reference": references[2], "delivery": "inline", "body": small}, third)
+
+    async def test_a_resolver_that_mutates_what_it_returned_changes_nothing_published(self) -> None:
+        references = ("result:sha256:61", "result:sha256:62")
+        job = self.seed_with_references("request:multi-mutate", references)
+        returned: list[dict] = []
+
+        def mutating(reference):
+            body = {"rows": [{"n": n, "text": "z" * 20} for n in range(400)], "ref": reference}
+            returned.append(body)
+            return body
+
+        handlers, transfers = self.with_bodies({}, resolver=mutating)
+        result = self.ok(await self.result_with(handlers, job.job_id))
+        digests = {item["reference"]: item["payload_sha256"] for item in result["bodies"]}
+        # Mutating the returned objects afterwards cannot alter what is retained.
+        for body in returned:
+            body["ref"] = "tampered"
+            body["rows"].clear()
+        for item in result["bodies"]:
+            socket, _ = await self.resume(transfers, item["transfer_id"])
+            receiver = FramedResultReceiver()
+            document = None
+            for frame in socket.responses:
+                document = receiver.receive(frame)
+            self.assertEqual(item["reference"], document["ref"])
+            self.assertEqual(400, len(document["rows"]))
+            self.assertEqual(digests[item["reference"]], socket.responses[0]["payload_sha256"])
+
     async def test_a_resolver_failure_or_a_non_canonical_body_is_an_integrity_failure(self) -> None:
         job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-faults")
 

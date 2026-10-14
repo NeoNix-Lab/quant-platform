@@ -44,6 +44,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
+import json
 from typing import Any
 
 from .api_transport_server import J02FamilyHandler
@@ -327,10 +328,16 @@ class JobTransport:
         admitted as a single batch, so a refusal (or a resolver that fails on a
         later reference) publishes nothing of this call, and never withdraws a
         transfer that was already retained.
+
+        A resolver's return value is never kept: a resolver may hand back one
+        buffer it reuses, or mutate what it returned. What is checked, inlined
+        and published is a snapshot decoded from the very canonical bytes that
+        were framed at the time of the check, and the published transfer must
+        carry the digest of that check.
         """
 
         deliveries: list[dict[str, Any] | None] = []
-        framed: list[tuple[int, str, Any]] = []  # (position, reference, body)
+        framed: list[tuple[int, str, Any, str]] = []  # (position, reference, snapshot, digest)
         for reference in references:
             try:
                 body = self._bodies(reference)
@@ -345,16 +352,20 @@ class JobTransport:
                 )
             except (TypeError, ValueError, ArithmeticError, RecursionError) as error:
                 raise _integrity("result_body_not_canonical") from error
+            try:
+                snapshot = json.loads(b"".join(frame.chunk_payload for frame in frames))
+            except ValueError as error:
+                raise _integrity("result_body_not_canonical") from error
             if len(frames) == 1:
                 # One frame is one message: nothing to frame, nothing to retain.
-                deliveries.append({"reference": reference, "delivery": "inline", "body": body})
+                deliveries.append({"reference": reference, "delivery": "inline", "body": snapshot})
             else:
-                framed.append((len(deliveries), reference, body))
+                framed.append((len(deliveries), reference, snapshot, frames[0].payload_sha256))
                 deliveries.append(None)
         if framed:
             try:
                 admitted = self._transfers.admit_many(
-                    [(reference, body) for _, reference, body in framed],
+                    [(reference, snapshot) for _, reference, snapshot, _ in framed],
                     owner=J02_JOB_SCOPES["result"],
                 )
             except FramedResultTransportError as error:
@@ -364,8 +375,11 @@ class JobTransport:
                     "the result would exceed the maximum J02 response size",
                     context={"reason": "transfer_refused"},
                 ) from error
-            for (position, reference, _), frames in zip(framed, admitted):
+            for (position, reference, _, digest), frames in zip(framed, admitted):
                 first = frames[0]
+                if first.payload_sha256 != digest:
+                    # Not the bytes that were checked: never describe it as such.
+                    raise _integrity("result_body_not_canonical")
                 deliveries[position] = {
                     "reference": reference,
                     "delivery": "framed",
