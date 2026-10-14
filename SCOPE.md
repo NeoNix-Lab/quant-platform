@@ -1,147 +1,117 @@
-# Scope: DG-K — Process Topology v1
+# Scope: DG-C / A14 — L2 contract, continuity and publication v1 (design gate)
 
-Status: **Part A (design gate) CLOSED — ADR-0068 and ADR-0069 ACCEPTED (#319, 2026-10-10). Part B implementation inventory AUTHORIZED; its implementation issues are not yet opened (maintainer direction 2026-10-10: reconcile without generating issues).**
+Status: **OPEN — design-gate scope on integration branch `implement/l2` (cut from `implement/dgk`).**
 
-Scope kind: this document has two parts. Part A recorded the DG-K design gate registered by governance issue #318 and closed by #319. Part B is the implementation inventory that gate makes implementable. No implementation may start until its own implementation issue exists, cites the governing ADR section below, and targets the DG-K integration branch.
+Scope kind: this document opens the **L2 design gate** for capability **`A14`** (L2
+contract/acquisition) and registers the atoms that implement it. It decides no L2
+semantics: those belong to `ADR-0070`, which does not exist yet. Registered by governance
+issue #364.
 
 ---
 
 ## Historical scope archive
 
-This file previously recorded **Wave 8 — Full Platform API & Remote Service Topology v1** (CLOSED — operator closeout, issue #327/PR #328, 2026-10-10; implementation promoted to `main` by PR #322 and PR #326; no Golden proof claimed), and then **this same DG-K scope while its design gate was still open** (governance issue #318). Both are preserved in git history (`git log -- SCOPE.md`). `SCOPE.md` is overwritten in place for each governance reconciliation.
+This file previously recorded **DG-K — Process Topology v1** (Part A closed via
+ADR-0068/ADR-0069; Part B implemented on `implement/dgk`), and earlier **Wave 8 — Full
+Platform API & Remote Service Topology v1** (closed #327/PR #328). Both are preserved in
+git history (`git log -- SCOPE.md`). `SCOPE.md` is rewritten in place on each integration
+line; the DG-K scope remains authoritative on `implement/dgk` until its closeout, and the
+two versions are reconciled by hand at promotion to `main` (see "Promotion").
 
 ---
 
 ## Why this scope exists
 
-ADR-0024 §6 left process topology, host placement and service split open. The Wave 8 closeout (#327) credited `J03`, `J10`, `J12`, `J13`, `K12` and `K13` only within explicit bounds: no J03 dispatch or worker, no J02 carriage of the consumer seams, no byte transfer between server and deck, and a non-atomic K13 registration across PostgreSQL and SQLite. The maintainer's direction (2026-10-07, refined 2026-10-10) is a modular monolith deployed as a small fixed set of processes, with heavy compute on the deck and the server kept as free as possible.
+1. PR #317 / issue #316 added L2 groundwork only: `schemas/l2-book-event-v1.json`,
+   `L2BookEvent` / `L2LevelChange` (`quant_platform.data.models`) and
+   `normalize_bybit_l2_message` (`quant_platform.source_adapters.l2`).
+2. `A14` is nevertheless `OPEN_BLOCKING` / `MISSING`. No accepted ADR resolves snapshot /
+   delta reconciliation, sequence continuity, gap detection and resync; no canonical
+   materializer, ordering provider, publication path, ingest harness or consumer read exists
+   for L2. `CAPABILITY_DAG.md` requires the L2 branch decision to ratify the #317 schema by ADR
+   or supersede it.
+3. The maintainer selected L2 on 2026-10-14. This scope turns that selection into a design gate
+   and a registered, not yet authorized, atom inventory.
 
 ---
 
-## Owner decisions (inputs the design gate honored)
+## Owner decisions (fixed inputs of the design gate)
 
-1. P01 preserves every existing identity hash; RFC 8785 is one profile, for `J14` and new contracts only.
-2. P03 keeps executable hosts in `tools/`.
-3. P04 v1 runs exactly one J03 worker process.
-4. P05 belongs to DG-K, not Wave 8 (2026-10-08).
-5. The server stays as free as possible: server-side J03 handlers are data-local only; replay, sweeps, training and large PBO run on the deck, on the deck's own initiative; the server never delegates jobs to the deck or any other machine (2026-10-10).
-6. `J11` is not planned: replay runs only on the deck over `K12`-admitted inputs, results return through `K13` (2026-10-10).
+Taken on 2026-10-14 and recorded by #364:
 
----
+1. **Aggregated price levels only.** No order-level, queue-position or L3/MBO semantics; no
+   synthetic book from trades.
+2. **`A13` (L1) is not a prerequisite of `A14`.** "L1 does not activate L2" is unchanged.
+3. **Two batches.** `v1` is historical ingest; `v2` is live ingest.
+4. **Consumer read is in scope of `v1`.** An L2 that can be written but not read does not close `A14`.
+5. **`implement/l2` stays cut from `implement/dgk`**; promotion to `main` follows DG-K closeout.
+6. **Venue: Bybit only.** No second venue.
 
-## Part A — Design gate outcome, CLOSED
+## Proposed inputs — NOT decisions
 
-| Gate | Issue | ADR | Disposition | One-line resolution |
-|---|---|---|---|---|
-| **DG-K** topology | #319 | ADR-0068 | ACCEPTED | Five units (ingest, platform API, exactly one J03 worker, PostgreSQL, deck compute); domain packages stay in-process libraries; `runtime` schema with per-unit roles and atomic K13 registration; four named identity byte profiles that change no existing bytes; closed data-local J03 handler registry; single worker enforced by a PostgreSQL advisory lock; hosts stay in `tools/`. |
-| **DG-K** wire and handoff | #319 | ADR-0069 | ACCEPTED | Additive J02 message families authorized before decode, one least-privilege scope per family; synchronous `J10`/`J12`/`J13` with unchanged budgets; J03 submit/status/result/cancel; deck-initiated `K12` delivery and `K13` submission; feature-provider code identity in replay result bundles; deck client outside `src/quant_platform`. |
+Drafted before this scope (PR #360) and carried only as proposals for `ADR-0070` to settle or
+reject:
 
-Answers to the nine DG-K questions are in ADR-0068 §1-§9 and ADR-0069 §1-§9; `OPEN_DECISIONS.md` (DG-K) records them in summary. Neither ADR amends another ADR or changes an existing identity. Work that ADR-0065 Amendments 1 and 2 left for "a separate J03 dispatch design gate" (over-budget PBO and training) is resolved as deck work, not server J03 work (ADR-0068 §3).
-
----
-
-## Part B — Authorized DG-K implementation inventory
-
-Each atom below has an `ACCEPTED` governing ADR. Each later receives its own implementation issue; **this reconciliation opens none**.
-
-| Atom | Capability | Governing ADR | Requires | Sequencing note |
-|---|---|---|---|---|
-| `P01` | Canonical identity serializer v1 | ADR-0068 §5 | — | Independent. Byte parity on every pinned identity and a two-`PYTHONHASHSEED` cross-process proof are acceptance. |
-| `P02` | Runtime store on PostgreSQL v1 | ADR-0068 §4 | `J03`, `K12`, `K13` (on `main`) | Independent. Must establish atomic K13 registration and confirm no production SQLite runtime state is lost. |
-| `P03` | Executable host boundaries v1 | ADR-0068 §7 | — | Independent. Boundary-test rules only; no host moves. |
-| `P04a` | J03 handler registry and dispatch v1 | ADR-0068 §6 | `P01`, `P02` | Start gate: HOLD until `P01` and `P02` are merged. Data-local handlers only. |
-| `P04b` | Single J03 worker process v1 | ADR-0068 §6, §8 | `P03`, `P04a` | Start gate: HOLD until `P03` and `P04a` are merged. |
-| `P05a` | J02 carriage of synchronous J10/J12/J13 v1 | ADR-0069 §1-§3 | `J02`, `J09` (on `main`) | Independent. |
-| `P05b` | J02 submit/status/result for J03 data-local jobs v1 | ADR-0069 §1, §2, §4 | `P04b` | Start gate: HOLD until `P04b` is merged. |
-| `P06` | Deck handoff over J02 v1 | ADR-0069 §1, §2, §5-§8 | `J09`, `J14` (on `main`), `P02` | Start gate: HOLD until `P02` is merged. |
-
-```text
-P01 ──┐
-P02 ──┼─> P04a ─> P04b ─> P05b
-P03 ──┘     (P04b also requires P03)
-P05a       (J02/J09 on main)
-P06        (J09, J14 on main; requires P02)
-```
-
-Immediately startable once their issues exist: `P01`, `P02`, `P03`, `P05a`.
-
-### Integration branch
-
-Default proposed by this reconciliation: one integration branch `implement/dgk` cut from `main` when the first Part B issue opens; atomic slices use `agent/issue-<N>-<slug>` from it and target it (`AGENTS.md`, Branching). DG-K is a design-gate line, not a numbered wave; the maintainer may rename the branch before it is created.
+- ordering key `(exchange_ts, native_sequence, native_update_id)` and provider name
+  `bybit-l2-exchange-ts-seq-v1`;
+- physical path `canonical/l2/{venue}/{instrument}/l2-book-event-v1/dt=YYYY-MM-DD/part-001.parquet`,
+  Zstandard compression and the Arrow schema of `bids`/`asks`;
+- topics `orderbook.50` / `orderbook.500`;
+- certification profile and check-suite names for `kind="l2"`.
 
 ---
 
-## Authority
+## Part A — Design gate
 
-- `AGENTS.md`
-- governance issue #318; design-gate issue #319; Wave 8 closeout #327
-- ADR-0068 (process topology v1), ADR-0069 (J02 carriage of consumer seams and deck handoff v1)
-- ADR-0018, ADR-0024, ADR-0043, ADR-0050 (and Amendment 1), ADR-0055, ADR-0057, ADR-0058, ADR-0062 through ADR-0067
-- `docs/product/ROADMAP.md`, `docs/product/CAPABILITY_DAG.md` (`DG-K` section; `P` atoms), `docs/architecture/OPEN_DECISIONS.md` (`DG-K`)
+| Gate | Target ADR | Questions to resolve | Status |
+|---|---|---|---|
+| **DG-C / A14** | `ADR-0070` | The eight questions of `OPEN_DECISIONS.md` (DG-C, L2 branch): total order given the update-id reset on snapshots; reconciliation, gap and resync rule and the partition-boundary state; events versus reconstructed book; Parquet layout and manifests; certification and publication eligibility; a read surface that does not change frozen J02 v1 or representation contracts; the fate of `l2-book-event-v1`; (`v2`) live supervision. | OPEN |
 
-Accepted ADRs and frozen contracts remain normative. No Part B issue may change an existing identity, ADR-0062's lifecycle or attempt model, ADR-0064's sealed-input identity, ADR-0043's host placement, J02 v1, or the frozen Consumer API.
-
----
-
-## Baseline and Credited State
-
-```text
-main @ 56f6375 (Wave 8 governance closeout #327 / PR #328 merged)
-Wave 8: J03,J09,J10,J12,J13,J14,J15,K12,K13 COMPLETE within recorded bounds
-DG-K: ADR-0068, ADR-0069 ACCEPTED (#319); P01-P06 FROZEN / MISSING
-```
-
-Credit, do not reimplement or re-prove absent invalidating evidence: every atom `COMPLETE` in `CAPABILITY_DAG.md`, within the bound its row records. `J14`'s RFC 8785 framing, `J15`'s `clients/omega` location, #313's replay identity parity tests and the K12/K13 server logic are reused as evidence, not rebuilt.
+`ADR-0070` is a separate design-gate issue (opened after #364). No atom below is authorized
+before it is accepted.
 
 ---
 
-## Explicit non-claims
+## Part B — Registered atom inventory
 
-- `P01`-`P06` are `FROZEN`/`MISSING`: decided, not built. No implementation issue exists yet.
-- `J10`/`J12`/`J13` remain unreachable over J02 until `P05a` is implemented; `K13` stays non-atomic until `P02`.
-- `J11` is not planned and remains `OPEN_DEFERABLE`/`MISSING`.
-- Omega remote use of ADR-0069 families needs its own ADR-0067 amendment and is not authorized.
-- `J07`/`J08` (Wave 10), `I06`/`I07` (Wave 9), `A13`-`A15` and second venue are untouched.
+Registered as `OPEN_BLOCKING` / `MISSING`; **not authorized** until `ADR-0070` is accepted and the
+atoms are re-stated by a reconciliation. Names are provisional; final names are the design gate's call.
 
----
+| Atom | Batch | Capability | Requires |
+|---|---|---|---|
+| `A14a` | v1 | L2 ordering provider and certification profile | `A14`, `ADR-0070` |
+| `A14b` | v1 | Canonical L2 Parquet materializer | `A14a` |
+| `A14c` | v1 | L2 publication and catalog bridge for `kind="l2"` | `A14a`, `A14b`, `A08`, `A09` |
+| `A14d` | v1 | Bybit historical L2 ingest with per-interval gap/outcome tracking | `A14b`, `A14c`, `A07` |
+| `A14e` | v1 | L2 consumer read through DataGateway / Consumer API | `A14c`, `B02` |
+| `A14f` | v2 | Bybit live L2 ingest with gap detection and resync | `A14d`, `A11` |
 
-## Mutation policy
-
-- Each Part B implementation issue produces code and tests for exactly one atom.
-- Branch `agent/issue-<N>-<slug>` (or `codex/issue-<N>-<slug>`) from the DG-K integration branch and target it, not `main`.
-- Do not mutate `SCOPE.md`, `ROADMAP.md`, `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md` or `OPEN_DECISIONS.md` as part of implementation work (`AGENTS.md` Governance boundary). Governance PRs use a `governance/` or `admin/` head branch.
-- Start gates in the Part B table are binding: `P04a` after `P01`+`P02`; `P04b` after `P03`+`P04a`; `P05b` after `P04b`; `P06` after `P02`.
-
----
-
-## Exit criteria for this scope
-
-- Part A: **met** — ADR-0068 and ADR-0069 `ACCEPTED` (#319), reconciled here.
-- Part B: each of the eight atoms is implemented, merged into the integration branch and promoted to `main`, within the acceptance its governing ADR section states, followed by a governance closeout.
+`A14` closes when `A14a`-`A14e` are `COMPLETE` and the `v1` golden end-to-end proof is accepted
+(historical ingest -> materialization -> catalog publication -> consumer read). The golden proof is
+the closeout criterion of the batch, not an atom. `A14f` follows and is outside that closure.
 
 ---
 
-## Out of Scope
+## Non-claims and out of scope
 
-- a message broker, a distributed scheduler, a generic executor or a remote-execution framework;
-- server-to-deck (or server-to-any-machine) job delegation, and remote workers pulling from the server J03 queue;
-- one deployed service per domain package;
-- a canonical-storage migration to the deck (ADR-0057 §6); moving runtime stores to PostgreSQL is not that migration;
-- changing any existing identity bytes (an ADR-0018 contract evolution);
-- the `J11` replay seam (not planned) and `D05` bar-input replay;
-- a binary transport family or a second transport stack;
-- L2 acquisition, publication and live daemon semantics (`A13`-`A15`);
-- Omega remote use of ADR-0069 families (ADR-0067 amendment);
-- `J07`/`J08`, `I06`/`I07`, second venue, multi-asset execution;
-- repository mirroring outside Git history.
+- No order-level, queue-position, MBO or L3 semantics; no synthetic book from trades.
+- No L1 (`A13`), no second venue, no execution or trading on L2 data.
+- No change to the frozen `trade-v1` or `candle-v1` contracts, to J02 v1, or to existing
+  representation contracts unless an accepted ADR amendment allows it.
+- No DG-K work (`P01`-`P06`, issues #339, #342, #343, #357) and no other parallel line.
+- No implementation, no ADR text and no bulk market data in Git under this scope.
 
----
+## Promotion
 
-## Stop / Escalation Conditions
+Each integration line rewrites `SCOPE.md` in place. DG-K promotes first; the L2 line then rebases and
+reconciles `SCOPE.md` by hand at its own merge. The order is recorded in `ROADMAP.md` and is not
+decided by an implementation issue.
 
-Stop and report rather than implement or decide unilaterally if:
+**Accepted debt (maintainer, #364):** the by-hand `SCOPE.md` reconciliation toward `main` is a known,
+accepted cost of running two integration lines. It is not a defect of this scope and is not resolved
+here; it is paid once, at the L2 line's merge, after DG-K has been promoted.
 
-- an implementation issue cannot satisfy its ADR-0068/ADR-0069 section without weakening an accepted ADR or changing an existing identity;
-- a Part B issue starts before its start gate is met;
-- a handler outside ADR-0068 §6's data-local registry rule is proposed for J03;
-- implementing an atom would require answering a design question the ADRs leave open.
+## Stop conditions
+
+Stop and report if registering or resolving DG-C / A14 would require changing an accepted ADR or a
+frozen contract.
