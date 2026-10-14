@@ -228,7 +228,8 @@ implementation issues are not opened yet. Startable first: `P01`, `P02`, `P03`,
 
 The L2 market-depth line (governance #364) runs in parallel on `implement/l2`, cut from `implement/dgk`:
 it registers `A14a`-`A14f` and selects no implementation work until `ADR-0070` exists. It shares no code
-with DG-K; promotion order is DG-K first, then L2, with `SCOPE.md` reconciled by hand at the second merge.
+with DG-K; promotion order is DG-K first, then L2, with `SCOPE.md` reconciled by hand at the second merge
+(accepted maintainer debt, not a blocker).
 
 No new runtime/product frontier is authorized by this closeout, the Wave 8
 closeout or the stabilization line. H06, I06-I07, J07/J08, RL, live broker execution, second

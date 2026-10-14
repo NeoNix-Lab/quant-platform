@@ -107,6 +107,10 @@ Each integration line rewrites `SCOPE.md` in place. DG-K promotes first; the L2 
 reconciles `SCOPE.md` by hand at its own merge. The order is recorded in `ROADMAP.md` and is not
 decided by an implementation issue.
 
+**Accepted debt (maintainer, #364):** the by-hand `SCOPE.md` reconciliation toward `main` is a known,
+accepted cost of running two integration lines. It is not a defect of this scope and is not resolved
+here; it is paid once, at the L2 line's merge, after DG-K has been promoted.
+
 ## Stop conditions
 
 Stop and report if registering or resolving DG-C / A14 would require changing an accepted ADR or a

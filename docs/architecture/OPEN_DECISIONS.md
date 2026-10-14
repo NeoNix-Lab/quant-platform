@@ -298,7 +298,8 @@ ratify the schema by ADR or supersede it.
 2. `A13` (L1) is not a prerequisite of `A14`; "L1 does not activate L2" is unchanged.
 3. Two batches: `v1` is historical ingest, `v2` is live ingest.
 4. Consumer read through DataGateway/Consumer API is in scope of `v1`.
-5. `implement/l2` stays cut from `implement/dgk`; promotion follows DG-K closeout.
+5. `implement/l2` stays cut from `implement/dgk`; promotion follows DG-K closeout. The resulting
+   by-hand reconciliation of `SCOPE.md` toward `main` is accepted maintainer debt, paid at the L2 merge.
 6. Venue: Bybit only; no second venue.
 
 **Proposed, not decided** (drafted in PR #360, for `ADR-0070` to settle or reject): the ordering key

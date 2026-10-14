@@ -182,7 +182,10 @@ PostgreSQL, one canonical identity module, host boundaries and the K12/K13
 deck handoff over J02). No implementation issue is open yet. `J11` is not
 planned. J07, J08, RL, broker/live execution, second venue
 and L1/L2/L3 market depth remain outside every closed scope (`A14` has
-groundwork from PR #317 only). Frontier/readiness state is **not concurrent
-implementation authorization**.
+groundwork from PR #317 only). A separate L2 design-gate line (DG-C / `A14`,
+governance #364) runs on `implement/l2`: it registers `A14a`-`A14f` as
+`OPEN_BLOCKING`/`MISSING` and authorizes none of them until `ADR-0070` is
+accepted. Frontier/readiness state is **not concurrent implementation
+authorization**.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.
