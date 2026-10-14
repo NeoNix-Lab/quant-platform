@@ -281,7 +281,7 @@ Selecting L1 does **not** activate L2.
 
 ### L2 branch (`A14`)
 
-Activate only when L2 is selected, after the declared L1 dependency. Resolve snapshot/increment semantics, deterministic reconstruction ordering, gap handling and duplicate rules.
+Selected by the owner on 2026-10-14 (#364); it does **not** require `A13`. Resolve snapshot/increment semantics, deterministic reconstruction ordering, gap handling and duplicate rules.
 
 Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
 
@@ -290,6 +290,37 @@ added an `l2-book-event-v1` schema, an `L2BookEvent` identity and pure venue
 adapters. No accepted ADR resolves this branch, so `A14` stays `OPEN_BLOCKING`
 and that code is groundwork, not a decision. The L2 branch decision must
 ratify the schema by ADR or supersede it.
+
+**Owner decisions taken (2026-10-14, #364) — fixed inputs of the design gate:**
+
+1. L2 is aggregated price levels only; no order-level, queue-position or L3/MBO semantics; no
+   synthetic book from trades.
+2. `A13` (L1) is not a prerequisite of `A14`; "L1 does not activate L2" is unchanged.
+3. Two batches: `v1` is historical ingest, `v2` is live ingest.
+4. Consumer read through DataGateway/Consumer API is in scope of `v1`.
+5. `implement/l2` stays cut from `implement/dgk`; promotion follows DG-K closeout.
+6. Venue: Bybit only; no second venue.
+
+**Proposed, not decided** (drafted in PR #360, for `ADR-0070` to settle or reject): the ordering key
+`(exchange_ts, native_sequence, native_update_id)` and provider name `bybit-l2-exchange-ts-seq-v1`;
+the physical path `canonical/l2/{venue}/{instrument}/l2-book-event-v1/dt=YYYY-MM-DD/part-001.parquet`
+with Zstandard; topics `orderbook.50`/`orderbook.500`; the certification profile and check-suite names.
+
+**Question set for the L2 design gate (`ADR-0070`; atoms `A14a`-`A14f`, all `OPEN_BLOCKING`):**
+
+1. Which total order does the venue's native sequencing support, given that a Bybit snapshot resets the
+   update id (`u`)? Is `exchange_ts` an admissible primary key?
+2. Which snapshot/delta reconciliation, gap detection and resync rule makes an interval certifiable, and
+   what state is carried across a partition (day) boundary?
+3. Does the canonical layer store events (deltas and snapshots) or a reconstructed book, and which replay
+   semantic does that fix?
+4. Which Parquet layout, partition manifest and coverage manifest carry L2?
+5. Which certification profile and check suite make an L2 partition eligible for publication?
+6. Which DataGateway/Consumer API surface serves `l2` without changing the frozen J02 v1 contract or the
+   existing representation contracts, and does it need an amendment to an accepted ADR?
+7. How does `l2-book-event-v1` (#317) relate to the final contract: ratified as is, amended or superseded?
+8. (`v2`) Which supervision lifecycle, backpressure and resync rule does live ingest follow, and how does
+   it fit the live-ingest host (ADR-0043)?
 
 ## DG-E — Validation semantics — RESOLVED / IMPLEMENTED
 
