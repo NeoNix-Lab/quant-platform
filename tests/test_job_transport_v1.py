@@ -31,6 +31,7 @@ from quant_platform.application.framed_result_transport import (  # noqa: E402
     FramedResultReceiver,
     FramedResultResumeRequest,
     FramedResultTransferStore,
+    frame_complete_result,
 )
 from quant_platform.application.durable_jobs import (  # noqa: E402
     DurableJobStore,
@@ -854,6 +855,187 @@ class JobTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         error = self.refused(response, "transfer_refused", code="result_too_large")
         self.assertEqual("the result would exceed the maximum J02 response size", error["message"])
         self.assertEqual(0, len(small._transfers))
+
+    def seed_with_references(self, request_identity, references):
+        job, store = self.seed(JobState.RUNNING, request_identity=request_identity)
+        store.transition(job.job_id, JobState.SUCCEEDED, result_references=tuple(references))
+        return job
+
+    OTHER_LARGE = {"rows": [{"n": n, "text": "y" * 20} for n in range(400)]}
+
+    async def test_a_multi_body_result_is_refused_without_publishing_part_of_it(self) -> None:
+        references = ("result:sha256:11", "result:sha256:12")
+        job = self.seed_with_references("request:multi-refused", references)
+        # Room for one transfer only: the second body is refused.
+        small = self.transfers(max_in_flight_transfers=1)
+        handlers, _ = self.with_bodies(
+            {references[0]: self.LARGE, references[1]: self.OTHER_LARGE}, transfers=small,
+        )
+        response = await self.result_with(handlers, job.job_id)
+        self.refused(response, "transfer_refused", code="result_too_large")
+        # Nothing of this call is retained, held or resumable.
+        self.assertEqual({}, dict(small._transfers))
+        self.assertEqual({}, dict(small._pending))
+
+    async def test_a_resolver_failing_on_a_later_reference_leaves_nothing_published(self) -> None:
+        references = ("result:sha256:21", "result:sha256:22", "result:sha256:23")
+        job = self.seed_with_references("request:multi-resolver", references)
+
+        def resolver(reference):
+            if reference == references[2]:
+                raise RuntimeError("/srv/secret/path token=abc")
+            return self.LARGE if reference == references[0] else self.OTHER_LARGE
+
+        for label, failing in (
+            ("resolver raises", resolver),
+            ("not canonical JSON", lambda r: {"value": {1, 2}} if r == references[2] else resolver(r)),
+        ):
+            with self.subTest(label):
+                handlers, transfers = self.with_bodies({}, resolver=failing)
+                response = await self.result_with(handlers, job.job_id)
+                self.assertEqual("integrity_failure", response["error"]["code"])
+                self.assertEqual({}, dict(transfers._transfers))
+                self.assertEqual({}, dict(transfers._pending))
+
+    async def test_a_refused_multi_body_result_never_withdraws_a_retained_transfer(self) -> None:
+        references = ("result:sha256:31", "result:sha256:32")
+        job = self.seed_with_references("request:multi-retained", references)
+        # Capacity for the first body only; another result already retained it.
+        small = self.transfers(max_in_flight_transfers=1)
+        earlier = small.admit(
+            logical_result_identity=references[0], result=self.LARGE, owner=READ,
+        )
+        before = dict(small._transfers)
+        handlers, _ = self.with_bodies(
+            {references[0]: self.LARGE, references[1]: self.OTHER_LARGE}, transfers=small,
+        )
+        response = await self.result_with(handlers, job.job_id)
+        self.refused(response, "transfer_refused", code="result_too_large")
+        self.assertEqual(before, dict(small._transfers))  # the earlier one is untouched
+        socket, _ = await self.resume(small, earlier[0].transfer_id)
+        self.assertEqual(len(earlier), len(socket.responses))  # and still resumable
+
+    async def test_a_multi_body_result_that_fits_keeps_its_deliveries_and_reuses_retained(self) -> None:
+        references = ("result:sha256:41", "result:sha256:42", "result:sha256:43", "result:sha256:44")
+        job = self.seed_with_references("request:multi-fits", references)
+        bodies = {
+            references[0]: {"rows": [1, 2, 3]},      # inline
+            references[1]: self.LARGE,               # framed
+            references[3]: self.OTHER_LARGE,         # framed (references[2] has none)
+        }
+        handlers, transfers = self.with_bodies(bodies)
+        first = self.ok(await self.result_with(handlers, job.job_id))
+        self.assertEqual(
+            ["inline", "framed", "none", "framed"], [item["delivery"] for item in first["bodies"]],
+        )
+        self.assertEqual(references, tuple(item["reference"] for item in first["bodies"]))
+        self.assertEqual(2, len(transfers._transfers))
+        # The same result again is the same descriptors and the same retained set.
+        again = self.ok(await self.result_with(handlers, job.job_id))
+        self.assertEqual(first["bodies"], again["bodies"])
+        self.assertEqual(2, len(transfers._transfers))
+        for item in (first["bodies"][1], first["bodies"][3]):
+            socket, _ = await self.resume(transfers, item["transfer_id"])
+            self.assertEqual(item["chunk_count"], len(socket.responses))
+
+    async def test_a_resolver_that_reuses_its_buffer_cannot_publish_one_body_as_another(self) -> None:
+        references = ("result:sha256:51", "result:sha256:52", "result:sha256:53")
+        job = self.seed_with_references("request:multi-buffer", references)
+        small = {"rows": [1, 2, 3]}
+        bodies = {references[0]: self.LARGE, references[1]: self.OTHER_LARGE, references[2]: small}
+        buffer: dict = {}
+
+        def reusing(reference):
+            # One mutable object, refilled for each reference (and left holding
+            # the last one when the result is assembled).
+            buffer.clear()
+            buffer.update(bodies[reference])
+            return buffer
+
+        handlers, transfers = self.with_bodies({}, resolver=reusing)
+        result = self.ok(await self.result_with(handlers, job.job_id))
+        first, second, third = result["bodies"]
+        self.assertEqual(
+            ["framed", "framed", "inline"], [item["delivery"] for item in (first, second, third)],
+        )
+        # Each framed transfer is its own reference's body, whole.
+        for item, expected in ((first, self.LARGE), (second, self.OTHER_LARGE)):
+            self.assertEqual("framed", item["delivery"])
+            socket, _ = await self.resume(transfers, item["transfer_id"])
+            receiver = FramedResultReceiver()
+            reassembled = None
+            for frame in socket.responses:
+                reassembled = receiver.receive(frame)
+            self.assertEqual(expected, reassembled, item["reference"])
+            self.assertEqual(item["reference"], socket.responses[0]["logical_result_identity"])
+        # The inline body is its own, not whatever the buffer holds at the end.
+        self.assertEqual({"reference": references[2], "delivery": "inline", "body": small}, third)
+
+    async def test_a_resolver_that_mutates_what_it_returned_changes_nothing_published(self) -> None:
+        references = ("result:sha256:61", "result:sha256:62")
+        job = self.seed_with_references("request:multi-mutate", references)
+        returned: list[dict] = []
+
+        def mutating(reference):
+            body = {"rows": [{"n": n, "text": "z" * 20} for n in range(400)], "ref": reference}
+            returned.append(body)
+            return body
+
+        handlers, transfers = self.with_bodies({}, resolver=mutating)
+        result = self.ok(await self.result_with(handlers, job.job_id))
+        digests = {item["reference"]: item["payload_sha256"] for item in result["bodies"]}
+        # Mutating the returned objects afterwards cannot alter what is retained.
+        for body in returned:
+            body["ref"] = "tampered"
+            body["rows"].clear()
+        for item in result["bodies"]:
+            socket, _ = await self.resume(transfers, item["transfer_id"])
+            receiver = FramedResultReceiver()
+            document = None
+            for frame in socket.responses:
+                document = receiver.receive(frame)
+            self.assertEqual(item["reference"], document["ref"])
+            self.assertEqual(400, len(document["rows"]))
+            self.assertEqual(digests[item["reference"]], socket.responses[0]["payload_sha256"])
+
+    async def test_a_snapshot_keeps_the_exact_numbers_and_the_original_framing(self) -> None:
+        # Floats whose canonical token is an integer beyond the safe domain
+        # (1e16, 1e20, 2**53) must survive the snapshot: they were valid, and
+        # the published transfer is the very framing of the value as returned.
+        values = (1e20, -1e20, 1e16, 9007199254740992.0, 1e21, 1.25, 0.1, 5, True, None)
+        config = self.transfers().config
+        for value in values:
+            with self.subTest(value=value):
+                reference = f"result:sha256:num-{abs(hash(repr(value))) % 10**8}"
+                job = self.seed_with_references(f"request:num-{reference}", (reference,))
+                body = {"number": value, "padding": "x" * 2000, "nested": [value, {"v": value}]}
+                expected = frame_complete_result(
+                    logical_result_identity=reference, result=body, config=config,
+                )
+                handlers, transfers = self.with_bodies({reference: body})
+                result = self.ok(await self.result_with(handlers, job.job_id))
+                (entry,) = result["bodies"]
+                self.assertEqual("framed", entry["delivery"])
+                self.assertEqual(expected[0].payload_sha256, entry["payload_sha256"])
+                self.assertEqual(expected[0].transfer_id, entry["transfer_id"])
+                socket, _ = await self.resume(transfers, entry["transfer_id"])
+                receiver = FramedResultReceiver()
+                reassembled = None
+                for frame in socket.responses:
+                    reassembled = receiver.receive(frame)
+                self.assertEqual(json.loads(json.dumps(body)), reassembled)
+
+    async def test_a_body_with_tuples_is_delivered_as_before(self) -> None:
+        reference = "result:sha256:tuples"
+        job = self.seed_with_references("request:tuples", (reference,))
+        body = {"rows": tuple(({"n": n, "t": "q" * 20},) for n in range(400))}
+        handlers, transfers = self.with_bodies({reference: body})
+        (entry,) = self.ok(await self.result_with(handlers, job.job_id))["bodies"]
+        self.assertEqual("framed", entry["delivery"])
+        expected = frame_complete_result(
+            logical_result_identity=reference, result=body, config=transfers.config,
+        )
+        self.assertEqual(expected[0].payload_sha256, entry["payload_sha256"])
 
     async def test_a_resolver_failure_or_a_non_canonical_body_is_an_integrity_failure(self) -> None:
         job, _ = self.seed(JobState.SUCCEEDED, request_identity="request:body-faults")
