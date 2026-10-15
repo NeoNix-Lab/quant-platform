@@ -521,7 +521,19 @@ class DeckHandoffClient:
             "operation_identity": operation_identity,
             "profile_identity": profile_identity,
         })
-        return self._admission(result)
+        admission = self._admission(result)
+        manifest = admission.manifest
+        if (
+            manifest.get("operation_identity") != operation_identity
+            or "profile_identity" not in manifest
+            or manifest["profile_identity"] != profile_identity
+        ):
+            # A sealed admission of another operation or profile is not the answer to this request.
+            raise DeliveryIntegrityFailure(
+                "transfer_integrity_failure", None,
+                "the admission is not for the requested operation and profile",
+            )
+        return admission
 
     async def manifest(self, admission_id: str) -> Admission:
         result = await self._call(ADMITTED_INPUT_FAMILY, "manifest", {"admission_id": admission_id})

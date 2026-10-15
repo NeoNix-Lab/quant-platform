@@ -488,6 +488,48 @@ class DeckHandoffClientAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], connections)
         self.assertEqual([], self.authority.resolve_calls)
 
+    async def test_an_admission_for_another_operation_or_profile_is_not_the_one_requested(self) -> None:
+        async with self.serve() as server:
+            async with self.client(server) as client:
+                other = await client.admit(
+                    dataset=DATASET, operation_identity="operation:B", profile_identity="profile:A",
+                )
+            for label, change in (
+                ("another operation", {"operation_identity": "operation:B", "profile_identity": "profile:A"}),
+                ("another profile", {"operation_identity": "operation:A", "profile_identity": "profile:B"}),
+                ("a profile that was not requested", {"operation_identity": "operation:A", "profile_identity": None}),
+            ):
+                with self.subTest(label):
+                    returned = await self._admit_as_returned(server, change)
+                    self.assertEqual(
+                        AdmittedInputState.SEALED, self.stored_state(returned.admission_id).state,
+                    )
+        self.assertEqual(AdmittedInputState.SEALED, self.stored_state(other.admission_id).state)
+
+    async def _admit_as_returned(self, server, other):
+        """Admit A, while the wire carries the sealed admission ``other`` (a real one) instead."""
+
+        async with self.client(server) as client:
+            real = await client.admit(dataset=DATASET, **other)
+
+        class Substitute(_Wrapped):
+            async def recv(self):
+                envelope = json.loads(await self._ws.recv())
+                result = envelope.get("result")
+                if isinstance(result, dict) and "manifest" in result:
+                    envelope["result"] = {
+                        "admission_id": real.admission_id, "manifest_digest": real.manifest_digest,
+                        "manifest": dict(real.manifest), "state": real.state,
+                    }
+                return json.dumps(envelope)
+
+        async with self.client(server, connect=Substitute(websockets.connect)) as client:
+            with self.assertRaises(deck.DeliveryIntegrityFailure):
+                await client.admit(
+                    dataset=DATASET, operation_identity="operation:A", profile_identity="profile:A",
+                )
+        return real
+
     async def test_a_wrong_authority_or_name_is_still_a_remote_security_failure(self) -> None:
         async with self.serve() as server:
             port = server.sockets[0].getsockname()[1]

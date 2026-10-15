@@ -280,6 +280,55 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 await client.manifest(asked["admission_id"])
         self.assertEqual(["manifest"], [item["operation"] for item in script.sent])  # no deliver, no retry
 
+    async def test_an_admission_for_another_operation_or_profile_is_refused(self) -> None:
+        # B is a faithful, sealed admission with its own correct digest and id;
+        # the request named operation/profile A.
+        asked = admission_document()["manifest"]
+        operation, profile = asked["operation_identity"], asked["profile_identity"]
+        self.assertIsNotNone(profile)
+        for label, change in (
+            ("another operation", {"operation_identity": "other-operation-v1"}),
+            ("another profile", {"profile_identity": "profile-v1:other"}),
+            ("the requested profile removed", {"profile_identity": None}),
+        ):
+            with self.subTest(label):
+                fields = {**asked, **change}
+                digest = deck.manifest_digest(fields)
+                other = {
+                    "manifest": fields, "manifest_digest": digest,
+                    "admission_id": f"admitted-input-v1:{digest}", "state": "SEALED",
+                }
+                script = Script(lambda request, other=other: ok(request, other))
+                async with deck.DeckHandoffClient(
+                    "wss://x", ssl_context=strict_context(), connect=script,
+                ) as client:
+                    with self.assertRaises(deck.DeliveryIntegrityFailure):
+                        await client.admit(
+                            dataset={"instrument": "BTCUSDT"}, operation_identity=operation,
+                            profile_identity=profile,
+                        )
+                self.assertEqual(["admit"], [item["operation"] for item in script.sent])
+        # A manifest that carries no profile field at all is not "no profile requested".
+        fields = {key: value for key, value in asked.items() if key != "profile_identity"}
+        digest = deck.manifest_digest(fields)
+        script = Script(lambda request: ok(request, {
+            "manifest": fields, "manifest_digest": digest,
+            "admission_id": f"admitted-input-v1:{digest}", "state": "SEALED",
+        }))
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            with self.assertRaises(deck.DeliveryIntegrityFailure):
+                await client.admit(dataset={"instrument": "BTCUSDT"}, operation_identity=operation)
+        # A profile that was not requested is not the request's either.
+        script = Script(lambda request: ok(request, admission_document()))
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            with self.assertRaises(deck.DeliveryIntegrityFailure):
+                await client.admit(dataset={"instrument": "BTCUSDT"}, operation_identity=operation)
+            self.assertEqual(["admit"], [item["operation"] for item in script.sent])
+            admission = await client.admit(
+                dataset={"instrument": "BTCUSDT"}, operation_identity=operation, profile_identity=profile,
+            )
+        self.assertEqual(admission_document()["admission_id"], admission.admission_id)
+
     async def test_an_upload_learns_the_servers_chunk_size_from_a_layout_refusal_once(self) -> None:
         payload = bytes(range(256)) * 8  # 2048 bytes
         state = {"size": 700}
@@ -505,6 +554,13 @@ class SecureEndpointTests(unittest.IsolatedAsyncioTestCase):
             context.verify_mode = ssl.CERT_OPTIONAL
             return context
 
+        def server_side_otherwise_strict():
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_3
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.check_hostname = True  # every other constraint is met: only the role is wrong
+            return context
+
         def tls12():
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -513,6 +569,7 @@ class SecureEndpointTests(unittest.IsolatedAsyncioTestCase):
         for label, context in (
             ("no context", None),
             ("a server-side context", ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)),
+            ("a server-side context with TLS 1.3 and CERT_REQUIRED", server_side_otherwise_strict()),
             ("chain verification off", unverified_chain()),
             ("hostname verification off", no_hostname_check()),
             ("chain verification optional", optional_chain()),
