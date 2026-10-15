@@ -35,7 +35,10 @@ CREATE TABLE admitted_inputs (
     manifest_payload text NOT NULL,
     state text NOT NULL CHECK (state IN ('ADMITTED','SEALED','DELIVERY_PENDING',
         'DELIVERED','DELIVERY_FAILED','EXPIRED')),
-    delivery_failure_reason text
+    delivery_failure_reason text,
+    -- ADR-0064 Amendment 1 (#357): operational metadata of a delivery, outside
+    -- canonical_payload_v1, manifest_digest and admission_id.
+    delivery_attempt integer NOT NULL DEFAULT 0 CHECK (delivery_attempt >= 0)
 );
 CREATE TABLE governed_result_bundles (
     bundle_digest text PRIMARY KEY,

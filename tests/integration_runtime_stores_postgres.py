@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from quant_platform.application.admitted_input import (  # noqa: E402
-    AdmittedInputConflict, AdmittedInputState, AdmittedInputStore,
+    AdmittedInputConflict, AdmittedInputError, AdmittedInputState, AdmittedInputStore,
 )
 from quant_platform.application.durable_jobs import (  # noqa: E402
     DurableJobConflict, DurableJobStore, EffectSafety, JobState,
@@ -670,6 +670,71 @@ class PostgresInputs(DisposableCase, k12.AdmittedInputManifestV1Tests):
     def store(self):
         return AdmittedInputStore(self.connection())
 
+    def test_concurrent_delivery_starts_record_exactly_one_attempt(self):
+        """#357: the attempt number is written with the state, under the store's lock."""
+
+        store = self.store()
+        sealed = store.seal(store.admit(k12.manifest()).admission_id)
+
+        def begin(_):
+            with connect("API") as connection:
+                connection.execute("SET statement_timeout = '5s'")
+                try:
+                    return AdmittedInputStore(connection).begin_delivery(sealed.admission_id).delivery_attempt
+                except AdmittedInputConflict:
+                    return None
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(begin, range(4)))
+        self.assertEqual([1], [attempt for attempt in results if attempt is not None])
+        record = store.get(sealed.admission_id)
+        self.assertEqual((AdmittedInputState.DELIVERY_PENDING, 1), (record.state, record.delivery_attempt))
+
+    def test_a_stale_report_loses_to_a_concurrent_newer_attempt(self):
+        store = self.store()
+        sealed = store.seal(store.admit(k12.manifest()).admission_id)
+        store.begin_delivery(sealed.admission_id)  # attempt 1
+        digest = sealed.manifest.manifest_digest
+
+        def stale(_):
+            with connect("API") as connection:
+                connection.execute("SET statement_timeout = '5s'")
+                try:
+                    AdmittedInputStore(connection).record_delivery(
+                        sealed.admission_id, digest, delivery_attempt=1,
+                    )
+                    return "applied"
+                except AdmittedInputError as error:
+                    return type(error).__name__
+
+        def newer(_):
+            with connect("API") as connection:
+                connection.execute("SET statement_timeout = '5s'")
+                other = AdmittedInputStore(connection)
+                try:
+                    other.record_delivery_failure(
+                        sealed.admission_id, "delivery_interrupted", delivery_attempt=1,
+                    )
+                    return other.begin_delivery(sealed.admission_id).delivery_attempt
+                except AdmittedInputError:
+                    return None  # the stale report ended attempt 1 first
+
+        # The two orders are both legal: the stale report runs first (applied to the
+        # attempt it names) or after the newer attempt began (refused). It is never
+        # applied to attempt 2.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reported, started = pool.submit(stale, 0), pool.submit(newer, 0)
+            outcome, attempt = reported.result(), started.result()
+        record = store.get(sealed.admission_id)
+        if outcome == "applied":
+            self.assertEqual(AdmittedInputState.DELIVERED, record.state)  # attempt 1 ended; the newer one conflicted
+        else:
+            self.assertEqual(
+                (AdmittedInputState.DELIVERY_PENDING, 2, None),
+                (record.state, record.delivery_attempt, record.delivery_failure_reason),
+            )
+            self.assertEqual(2, attempt)
+
 
 class PostgresAdmittedInputTransport(
     DisposableCase, admitted_transport.AdmittedInputTransportV1Tests
@@ -1053,10 +1118,14 @@ class PostgresSafety(DisposableCase, unittest.TestCase):
         store = AdmittedInputStore(self.connection())
         record = store.admit(k12.manifest())
         store.seal(record.admission_id)
-        store.begin_delivery(record.admission_id)
-        store.expire(record.admission_id)
-        with self.assertRaises(AdmittedInputConflict):
-            store.record_delivery(record.admission_id, record.manifest.manifest_digest)
+        store.expire(
+            record.admission_id,
+            delivery_attempt=store.begin_delivery(record.admission_id).delivery_attempt,
+        )
+        with self.assertRaises(AdmittedInputError):
+            store.record_delivery(
+                record.admission_id, record.manifest.manifest_digest, delivery_attempt=1,
+            )
         self.assertEqual(AdmittedInputState.EXPIRED, store.get(record.admission_id).state)
 
     def test_admission_read_check_write_obeys_transaction_lock(self):

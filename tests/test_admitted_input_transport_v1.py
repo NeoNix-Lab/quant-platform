@@ -1,4 +1,4 @@
-"""``j02-admitted-input-v1``: K12 delivery to the deck over authenticated J02 (#341, P06).
+"""``j02-admitted-input-v2``: K12 delivery to the deck over authenticated J02 (#341, P06).
 
 ``AdmittedInputTransportV1Tests`` is backend-neutral: ``provider()`` yields a
 *new* store on its own connection per request, as the family composition
@@ -653,7 +653,7 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         admission_id = admitted["admission_id"]
         self.ok(await self.call("deliver", {"admission_id": admission_id}))
         result = self.ok(await self.call("acknowledge", {
-            "admission_id": admission_id, "outcome": "delivered",
+            "admission_id": admission_id, "delivery_attempt": 1, "outcome": "delivered",
             "manifest_digest": admitted["manifest_digest"],
             "failure_reason": None, "failed_member_index": None,
         }))
@@ -668,7 +668,7 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, len(self.transfers._transfers))
         self.assertEqual([], self.authority.read_calls[2:])  # no member was even read again
         self.refused(await self.call("acknowledge", {
-            "admission_id": admission_id, "outcome": "delivered",
+            "admission_id": admission_id, "delivery_attempt": 1, "outcome": "delivered",
             "manifest_digest": admitted["manifest_digest"],
             "failure_reason": None, "failed_member_index": None,
         }), "acknowledgement_not_expected")
@@ -678,7 +678,7 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         admission_id = admitted["admission_id"]
         first = self.ok(await self.call("deliver", {"admission_id": admission_id}))
         failed = self.ok(await self.call("acknowledge", {
-            "admission_id": admission_id, "outcome": "failed", "manifest_digest": None,
+            "admission_id": admission_id, "delivery_attempt": 1, "outcome": "failed", "manifest_digest": None,
             "failure_reason": "content_hash_mismatch", "failed_member_index": 1,
         }))
         self.assertEqual("DELIVERY_FAILED", failed["state"])
@@ -695,7 +695,7 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         admitted = await self.admit()
         self.ok(await self.call("deliver", {"admission_id": admitted["admission_id"]}))
         result = self.ok(await self.call("acknowledge", {
-            "admission_id": admitted["admission_id"], "outcome": "delivered",
+            "admission_id": admitted["admission_id"], "delivery_attempt": 1, "outcome": "delivered",
             "manifest_digest": UNIMPORTANT_DIGEST, "failure_reason": None,
             "failed_member_index": None,
         }))
@@ -705,10 +705,10 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
     async def test_acknowledge_and_deliver_refuse_what_the_state_does_not_allow(self) -> None:
         admitted = await self.admit()
         admission_id = admitted["admission_id"]
-        ack = {"admission_id": admission_id, "outcome": "failed", "manifest_digest": None,
+        ack = {"admission_id": admission_id, "delivery_attempt": 1, "outcome": "failed", "manifest_digest": None,
                "failure_reason": "delivery_interrupted", "failed_member_index": None}
-        # Nothing was delivered yet: there is nothing to acknowledge.
-        self.refused(await self.call("acknowledge", ack), "acknowledgement_not_expected")
+        # Nothing was delivered yet: there is no attempt to acknowledge.
+        self.refused(await self.call("acknowledge", ack), "delivery_attempt_mismatch")
         self.ok(await self.call("deliver", {"admission_id": admission_id}))
         # A pending attempt is ended by its acknowledgement, not restarted.
         self.transfers._transfers.clear()
@@ -729,31 +729,40 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             await self.call("acknowledge", {**ack, "admission_id": absent}), "admission_not_found",
         )
         # Expiry is final: a new admission is needed, never a revived locator.
-        self.open_store().expire(admission_id)
+        self.open_store().expire(admission_id, delivery_attempt=1)
         self.refused(await self.call("deliver", {"admission_id": admission_id}), "admission_expired")
         self.refused(await self.call("acknowledge", ack), "admission_expired")
         self.refused(await self.call("admit", admit_body()), "admission_expired")
 
     async def test_malformed_acknowledgements_are_invalid_shape(self) -> None:
         admitted = await self.admit()
-        base = {"admission_id": admitted["admission_id"], "outcome": "failed", "manifest_digest": None,
+        base = {"admission_id": admitted["admission_id"], "delivery_attempt": 1, "outcome": "failed", "manifest_digest": None,
                 "failure_reason": "delivery_interrupted", "failed_member_index": None}
         cases = {
-            "unknown outcome": {**base, "outcome": "ok"},
+            "unknown outcome": {**base, "delivery_attempt": 1, "outcome": "ok"},
             "unknown reason": {**base, "failure_reason": "because"},
             "failed with a digest": {**base, "manifest_digest": admitted["manifest_digest"]},
             "negative index": {**base, "failed_member_index": -1},
             "bool index": {**base, "failed_member_index": True},
-            "delivered without digest": {**base, "outcome": "delivered", "failure_reason": None},
+            "delivered without digest": {**base, "delivery_attempt": 1, "outcome": "delivered", "failure_reason": None},
             "delivered with a reason": {
-                **base, "outcome": "delivered", "manifest_digest": admitted["manifest_digest"]},
-            "short digest": {**base, "outcome": "delivered", "failure_reason": None,
+                **base, "delivery_attempt": 1, "outcome": "delivered", "manifest_digest": admitted["manifest_digest"]},
+            "short digest": {**base, "delivery_attempt": 1, "outcome": "delivered", "failure_reason": None,
                              "manifest_digest": "abc"},
             "extra field": {**base, "note": "x"},
+            "attempt missing": {key: value for key, value in base.items() if key != "delivery_attempt"},
+            "attempt zero": {**base, "delivery_attempt": 0},
+            "attempt negative": {**base, "delivery_attempt": -1},
+            "attempt bool": {**base, "delivery_attempt": True},
+            "attempt text": {**base, "delivery_attempt": "1"},
+            "attempt null": {**base, "delivery_attempt": None},
         }
         for label, body in cases.items():
             with self.subTest(label):
                 self.refused(await self.call("acknowledge", body), "invalid_request_shape")
+        # A float is not lossless JSON: refused by the parser, before any decoder.
+        response = await self.call("acknowledge", {**base, "delivery_attempt": 1.0})
+        self.assertEqual(("error", "invalid_request"), (response["status"], response["error"]["code"]))
         self.assertEqual(AdmittedInputState.SEALED, self.state(admitted["admission_id"]))
 
     # -- authorization (ADR-0063, ADR-0069 section 2) ----------------------------
@@ -763,7 +772,7 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             "admit": admit_body(),
             "manifest": {"admission_id": "admitted-input-v1:" + "a" * 64},
             "deliver": {"admission_id": "admitted-input-v1:" + "a" * 64},
-            "acknowledge": {"admission_id": "admitted-input-v1:" + "a" * 64, "outcome": "failed",
+            "acknowledge": {"admission_id": "admitted-input-v1:" + "a" * 64, "delivery_attempt": 1, "outcome": "failed",
                             "manifest_digest": None, "failure_reason": "transfer_expired",
                             "failed_member_index": None},
         }
@@ -837,16 +846,84 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("secret", json.dumps(error))
         self.assertEqual(AdmittedInputState.SEALED, self.state(admitted["admission_id"]))
 
-    async def test_a_consumer_api_error_from_the_authority_passes_through_unchanged(self) -> None:
-        class Missing(Authority):
-            def resolve(self, request):
-                raise ConsumerApiError(
-                    ConsumerErrorCode.NO_COVERAGE, "no coverage", context={"reason": "no_partition"},
-                )
+    async def test_a_consumer_api_error_from_the_authority_is_projected_not_forwarded(self) -> None:
+        leak = "/srv/catalog/7d444840-9dc0-11d1-b245-5ffdce74fad2/part-0.parquet"
 
-        response = await self.call("admit", admit_body(), handlers=self.routes(authority=Missing()))
-        self.assertEqual("error", response["status"])
-        self.assertEqual("no_coverage", response["error"]["code"])
+        def raising(error):
+            class Missing(Authority):
+                def resolve(self, request):
+                    raise error
+
+                def members(self, manifest):
+                    raise error
+
+                def read_member(self, manifest, index):
+                    raise error
+            return Missing()
+
+        def errors():
+            yield ConsumerApiError(
+                ConsumerErrorCode.NO_COVERAGE, "no coverage in " + leak,
+                context={"reason": "no_partition", "path": leak, "catalog_id": "7d444840"},
+                request_identity="request-v1:" + leak,
+            )
+            yield ConsumerApiError(
+                ConsumerErrorCode.SOURCE_NOT_FOUND, "missing " + leak, context={"reason": leak},
+            )
+            yield ConsumerApiError(
+                ConsumerErrorCode.INTEGRITY_FAILURE, leak, context={"reason": "Contains Spaces 1"},
+            )
+            bad_code = ConsumerApiError(ConsumerErrorCode.INVALID_REQUEST, leak, context={})
+            bad_code.code = "not_a_code"
+            yield bad_code
+
+        expected = (
+            ("no_coverage", "no_partition"),
+            ("source_not_found", "admission_unavailable"),
+            ("integrity_failure", "admission_unavailable"),
+            ("integrity_failure", "admission_unavailable"),
+        )
+        for (code, reason), error in zip(expected, errors()):
+            with self.subTest(code=code, reason=reason):
+                response = await self.call(
+                    "admit", admit_body(), handlers=self.routes(authority=raising(error)),
+                )
+                self.assertEqual("error", response["status"])
+                public = response["error"]
+                self.assertEqual(code, public["code"])
+                self.assertEqual({"reason": reason}, public["context"])
+                self.assertNotIn("srv", json.dumps(response))
+                self.assertNotIn("7d444840", json.dumps(response))
+                self.assertNotIn("parquet", json.dumps(response))
+                self.assertIsNone(public.get("request_identity"))
+
+    async def test_a_consumer_api_error_from_members_and_member_bytes_is_projected_too(self) -> None:
+        leak = "/srv/catalog/part-0.parquet"
+        error = ConsumerApiError(
+            ConsumerErrorCode.SOURCE_NOT_FOUND, "missing " + leak,
+            context={"reason": "partition_missing", "path": leak}, request_identity="r:" + leak,
+        )
+
+        class MembersRaise(Authority):
+            def members(self, manifest):
+                raise error
+
+        class BytesRaise(Authority):
+            def read_member(self, manifest, index):
+                raise error
+
+        response = await self.call("admit", admit_body(), handlers=self.routes(authority=MembersRaise()))
+        public = self.refused(response, "partition_missing", code="source_not_found")
+        self.assertNotIn("srv", json.dumps(public))
+        admitted = await self.admit()
+        response = await self.call(
+            "deliver", {"admission_id": admitted["admission_id"]},
+            handlers=self.routes(authority=BytesRaise()),
+        )
+        public = self.refused(response, "partition_missing", code="source_not_found")
+        self.assertNotIn("srv", json.dumps(public))
+        self.assertNotIn("parquet", json.dumps(public))
+        self.assertEqual(AdmittedInputState.SEALED, self.state(admitted["admission_id"]))
 
     async def test_members_that_are_not_exactly_the_manifests_are_refused_before_sealing(self) -> None:
         base = Authority()
@@ -980,8 +1057,9 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
             if index == 1 and not fired:
                 fired.append(True)
                 with store_provider() as store:
-                    store.begin_delivery(admission_id)
-                    store.expire(admission_id)
+                    store.expire(
+                        admission_id, delivery_attempt=store.begin_delivery(admission_id).delivery_attempt,
+                    )
             return data
 
         authority.read_member = another_operation_starts_and_expires_it
@@ -998,7 +1076,7 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         # An earlier attempt published these same members and then failed.
         first = self.ok(await self.call("deliver", {"admission_id": admission_id}))
         self.ok(await self.call("acknowledge", {
-            "admission_id": admission_id, "outcome": "failed", "manifest_digest": None,
+            "admission_id": admission_id, "delivery_attempt": 1, "outcome": "failed", "manifest_digest": None,
             "failure_reason": "delivery_interrupted", "failed_member_index": None,
         }))
         earlier = dict(self.transfers._transfers)
@@ -1041,11 +1119,11 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         begin = AdmittedInputStore.begin_delivery
         waited = []
 
-        def slow_transition(store, admitted_id):
+        def slow_transition(store, admitted_id, **options):
             if not waited:
                 waited.append(True)
                 now[0] += 60.0  # the store lock was held for longer than retention
-            return begin(store, admitted_id)
+            return begin(store, admitted_id, **options)
 
         with patch.object(AdmittedInputStore, "begin_delivery", slow_transition):
             response = await self.call("deliver", {"admission_id": admission_id})
@@ -1053,64 +1131,144 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         self.refused(response, "transfer_expired", code="integrity_failure")
         self.assertEqual({}, dict(self.transfers._transfers))
         self.assertEqual({}, dict(self.transfers._pending))
-        # The server does not end the attempt by itself: it is pending, like one
-        # whose response was lost, and the deck ends it with its own failure.
-        self.assertEqual(AdmittedInputState.DELIVERY_PENDING, self.state(admission_id))
-        self.refused(
-            await self.call("deliver", {"admission_id": admission_id}), "delivery_not_available",
-        )
-        self.ok(await self.call("acknowledge", {
-            "admission_id": admission_id, "outcome": "failed", "manifest_digest": None,
-            "failure_reason": "transfer_expired", "failed_member_index": None,
-        }))
-        # It is then a failed attempt like any other: the sealed admission delivers again.
+        # The attempt and its publication are one transaction: nothing was
+        # published, so no attempt was recorded and no number was consumed.
+        record = self.open_store().get(admission_id)
+        self.assertEqual((AdmittedInputState.SEALED, 0), (record.state, record.delivery_attempt))
+        # The sealed admission simply delivers.
         delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
-        self.assertEqual("DELIVERY_PENDING", delivery["state"])
+        self.assertEqual(("DELIVERY_PENDING", 1), (delivery["state"], delivery["delivery_attempt"]))
         for descriptor in delivery["members"]:
             document = await self.fetch(descriptor)
             self.assertEqual(descriptor["content_hash"], document["content_hash"])
 
+    def ack(self, admission_id, attempt, *, delivered=False, digest=None, reason="delivery_interrupted"):
+        return {
+            "admission_id": admission_id, "delivery_attempt": attempt,
+            "outcome": "delivered" if delivered else "failed",
+            "manifest_digest": digest if delivered else None,
+            "failure_reason": None if delivered else reason, "failed_member_index": None,
+        }
+
     async def test_a_late_failure_of_one_attempt_never_ends_the_retry_that_succeeded(self) -> None:
         admitted = await self.admit()
         admission_id = admitted["admission_id"]
-        inner = AdmittedInputTransport(
-            self.provider(), self.authority.resolve, self.authority.members,
-            self.authority.read_member, transfers=self.transfers,
+        self.assertEqual(0, admitted["delivery_attempt"])
+        first = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.assertEqual(1, first["delivery_attempt"])
+        self.ok(await self.call("acknowledge", self.ack(admission_id, 1)))
+        second = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.assertEqual(2, second["delivery_attempt"])
+        # The old report is repeated, as a late or duplicated message: no write.
+        for outcome in (
+            self.ack(admission_id, 1),
+            self.ack(admission_id, 1, delivered=True, digest=admitted["manifest_digest"]),
+            self.ack(admission_id, 3),
+        ):
+            with self.subTest(outcome=outcome["outcome"], attempt=outcome["delivery_attempt"]):
+                self.refused(await self.call("acknowledge", outcome), "delivery_attempt_mismatch")
+                record = self.open_store().get(admission_id)
+                self.assertEqual(
+                    (AdmittedInputState.DELIVERY_PENDING, 2), (record.state, record.delivery_attempt),
+                )
+        # The retry's own acknowledgement still works.
+        result = self.ok(await self.call("acknowledge", self.ack(
+            admission_id, 2, delivered=True, digest=admitted["manifest_digest"],
+        )))
+        self.assertEqual(("DELIVERED", 2), (result["state"], result["delivery_attempt"]))
+        # A repeat for the attempt that ended is refused, never applied again.
+        self.refused(
+            await self.call("acknowledge", self.ack(admission_id, 2)), "acknowledgement_not_expected",
         )
-        begin = AdmittedInputStore.begin_delivery
-        retry = []
-        started = []
-
-        def retry_succeeds_before_the_first_attempt_publishes(store, admitted_id):
-            record = begin(store, admitted_id)
-            if not started:
-                started.append(True)
-                # The deck gives up on this attempt and the retry delivers...
-                failure = inner.decode("acknowledge", {
-                    "admission_id": admitted_id, "outcome": "failed", "manifest_digest": None,
-                    "failure_reason": "delivery_interrupted", "failed_member_index": None,
-                })
-                inner.execute("acknowledge", failure)
-                retry.append(inner.execute("deliver", admitted_id))
-                # ...and then this first attempt loses its transfers before it commits.
-                self.transfers._transfers.clear()
-                self.transfers._pending.clear()
-                self.transfers._generations.clear()
-            return record
-
-        with patch.object(AdmittedInputStore, "begin_delivery", retry_succeeds_before_the_first_attempt_publishes):
-            response = await self.call("deliver", {"admission_id": admission_id})
-        # The first attempt fails, and says so...
-        self.refused(response, "transfer_expired", code="integrity_failure")
-        # ...without touching the retry's state: its own acknowledgement still works.
-        self.assertEqual(AdmittedInputState.DELIVERY_PENDING, self.state(admission_id))
-        result = self.ok(await self.call("acknowledge", {
-            "admission_id": admission_id, "outcome": "delivered",
-            "manifest_digest": admitted["manifest_digest"],
-            "failure_reason": None, "failed_member_index": None,
-        }))
-        self.assertEqual("DELIVERED", result["state"])
         self.assertEqual(AdmittedInputState.DELIVERED, self.state(admission_id))
+
+    async def test_a_report_suspended_between_its_read_and_its_write_cannot_end_a_newer_attempt(self) -> None:
+        for delivered in (False, True):
+            with self.subTest(delivered=delivered):
+                self.setUp()  # a fresh store and transfer store for each outcome
+                admitted = await self.admit()
+                admission_id = admitted["admission_id"]
+                self.ok(await self.call("deliver", {"admission_id": admission_id}))
+                inner = AdmittedInputTransport(
+                    self.provider(), self.authority.resolve, self.authority.members,
+                    self.authority.read_member, transfers=self.transfers,
+                )
+                method = "record_delivery" if delivered else "record_delivery_failure"
+                original = getattr(AdmittedInputStore, method)
+                suspended = []
+
+                def after_a_newer_attempt_started(store, *args, **options):
+                    if not suspended:
+                        suspended.append(True)
+                        # While this report waits, attempt 1 ends and attempt 2 begins.
+                        inner.execute("acknowledge", inner.decode("acknowledge", self.ack(admission_id, 1)))
+                        suspended.append(inner.execute("deliver", admission_id))
+                    return original(store, *args, **options)
+
+                with patch.object(AdmittedInputStore, method, after_a_newer_attempt_started):
+                    response = await self.call("acknowledge", self.ack(
+                        admission_id, 1, delivered=delivered, digest=admitted["manifest_digest"],
+                    ))
+                self.assertEqual(2, suspended[1]["delivery_attempt"])
+                self.refused(response, "delivery_attempt_mismatch")
+                record = self.open_store().get(admission_id)
+                self.assertEqual(
+                    (AdmittedInputState.DELIVERY_PENDING, 2, None),
+                    (record.state, record.delivery_attempt, record.delivery_failure_reason),
+                )
+
+    # -- recoverability follows the admission (ADR-0064 Amendment 1, point 6) -----------
+
+    async def test_members_are_not_recoverable_after_expiry_and_stay_so_after_the_attempt_ends(self) -> None:
+        for ending in ("delivered", "failed", "expired"):
+            with self.subTest(ending=ending):
+                self.setUp()
+                admitted = await self.admit()
+                admission_id = admitted["admission_id"]
+                delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+                if ending == "expired":
+                    self.open_store().expire(admission_id, delivery_attempt=delivery["delivery_attempt"])
+                else:
+                    self.ok(await self.call("acknowledge", self.ack(
+                        admission_id, delivery["delivery_attempt"], delivered=ending == "delivered",
+                        digest=admitted["manifest_digest"],
+                    )))
+                for descriptor in delivery["members"]:
+                    socket, _ = await self.resume(descriptor["transfer_id"])
+                    if ending == "expired":
+                        self.assertEqual(1, len(socket.responses))
+                        self.assertEqual("transfer_expired", socket.responses[0]["outcome"])
+                        self.assertNotIn("chunk_base64", socket.responses[0])
+                    else:
+                        self.assertEqual(descriptor["chunk_count"], len(socket.responses))
+                        self.assertEqual("frame", socket.responses[0]["message_type"])
+
+    async def test_a_gate_that_cannot_read_the_admission_serves_nothing(self) -> None:
+        healthy = [True]
+        real = self.provider()
+
+        @contextmanager
+        def flaky():
+            if not healthy[0]:
+                raise RuntimeError("the store is down")
+            with real() as store:
+                yield store
+
+        authority = self.authority
+        handlers = admitted_input_family_handlers(
+            flaky, authority.resolve, authority.members, authority.read_member, transfers=self.transfers,
+        )
+        admitted = self.ok(await self.call("admit", admit_body(), handlers=handlers))
+        delivery = self.ok(await self.call(
+            "deliver", {"admission_id": admitted["admission_id"]}, handlers=handlers,
+        ))
+        descriptor = delivery["members"][0]
+        socket, _ = await self.resume(descriptor["transfer_id"])
+        self.assertEqual(descriptor["chunk_count"], len(socket.responses))
+        self.assertEqual("frame", socket.responses[0]["message_type"])
+        healthy[0] = False  # what cannot be confirmed as recoverable is not served
+        socket, _ = await self.resume(descriptor["transfer_id"])
+        self.assertEqual(["transfer_expired"], [item["outcome"] for item in socket.responses])
 
     async def test_a_loser_does_not_withdraw_what_the_winner_published_from_the_same_bytes(self) -> None:
         admitted = await self.admit()
@@ -1127,11 +1285,11 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
 
         started = []
 
-        def winner_first(store, admitted_id):
+        def winner_first(store, admitted_id, **options):
             if not started:
                 started.append(True)
                 concurrent.append(inner.execute("deliver", admitted_id))
-            return begin(store, admitted_id)
+            return begin(store, admitted_id, **options)
 
         with patch.object(AdmittedInputStore, "begin_delivery", winner_first):
             response = await self.call("deliver", {"admission_id": admission_id})

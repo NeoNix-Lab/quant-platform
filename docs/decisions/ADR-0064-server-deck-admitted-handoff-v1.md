@@ -154,3 +154,94 @@ or an end-to-end transfer proof.
 ## Related
 
 Parent tracking: #281. Closes issue #284.
+
+## Amendment 1 (issue #357) — a delivery attempt has an identity
+
+**Date:** 2026-10-15
+
+Recorded at the maintainer's direction after the independent audit of the
+`j02-admitted-input-v1` implementation (PR #356, issue #341); it takes effect
+when the correcting PR of issue #357 is merged. The maintainer chose a new
+family version on 2026-10-15; the rules for duplicate reports (refused) and
+for the state read (the existing `manifest` operation) are as in the draft of
+this text and stand until amended.
+
+Section 2 says that an interrupted or mismatched delivery "may be retried as a
+new delivery attempt against the same sealed admission", but gives an attempt
+no identity: K12 kept one state per admission. The audit reproduced the
+consequence on PostgreSQL. Deliver A, acknowledge A as failed, deliver B (same
+manifest, same members), repeat A's acknowledgement: it was applied to B, which
+ended as `DELIVERY_FAILED`, and B's own correct acknowledgement was then
+refused. A late write from an attempt that had been replaced landed on the one
+that replaced it, and neither the state nor the manifest digest could tell
+them apart.
+
+Section 2 is amended only for delivery attempts. The manifest fields,
+`canonical_payload_v1`, `manifest_digest`, `admission_id` and their derivation,
+the six states and their order, sections 1, 3 and 4, and the rule that expiry
+needs a new admission are unchanged.
+
+1. **A delivery attempt has a number.** An admission carries a
+   `delivery_attempt` integer, `0` while it has never been delivered. Each entry
+   into `DELIVERY_PENDING`, including the retry of a `DELIVERY_FAILED`
+   admission, increments it by exactly one, in the same atomic step as the state
+   change. It is never reused and never reset by a state change.
+2. **It is delivery metadata, not identity.** It is not a state, and it is not
+   part of `canonical_payload_v1`, `manifest_digest` or `admission_id`; section
+   2's exclusion of "delivery attempts" from the admission identity stands. It
+   changes nothing about what a sealed admission is.
+3. **Terminal transitions are attributed.** `DELIVERED` and `DELIVERY_FAILED`
+   that report an attempt are applied only when the admission is
+   `DELIVERY_PENDING` and its current `delivery_attempt` equals the number the
+   report presents. The comparison and the transition are one atomic step (the
+   write itself carries the comparison). A report for another number, older or
+   unknown, changes nothing and is refused, whatever outcome it asks for. A
+   repeated report for an attempt that already ended is refused too; it is
+   never applied to a later attempt.
+4. **Expiry** applies to the current attempt of the admission. An expiry that
+   names an attempt is applied only if it is the current one. `EXPIRED` is
+   final, as in section 2.
+5. **The number travels with the delivery.** A delivery returns its number to
+   the deck; the deck records it with `admission_id` and the manifest digest and
+   presents it when it reports the attempt's outcome. Reading the admission's
+   state also returns the current number, so that a deck whose delivery response
+   was lost can end that attempt with a failure report for the number it
+   observed. A report made against a number that has since been replaced is
+   refused by point 3.
+6. **Recoverability of delivered bytes follows the admission.** Transfers that
+   carry the members of a delivery are recoverable by the deck only while their
+   admission exists and is not `EXPIRED`; the admission's state is read at the
+   time of recovery, not inferred from the presence of retained frames, and a
+   state that cannot be read is "not recoverable". After `DELIVERED` or
+   `DELIVERY_FAILED` they remain recoverable until the transfer's own retention
+   ends. An attempt and the publication of its members are one atomic step on
+   the K12 side: the attempt is recorded only if its members were published,
+   and no other transition can occur between the two. A delivery that cannot
+   publish records no attempt and consumes no number, and it withdraws nothing
+   that an earlier or a concurrent attempt retained.
+7. **A pending attempt without recoverable transfers is a valid state.** The
+   in-memory transfer store and PostgreSQL are not one atomic unit. If a
+   response is lost, or the database commit fails after publication, or the
+   process restarts, the attempt may be pending while its transfers are not
+   recoverable. The server does not end the attempt itself. The deck ends it
+   with a failure report for the number it observed and delivers again.
+
+**Wire and schema consequences.** `admit`, `manifest` and `deliver` return
+`delivery_attempt`; `acknowledge` requires it. A required field of an accepted
+family is a new family version under ADR-0066 section 1, so the family becomes
+`j02-admitted-input-v2`, and a server that composes it accepts no v1
+acknowledgement on the same endpoint; `j02-admitted-input-v1` is withdrawn (it
+was never composed by a host and never released). A mismatch is the Consumer API
+`invalid_request` with the stable reason `delivery_attempt_mismatch`; no new
+error code. `runtime.admitted_inputs` gains `delivery_attempt integer NOT NULL
+DEFAULT 0`, a backward-compatible addition for existing rows.
+
+**Accepted constraints.**
+
+- The attempt number makes a stale report refusable; it does not make the
+  PostgreSQL state and the server's in-memory transfer store one atomic unit.
+  Point 6 therefore makes the *admission* the authority for recoverability, and
+  point 7 states what a pending attempt without transfers means.
+- The in-memory transfer store is not durable across a server restart; a
+  restart ends in point 7, recovered by the deck.
+- One server host is assumed, as in ADR-0068; nothing here addresses several.

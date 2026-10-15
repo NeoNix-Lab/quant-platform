@@ -195,7 +195,9 @@ class FramedResultTransferStore:
         # transfer_id -> (expiry, frames, payload bytes, owner). ``owner`` is the
         # authorization class that may resume it (a J02 scope), or None. The
         # store is reached from worker threads, so every access holds the lock.
-        self._transfers: dict[str, tuple[float, tuple[FramedResultFrame, ...], int, str | None]] = {}
+        self._transfers: dict[
+            str, tuple[float, tuple[FramedResultFrame, ...], int, str | None, Callable[[], bool] | None]
+        ] = {}
         # transfer_id -> the open reservations that hold it provisionally. A
         # provisional transfer occupies capacity but is not resumable and is not
         # visible to anyone until a reservation commits it; releasing the last
@@ -253,6 +255,7 @@ class FramedResultTransferStore:
 
     def reserve_many(
         self, items: Sequence[tuple[str, Any]], *, owner: str | None = None,
+        gate: Callable[[], bool] | None = None,
     ) -> "FramedResultReservation":
         """Hold a batch provisionally, so that publication can follow a decision.
 
@@ -264,10 +267,18 @@ class FramedResultTransferStore:
         :meth:`FramedResultReservation.commit` publishes the whole batch or
         raises ``transfer_expired`` and publishes nothing: it still requires the
         very copies this reservation saw, not a later admission of the same id.
+
+        ``gate`` is consulted on every :meth:`resume` of a transfer this call
+        creates (a reused transfer keeps the gate it was created with): a false
+        answer, or an error, is ``transfer_expired``. It is how an owner that
+        knows more than the store (an admission that has since expired) ends the
+        recoverability of what it published, without the store learning why.
         """
 
         if owner is not None and (not isinstance(owner, str) or not owner):
             raise ValueError("owner must be a non-empty string when supplied")
+        if gate is not None and not callable(gate):
+            raise TypeError("gate must be callable")
         with self._lock:
             self._expire()
             lease = next(self._leases)
@@ -307,7 +318,7 @@ class FramedResultTransferStore:
             for transfer_id, frames in created.items():
                 generation = next(self._generation_numbers)
                 self._transfers[transfer_id] = (
-                    expiry, frames, sum(len(frame.chunk_payload) for frame in frames), owner,
+                    expiry, frames, sum(len(frame.chunk_payload) for frame in frames), owner, gate,
                 )
                 self._generations[transfer_id] = generation
                 self._pending[transfer_id] = {lease}
@@ -347,9 +358,9 @@ class FramedResultTransferStore:
             for transfer_id in transfer_ids:
                 if transfer_id in held and transfer_id in self._pending:
                     del self._pending[transfer_id]
-                    _, frames, payload_bytes, owner = self._transfers[transfer_id]
+                    _, frames, payload_bytes, owner, gate = self._transfers[transfer_id]
                     # Retention runs from publication, not from the reservation.
-                    self._transfers[transfer_id] = (published, frames, payload_bytes, owner)
+                    self._transfers[transfer_id] = (published, frames, payload_bytes, owner, gate)
             return True
 
     def _release(
@@ -393,10 +404,19 @@ class FramedResultTransferStore:
                 or request.transfer_id in self._pending
             ):
                 raise FramedResultTransportError("transfer_expired", transfer_id=request.transfer_id)
-            frames = retained[1]
+            frames, gate = retained[1], retained[4]
             if request.next_verified_chunk_index > len(frames):
                 raise FramedResultTransportError("integrity_failure", transfer_id=request.transfer_id)
-            return frames[request.next_verified_chunk_index :]
+        # The owner's gate is read outside the store's lock (it may do I/O) and
+        # fails closed: what cannot be confirmed as recoverable is not served.
+        if gate is not None:
+            try:
+                recoverable = gate() is True
+            except Exception:  # noqa: BLE001 - any failure of the gate is a refusal
+                recoverable = False
+            if not recoverable:
+                raise FramedResultTransportError("transfer_expired", transfer_id=request.transfer_id)
+        return frames[request.next_verified_chunk_index :]
 
     @property
     def _retained_payload_bytes(self) -> int:

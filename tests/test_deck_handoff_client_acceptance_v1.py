@@ -457,6 +457,7 @@ class DeckHandoffClientAcceptanceTests(unittest.IsolatedAsyncioTestCase):
                         envelope["result"] = {
                             "admission_id": second.admission_id, "manifest_digest": second.manifest_digest,
                             "manifest": dict(second.manifest), "state": second.state,
+                            "delivery_attempt": second.delivery_attempt,
                         }
                     return json.dumps(envelope)
 
@@ -465,6 +466,57 @@ class DeckHandoffClientAcceptanceTests(unittest.IsolatedAsyncioTestCase):
                     await client.manifest(first.admission_id)
         for admission in (first, second):  # nothing was delivered
             self.assertEqual(AdmittedInputState.SEALED, self.stored_state(admission.admission_id).state)
+
+    async def test_a_lost_delivery_is_ended_and_the_admission_is_delivered_again(self) -> None:
+        async with self.serve() as server:
+            async with self.client(server) as lost:
+                admission = await lost.admit(
+                    dataset=DATASET, operation_identity="strategy-compose-v1",
+                    profile_identity="profile-v1:default",
+                )
+                # The deliver response never reaches the deck: the attempt is pending.
+                await lost._call(deck.ADMITTED_INPUT_FAMILY, "deliver", {"admission_id": admission.admission_id})
+            pending = self.stored_state(admission.admission_id)
+            self.assertEqual((AdmittedInputState.DELIVERY_PENDING, 1), (pending.state, pending.delivery_attempt))
+            async with self.client(server) as client:
+                ended = await client.end_pending_attempt(admission.admission_id)
+                self.assertEqual("DELIVERY_FAILED", ended.state)
+                self.assertEqual(
+                    "delivery_interrupted", self.stored_state(admission.admission_id).delivery_failure_reason,
+                )
+                delivered = await client.fetch_inputs(ended)
+        self.assertEqual(tuple(self.authority.members_bytes), delivered.members)
+        final = self.stored_state(admission.admission_id)
+        self.assertEqual((AdmittedInputState.DELIVERED, 2), (final.state, final.delivery_attempt))
+
+    async def test_a_report_of_a_replaced_attempt_ends_nothing_on_the_real_server(self) -> None:
+        async with self.serve() as server:
+            async with self.client(server) as client:
+                admission = await client.admit(
+                    dataset=DATASET, operation_identity="strategy-compose-v1",
+                    profile_identity="profile-v1:default",
+                )
+                call = client._call
+                family = deck.ADMITTED_INPUT_FAMILY
+                failed = {
+                    "admission_id": admission.admission_id, "delivery_attempt": 1, "outcome": "failed",
+                    "manifest_digest": None, "failure_reason": "delivery_interrupted",
+                    "failed_member_index": None,
+                }
+                await call(family, "deliver", {"admission_id": admission.admission_id})
+                await call(family, "acknowledge", failed)
+                await call(family, "deliver", {"admission_id": admission.admission_id})
+                with self.assertRaises(deck.RemoteConsumerApiError) as caught:
+                    await call(family, "acknowledge", failed)  # the old report, repeated
+                self.assertEqual("delivery_attempt_mismatch", caught.exception.context["reason"])
+                record = self.stored_state(admission.admission_id)
+                self.assertEqual((AdmittedInputState.DELIVERY_PENDING, 2), (record.state, record.delivery_attempt))
+                await call(family, "acknowledge", {
+                    "admission_id": admission.admission_id, "delivery_attempt": 2, "outcome": "delivered",
+                    "manifest_digest": admission.manifest_digest, "failure_reason": None,
+                    "failed_member_index": None,
+                })
+        self.assertEqual(AdmittedInputState.DELIVERED, self.stored_state(admission.admission_id).state)
 
     # -- ADR-0063 section 1: no plaintext, no non-verifying TLS ------------------------
 
@@ -520,6 +572,7 @@ class DeckHandoffClientAcceptanceTests(unittest.IsolatedAsyncioTestCase):
                     envelope["result"] = {
                         "admission_id": real.admission_id, "manifest_digest": real.manifest_digest,
                         "manifest": dict(real.manifest), "state": real.state,
+                        "delivery_attempt": real.delivery_attempt,
                     }
                 return json.dumps(envelope)
 
@@ -555,7 +608,7 @@ class DeckHandoffClientAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         class Reply(_Wrapped):
             async def recv(self):
                 envelope = json.loads(await self._ws.recv())
-                envelope["schema_version"] = "j02-admitted-input-v2-response-v1"
+                envelope["schema_version"] = "j02-admitted-input-v3-response-v1"
                 return json.dumps(envelope)
 
         async with self.serve() as server:

@@ -116,6 +116,7 @@ def admission_document() -> dict:
     return {
         "admission_id": f"admitted-input-v1:{digest}", "manifest_digest": digest,
         "manifest": fields, "state": "SEALED", "delivery_failure_reason": None,
+        "delivery_attempt": 0,
     }
 
 
@@ -170,7 +171,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_unexpected_family_version_or_request_id_is_wire_incompatible_and_not_retried(self) -> None:
         for label, change in (
             ("other family", {"message_family": "j02-job-v1"}),
-            ("other schema version", {"schema_version": "j02-admitted-input-v2-response-v1"}),
+            ("other schema version", {"schema_version": "j02-admitted-input-v3-response-v1"}),
             ("other request id", {"request_id": "someone-elses"}),
             ("j02 v1 envelope", {"message_family": None, "schema_version": "j02-response-v1"}),
         ):
@@ -232,7 +233,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             if request["operation"] == "deliver":
                 return ok(request, {
                     "admission_id": document["admission_id"], "manifest_digest": digest,
-                    "state": "DELIVERY_PENDING", "members": [member],
+                    "state": "DELIVERY_PENDING", "delivery_attempt": 1, "members": [member],
                 })
             return ok(request, {"state": "DELIVERY_FAILED"})
 
@@ -264,6 +265,87 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             admission = await client.manifest(document["admission_id"])
         self.assertEqual(document["manifest_digest"], admission.manifest_digest)
 
+    async def test_every_acknowledgement_names_the_attempt_the_delivery_returned(self) -> None:
+        admission = sealed_admission()
+        for faithful in (True, False):
+            with self.subTest(faithful=faithful):
+                identities = PARTITIONS if faithful else tuple(reversed(PARTITIONS))
+                script = delivery_script(
+                    admission, PARTITION_BYTES, descriptor_identities=PARTITIONS,
+                    document_identities=identities,
+                )
+                async with deck.DeckHandoffClient(
+                    "wss://x", ssl_context=strict_context(), connect=script,
+                ) as client:
+                    try:
+                        await client.fetch_inputs(admission)
+                    except deck.DeliveryIntegrityFailure:
+                        pass
+                acknowledgement = script.sent[-1]["request"]
+                self.assertEqual(1, acknowledgement["delivery_attempt"])
+                self.assertEqual("delivered" if faithful else "failed", acknowledgement["outcome"])
+
+    async def test_a_delivery_without_a_valid_attempt_is_wire_incompatible_and_acknowledges_nothing(self) -> None:
+        admission = sealed_admission()
+        for label, value in (("missing", None), ("zero", 0), ("text", "1"), ("bool", True)):
+            with self.subTest(label):
+                inner = delivery_script(
+                    admission, PARTITION_BYTES, descriptor_identities=PARTITIONS,
+                    document_identities=PARTITIONS,
+                )
+
+                def reply(request, inner=inner, value=value):
+                    response = inner.reply(request)
+                    if isinstance(response, str):
+                        envelope = json.loads(response)
+                        result = envelope.get("result")
+                        if isinstance(result, dict) and "members" in result:
+                            if value is None:
+                                del result["delivery_attempt"]
+                            else:
+                                result["delivery_attempt"] = value
+                        return json.dumps(envelope)
+                    return response
+
+                script = Script(reply)
+                async with deck.DeckHandoffClient(
+                    "wss://x", ssl_context=strict_context(), connect=script,
+                ) as client:
+                    with self.assertRaises(deck.WireIncompatible):
+                        await client.fetch_inputs(admission)
+                self.assertEqual(["deliver"], [item["operation"] for item in script.sent])
+
+    async def test_a_lost_delivery_is_ended_with_the_attempt_the_deck_observes(self) -> None:
+        admission = sealed_admission()
+        state = {"state": "DELIVERY_PENDING", "attempt": 3}
+
+        def reply(request):
+            if request["operation"] == "manifest":
+                return ok(request, {
+                    "admission_id": admission.admission_id, "manifest_digest": admission.manifest_digest,
+                    "manifest": dict(admission.manifest), "state": state["state"],
+                    "delivery_attempt": state["attempt"],
+                })
+            state["state"] = "DELIVERY_FAILED"  # the acknowledgement was accepted
+            return ok(request, {"state": "DELIVERY_FAILED"})
+
+        script = Script(reply)
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            ended = await client.end_pending_attempt(admission.admission_id)
+        self.assertEqual("DELIVERY_FAILED", ended.state)
+        sent = [item["request"] for item in script.sent if "outcome" in item.get("request", {})]
+        self.assertEqual(1, len(sent))
+        self.assertEqual(
+            (3, "failed", "delivery_interrupted"),
+            (sent[0]["delivery_attempt"], sent[0]["outcome"], sent[0]["failure_reason"]),
+        )
+        # An admission that is not pending is only read: nothing is reported.
+        state.update(state="DELIVERED")
+        script = Script(reply)
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            await client.end_pending_attempt(admission.admission_id)
+        self.assertEqual(["manifest"], [item["operation"] for item in script.sent])
+
     async def test_a_manifest_of_another_admission_is_refused_even_when_it_is_valid(self) -> None:
         # B is a faithful admission with its own correct digest and id; A was asked for.
         asked = admission_document()
@@ -272,6 +354,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         other = {
             **asked, "manifest": other_fields, "manifest_digest": other_digest,
             "admission_id": f"admitted-input-v1:{other_digest}",
+            "delivery_attempt": 0,
         }
         self.assertNotEqual(asked["admission_id"], other["admission_id"])
         script = Script(lambda request: ok(request, other))
@@ -297,6 +380,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 other = {
                     "manifest": fields, "manifest_digest": digest,
                     "admission_id": f"admitted-input-v1:{digest}", "state": "SEALED",
+                    "delivery_attempt": 0,
                 }
                 script = Script(lambda request, other=other: ok(request, other))
                 async with deck.DeckHandoffClient(
@@ -314,6 +398,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         script = Script(lambda request: ok(request, {
             "manifest": fields, "manifest_digest": digest,
             "admission_id": f"admitted-input-v1:{digest}", "state": "SEALED",
+            "delivery_attempt": 0,
         }))
         async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
             with self.assertRaises(deck.DeliveryIntegrityFailure):
@@ -427,7 +512,7 @@ def delivery_script(admission, members, *, descriptor_identities, document_ident
         if request["operation"] == "deliver":
             return ok(request, {
                 "admission_id": admission.admission_id, "manifest_digest": admission.manifest_digest,
-                "state": "DELIVERY_PENDING", "members": descriptors,
+                "state": "DELIVERY_PENDING", "delivery_attempt": 1, "members": descriptors,
             })
         outcome = request["request"]["outcome"]
         return ok(request, {"state": "DELIVERED" if outcome == "delivered" else "DELIVERY_FAILED"})
