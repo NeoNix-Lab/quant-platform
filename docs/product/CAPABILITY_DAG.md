@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 8 — Full Platform API & Remote Service Topology v1 CLOSED by operator closeout (issue #327): `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` implemented and promoted to `main` (PR #322, #326), within the bounds recorded in their rows; no Wave 8 Golden proof claimed; `J11` remains `OPEN_DEFERABLE` (not planned, owner decision 2026-10-10). DG-K Process Topology v1 is resolved by ADR-0068 and ADR-0069 (#319); atoms `P01`-`P06` are `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B, with no implementation issue opened yet. DG-C / A14 (L2) is registered by governance issue #364 on `implement/l2`: atoms `A14a`-`A14f` are `OPEN_BLOCKING`/`MISSING` under the L2 design gate (`ADR-0070`, not yet written), and `A14` no longer requires `A13`.**
+Status: **CANONICAL; Wave 8 — Full Platform API & Remote Service Topology v1 CLOSED by operator closeout (issue #327): `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` implemented and promoted to `main` (PR #322, #326), within the bounds recorded in their rows; no Wave 8 Golden proof claimed; `J11` remains `OPEN_DEFERABLE` (not planned, owner decision 2026-10-10). DG-K Process Topology v1 is resolved by ADR-0068 and ADR-0069 (#319); atoms `P01`-`P06` are `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B, with no implementation issue opened yet. DG-C / A14 (L2) on `implement/l2` is resolved by ADR-0070 (#367; reconciled by #371): `A14` and `A14a`-`A14g` are `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B, with no implementation issue opened yet; `A14` no longer requires `A13`.**
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,22 +10,27 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after the DG-C / A14 registration (#364;
+Current audited inventory after the DG-C / A14 design-gate reconciliation (#371;
 recomputed mechanically from the atom tables below, not by hand):
 
 ```text
-TOTAL_ATOMS                     = 110
-CLASSIFIED_ATOMS                = 110
+TOTAL_ATOMS                     = 111
+CLASSIFIED_ATOMS                = 111
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 92 / 110 = 83.6%
-OPEN_BLOCKING                   = 10
+SEMANTIC_FROZEN_OR_RESOLVED     = 100 / 111 = 90.1%
+OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 92 + 10 + 8 = 110
-ROADMAP_PLANNING_COMPLETENESS   = 110 / 110 = 100%
-IMPLEMENTATION_COMPLETE         = 78 / 110 = 70.9%
+ROADMAP_DEFINED                 = 100 + 3 + 8 = 111
+ROADMAP_PLANNING_COMPLETENESS   = 111 / 111 = 100%
+IMPLEMENTATION_COMPLETE         = 78 / 111 = 70.3%
 ```
 
-DG-C / A14 registration (issue #364): six candidate atoms `A14a`, `A14b`, `A14c`, `A14d`, `A14e` and
+DG-C / A14 design-gate reconciliation (#371): ADR-0070 is accepted (#367), so `A14` and `A14a`-`A14f`
+move from `OPEN_BLOCKING` to `FROZEN` (92 -> 99 decided) and the follow-on atom `A14g` (`ob500`
+projection, ADR-0070 §9) is registered `FROZEN`/`MISSING` (99 -> 100 decided; 110 -> 111 atoms).
+Implementation stays `MISSING`; `IMPLEMENTATION_COMPLETE` is unchanged at 78.
+
+Earlier, DG-C / A14 registration (issue #364): six candidate atoms `A14a`, `A14b`, `A14c`, `A14d`, `A14e` and
 `A14f` are added as `OPEN_BLOCKING`/`MISSING` under the L2 design gate (`ADR-0070`, not yet written).
 No existing atom changes decision or implementation state; the dependency edge `A13` -> `A14` is
 removed by the owner decision of 2026-10-14. The percentages fall because the inventory grows, not
@@ -110,13 +115,14 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | A11 | Live trades acquisition | Data Plane | A10,K05,K06,K08 | B06,K10,J07 | FROZEN | COMPLETE | ADR-0040; PR #112 implements Bybit BTCUSDT mapping/session/dedup/cutover/reconnect and canonical publication seam; PR #113 proves the real-provider/server publication path |
 | A12 | Second-venue trades | Data Plane | A11,real provider evidence | C06 | OPEN_DEFERABLE | MISSING | Venue ordering/eligibility profile; evidence-triggered |
 | A13 | L1 contract/acquisition | Data Plane | A01,A04,real feed | L1 consumers | OPEN_BLOCKING | MISSING | Versioned schema/ordering/provenance; DG-C L1 branch. Not a prerequisite of `A14` (owner decision 2026-10-14, #364) |
-| A14 | L2 contract/acquisition | Data Plane | A01,A04,real feed | A14a-A14f,A15 | OPEN_BLOCKING | MISSING | Snapshot/increment/gap semantics; DG-C L2 branch. Selected by the owner 2026-10-14 (#364); independent of `A13`. Closes when `A14a`-`A14e` (batch v1: historical ingest and consumer read) are `COMPLETE` and the v1 golden proof is accepted; `A14f` (batch v2: live) follows and is outside that closure |
-| A14a | L2 ordering provider and certification profile v1 | Data Plane | A14,ADR-0070 | A14b,A14c | OPEN_BLOCKING | MISSING | Total deterministic order for `l2-book-event-v1` and continuity/gap certification per interval. The ordering key and provider name are proposals of the design gate, not decisions |
-| A14b | Canonical L2 Parquet materializer v1 | Data Plane | A14a | A14c,A14d | OPEN_BLOCKING | MISSING | Atomic, byte-reproducible canonical partition emission with partition and coverage manifests; layout and compression are proposals of the design gate |
-| A14c | L2 publication and catalog bridge v1 | Producer | A14a,A14b,A08,A09 | A14d,A14e | OPEN_BLOCKING | MISSING | A certified `kind="l2"` partition is sealed and eligible in `market_catalog` through the existing S13/S14 path |
-| A14d | Bybit historical L2 ingest v1 | Source/Producer | A14b,A14c,A07 | A14f | OPEN_BLOCKING | MISSING | A historical Bybit L2 dump becomes published partitions with per-interval gap/outcome tracking (batch v1) |
-| A14e | L2 consumer read v1 | Data Access | A14c,B02 | A14 closure | OPEN_BLOCKING | MISSING | A published L2 partition is readable through DataGateway/Consumer API with the written events and order, without changing frozen J02 v1 or representation contracts unless an ADR amendment allows it (batch v1) |
-| A14f | Bybit live L2 ingest v1 | Data Plane | A14d,A11 | — | OPEN_BLOCKING | MISSING | Websocket L2 ingest with gap detection and resync to published partitions (batch v2; outside `A14` closure) |
+| A14 | L2 contract/acquisition | Data Plane | A01,A04,real feed | A14a-A14g,A15 | FROZEN | MISSING | ADR-0070 (#367) ratifies `l2-book-event-v1` unchanged and fixes order, continuity, layout, certification, read surface and v2 supervision. Groundwork only from PR #317 (schema, `L2BookEvent`, normalizer): no L2 dataset is published or readable yet. Selected by the owner 2026-10-14 (#364); independent of `A13`. Closes when `A14a`-`A14e` (batch v1: historical ingest and consumer read) are `COMPLETE` and the v1 golden proof is accepted; `A14f` (batch v2: live) and `A14g` (`ob500` projection) follow and are outside that closure |
+| A14a | L2 ordering provider and certification profile v1 | Data Plane | A14 | A14b,A14c | FROZEN | MISSING | ADR-0070 §1, §2, §5, §7. Total order by numeric `seq`; `exchange_ts` = `cts` certified non-decreasing along `seq`, `provider_ts` = `ts`; `u + 1` segments with `known_gap`/`degraded` outcomes; ordering provider `bybit-l2-book-event-v1-seq-v1`; certification checks 1-8; adapter mapping `bybit-orderbook-l2-v2`. E2-E4 are measured on one full pinned day before the check-suite parameters freeze |
+| A14b | Canonical L2 Parquet materializer v1 | Data Plane | A14a | A14c,A14d | FROZEN | MISSING | ADR-0070 §3, §4. Source events, not a reconstructed book; `canonical/l2/bybit/BTCUSDT/l2-book-event-v1/dt=YYYY-MM-DD/part-001.parquet`, Zstandard; `uint64` order columns with exact string round-trip against the string-typed schema; atomic, byte-reproducible emission with the existing partition and coverage manifests; `trade-v1` code paths untouched |
+| A14c | L2 publication and catalog bridge v1 | Producer | A14a,A14b,A08,A09 | A14d,A14e | FROZEN | MISSING | ADR-0070 §4, §5. A certified `kind="l2"` partition is sealed and eligible in `market_catalog` through the existing S13/S14 path; a `degraded` partition is eligible with explicit gaps; a PostgreSQL integration test confirms the catalog needs no DDL change |
+| A14d | Bybit historical L2 ingest v1 | Source/Producer | A14b,A14c,A07 | A14f,A14g | FROZEN | MISSING | ADR-0070 §2, §4, §7. A pinned Bybit `ob200` day becomes a published partition with a per-day outcome (batch v1); streamed-zip reader (data descriptor); `ob500` and other depths are refused (`source_depth_unsupported`) until `A14g` |
+| A14e | L2 consumer read v1 | Data Access | A14c,B02 | A14 closure | FROZEN | MISSING | ADR-0070 §6. `l2_book_events@1` representation under `j02.market_data.read`: events in `native_sequence` order with coverage, gaps and an `anchored` flag; per-partition origin (`source-acquired`/`projected`) visible and no `u + 1` assumption on projected rows; byte-based `result_too_large` bound; J02 v1 and the `trade-v1` gateway path unchanged (batch v1) |
+| A14f | Bybit live L2 ingest v1 | Data Plane | A14d,A11 | — | FROZEN | MISSING | ADR-0070 §8. Websocket `orderbook.200` ingest on the live-ingest host; a reconnect or re-snapshot opens a new segment; no repair path (ADR-0044); held behind the `SCOPE.md` Part B start gate (batch v2; outside `A14` closure) |
+| A14g | Bybit `ob500` raw ingest and top-200 projection v1 | Source/Producer | A14b,A14c,A14d | — | FROZEN | MISSING | ADR-0070 §9. Registered by #371. Raw `ob500` is kept lossless; a deterministic top-200 event projection with per-partition lineage (`derived_from`, `transform`) is certified by recomputation (check 9); outside the `A14` closure; held behind the `SCOPE.md` Part B start gate |
 | A15 | L3/MBO contract | Data Plane | real L3 feed | advanced research | OPEN_DEFERABLE | MISSING | Map real feed without semantic invention |
 | A16 | General quality lifecycle | Data Plane | A04,A08 | A10,A11 | RESOLVED | COMPLETE | Deterministic lifecycle for first vertical + A10 reuse; lifecycle beyond first vertical remains open |
 
@@ -282,7 +288,7 @@ K08/A11/K02/K10 are now complete for the selected first live-ingest path, includ
 
 ## Decision gates
 
-There are now **12 unresolved atom decisions** (4 `OPEN_BLOCKING`: `A13`, `A14`, `I06`, `I07`; 8 `OPEN_DEFERABLE`: `A12`, `A15`, `B05`, `B08`, `C06`, `E07`, `H06`, `J11`) grouped into gate families. The `DG-J` Wave 8 gates (`G1`-`G6`) are resolved and their nine atoms are implemented (Wave 8 closeout, issue #327); `J11` is deliberately `OPEN_DEFERABLE` under ADR-0065 §5. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
+There are now **11 unresolved atom decisions** (3 `OPEN_BLOCKING`: `A13`, `I06`, `I07`; 8 `OPEN_DEFERABLE`: `A12`, `A15`, `B05`, `B08`, `C06`, `E07`, `H06`, `J11`) grouped into gate families. The `DG-J` Wave 8 gates (`G1`-`G6`) are resolved and their nine atoms are implemented (Wave 8 closeout, issue #327); `J11` is deliberately `OPEN_DEFERABLE` under ADR-0065 §5. In addition, the selected Live Ingest scope carried one explicit scope-level DG-B proposition for long-gap remediation, now disposed (`NO_AUTHORITATIVE_REPAIR_PATH_PROVEN`, #110); it was never represented as a new atom and is not counted above.
 
 A gate-family name is not a requirement to resolve every atom inside it. Selecting an atom activates only unresolved propositions on that atom's transitive dependency path.
 
@@ -320,20 +326,21 @@ Atom-specific branches:
 
 - L1 branch: `A13` when a concrete L1 feed is selected;
 - L2 branch: `A14` only when L2 is selected. L2 is selected (owner decision 2026-10-14, #364) and
-  does **not** require `A13`; the earlier "after A13" ordering is revised.
+  does **not** require `A13`; the earlier "after A13" ordering is revised. **RESOLVED by ADR-0070 (#367).**
 
 L1 does not activate L2. L3/MBO remains deferable until real L3 evidence exists.
 
-The L2 branch is registered by #364 as atoms `A14a`-`A14f` in two batches: `v1` (historical ingest and
-consumer read) and `v2` (live ingest). `ADR-0070` has not been written; its question set is recorded in
-`OPEN_DECISIONS.md` (DG-C). The L2 line lives on `implement/l2`, cut from `implement/dgk`.
+The L2 branch was registered by #364 as atoms `A14a`-`A14f` in two batches: `v1` (historical ingest and
+consumer read) and `v2` (live ingest), and resolved by ADR-0070 (#367), which also registers the follow-on
+`A14g` (`ob500` projection). `SCOPE.md` Part B authorizes the inventory with start gates; no implementation
+issue is open. The L2 line lives on `implement/l2`, cut from `implement/dgk`.
 
 PR #317 / issue #316 (operator-requested emergency slice on `implement/wave-8`)
 added an `l2-book-event-v1` schema, `L2BookEvent` identity and pure venue
-adapters. This is groundwork only: `A14` stays `OPEN_BLOCKING`/`MISSING`
-because no accepted ADR resolves L2 snapshot/increment/gap semantics and
-acquisition/publication/live wiring were outside #316. The L2 branch decision
-must ratify that schema by ADR or supersede it.
+adapters. This was groundwork only. ADR-0070 ratifies `l2-book-event-v1` unchanged
+(the schema bytes do not change; the `exchange_ts` mapping of the normalizer is corrected by
+`A14a`). `A14` is `FROZEN`/`MISSING`: acquisition, publication, materialization and reading are
+still unimplemented.
 
 ### DG-D — Application configuration — RESOLVED
 
@@ -469,7 +476,8 @@ Startable once their issues exist: `P01`, `P02`, `P03`, `P05a`. No
 implementation issue is open yet.
 
 In parallel, and on its own integration line `implement/l2` (cut from `implement/dgk`), DG-C / A14 is
-registered by #364: `A14a`-`A14f` are `OPEN_BLOCKING`/`MISSING` until `ADR-0070` exists. It shares no
+resolved by ADR-0070 (#367, reconciled by #371): `A14`, `A14a`-`A14g` are `FROZEN`/`MISSING`; startable
+once its issue exists: `A14a`. It shares no
 code with DG-K; its promotion to `main` follows DG-K's closeout, and `SCOPE.md` must then be reconciled
 by hand because each line rewrites it in place.
 
@@ -557,7 +565,7 @@ Wave 8  Full Platform API & Remote Service Topology v1    COMPLETE (J03,J09,J10,
                                                            recorded bounds; J10/J12/J13 in-process only; J11
                                                            deferred; no Golden proof claimed; operator closeout #327)
 DG-K   Process Topology v1                               ADRs ACCEPTED (#319); P01-P06 authorized, MISSING; before Wave 9
-DG-C/L2 L2 market depth v1 (design-gate line, #364)      A14a-A14f registered, MISSING; ADR-0070 pending; implement/l2 (cut from implement/dgk)
+DG-C/L2 L2 market depth v1 (design-gate line, #364)      ADR-0070 ACCEPTED (#367); A14, A14a-A14g FROZEN, MISSING; implement/l2 (cut from implement/dgk)
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```
