@@ -142,7 +142,9 @@ Amendment 1 requires, and a required field of an accepted family is a new family
 version. The family is therefore `j02-admitted-input-v2` (request and response
 schemas `j02-admitted-input-v2-request-v1` and `j02-admitted-input-v2-response-v1`,
 derived as `<family>-request-v1` and `<family>-response-v1` in ADR-0069). The
-v1 family was never composed by a host and had no consumer other than its own
-tests; it is withdrawn rather than served in parallel, so a server that composes
-v2 answers a v1 header as an unsupported family, and no client ever downgrades.
+v1 family was never composed by a host or released; its only consumers in the
+repository were its own tests and the deck client of #343 (`clients/deck`),
+which is adapted to v2 in the same change. It is withdrawn rather than served
+in parallel, so a server that composes v2 answers a v1 header as an unsupported
+family, and no client ever downgrades.
 Nothing else in this ADR changes.

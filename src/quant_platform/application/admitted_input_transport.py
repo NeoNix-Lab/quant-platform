@@ -60,11 +60,15 @@ Delivery attempts (ADR-0064 Amendment 1, issue #357):
 - The members are published in the *same* K12 transaction that records the
   attempt, so an attempt is recorded only if its transfers were published, and
   no other K12 transition (expiry, an acknowledgement, a newer attempt) can
-  interleave between the two.
+  interleave between the two. If that transaction is then refused, even at its
+  commit, what this delivery alone created is withdrawn, and any copy that
+  cannot be is not recoverable until the admission has recorded the attempt it
+  was published for.
 - J14 ``resume`` of a member consults the admission at the time of the request:
-  after ``EXPIRED`` (or an admission that no longer exists, or cannot be read)
-  a member is ``transfer_expired``; after ``DELIVERED`` / ``DELIVERY_FAILED``
-  it stays recoverable until the J14 retention.
+  after ``EXPIRED`` (or an admission that no longer exists, or cannot be read,
+  or has not recorded the attempt the copy was published for) a member is
+  ``transfer_expired``; after ``DELIVERED`` / ``DELIVERY_FAILED`` it stays
+  recoverable until the J14 retention.
 - A ``ConsumerApiError`` raised by an authority seam reaches the wire only as
   the public projection: the frozen code, a fixed message for that code, and a
   stable letters-and-underscore ``reason`` (or the seam's default). Its own
@@ -640,9 +644,13 @@ class AdmittedInputTransport:
         try:
             # Held, not published: capacity is taken, or the whole batch is
             # refused and nothing is held. Nothing is resumable yet.
+            # The attempt this publication is made for, known only once K12 has
+            # written it; until then (and if K12 never records it) nothing the
+            # gate guards is recoverable.
+            published_for: dict[str, int | None] = {"attempt": None}
             reservation = self._transfers.reserve_many(
                 documents, owner=J02_ADMITTED_INPUT_SCOPE,
-                gate=lambda: self._recoverable(admission_id),
+                gate=lambda: self._recoverable(admission_id, published_for),
             )
         except FramedResultTransportError as error:
             # ADR-0066 section 3: refuse admission rather than retain without bound.
@@ -654,24 +662,30 @@ class AdmittedInputTransport:
             # and nothing can end or replace the attempt in between. What the
             # reservation did not create (an earlier or a concurrent delivery's
             # transfers) is never ours to withdraw, and release leaves it alone.
-            record = store.begin_delivery(
-                admission_id, before_commit=lambda _record: reservation.commit(),
-            )
+            def publish(attempt_record: AdmittedInputRecord) -> None:
+                published_for["attempt"] = attempt_record.delivery_attempt
+                reservation.commit()
+
+            record = store.begin_delivery(admission_id, before_commit=publish)
         except AdmittedInputExpired as error:
-            reservation.release()
+            reservation.withdraw()
             raise _refusal("admission_expired") from error
         except AdmittedInputConflict as error:
-            reservation.release()
+            reservation.withdraw()
             raise _refusal("delivery_not_available") from error
         except FramedResultTransportError as error:
             # The reservation expired (or a copy was replaced) while the
             # transition waited: nothing was published, the transaction was
             # rolled back, so no attempt number was consumed and no descriptor
             # is returned. The admission stays as it was; the deck may deliver.
-            reservation.release()
+            reservation.withdraw()
             raise _integrity("transfer_expired") from error
         except BaseException:
-            reservation.release()
+            # Includes a K12 commit that was refused *after* the publication
+            # above: the attempt was rolled back, so what this reservation
+            # alone published is withdrawn (and, whatever cannot be, is not
+            # recoverable: the gate wants the attempt it was published for).
+            reservation.withdraw()
             raise
         descriptors = [
             {
@@ -694,19 +708,28 @@ class AdmittedInputTransport:
             "members": descriptors,
         }
 
-    def _recoverable(self, admission_id: str) -> bool:
+    def _recoverable(self, admission_id: str, published_for: Mapping[str, int | None]) -> bool:
         """May the members of this admission still be fetched? Read at resume time.
 
-        Only an admission that exists and is not ``EXPIRED`` (ADR-0064
-        Amendment 1, point 6). Any failure to know is "no": a member is then
+        Only an admission that exists, is not ``EXPIRED``, and has *recorded*
+        the attempt this publication was made for (ADR-0064 Amendment 1, point
+        6): a copy published by a delivery whose attempt was never recorded (its
+        K12 commit was refused) is not recoverable, whatever the admission's
+        other attempts. Any failure to know is "no": a member is then
         ``transfer_expired``, which the deck already handles.
         """
 
+        attempt = published_for.get("attempt")
+        if attempt is None:
+            return False
         try:
             with self._provider() as store:
-                return store.get(admission_id).state is not AdmittedInputState.EXPIRED
+                record = store.get(admission_id)
         except Exception:  # noqa: BLE001 - fail closed
             return False
+        return (
+            record.state is not AdmittedInputState.EXPIRED and record.delivery_attempt >= attempt
+        )
 
     def _member_bytes(self, manifest: AdmittedInputManifestV1, index: int) -> bytes:
         try:

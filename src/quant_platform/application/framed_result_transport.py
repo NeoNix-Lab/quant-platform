@@ -207,6 +207,11 @@ class FramedResultTransferStore:
         # expires and is later admitted again is a new generation, so a stale
         # reservation can never publish, or withdraw, somebody else's copy.
         self._generations: dict[str, int] = {}
+        # transfer_id -> the lease that *created* the retained copy, and the ids
+        # some other reservation has since reused. A reservation may withdraw
+        # (after publishing) only a copy it created and nobody has touched.
+        self._creators: dict[str, int] = {}
+        self._reused: set[str] = set()
         self._leases = itertools.count(1)
         self._generation_numbers = itertools.count(1)
         self._lock = threading.RLock()
@@ -321,10 +326,12 @@ class FramedResultTransferStore:
                     expiry, frames, sum(len(frame.chunk_payload) for frame in frames), owner, gate,
                 )
                 self._generations[transfer_id] = generation
+                self._creators[transfer_id] = lease
                 self._pending[transfer_id] = {lease}
                 seen[transfer_id] = generation
                 held.add(transfer_id)
             for transfer_id in reused:
+                self._reused.add(transfer_id)
                 seen[transfer_id] = self._generations[transfer_id]
                 holders = self._pending.get(transfer_id)
                 if holders is not None:  # reusing another reservation's provisional hold
@@ -335,12 +342,12 @@ class FramedResultTransferStore:
                 for transfer_id in ordered
             )
             return FramedResultReservation(
-                self, lease, tuple(ordered), frames_in_order, seen, frozenset(held),
+                self, lease, tuple(ordered), frames_in_order, seen, frozenset(held), gate,
             )
 
     def _commit(
         self, lease: int, transfer_ids: tuple[str, ...], seen: Mapping[str, int],
-        held: frozenset[str],
+        held: frozenset[str], gate: Callable[[], bool] | None = None,
     ) -> bool:
         """Publish the whole batch if this lease still has every copy it relied on."""
 
@@ -358,9 +365,14 @@ class FramedResultTransferStore:
             for transfer_id in transfer_ids:
                 if transfer_id in held and transfer_id in self._pending:
                     del self._pending[transfer_id]
-                    _, frames, payload_bytes, owner, gate = self._transfers[transfer_id]
+                    _, frames, payload_bytes, owner, created_gate = self._transfers[transfer_id]
                     # Retention runs from publication, not from the reservation.
-                    self._transfers[transfer_id] = (published, frames, payload_bytes, owner, gate)
+                    # The gate is the publisher's: whoever makes a copy
+                    # recoverable answers for it, not whoever happened to create it.
+                    self._transfers[transfer_id] = (
+                        published, frames, payload_bytes, owner,
+                        gate if gate is not None else created_gate,
+                    )
             return True
 
     def _release(
@@ -379,6 +391,23 @@ class FramedResultTransferStore:
                     del self._pending[transfer_id]
                     self._transfers.pop(transfer_id, None)
                     self._generations.pop(transfer_id, None)
+                    self._creators.pop(transfer_id, None)
+                    self._reused.discard(transfer_id)
+
+    def _withdraw(self, lease: int, transfer_ids: tuple[str, ...], seen: Mapping[str, int]) -> None:
+        """Remove what this lease created, published, and nobody else has since reused."""
+
+        with self._lock:
+            for transfer_id in transfer_ids:
+                if (
+                    self._creators.get(transfer_id) == lease
+                    and self._generations.get(transfer_id) == seen[transfer_id]
+                    and transfer_id not in self._reused
+                    and transfer_id not in self._pending
+                ):
+                    self._transfers.pop(transfer_id, None)
+                    self._generations.pop(transfer_id, None)
+                    self._creators.pop(transfer_id, None)
 
     def retained_owner(self, transfer_id: str) -> tuple[str | None] | None:
         """``(owner,)`` of a retained transfer; ``None`` if unknown or expired."""
@@ -429,6 +458,8 @@ class FramedResultTransferStore:
                 del self._transfers[transfer_id]
                 self._pending.pop(transfer_id, None)
                 self._generations.pop(transfer_id, None)
+                self._creators.pop(transfer_id, None)
+                self._reused.discard(transfer_id)
 
 
 class FramedResultReservation:
@@ -437,9 +468,11 @@ class FramedResultReservation:
     def __init__(
         self, store: FramedResultTransferStore, lease: int, transfer_ids: tuple[str, ...],
         frames: tuple[tuple[FramedResultFrame, ...], ...], seen: Mapping[str, int],
-        held: frozenset[str],
+        held: frozenset[str], gate: Callable[[], bool] | None = None,
     ) -> None:
         self._store = store
+        self._gate = gate
+        self._published = False
         self._lease = lease
         self._transfer_ids = transfer_ids
         self._seen = dict(seen)
@@ -457,9 +490,27 @@ class FramedResultReservation:
 
         if self._closed:
             return
-        if not self._store._commit(self._lease, self._transfer_ids, self._seen, self._held):
+        if not self._store._commit(
+            self._lease, self._transfer_ids, self._seen, self._held, self._gate,
+        ):
             raise FramedResultTransportError("transfer_expired")
         self._closed = True
+        self._published = True
+
+    def withdraw(self) -> None:
+        """Undo this reservation, including a publication that its caller cannot keep.
+
+        Before :meth:`commit` it is :meth:`release`. After it, it removes only the
+        copies this reservation itself created and that no other reservation has
+        reused since: never a copy that an earlier or a concurrent delivery holds
+        or has published. What it cannot remove stays gated by its publisher.
+        """
+
+        if not self._published:
+            self.release()
+            return
+        self._published = False
+        self._store._withdraw(self._lease, self._transfer_ids, self._seen)
 
     def release(self) -> None:
         """Withdraw what this reservation alone holds. A no-op after commit."""

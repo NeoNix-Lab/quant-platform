@@ -354,7 +354,7 @@ class FramedResultTransportV1Tests(unittest.TestCase):
                 self.fired = 0
                 self.commits = 0
 
-            def _commit(self, lease, transfer_ids, seen, held):
+            def _commit(self, lease, transfer_ids, seen, held, *rest):
                 self.commits += 1
                 if self.fired == 0 or self.always:
                     self.fired += 1
@@ -366,7 +366,7 @@ class FramedResultTransportV1Tests(unittest.TestCase):
                             self._transfers.pop(transfer_id, None)
                             self._generations.pop(transfer_id, None)
                             self._pending.pop(transfer_id, None)
-                return super()._commit(lease, transfer_ids, seen, held)
+                return super()._commit(lease, transfer_ids, seen, held, *rest)
 
         config = FramedResultConfig(
             frame_payload_bytes=4, max_in_flight_transfers=3, max_retained_payload_bytes=64,
@@ -550,6 +550,49 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         second.commit()
         with self.assertRaises(FramedResultTransportError):
             store.resume(FramedResultResumeRequest(first.frames[0][0].transfer_id, 0), owner="a")
+
+    def test_a_publisher_can_withdraw_only_what_it_alone_created(self) -> None:
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        item = ("result:1", {"p": "abcdefgh"})
+        mine = store.reserve_many([item], owner="a")
+        mine.commit()
+        transfer_id = mine.frames[0][0].transfer_id
+        mine.withdraw()  # published by this reservation alone: gone
+        self.assertEqual({}, dict(store._transfers))
+        self.assertEqual({}, dict(store._generations))
+        self.assertEqual({}, dict(store._creators))
+        self.assertIsNone(store.retained_owner(transfer_id))
+
+        # Another reservation reused the copy after it was created: not withdrawn.
+        first = store.reserve_many([item], owner="a")
+        first.commit()
+        second = store.reserve_many([item], owner="a")
+        second.commit()
+        first.withdraw()
+        self.assertEqual((("a"),), store.retained_owner(transfer_id))
+        # A copy this reservation only reused is never its to withdraw.
+        third = store.reserve_many([item], owner="a")
+        third.commit()
+        third.withdraw()
+        self.assertEqual((("a"),), store.retained_owner(transfer_id))
+
+        # Before commit it is a release: a hold that was alone is removed, and it
+        # is safe to call again.
+        held = store.reserve_many([("result:2", {"p": "ijklmnop"})], owner="a")
+        held.withdraw()
+        held.withdraw()
+        self.assertEqual(1, len(store._transfers))
+
+    def test_the_publisher_of_a_copy_answers_for_it_not_its_creator(self) -> None:
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        item = ("result:1", {"p": "abcdefgh"})
+        creator = store.reserve_many([item], owner="a", gate=lambda: False)
+        publisher = store.reserve_many([item], owner="a", gate=lambda: True)  # holds the same copy
+        publisher.commit()
+        creator.release()  # the creator lost: it must not leave its gate on the winner's copy
+        transfer_id = publisher.frames[0][0].transfer_id
+        frames = store.resume(FramedResultResumeRequest(transfer_id, 0), owner="a")
+        self.assertEqual(publisher.frames[0], frames)
 
 
 if __name__ == "__main__":

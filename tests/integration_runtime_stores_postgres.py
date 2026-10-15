@@ -758,6 +758,40 @@ class PostgresAdmittedInputTransport(
                 connection.close()
         return session
 
+    async def test_a_commit_refused_by_postgresql_after_publication_leaves_nothing_recoverable(self):
+        """#357 review: the refusal comes from the database, at COMMIT, not from the callback.
+
+        A deferred constraint trigger rejects the move to DELIVERY_PENDING when the
+        transaction commits, after the members were published. State and attempt
+        number are rolled back by PostgreSQL itself; nothing may stay recoverable.
+        """
+
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        with connect("ADMIN") as admin:
+            admin.execute(
+                "CREATE FUNCTION runtime.reject_pending_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                "BEGIN IF NEW.state = 'DELIVERY_PENDING' THEN "
+                "RAISE EXCEPTION 'commit refused by the test'; END IF; RETURN NEW; END $$"
+            )
+            admin.execute(
+                "CREATE CONSTRAINT TRIGGER reject_pending_commit AFTER UPDATE ON runtime.admitted_inputs "
+                "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION runtime.reject_pending_commit()"
+            )
+        try:
+            response = await self.call("deliver", {"admission_id": admission_id})
+            self.assertEqual("error", response["status"])
+            record = self.open_store().get(admission_id)
+            self.assertEqual((AdmittedInputState.SEALED, 0), (record.state, record.delivery_attempt))
+            self.assertEqual({}, dict(self.transfers._transfers))
+            self.assertEqual({}, dict(self.transfers._pending))
+        finally:
+            with connect("ADMIN") as admin:
+                admin.execute("DROP TRIGGER reject_pending_commit ON runtime.admitted_inputs")
+                admin.execute("DROP FUNCTION runtime.reject_pending_commit()")
+        delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.assertEqual(1, delivery["delivery_attempt"])
+
 
 class PostgresResultImportTransport(
     DisposableCase, result_import.ResultImportTransportV1Tests

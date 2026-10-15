@@ -48,6 +48,7 @@ from quant_platform.application.framed_result_transport import (  # noqa: E402
     J14_SCHEMA_VERSION,
     FramedResultConfig,
     FramedResultReceiver,
+    FramedResultReservation,
     FramedResultTransferStore,
     FramedResultTransportError,
 )
@@ -1216,6 +1217,74 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
                     (AdmittedInputState.DELIVERY_PENDING, 2, None),
                     (record.state, record.delivery_attempt, record.delivery_failure_reason),
                 )
+
+    # -- a K12 commit that is refused after the publication (#357 review) ---------------
+
+    def refuse_the_commit_after_publishing(self):
+        """The attempt's transaction publishes, then is rolled back, as a refused commit is."""
+
+        original = AdmittedInputStore.begin_delivery
+
+        def refusing(store, admission_id, *, before_commit=None):
+            def publish_then_fail(record):
+                before_commit(record)
+                raise RuntimeError("the commit was refused")
+            return original(store, admission_id, before_commit=publish_then_fail)
+
+        return patch.object(AdmittedInputStore, "begin_delivery", refusing)
+
+    async def test_a_refused_k12_commit_after_publication_leaves_nothing_recoverable(self) -> None:
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        with self.refuse_the_commit_after_publishing():
+            response = await self.call("deliver", {"admission_id": admission_id})
+        self.assertEqual("error", response["status"])
+        record = self.open_store().get(admission_id)
+        self.assertEqual((AdmittedInputState.SEALED, 0), (record.state, record.delivery_attempt))
+        # What this refused delivery alone published is withdrawn...
+        self.assertEqual({}, dict(self.transfers._transfers))
+        self.assertEqual({}, dict(self.transfers._pending))
+        # ...and the sealed admission delivers normally afterwards.
+        delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.assertEqual(1, delivery["delivery_attempt"])
+        for descriptor in delivery["members"]:
+            self.assertEqual(descriptor["content_hash"], (await self.fetch(descriptor))["content_hash"])
+
+    async def test_a_publication_that_cannot_be_withdrawn_is_still_not_recoverable(self) -> None:
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        # Withdrawal is neutralized: only the gate stands between the copy and the deck.
+        with self.refuse_the_commit_after_publishing(), patch.object(
+            FramedResultReservation, "withdraw", lambda reservation: None,
+        ):
+            await self.call("deliver", {"admission_id": admission_id})
+        retained = dict(self.transfers._transfers)
+        self.assertEqual(2, len(retained))
+        for transfer_id in retained:
+            socket, _ = await self.resume(transfer_id)
+            self.assertEqual(["transfer_expired"], [item["outcome"] for item in socket.responses])
+        # A later attempt that is recorded makes the very same copies recoverable.
+        delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.assertEqual(sorted(retained), sorted(item["transfer_id"] for item in delivery["members"]))
+        for descriptor in delivery["members"]:
+            self.assertEqual(descriptor["content_hash"], (await self.fetch(descriptor))["content_hash"])
+
+    async def test_a_refused_commit_leaves_the_valid_transfers_of_an_earlier_attempt_alone(self) -> None:
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        first = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.ok(await self.call("acknowledge", self.ack(admission_id, 1)))
+        earlier = dict(self.transfers._transfers)
+        manifest = self.open_store().get(admission_id).manifest.canonical_payload_v1
+        with self.refuse_the_commit_after_publishing():
+            response = await self.call("deliver", {"admission_id": admission_id})
+        self.assertEqual("error", response["status"])
+        self.assertEqual(earlier, dict(self.transfers._transfers))  # none added, none removed
+        record = self.open_store().get(admission_id)
+        self.assertEqual((AdmittedInputState.DELIVERY_FAILED, 1), (record.state, record.delivery_attempt))
+        self.assertEqual(manifest, record.manifest.canonical_payload_v1)
+        for descriptor in first["members"]:  # and attempt 1's members are still served
+            self.assertEqual(descriptor["content_hash"], (await self.fetch(descriptor))["content_hash"])
 
     # -- recoverability follows the admission (ADR-0064 Amendment 1, point 6) -----------
 
