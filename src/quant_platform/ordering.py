@@ -12,6 +12,7 @@ from typing import Any
 
 
 TRADES_CANONICAL_TOTAL_ORDER_V1 = "trades@1-canonical-total-order-v1"
+L2_BOOK_EVENTS_CANONICAL_TOTAL_ORDER_V1 = "l2-book-events@1-canonical-total-order-v1"
 OrderingKey = Callable[[Any], tuple[Any, ...]]
 ApplicabilityPredicate = Callable[[Any], bool]
 
@@ -68,6 +69,7 @@ __all__ = [
     "ApplicabilityPredicate",
     "DuplicateOrderingProviderError",
     "OrderingProvider",
+    "L2_BOOK_EVENTS_CANONICAL_TOTAL_ORDER_V1",
     "TRADES_CANONICAL_TOTAL_ORDER_V1",
     "ordering_policy_satisfies",
     "provider_for",
