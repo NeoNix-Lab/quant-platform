@@ -49,7 +49,8 @@ Two findings reshape the earlier proposals and are stated up front:
 - **The historical archive changed depth inside the history.** `..._ob500.data.zip` is present on probed
   dates through 2025-08-01 and absent from 2025-09-01; `..._ob200.data.zip` is present on every probed date from 2025-09 to the previous
   day. Depth 200 is therefore the only depth present in both the recent archive and the live
-  feed.
+  feed. Pre-2025-09 history is admitted by an explicit, deterministic top-200 projection (§9),
+  not by changing the depth of the dataset.
 
 ## Decision
 
@@ -130,7 +131,9 @@ The canonical layer stores **source events**: snapshots and deltas exactly as no
 adapter, with level order preserved (the identity hash already refuses to sort levels).
 
 - A reconstructed or resampled book is a *derived* representation with its own identity and is
-  out of `v1`. Nothing derived is written to the canonical layer.
+  out of `v1`. The one derived canonical content is the top-N *event* projection of §9, which
+  carries explicit lineage and is certified by recomputation; nothing else derived is written to
+  the canonical layer.
 - The replay semantic is fixed by the events: apply `upsert` (insert or overwrite size) and
   `delete` (size `"0"`, remove the level); a `snapshot` replaces the whole book. A `delete` of an
   absent level is a source-semantics violation counted by certification (0 occurrences in the
@@ -144,10 +147,12 @@ adapter, with level order preserved (the identity hash already refuses to sort l
   `dataset_kind` for raw and canonical in the frozen manifest vocabulary, and `_derive_rel_root`
   yields `canonical/l2/bybit/BTCUSDT/l2-book-event-v1`. **No manifest or `DatasetIdentity`
   evolution is needed for `v1`.**
-- **One stream per dataset.** Every event of the dataset has the same `source_channel` and
-  `source_depth_limit`. `v1` fixes them to `orderbook.200.BTCUSDT` and `200` (see §7). A second
-  depth cannot share the identity; it needs a new identity dimension, which is a separate
-  contract evolution under ADR-0018 and is **not** made here.
+- **One effective depth per dataset.** Every event of a partition has the same `source_channel`
+  and `source_depth_limit`, and the dataset has one *effective book depth*, 200: a partition is
+  either source-acquired (`orderbook.200.BTCUSDT`, `source_depth_limit = 200`) or a §9
+  projection (`source_depth_limit = 500`, manifest transform `top_n = 200`). A second
+  *effective* depth cannot share the identity; it needs a new identity dimension, a separate
+  contract evolution under ADR-0018 that is **not** made here.
 - **Path.** `canonical/l2/bybit/BTCUSDT/l2-book-event-v1/dt=YYYY-MM-DD/part-001.parquet`,
   Zstandard, row-group size 65,536 (the `trade-v1` convention, accepted as proposed).
 - **Columns** (one row per event, schema identity `l2-book-event-v1`, optional fields nullable):
@@ -173,7 +178,8 @@ adapter, with level order preserved (the identity hash already refuses to sort l
   as for `trade-v1`); check suite `producer-consumer-conformity-v1/bybit-l2-book-event-v1-checks`.
 - **Checks**, all fail-closed unless marked:
   1. every record validates against `l2-book-event-v1` and matches the dataset identity;
-  2. single stream: constant `source_channel` and `source_depth_limit`;
+  2. single stream per partition: constant `source_channel` and `source_depth_limit`, and an
+     effective depth equal to 200 (source depth 200, or the recorded projection `top_n = 200`);
   3. strictly increasing `native_sequence` in physical order, no duplicates;
   4. `exchange_ts` non-decreasing along `native_sequence`;
   5. segment accounting: `u + 1` continuity per segment, discontinuities enumerated
@@ -183,7 +189,9 @@ adapter, with level order preserved (the identity hash already refuses to sort l
      evidence item below, default **0 allowed**);
   7. coverage fold equals the sealed catalog row (ADR-0022, S13);
   8. physical artifact size and SHA-256 equal manifest evidence; row count and observed bounds
-     equal the partition manifest.
+     equal the partition manifest;
+  9. a projected partition (§9) equals the recomputation of its projection from the raw
+     partition it declares in `derived_from`.
 - **Outcomes.** Checks 1-4, 6 (violation) and 7-8 make the partition ineligible. Check 5
   findings and an unanchored head make it `degraded`, which is an eligible lifecycle state
   already (`closed`/`valid`/`degraded`). A `degraded` partition is published with its
@@ -223,13 +231,15 @@ adapter, with level order preserved (the identity hash already refuses to sort l
   `native_sequence` = `seq`, `native_update_id` = `u`, `continuity_token` derived.
   No L2 data has been persisted yet, so correcting the adapter mapping (§1) changes no stored
   identity.
-- **Depth 200 is the only `v1` depth.** `source_channel = orderbook.200.BTCUSDT`. Reasons:
-  it is the only depth in both the recent archive (`ob200`, 2025-09 onward) and the live feed
-  (`orderbook.200`), so `v2` can extend `v1` without an identity change; `orderbook.500` is
-  not a valid live topic; and a 500-level delta stream cannot be truncated to 200 without
-  reconstructing the book, which would be synthetic.
-- **`ob500` history (up to 2025-08) is out of `v1`.** An `ob500` day is refused with
-  `source_depth_unsupported`, not converted.
+- **Depth 200 is the only effective depth.** Source-acquired events are
+  `orderbook.200.BTCUSDT`. Reasons: it is the only depth in both the recent archive (`ob200`,
+  2025-09 onward) and the live feed (`orderbook.200`), so `v2` can extend `v1` without an
+  identity change; and `orderbook.500` is not a valid live topic.
+- **`ob500` history (up to 2025-08) is admitted by projection (§9), after `A14d`.** It is not
+  converted silently and not mixed as depth 500: it is a derived partition with lineage. Until
+  `A14g` exists, an `ob500` day is refused with `source_depth_unsupported`. Any other depth
+  (`ob50`, `ob1000`, `orderbook.1000`) is refused the same way; only 200 and the §9 projection
+  from 500 are admitted.
 - **Rejected proposals:** topics `orderbook.50`/`orderbook.500`; `exchange_ts`-first ordering key
   and `bybit-l2-exchange-ts-seq-v1`. **Accepted proposals:** the `dt=` path and Zstandard,
   with the typed column set in §4 (the Arrow schema is now fixed, not left open).
@@ -259,7 +269,50 @@ adapter, with level order preserved (the identity hash already refuses to sort l
 - **Out of `v1`:** everything in this section is `v2`; `A14f` is not authorized by this ADR's
   acceptance alone (it stays registered, not implemented).
 
-## Atoms (the set `A14a`-`A14f`, now statable)
+### 9. Projection of deeper history, follow-on `A14g` (outside the `A14` closure)
+
+Pre-2025-09 history exists only as depth 500. It is brought into the depth-200 dataset by a
+**deterministic top-N projection** of the source's own events, declared as such.
+
+- **Premise, tested.** A book of depth N is the top-N of a deeper book at the same `seq`. In the
+  capture, the top-50 of the replayed depth-200 book equalled the depth-50 book at all 479
+  shared `seq` values (Appendix D). The 500 -> 200 case is the same principle but cannot be
+  tested directly: there is no live depth 500, and depth 1000 shares no `seq` with depth 200.
+- **Raw first.** The `ob500` day is stored in the raw layer as normalized `L2BookEvent` rows at
+  depth 500, lossless (`raw`, `l2`, `bybit`, `BTCUSDT`, `l2-book-event-v1`; kind `l2` is
+  already in the raw vocabulary; ADR-0032). Consumers never read raw.
+- **Projection.** Replay the raw events per continuity segment (§2) from a snapshot. After each
+  source event `k`, let `T_k` be the top 200 levels per side (bids by descending price, asks by
+  ascending price). The emitted changes are the symmetric difference of `T_{k-1}` and `T_k`:
+  `upsert` for a level new to the window or with a changed size, `delete` (size `"0"`) for a
+  level that left the window, whether removed from the book or pushed below rank 200. A
+  difference-free event emits nothing. A source `snapshot` emits a full top-200 `snapshot`. This
+  is the same behaviour the 200-level stream shows: its book size stayed exactly 200 per side.
+- **Event fields.** `exchange_ts` = source `cts`, `provider_ts` = source `ts` (an event
+  without `cts` is refused); `native_sequence` = source `seq`; `source_channel` and
+  `source_depth_limit` stay the true source (`orderbook.500.BTCUSDT`, `500`) so that provenance
+  is not falsified; `native_update_id` is the *source stream's* `u` and is not comparable to the
+  200 stream's `u`.
+- **Continuity.** The `u + 1` rule is checked on the *raw* segments before projection. Because
+  projected events skip source events, `u + 1` is not a property of the projected rows; the
+  segment boundaries and the discontinuity intervals are recorded in the coverage evidence
+  `detail`, and the same `known_gap` / `degraded` outcomes apply (§2).
+- **Lineage.** The manifest carries `derived_from` (the raw partition) and
+  `transform = project-top-n-v1` with `top_n = 200`. Lineage is per partition, so source-acquired
+  and projected days coexist in one dataset and a read exposes each partition's origin.
+- **Certification by recomputation** (check 9, §5): re-projecting the raw partition must
+  reproduce the projected partition's `canonical_content_hash_v1`. A projected partition whose
+  raw partition is missing or altered is ineligible.
+- **What it does not claim.** A projected day is not byte-comparable with a genuine `ob200`
+  day: it has fewer events (changes confined to ranks 201-500 emit nothing) and different
+  `native_update_id`. The consumer-visible book state at each retained `seq` is the claim.
+- **No synthetic data.** Every level and size comes from a venue message; nothing is inferred
+  from trades; a book is never invented across a discontinuity.
+
+`A14g` has its own golden (the A07 day 2024-01-15, an `ob500` day) and is not part of the
+`A14` closure, like `A14f`.
+
+## Atoms (the set `A14a`-`A14g`, now statable)
 
 | Atom | Final name | In | Out | Requires |
 |---|---|---|---|---|
@@ -269,8 +322,11 @@ adapter, with level order preserved (the identity hash already refuses to sort l
 | `A14d` | Bybit historical L2 ingest (`ob200` day) with per-day outcome | archive day file | published partition + coverage, or typed refusal | `A14b`, `A14c`, `A07` |
 | `A14e` | `l2_book_events@1` consumer read | `DataRequest` / Consumer query | ordered events, coverage, gaps, `anchored` flag | `A14c`, `B02` |
 | `A14f` | Bybit live L2 ingest and resync (`v2`) | `orderbook.200` stream | durable partitions, checkpoints, explicit gaps | `A14d`, `A11` |
+| `A14g` | Bybit `ob500` raw ingest and top-200 projection (follow-on) | `ob500` archive day | raw partition + projected canonical partition with lineage, or typed refusal | `A14d`, `A14b`, `A14c` |
 
 Dependency order for `v1`: `A14a` -> `A14b` -> `A14c` -> (`A14d` and `A14e`, independent).
+`A14g` follows `A14d` and, like `A14f`, is outside the `A14` closure; `A14g` is not registered in
+`CAPABILITY_DAG.md` yet and is added by the reconciliation that follows acceptance.
 
 ### v1 golden proof
 
@@ -278,7 +334,8 @@ Historical ingest -> materialization -> certification -> catalog publication -> 
 one pinned UTC day of the `ob200` archive.
 
 - **Fixtures.** A pinned day (candidate: a day in the `ob200` range such as 2025-12-01; the
-  A07 golden day 2024-01-15 is an `ob500` day and cannot be reused). The archive's SHA-256 is
+  A07 golden day 2024-01-15 is an `ob500` day, usable only by the `A14g` golden of §9). The
+  archive's SHA-256 is
   recorded; a committed excerpt is limited to what is needed to exercise snapshot, delta,
   delete and one discontinuity, under the repository's no-bulk-data rule.
 - **Hermetic/real split.** Hermetic: synthetic and excerpt fixtures prove every check and
@@ -286,8 +343,9 @@ one pinned UTC day of the `ob200` archive.
   recorded in the closeout.
 - **Acceptance.** The published partition's `canonical_content_hash_v1` and physical SHA-256 are
   reproducible; the consumer read of an interval returns the same events as the materializer
-  input in `native_sequence` order, with coverage and `anchored` flags; an `ob500` day and a
-  conflicting duplicate are refused with their typed reasons.
+  input in `native_sequence` order, with coverage and `anchored` flags; an unsupported depth and
+  a conflicting duplicate are refused with their typed reasons (an `ob500` day is refused until
+  `A14g`).
 
 ## Open evidence (does not block acceptance; each has a fixed rule)
 
@@ -296,35 +354,41 @@ above hold whatever the outcome; the outcome only fixes how much data is eligibl
 
 | # | Question | Rule that already applies |
 |---|---|---|
-| E1 | Format of an `ob200` day file (fields, presence of `cts`/`u`/`seq`, first record type) | An event without `cts` is refused (§1); a day not starting with a snapshot has an unanchored head and is `degraded` (§2) |
+| E1 | Format of an `ob200` and of an `ob500` day file (fields, presence of `cts`/`u`/`seq`, first record type) | An event without `cts` is refused (§1); a day not starting with a snapshot has an unanchored head and is `degraded` (§2) |
 | E2 | Does `seq` survive a provider restart | A regression makes the partition ineligible (§2) |
 | E3 | Rate of deletes of absent levels in the archive | Default 0 allowed (§5 check 6); a measured non-zero floor is a profile parameter, set by the maintainer |
 | E4 | Does the archive ever contain re-snapshots mid-day | Each starts a new segment (§2) |
+| E5 | Is the top-200 projection of an `ob500` day indistinguishable from a genuine depth-200 book | Only the 50 vs 200 case is proven (Appendix D); `A14g` acceptance adds a parity test on a real day pair, and the claim stays "book state at retained `seq`" (§9) |
 
 ## Consequences
 
 - `A14a`-`A14e` can be implemented without further semantic decisions. `A14f` has its supervision
   rule; its soak evidence remains to be produced.
 - No accepted ADR is weakened; no frozen contract changes; no existing identity changes.
-- Adding a second depth or a second venue requires an identity dimension (ADR-0018 evolution),
-  decided separately.
+- Adding a second *effective* depth or a second venue requires an identity dimension (ADR-0018
+  evolution), decided separately. Pre-2025-09 history needs none: it enters through §9.
+- One canonical dataset can hold source-acquired and projected partitions; consumers see the
+  origin per partition and must not assume byte-equal event streams across the 2025-09 boundary.
 - The `trade-v1` code paths are untouched; L2 is a sibling set of modules.
 - The consumer read is bounded by bytes, so a day is read in slices; in-process consumers are
   not bounded by J02.
 - `OPEN_DECISIONS.md` DG-C Q1-Q8 are answered by this ADR; the governance reconciliation after
-  acceptance re-states `A14a`-`A14f` as authorized (as DG-K did with #319).
+  acceptance re-states `A14a`-`A14f` as authorized and registers `A14g` (as DG-K did with #319).
 
 ## Decisions for the maintainer
 
 Acceptance is the merge of this PR. These are the choices that change scope most; reject or
 amend any of them in review:
 
-1. **Depth 200 only in `v1`** and `ob500` history excluded (§7).
+1. **Effective depth 200**; `ob500` history enters only by the §9 projection (`A14g`), never as
+   depth 500 in the dataset (§7, §9).
 2. **`exchange_ts` = `cts`**, `provider_ts` = `ts`, refuse events without `cts` (§1).
 3. **Order by `seq` alone**; `exchange_ts` is a certified property, not a key (§1).
 4. **A discontinuity degrades, a `seq` regression or `exchange_ts` regression rejects** (§2, §5).
 5. **A byte-based result bound** for the L2 representation (§6).
 6. **Sibling L2 modules; no change to the trade path** (§4).
+7. **A declared exception to "no derived canonical content"** for the §9 projection, certified by
+   recomputation and carried with per-partition lineage (§3, §9).
 
 ## Appendix - evidence
 
@@ -363,6 +427,14 @@ prove them across restarts or days (Open evidence E2, E4).
 2025-09-01 to 2026-10-13 (monthly probes, plus 2025-06-01 and 2026-10-10/13); the 2026-10-13
 file is published at about 00:11 UTC the next day. A day is about 210-250 MB zipped. File
 contents were **not** inspected.
+
+### D. Projection principle test, 2026-10-14 (same capture as B)
+
+The depth-200 and depth-50 streams were each replayed (snapshot, then upsert/delete). At every
+`seq` present in both (479), the top 50 levels per side of the depth-200 book were compared with
+the depth-50 book by price and size text. **479 of 479 were identical**; the depth-50 book held
+exactly 50 levels per side after warm-up (3,805 of 3,805 events). This supports the §9 premise
+for N = 50 vs 200. It is not a test of 500 vs 200.
 
 ## Related
 
