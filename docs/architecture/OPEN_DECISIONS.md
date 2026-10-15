@@ -273,6 +273,8 @@ non-complete evidence until a future attributable repair path proves it.
 
 ## DG-C — Market-data depth
 
+**Status:** the L2 branch is **RESOLVED** by ADR-0070 (#367, accepted 2026-10-15; reconciled by #371). The L1 branch (`A13`) stays `OPEN_BLOCKING`.
+
 ### L1 branch (`A13`)
 
 Activate when a concrete L1 feed is selected. Resolve versioned L1 schema, identity, ordering, coverage and provenance from observed source evidence.
@@ -287,9 +289,8 @@ Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
 
 PR #317 / issue #316 (operator-requested emergency slice, merged during Wave 8)
 added an `l2-book-event-v1` schema, an `L2BookEvent` identity and pure venue
-adapters. No accepted ADR resolves this branch, so `A14` stays `OPEN_BLOCKING`
-and that code is groundwork, not a decision. The L2 branch decision must
-ratify the schema by ADR or supersede it.
+adapters. ADR-0070 ratifies the schema unchanged; that code is groundwork, and
+`A14` is `FROZEN`/`MISSING` until its atoms are implemented.
 
 **Owner decisions taken (2026-10-14, #364) — fixed inputs of the design gate:**
 
@@ -302,12 +303,14 @@ ratify the schema by ADR or supersede it.
    by-hand reconciliation of `SCOPE.md` toward `main` is accepted maintainer debt, paid at the L2 merge.
 6. Venue: Bybit only; no second venue.
 
-**Proposed, not decided** (drafted in PR #360, for `ADR-0070` to settle or reject): the ordering key
-`(exchange_ts, native_sequence, native_update_id)` and provider name `bybit-l2-exchange-ts-seq-v1`;
-the physical path `canonical/l2/{venue}/{instrument}/l2-book-event-v1/dt=YYYY-MM-DD/part-001.parquet`
-with Zstandard; topics `orderbook.50`/`orderbook.500`; the certification profile and check-suite names.
+**Proposals of PR #360, now settled by ADR-0070:** the ordering key `(exchange_ts, native_sequence,
+native_update_id)` and provider `bybit-l2-exchange-ts-seq-v1` are **rejected** (order is numeric `seq`
+alone, provider `bybit-l2-book-event-v1-seq-v1`); the physical path and Zstandard are **accepted** with
+the typed columns of ADR-0070 §4; topics `orderbook.50`/`orderbook.500` are **rejected** (`orderbook.500`
+is not a valid live topic; the effective depth is 200); the certification profile and check-suite names
+are fixed in ADR-0070 §5.
 
-**Question set for the L2 design gate (`ADR-0070`; atoms `A14a`-`A14f`, all `OPEN_BLOCKING`):**
+**Question set for the L2 design gate (answered by `ADR-0070` §1-§8; atoms `A14a`-`A14f` now `FROZEN`):**
 
 1. Which total order does the venue's native sequencing support, given that a Bybit snapshot resets the
    update id (`u`)? Is `exchange_ts` an admissible primary key?
@@ -322,6 +325,37 @@ with Zstandard; topics `orderbook.50`/`orderbook.500`; the certification profile
 7. How does `l2-book-event-v1` (#317) relate to the final contract: ratified as is, amended or superseded?
 8. (`v2`) Which supervision lifecycle, backpressure and resync rule does live ingest follow, and how does
    it fit the live-ingest host (ADR-0043)?
+
+**Resolution (ADR-0070, accepted 2026-10-15):**
+
+1. Q1: order by numeric `seq` alone within one stream; `exchange_ts` = `cts` is a certified non-decreasing
+   property, `provider_ts` = `ts`; `u` is the continuity signal because a snapshot resets it (§1).
+2. Q2: `u + 1` segments; a discontinuity is a `known_gap` and the partition `degraded`; a `seq` or
+   `exchange_ts` regression makes it ineligible; no synthetic snapshot; continuity across the day boundary
+   is evidence, not carried state (§2).
+3. Q3: the canonical layer stores source events, not a book; one derived exception, the declared top-N
+   projection of §9 (§3).
+4. Q4: `canonical/l2/bybit/BTCUSDT/l2-book-event-v1`, existing manifests and `l2` kind, no manifest
+   evolution; one effective depth (200); sibling L2 modules (§4).
+5. Q5: profile and checks 1-9; `degraded` is eligible with explicit gaps (§5).
+6. Q6: additive `l2_book_events@1` representation, byte-based result bound, J02 v1 unchanged, no accepted-ADR
+   amendment (§6).
+7. Q7: `l2-book-event-v1` ratified unchanged; depth 200 is the only effective depth; `ob500` history enters
+   only by the §9 projection (`A14g`) (§7, §9).
+8. Q8 (`v2`): reuse the live-ingest host, one `orderbook.200` subscription, resync waits for the in-band
+   snapshot, no repair path (§8).
+
+**Open evidence (rules already fail-closed):** E1 was measured on 2026-10-15 on the first 2 MiB of one
+`ob200` and one `ob500` day (`cts` present in 100% of 7,285 messages; first record a snapshot; `u` +1;
+`seq` strictly increasing; no `cts` regression, no delete of an absent level, no crossed book). Still open:
+E2 (`seq` across a provider restart), E3 (delete-of-absent rate over a full day), E4 (mid-day
+re-snapshots), E5 (real-day parity of the 500 -> 200 projection). A measured `cts` regression along `seq`
+would make whole days ineligible under ADR-0070 §5 check 4 and must be brought back as an ADR amendment,
+not relaxed in code.
+
+**Requirements carried to implementers (not decisions):** `A14b` maps `uint64` columns to the
+string-typed schema with an exact round-trip; `A14e` exposes per-partition origin and must not assume
+`u + 1` on projected rows; `A14d` reads a streamed zip with a data descriptor.
 
 ## DG-E — Validation semantics — RESOLVED / IMPLEMENTED
 
