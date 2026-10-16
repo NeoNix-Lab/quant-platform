@@ -63,6 +63,11 @@ def native_types(request):
     return [type(f.observation.value) for s in request.projection.samples for f in s.feature_inputs]
 
 
+def _pad_key(mapping, key):
+    """Rename ``key`` to its whitespace-padded spelling, keeping its value."""
+    mapping[f" {key} "] = mapping.pop(key)
+
+
 class CodecTests(unittest.TestCase):
     def test_a_request_round_trips_to_an_equal_request_with_the_same_identity(self) -> None:
         request = request_for(projection())
@@ -196,6 +201,8 @@ class CodecTests(unittest.TestCase):
             "fewer feature evidence": edit(lambda body: sample0(body)["features"].pop()),
             "more feature evidence": edit(lambda body: sample0(body)["features"].append(deepcopy(feature0(body)))),
             # evidence the constructors would normalize into the right object is still not canonical
+            "padded trial dimension name": edit(lambda body: _pad_key(
+                recon(body)["run_identity"]["trial_assignments"], "model_family")),
             "padded study version": edit(lambda body: recon(body)["run_identity"]["study"].__setitem__(
                 "study_definition_version", " study-definition-v1 ")),
             "padded code identity": edit(lambda body: run_spec(body)["code_identity"].__setitem__(
@@ -221,6 +228,41 @@ class CodecTests(unittest.TestCase):
                 self.assertEqual("the request is not valid", caught.exception.message)
         # The unmutated body still decodes: every refusal above is the mutation's.
         codec.decode_train_evaluate_request(deepcopy(base))
+
+    def test_no_piece_of_evidence_survives_being_padded_with_whitespace(self) -> None:
+        # Sweep: every string and every key of the reconstruction, padded. The
+        # constructors strip padding, and the canonical payload carries only
+        # hashes of this evidence, so only the evidence comparisons can refuse it.
+        base = wire_body(request_for(projection()))
+
+        def leaves(node, path=()):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    yield ("key", path, key)
+                    yield from leaves(value, path + (key,))
+            elif isinstance(node, list):
+                for index, value in enumerate(node):
+                    yield from leaves(value, path + (index,))
+            elif isinstance(node, str):
+                yield ("value", path[:-1], path[-1])
+
+        def at(root, path):
+            for step in path:
+                root = root[step]
+            return root
+
+        checked = 0
+        for kind, parent_path, name in list(leaves(base["reconstruction"])):
+            body = deepcopy(base)
+            parent = at(body["reconstruction"], parent_path)
+            if kind == "key":
+                parent[f" {name} "] = parent.pop(name)
+            else:
+                parent[name] = f" {parent[name]} "
+            checked += 1
+            with self.subTest(kind=kind, path=parent_path, name=name), self.assertRaises(ConsumerApiError):
+                codec.decode_train_evaluate_request(body)
+        self.assertGreater(checked, 60)
 
     def test_a_non_mapping_or_garbage_body_is_invalid(self) -> None:
         for body in (None, [], "x", 1, {}):
@@ -449,6 +491,31 @@ class TrainingWssTests(_FamilyMtlsFixture):
             responses, _ = await self.exchange_messages(bodies, codec.training_family_handlers(), scopes=BOTH)
         trainer.assert_not_called()
         self.assertEqual(["invalid_request"] * 3, [item["error"]["code"] for item in responses])
+
+    async def test_a_noncanonical_trial_key_is_refused_before_training_or_registration(self) -> None:
+        request = request_for(projection())
+        body = wire_body(request, register=True)
+        _pad_key(body["reconstruction"]["run_identity"]["trial_assignments"], "model_family")
+        message = json.dumps({
+            "message_family": codec.J02_TRAINING_FAMILY, "schema_version": codec.J02_TRAINING_REQUEST_VERSION,
+            "operation": "train_evaluate", "request_id": "pad", "request": body,
+        })
+        repository = ExperimentRepository(FakeConnection())
+        with patch("quant_platform.application.training_consumer.train_evaluate_supervised_baseline") as trainer, patch(
+            "quant_platform.application.training_consumer.record_supervised_training_run"
+        ) as registrar:
+            responses, _ = await self.exchange_messages(
+                [message], codec.training_family_handlers(self.provider(repository)), scopes=BOTH,
+            )
+        self.assertEqual("invalid_request", responses[0]["error"]["code"])
+        trainer.assert_not_called()
+        registrar.assert_not_called()
+        # The honest vector under the same composition still runs.
+        honest, _ = await self.exchange_messages(
+            [codec.encode_train_evaluate_message(request, register=True, request_id="ok")],
+            codec.training_family_handlers(self.provider(repository)), scopes=BOTH,
+        )
+        self.assertEqual("ok", honest[0]["status"])
 
     async def test_an_oversized_request_is_refused_before_it_is_sent(self) -> None:
         sent = []

@@ -290,6 +290,9 @@ def _decode_run_identity(evidence: Any, execution_id: Any) -> RunIdentity:
     if not isinstance(assignments, Mapping):
         raise ValueError("trial assignments must be an object")
     trial = TrialIdentity(study, _json_value(assignments))
+    # The constructor normalizes dimension names, and the canonical payload carries
+    # only the Trial's fingerprint: the evidence itself must already be canonical.
+    _require_canonical(assignments, trial.fingerprint_payload()["trial_assignments"])
     run_spec = _object(item["run_spec"], {
         "code_identity", "data_identities", "feature_identities", "research_label_identities",
         "validation_identity", "strategy_policy_execution_identities", "environment_identity",
