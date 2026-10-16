@@ -13,13 +13,13 @@ def adr_text() -> str:
 
 
 class DeckDeploymentCompositionContractV1Tests(unittest.TestCase):
-    def test_the_adr_is_a_proposal_that_amends_no_accepted_adr(self) -> None:
+    def test_the_adr_is_accepted_and_amends_no_accepted_adr(self) -> None:
         text = adr_text()
         for required_text in (
             "# ADR-0072 - Server/deck deployment composition v1 (DG-K2)",
-            "**Status:** PROPOSED",
+            "**Status:** ACCEPTED",
             "Amends no ADR",
-            "Governance issues #381, #382; design gate #383.",
+            "Governance issues #381, #382; design gate #383; acceptance #387.",
         ):
             self.assertIn(required_text, text)
         for forbidden_text in ("[TBD]", "[DA CONFERMARE]"):
@@ -97,6 +97,18 @@ class DeckDeploymentCompositionContractV1Tests(unittest.TestCase):
             "the topology may be called\ndeployable only after both",
             "no handler is claimed: the registry is empty",
             "rotation drill",
+        ):
+            self.assertIn(required_text, text)
+
+    def test_strategy_testing_under_dataset_only_inputs_is_stated(self) -> None:
+        text = adr_text()
+        for required_text in (
+            "### 11. How a strategy is tested while only dataset selectors are admissible",
+            "changes no decision above",
+            "do not use `admit` or `deliver`",
+            "The server never executes the strategy or the provider.",
+            "a precomputed, server-side feature artifact as an input",
+            "is proved by `S05` and `S07`, not by\nthis ADR",
         ):
             self.assertIn(required_text, text)
 
