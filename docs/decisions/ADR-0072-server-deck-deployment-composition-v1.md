@@ -1,6 +1,6 @@
 # ADR-0072 - Server/deck deployment composition v1 (DG-K2)
 
-**Status:** PROPOSED (design gate #383, for maintainer acceptance; it becomes ACCEPTED when the maintainer accepts it)
+**Status:** ACCEPTED (design gate #383; accepted by the maintainer on 2026-10-16, with the clarification of section 11, issue #387)
 **Date:** 2026-10-16
 
 The number is the next free one at authoring time: ADR-0070 exists on `implement/l2` (L2) and ADR-0071 is the number
@@ -264,6 +264,24 @@ The composition is configuration and composition code inside `quant_platform.app
 nothing pulls from the queue, nothing is pushed, and no transport other than WebSocket/JSON over the existing
 families is used (ADR-0068 §9, ADR-0063).
 
+### 11. How a strategy is tested while only dataset selectors are admissible
+
+Clarification added at acceptance (issue #387); it changes no decision above. Section 1 admits a dataset selector and
+refuses `artifact_inputs_unavailable`; that rule does not prevent testing a strategy, which has two paths.
+
+- **Server-side.** The synchronous `J10`, `J12` and `J13` families (ADR-0069 section 3) read market data by request, as
+  the Consumer API does, and do not use `admit` or `deliver`. Section 1 does not apply to them.
+- **Deck-side.** The deck admits a dataset selector, verifies and acknowledges the delivery, then runs the platform
+  library in process over the delivered trade bytes (ADR-0069 section 8), computes the features and runs the replay,
+  uploads the outputs and submits `replay-result` and `replay-summary` through `K13` with the feature-provider identity
+  (section 5; ADR-0069 section 7). The server never executes the strategy or the provider.
+
+What is not available in v1 is a precomputed, server-side feature artifact as an input: the deck recomputes features from
+trades at its own cost, and the result is reproducible because the deck runs the server's commit (section 5). Admitting
+artifact inputs needs a server-side store of accepted artifacts with a resolver, which does not exist; it would be its
+own design gate (the trigger of section 1). That the deck-side path works end to end is proved by `S05` and `S07`, not by
+this ADR.
+
 ## Consequences
 
 - A deck result is accepted only for the server's commit. The server and the deck move together on promotion; this
@@ -295,6 +313,6 @@ design authority. It is not implementation or a proof of the topology.
 
 ## Related
 
-Governance issues #381, #382; design gate #383. Builds on ADR-0057, ADR-0063, ADR-0064 (Amendment 1), ADR-0066
+Governance issues #381, #382; design gate #383; acceptance #387. Builds on ADR-0057, ADR-0063, ADR-0064 (Amendment 1), ADR-0066
 (Amendment 1), ADR-0067, ADR-0068 (Amendment 1) and ADR-0069 (Amendments 1 and 2). Amends no ADR; section 5 records a
 conflict between ADR-0068 §8 and the implemented `K13` and resolves it in `K13`'s direction without editing either.
