@@ -120,7 +120,12 @@ class CanonicalV1Tests(unittest.TestCase):
             "ordinal": 1, "scope": "encode_train_evaluate_message",
             "argument_ast": ast.dump(ast.parse("message", mode="eval").body, include_attributes=False),
             "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
-        }]  # #338: existing J12 canonical identities, unchanged byte profile; #339: the J13 wire message.
+        }, {
+            "path": "src/quant_platform/application/admitted_input_authority.py",
+            "ordinal": 1, "scope": "partition_identity_text",
+            "argument_ast": ast.dump(ast.parse("identity.stable_dict()", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }]  # #338: existing J12 canonical identities, unchanged byte profile; #339: the J13 wire message; #391: the natural partition identity text.
         # #342: the feature-provider identity (ADR-0069 s7, the ADR-0068
         # sorted-compact-ascii-v1 profile) and the size bound of a bundle's JSON
         # documents; each is one declared call site, no new profile.
