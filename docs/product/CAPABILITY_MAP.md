@@ -151,7 +151,7 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | `DG-J` Remote Service Topology design-gate line (issues #282-#287, parent #281) | RESOLVED for all six gates | Six design-gate issues on `implement/omega` each produced one ACCEPTED ADR: G1/`J09` (ADR-0063, #283/PR #290), G2/`J03` (ADR-0062, #282/PR #289), G3/`K12`+`K13` (ADR-0064, #284/PR #291), G4/`J10`,`J12`,`J13` (ADR-0065, #285/PR #292; `J11` explicitly deferred), G5/`J14` (ADR-0066, #286/PR #293), G6/`J15` (ADR-0067, #287/PR #294). Issue #288 reconciles these outcomes into governance state and authorizes the Wave 8 implementation inventory; `implement/omega` is closed as the bounded design-integration line for this scope. |
 | Wave 8 Full Platform API & Remote Service Topology | COMPLETE (operator closeout #327) | J03/J09/J10/J12/J13/J14/J15/K12/K13 implemented by PR #307-#312, #315, #320, #321 and promoted by PR #322; owner-accepted extras #313/#314 by PR #323/#324 via `implement/wave-8.1` and PR #326. J10/J12/J13 are in-process seams only; no Wave 8 Golden proof artifact is claimed. PR #317 (A14 L2 groundwork) does not complete A14. |
 | `DG-K` Process Topology v1 design gate (governance #318, design gate #319) | RESOLVED | ADR-0068 (process topology v1) and ADR-0069 (J02 carriage of consumer seams and deck handoff v1) accepted; P01-P06 `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B; no implementation issue opened yet. |
-| `DG-C` L2 market depth line (governance #364/#371, `implement/l2`) | RESOLVED (ADR-0070, #367) | Owner selection 2026-10-14: aggregated L2 only, batch v1 historical ingest plus consumer read, batch v2 live ingest, `A13` not a prerequisite. ADR-0070 accepted; `A14`, `A14a`-`A14g` are `FROZEN`/`MISSING`, authorized in `SCOPE.md` Part B with start gates; no implementation issue is open yet. Cut from `implement/dgk`; promoted after DG-K closeout. |
+| `DG-C` L2 market depth line (governance #364/#371, `implement/l2`) | RESOLVED (ADR-0070, #367) | Owner selection 2026-10-14: aggregated L2 only, batch v1 historical ingest plus consumer read, batch v2 live ingest, `A13` not a prerequisite. ADR-0070 accepted; `A14`, `A14a`-`A14g` are `FROZEN`/`MISSING`, authorized in `SCOPE.md` Part B with start gates; `A14a`-`A14c` are implemented on `implement/l2` (credited at the `A14` closeout), `A14d`/`A14e` are startable, and ADR-0070 Amendment 1 (#402) cuts a source day into per-run partitions. Cut from `implement/dgk`; promoted after DG-K closeout. |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
 | Wave 3 (`implement/wave-3`) | COMPLETE | F01-F08 implementation complete; F03 authority reconciled by ADR-0038/PR #103; F07/F08 integrated by PR #99/#104. |
@@ -184,8 +184,8 @@ planned. J07, J08, RL, broker/live execution, second venue
 and L1/L2/L3 market depth remain outside every closed scope (`A14` has
 groundwork from PR #317 only). A separate L2 design-gate line (DG-C / `A14`,
 governance #364/#371) runs on `implement/l2`: ADR-0070 is accepted, `A14a`-`A14g` are
-`FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B; `A14a` is startable once its
-issue exists and `A14b`-`A14e` follow their start gates. Frontier/readiness state is **not concurrent implementation
+`FROZEN` and authorized in `SCOPE.md` Part B; `A14a`-`A14c` are implemented on the branch (credited at the
+`A14` closeout) and `A14d`, `A14e` are startable once their issues exist. Frontier/readiness state is **not concurrent implementation
 authorization**.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.

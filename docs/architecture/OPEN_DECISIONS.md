@@ -302,6 +302,9 @@ adapters. ADR-0070 ratifies the schema unchanged; that code is groundwork, and
 5. `implement/l2` stays cut from `implement/dgk`; promotion follows DG-K closeout. The resulting
    by-hand reconciliation of `SCOPE.md` toward `main` is accepted maintainer debt, paid at the L2 merge.
 6. Venue: Bybit only; no second venue.
+7. (2026-10-16, #402) A source day with a `u` discontinuity is cut into per-run partitions
+   `dt=YYYY-MM-DD/seg=NNN` (one coverage document per run and per gap), not split inside one partition:
+   the frozen coverage fold cannot publish an internal `known_gap`.
 
 **Proposals of PR #360, now settled by ADR-0070:** the ordering key `(exchange_ts, native_sequence,
 native_update_id)` and provider `bybit-l2-exchange-ts-seq-v1` are **rejected** (order is numeric `seq`
@@ -352,6 +355,14 @@ E2 (`seq` across a provider restart), E3 (delete-of-absent rate over a full day)
 re-snapshots), E5 (real-day parity of the 500 -> 200 projection). A measured `cts` regression along `seq`
 would make whole days ineligible under ADR-0070 §5 check 4 and must be brought back as an ADR amendment,
 not relaxed in code.
+
+**Amendment 1 (ADR-0070, #402, 2026-10-16):** supersedes the §2/§4/§5 in-partition `known_gap` split and the
+`degraded` publication state. A run is a maximal sequence from an in-band snapshot to the delta that opens a
+discontinuity; each run is one partition `dt=YYYY-MM-DD/seg=NNN` certified `eligible`; events in an unknown
+interval or before the first snapshot are excluded from the canonical layer, kept in the retained source archive
+and counted in the gap evidence; coverage is one document per run (`complete`) and per gap (`known_gap`), 1 µs
+unit; refusals `discontinuity_not_representable`, `no_anchored_run`, `event_outside_day`,
+`day_already_published_differently`. The live day-roll head mechanics are deferred to the `A14f` issue.
 
 **Requirements carried to implementers (not decisions):** `A14b` maps `uint64` columns to the
 string-typed schema with an exact round-trip; `A14e` exposes per-partition origin and must not assume
