@@ -24,7 +24,7 @@ Rules, in one place:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -37,6 +37,7 @@ from ..data.models import (
     l2_book_event_identity_v1,
 )
 from ..ordering import L2_BOOK_EVENTS_CANONICAL_TOTAL_ORDER_V1, OrderingProvider
+from .l2 import BYBIT_L2_SOURCE_SEMANTICS_V2
 
 BYBIT_L2_BOOK_EVENT_V1_ORDERING_POLICY = "bybit-l2-book-event-v1-seq-v1"
 BYBIT_L2_BOOK_EVENT_V1_CERTIFICATION_PROFILE = (
@@ -47,6 +48,13 @@ BYBIT_L2_BOOK_EVENT_V1_CHECK_SUITE = (
 )
 BYBIT_L2_SOURCE_CHANNEL_V1 = "orderbook.200.BTCUSDT"
 BYBIT_L2_EFFECTIVE_DEPTH_V1 = 200
+
+# Declared-coverage source evidence for the historical archive path (A14c).
+# ``source_semantics`` is the adapter semantics id of A14a; the mapping names
+# the one-UTC-day archive acquisition that A14d will emit.
+BYBIT_L2_COVERAGE_BASIS_ARCHIVE = "source_archive"
+BYBIT_L2_COVERAGE_SOURCE_SEMANTICS = BYBIT_L2_SOURCE_SEMANTICS_V2
+BYBIT_L2_COVERAGE_MAPPING_ARCHIVE_DAY_V1 = "bybit-orderbook-day-archive-v1"
 
 OUTCOME_ELIGIBLE = "eligible"
 OUTCOME_DEGRADED = "degraded"
@@ -610,6 +618,93 @@ def certify_bybit_l2_book_events(
     )
 
 
+def bybit_l2_continuity_evidence_detail(report: L2CertificationReport) -> str:
+    """Deterministic ``detail`` of the ``sequence_continuity`` evidence.
+
+    It binds the declared coverage to the exact bytes it speaks about: the first
+    and last event, the event count and the number of continuity segments of the
+    partition.  The producer (A14d) and the certifier build the string with this
+    one function, so a mismatch is evidence that the declaration does not
+    describe the artifact.
+    """
+
+    def describe(event: Mapping[str, str] | None) -> str:
+        if event is None:
+            return "none"
+        return (
+            f"seq:{event['native_sequence']};u:{event['native_update_id']};"
+            f"type:{event['event_type']};ts:{event['exchange_ts']}"
+        )
+
+    return (
+        f"first={describe(report.first_event)}|last={describe(report.last_event)}"
+        f"|events={report.event_count}|segments={len(report.segments)}"
+    )
+
+
+def _complete_assertions(coverage_documents: Sequence[Mapping[str, Any]]):
+    for document in coverage_documents:
+        for assertion in document.get("assertions") or ():
+            if assertion.get("status") == "complete":
+                yield document, assertion
+
+
+def validate_bybit_l2_coverage_source(
+    identity: DatasetIdentity, coverage_documents: Sequence[Mapping[str, Any]]
+) -> Mapping[str, Any]:
+    """Document-only checks of the L2 source evidence (S13 ``source`` category)."""
+
+    if not bybit_l2_book_event_v1_applies_to(identity):
+        raise BybitL2EligibilityError("Bybit L2 certification profile does not apply")
+    if not coverage_documents:
+        raise BybitL2EligibilityError("certification requires durable source coverage evidence")
+    for document in coverage_documents:
+        acquisition = document.get("acquisition") or {}
+        if acquisition.get("basis") != BYBIT_L2_COVERAGE_BASIS_ARCHIVE:
+            raise BybitL2EligibilityError("coverage basis is not the Bybit L2 source archive")
+        if acquisition.get("source_semantics") != BYBIT_L2_COVERAGE_SOURCE_SEMANTICS:
+            raise BybitL2EligibilityError("coverage source_semantics is not bybit-orderbook-l2-v2")
+        if acquisition.get("mapping") != BYBIT_L2_COVERAGE_MAPPING_ARCHIVE_DAY_V1:
+            raise BybitL2EligibilityError("coverage mapping is not the frozen Bybit L2 day-archive mapping")
+    complete = list(_complete_assertions(coverage_documents))
+    for _, assertion in complete:
+        kinds = {item.get("kind") for item in assertion.get("evidence") or ()}
+        for required in ("archive_completeness", "sequence_continuity"):
+            if required not in kinds:
+                raise BybitL2EligibilityError(
+                    f"complete Bybit L2 coverage lacks {required} evidence"
+                )
+    return {
+        "source_semantics": BYBIT_L2_COVERAGE_SOURCE_SEMANTICS,
+        "mapping": BYBIT_L2_COVERAGE_MAPPING_ARCHIVE_DAY_V1,
+        "documents": len(coverage_documents),
+        "complete_assertions": len(complete),
+    }
+
+
+def validate_bybit_l2_coverage_against_events(
+    coverage_documents: Sequence[Mapping[str, Any]], report: L2CertificationReport
+) -> Mapping[str, Any]:
+    """Bind complete coverage to the artifact: the continuity evidence must equal
+    the one derived from the stored events."""
+
+    expected = bybit_l2_continuity_evidence_detail(report)
+    checked = 0
+    for _, assertion in _complete_assertions(coverage_documents):
+        details = [
+            item.get("detail")
+            for item in assertion.get("evidence") or ()
+            if item.get("kind") == "sequence_continuity"
+        ]
+        if not details or any(detail != expected for detail in details):
+            raise BybitL2EligibilityError(
+                "sequence_continuity evidence does not describe the stored events "
+                f"(assertion {assertion.get('assertion_id')!r})"
+            )
+        checked += 1
+    return {"sequence_continuity_detail": expected, "bound_assertions": checked}
+
+
 @dataclass(frozen=True, slots=True)
 class BybitL2BookEventV1CertificationProfile:
     """Source-owned profile bundling the ids, parameters and entry points."""
@@ -637,11 +732,30 @@ class BybitL2BookEventV1CertificationProfile:
             check_suite=self.check_suite,
         )
 
+    # --- the S13 sibling (data.l2_publication) calls these three -----------
+    def validate_events(
+        self, identity: DatasetIdentity, events: Iterable[L2BookEvent]
+    ) -> L2CertificationReport:
+        return self.certify(identity, events)
+
+    def validate_source(
+        self, identity: DatasetIdentity, coverage_documents: Sequence[Mapping[str, Any]]
+    ) -> Mapping[str, Any]:
+        return validate_bybit_l2_coverage_source(identity, coverage_documents)
+
+    def validate_source_evidence(
+        self, coverage_documents: Sequence[Mapping[str, Any]], report: L2CertificationReport
+    ) -> Mapping[str, Any]:
+        return validate_bybit_l2_coverage_against_events(coverage_documents, report)
+
 
 __all__ = [
     "BYBIT_L2_BOOK_EVENT_V1_CERTIFICATION_PROFILE",
     "BYBIT_L2_BOOK_EVENT_V1_CHECK_SUITE",
     "BYBIT_L2_BOOK_EVENT_V1_ORDERING_POLICY",
+    "BYBIT_L2_COVERAGE_BASIS_ARCHIVE",
+    "BYBIT_L2_COVERAGE_MAPPING_ARCHIVE_DAY_V1",
+    "BYBIT_L2_COVERAGE_SOURCE_SEMANTICS",
     "BYBIT_L2_EFFECTIVE_DEPTH_V1",
     "BYBIT_L2_ORDERING_PROVIDER",
     "BYBIT_L2_SOURCE_CHANNEL_V1",
@@ -657,7 +771,10 @@ __all__ = [
     "OUTCOME_ELIGIBLE",
     "OUTCOME_INELIGIBLE",
     "bybit_l2_book_event_v1_applies_to",
+    "bybit_l2_continuity_evidence_detail",
     "bybit_l2_book_event_v1_ordering_key",
     "certify_bybit_l2_book_events",
     "resolve_duplicate_sequences",
+    "validate_bybit_l2_coverage_against_events",
+    "validate_bybit_l2_coverage_source",
 ]
