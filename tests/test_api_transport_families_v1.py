@@ -998,6 +998,94 @@ class FamilyResponseAndBodyTests(unittest.IsolatedAsyncioTestCase):
         hook.assert_called_once()
         executor.assert_called_once()
 
+    # -- a grant named by the raw body is authorized before the decoder (#339) -----
+
+    def pre_decode_route(self, *, pre=None, extra=True):
+        decoder = MagicMock(side_effect=lambda body: dict(body))
+        executor = MagicMock(side_effect=lambda request: request)
+        scope = "j02.training.register"
+        pre_hook = MagicMock(side_effect=pre or (lambda body: (scope,) if body.get("register") is True else ()))
+        hook = MagicMock(side_effect=lambda decoded: (scope,) if decoded.get("register") else ())
+        handler = transport.J02FamilyHandler(
+            SCOPE, RESPONSE_VERSION, decoder, executor,
+            additional_scopes=hook if extra else None, pre_decode_scopes=pre_hook,
+        )
+        return {(FAMILY, VERSION, "echo"): handler}, decoder, executor, pre_hook, hook
+
+    async def test_a_pre_decode_grant_is_denied_before_the_decoder_runs(self):
+        handlers, decoder, executor, pre_hook, _ = self.pre_decode_route()
+        socket, configuration = await self.exchange(handlers, request={"register": True})
+        self.assertEqual([(1008, "policy denied")], socket.close_calls)
+        self.assertEqual([], socket.responses)
+        pre_hook.assert_called_once()
+        decoder.assert_not_called()
+        executor.assert_not_called()
+        evidence = configuration.evidence_log.events[-1]
+        self.assertEqual(("j02.training.register", "deny"), (evidence.requested_scope, evidence.decision))
+
+    async def test_a_pre_decode_grant_that_is_held_is_recorded_once_and_the_request_runs(self):
+        handlers, decoder, executor, _, hook = self.pre_decode_route()
+        configuration = security(principal=transport.RemoteJ02Principal(
+            "family-peer", frozenset({SCOPE, "j02.training.register"}),
+        ))
+        configuration.evidence_log._max_events = 8
+        socket = Socket([json.dumps(envelope(request={"register": True}))])
+        await transport.handle_api_transport_connection(
+            socket, execute=MagicMock(), remote_security=configuration, family_handlers=handlers,
+        )
+        self.assertEqual("ok", socket.responses[0]["status"])
+        decoder.assert_called_once()
+        hook.assert_called_once()
+        executor.assert_called_once()
+        self.assertEqual(  # the same grant is not authorized (and logged) a second time
+            [SCOPE, "j02.training.register"],
+            [event.requested_scope for event in configuration.evidence_log.events],
+        )
+
+    async def test_a_request_that_names_no_pre_decode_grant_needs_none(self):
+        handlers, decoder, executor, pre_hook, _ = self.pre_decode_route()
+        for body in ({"register": False}, {}):
+            with self.subTest(body=body):
+                decoder.reset_mock()
+                socket, _ = await self.exchange(handlers, request=body)
+                self.assertEqual([], socket.close_calls)
+                self.assertEqual("ok", socket.responses[0]["status"])
+                decoder.assert_called_once()
+
+    async def test_a_broken_pre_decode_hook_is_a_platform_fault_and_nothing_is_decoded(self):
+        for label, pre in (
+            ("raises", MagicMock(side_effect=RuntimeError("secret"))),
+            ("unregistered scope", MagicMock(return_value=("j02.not.a.scope",))),
+        ):
+            with self.subTest(label):
+                handlers, decoder, executor, _, _ = self.pre_decode_route(pre=pre.side_effect or (lambda body: pre.return_value))
+                socket, _ = await self.exchange(handlers, request={"register": True})
+                self.assertEqual("integrity_failure", socket.responses[0]["error"]["code"])
+                self.assertEqual("opaque-request-id", socket.responses[0]["request_id"])
+                self.assertNotIn("secret", json.dumps(socket.responses[0]))
+                decoder.assert_not_called()
+                executor.assert_not_called()
+
+    def test_the_direct_entry_point_cannot_authorize_a_pre_decode_grant(self):
+        handlers, decoder, executor, _, _ = self.pre_decode_route()
+        handler = next(iter(handlers.values()))
+        text = json.dumps(envelope(request={"register": True}))
+        response = json.loads(transport.handle_api_transport_message(
+            text, execute=MagicMock(), family_handler=handler,
+        ))
+        self.assertEqual("error", response["status"])
+        decoder.assert_not_called()
+        executor.assert_not_called()
+        plain = json.loads(transport.handle_api_transport_message(
+            json.dumps(envelope(request={"register": False})), execute=MagicMock(),
+            family_handler=handler,
+        ))
+        self.assertEqual("ok", plain["status"])
+
+    def test_pre_decode_scopes_must_be_callable(self):
+        with self.assertRaises(TypeError):
+            transport.J02FamilyHandler(SCOPE, RESPONSE_VERSION, dict, dict, pre_decode_scopes="register")
+
     async def test_unregistered_or_faulty_additional_scope_hook_is_integrity_failure(self):
         for extra in (("j02.not.registered",), None):
             with self.subTest(extra=extra):

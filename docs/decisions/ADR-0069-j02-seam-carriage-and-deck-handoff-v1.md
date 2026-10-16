@@ -290,3 +290,71 @@ unchanged.
   message of that code, and a `reason` that is a short token of lowercase letters
   and underscores (or the seam's stable default). The seam's own message,
   context and request identity are never forwarded. No error code is added.
+
+## Amendment 2 (issue #339) — J13 carries its reconstruction evidence
+
+**Date:** 2026-10-16
+
+Recorded at the maintainer's direction (the Executor's escalation on issue #339
+asked whether a J13-only inline reconstruction representation outside existing
+canonical identity bytes was authorized; the maintainer authorized it in chat on
+2026-10-16 and asked for the blocker to be resolved). It takes effect when the
+correcting PR of issue #339 is merged.
+
+Section 3 says the `j02-training-v1` request is the ADR-0065 section 4 request
+and that `request` is the owning seam's lossless canonical payload. For J13 that
+payload is a *hash* of its inputs in three places: it carries the `RunSpecIdentity`
+fingerprint and execution id, not the RunSpec/Trial/Study preimages; it carries
+each feature's `SupportIdentity` hash, not its input-contract and support-reference
+preimage; and it carries each feature value after normalization, so a `Decimal`
+and the literal string of the same text are one canonical value. The owned
+constructors need those preimages and the original value type, so the canonical
+payload alone cannot rebuild the request. This is the same situation as J10's
+Decimal evidence (issue #337) and J12's binary64 evidence (issue #338), whose
+clarifications were scoped to those families; this one is scoped to J13.
+
+1. **The request.** `request` is the `supervised-train-evaluate-request-v1`
+   canonical payload, byte for byte, plus exactly two transport-only members that
+   are never part of any domain canonical payload or identity: `register` (a
+   boolean) and `reconstruction`.
+2. **The reconstruction** (`version: "j13-reconstruction-v1"`) carries:
+   `run_identity` (the Study fingerprint payload, the Trial's dimension
+   assignments, and the RunSpec's code, data, feature, research-label, validation,
+   strategy-policy-execution and environment references plus its explicit run
+   configuration); and, per projection sample in order, the `LabelResult`
+   canonical payload and, per feature, the `SupportIdentity` payload and a
+   `value_type` of `null`, `boolean`, `integer`, `string`, `decimal` or
+   `fraction`. Nothing else is carried and nothing is looked up.
+3. **Verification before use.** The server rebuilds every object through its
+   owner's constructor and requires each rebuilt object's canonical or stable
+   payload, hash and identity to equal what the request carries (including the
+   `run_spec_identity` fingerprint, `label_result_id`, `support_identity` hash,
+   observation identities, sample identities and the projection identity). A
+   mismatch, a missing or extra member, or a type evidence that does not fit the
+   canonical value (for example `decimal` on text that is not that decimal's
+   exact text) is `invalid_request` before training or registration. Ordinary
+   strings remain strings: only a value declared `decimal` or `fraction` is
+   parsed as one.
+4. **What stays as it was.** No provenance is fabricated, no reference is resolved
+   against server state, no path or callable is accepted, the shared parser is
+   not relaxed, and no identity, budget (including Amendment 2's
+   `training_sync_budget_exceeded`) or training math changes. The value-type
+   evidence is sender-claimed and, like J10's, is not covered by the request
+   identity: a `Decimal` and its literal string share one request identity, and
+   training treats them numerically alike; the type is what the constructors need.
+5. **Floats.** A JSON float has no lossless wire form (ADR-0069 section 1): the
+   client encoder refuses a float in the run configuration or a trial assignment,
+   and a feature value that is not a scalar of the six types above.
+6. **Registration is authorized before decoding.** `register: true` requires
+   `j02.training.register` in addition to `j02.training.evaluate`. Because the
+   flag is a member of the raw lossless request body, the server authorizes it
+   (close `1008` on a denial) *before* the family decoder is called, through a
+   handler hook that is total and side-effect free; `additional_scopes` after the
+   decode stays as defense in depth, and a scope already authorized is not
+   authorized twice. Registration is server-composed: the server decides where
+   the Experiment repository lives, and a server composed without one answers
+   `register: true` with `invalid_request` / `registration_unavailable`.
+7. **Size.** The whole request message must fit 16 MiB. The client encodes the
+   message, compares its size with the bound before sending, and refuses locally
+   with `request_too_large` when it exceeds it; the server's `max_size` close
+   stays defense in depth.

@@ -114,6 +114,7 @@ OWNERS = {
     "quant_platform.application.storage_relocation": "application",
     "quant_platform.application.strategy_consumer": "application",
     "quant_platform.application.strategy_transport": "application",
+    "quant_platform.application.training_transport": "application",
     "quant_platform.application.training_consumer": "application",
     "quant_platform.application.validation_consumer": "application",
     "quant_platform.application.validation_transport": "application",

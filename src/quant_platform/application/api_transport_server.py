@@ -117,8 +117,11 @@ class J02FamilyHandler:
     ``additional_scopes`` lets a codec declare grants that depend on the decoded
     request (for example ADR-0069 section 3's ``register`` flag): the server
     authorizes each returned scope, with evidence, after decoding and before
-    ``execute`` can run. Concrete seam codecs and handlers belong to subsequent
-    implementation atoms.
+    ``execute`` can run. ``pre_decode_scopes`` is the same idea for a grant that
+    one flag of the *raw* lossless request body names: it must be total and
+    side-effect free, and the server authorizes what it returns (close ``1008``
+    on a denial) before ``decode_request`` is called at all. Concrete seam
+    codecs and handlers belong to subsequent implementation atoms.
     """
 
     required_scope: str
@@ -126,6 +129,7 @@ class J02FamilyHandler:
     decode_request: Callable[[Mapping[str, Any]], Any]
     execute: Callable[[Any], Mapping[str, Any]]
     additional_scopes: Callable[[Any], Iterable[str]] | None = None
+    pre_decode_scopes: Callable[[Mapping[str, Any]], Iterable[str]] | None = None
 
     def __post_init__(self) -> None:
         if self.required_scope not in J02_REMOTE_SCOPES:
@@ -136,6 +140,8 @@ class J02FamilyHandler:
             raise TypeError("family decoder and executor must be callable")
         if self.additional_scopes is not None and not callable(self.additional_scopes):
             raise TypeError("additional_scopes must be callable")
+        if self.pre_decode_scopes is not None and not callable(self.pre_decode_scopes):
+            raise TypeError("pre_decode_scopes must be callable")
 
 
 FamilyHandlers = Mapping[tuple[str, str, str], J02FamilyHandler]
@@ -500,6 +506,19 @@ def _build_direct_family_response(
 ) -> dict[str, Any]:
     # An additive or unclassifiable envelope must never be coerced into a v1
     # query, even when it also carries a perfectly valid legacy query.
+    try:
+        pre_scopes = _pre_decode_scopes(parsed, family_handler)
+    except Exception:
+        return _family_failure(
+            _header_envelope(parsed, family_handler), ConsumerErrorCode.INTEGRITY_FAILURE,
+            _INTEGRITY_FAILURE_MESSAGE,
+        )
+    if pre_scopes:
+        # No principal here: a grant named by the body is never decoded unauthorized.
+        return _family_failure(
+            _header_envelope(parsed, family_handler), ConsumerErrorCode.INVALID_REQUEST,
+            _FAMILY_UNSUPPORTED_MESSAGE,
+        )
     prepared, response = _prepare_family_request(parsed, family_handler)
     if prepared is None:
         return response
@@ -666,7 +685,29 @@ async def handle_api_transport_connection(
                 handle_api_transport_message, message, execute=execute, _parsed=parsed,
             )
         else:
-            prepared, early = await asyncio.to_thread(_prepare_family_request, parsed, handler)
+            pre_scopes: frozenset[str] = frozenset()
+            early = None
+            if handler is not None:
+                try:
+                    pre_scopes = await asyncio.to_thread(_pre_decode_scopes, parsed, handler)
+                except Exception:
+                    # A broken server-side hook is a platform fault; nothing was decoded.
+                    early = _family_failure(
+                        _header_envelope(parsed, handler), ConsumerErrorCode.INTEGRITY_FAILURE,
+                        _INTEGRITY_FAILURE_MESSAGE,
+                    )
+                for pre_scope in sorted(pre_scopes):
+                    # Body-named grants (ADR-0069 section 3's ``register``) are
+                    # authorized strictly before the decoder can run.
+                    if not await _authorize_remote_connection(
+                        websocket, remote_security, session_id=session_id,
+                        required_scope=pre_scope,
+                    ):
+                        return
+            if early is not None:
+                prepared = None
+            else:
+                prepared, early = await asyncio.to_thread(_prepare_family_request, parsed, handler)
             if prepared is None:
                 response = await asyncio.to_thread(
                     handle_api_transport_message, message, execute=execute,
@@ -675,7 +716,7 @@ async def handle_api_transport_connection(
             else:
                 # Body-dependent grants (ADR-0069 section 3) are authorized
                 # after decode but strictly before the executor can run.
-                for extra_scope in sorted(prepared.additional_scopes):
+                for extra_scope in sorted(prepared.additional_scopes - pre_scopes):
                     if not await _authorize_remote_connection(
                         websocket, remote_security, session_id=session_id,
                         required_scope=extra_scope,
@@ -1090,6 +1131,33 @@ def _family_failure(
         "code": code.value, "message": message, "context": {}, "request_identity": None,
     })
     return response
+
+
+def _header_envelope(parsed: _ParsedMessage, handler: J02FamilyHandler | None) -> dict[str, Any]:
+    """The response envelope a failure before decoding carries (header fields only)."""
+
+    payload = parsed.payload if isinstance(parsed.payload, Mapping) else {}
+    family = payload.get("message_family")
+    request_id = payload.get("request_id")
+    return {
+        "message_family": family if isinstance(family, str) else None,
+        "schema_version": handler.response_schema_version if handler else None,
+        "request_id": request_id if isinstance(request_id, str) else None,
+    }
+
+
+def _pre_decode_scopes(parsed: _ParsedMessage, handler: J02FamilyHandler | None) -> frozenset[str]:
+    """Grants the raw lossless request body names, before any decoder runs."""
+
+    if handler is None or handler.pre_decode_scopes is None:
+        return frozenset()
+    request = parsed.payload.get("request") if isinstance(parsed.payload, Mapping) else None
+    if parsed.failed or not parsed.lossless or not isinstance(request, Mapping):
+        return frozenset()  # the decoder is never reached for such a body either
+    scopes = frozenset(handler.pre_decode_scopes(request))
+    if not scopes <= J02_REMOTE_SCOPES:
+        raise ValueError("pre-decode scope is not a registered J02 scope")
+    return scopes
 
 
 def _prepare_family_request(
