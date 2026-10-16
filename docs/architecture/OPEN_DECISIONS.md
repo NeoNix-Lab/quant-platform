@@ -667,12 +667,26 @@ this gate: L2 acquisition semantics (`A13`-`A15`), `J11`, `D05` bar-input
 replay, and Omega remote use of `P05`/`P06` (needs its own ADR-0067
 amendment).
 
-## DG-K2 — Server/deck deployment composition v1 — OPEN_BLOCKING (provisional name)
+## DG-K2 — Server/deck deployment composition v1 — RESOLVED (ADR-0072 ACCEPTED)
 
-Registered by governance issue #382 (2026-10-16) after the DG-K closeout (#381). The single design-gate issue is
-#383 (one ADR, next free number). It gates the candidate atoms `S01`-`S07` in `CAPABILITY_DAG.md` (`S08`, the first
-data-local J03 handlers, is `OPEN_DEFERABLE` on an evidence trigger). Names, the scope id and the integration branch
-are provisional placeholders for the maintainer: `DG-L` and `DG-C` already exist on other lines.
+**Resolved 2026-10-16.** The design gate #383 produced ADR-0072, `ACCEPTED` by the maintainer with the clarification
+of its section 11 (issue #387, PR #388). Governance issue #389 authorizes `S01`-`S07` in `CAPABILITY_DAG.md` (`FROZEN`,
+implementation `MISSING`); `S08` stays `OPEN_DEFERABLE` on its trigger. The scope id `DG-K2` and the atom names are
+confirmed; the integration branch name `implement/dgk2` is proposed for the maintainer's confirmation.
+
+Decisions taken (the question set below is kept as the record of what was asked; each question is answered by the ADR
+section named here): 1 -> section 1 (dataset selector only, `artifact_inputs_unavailable`, no time-based expiry, bounds
+16 / 32 MiB / 64 MiB with a 96 MiB transfer store); 2 -> section 2 (six roles, checksum content identity); 3 -> section 3
+(opt-in families, fail-closed startup); 4 -> section 4 (`openssl` scripts, restart-based rotation; `S04` stays in
+scope); 5 -> section 5 (the deck is pinned to the server's commit, resolving the ADR-0068 section 8 / `K13` conflict in
+`K13`'s direction) and section 11 (how a strategy is tested); 6 -> section 6; 7 -> section 7 (hermetic plus supervised
+proof); 8 -> section 8 (Omega out of scope); 9 -> section 9 (an empty handler registry is accepted; `S08` deferable).
+
+As originally registered:
+
+Registered by governance issue #382 (2026-10-16) after the DG-K closeout (#381). The single design-gate issue was
+#383 (one ADR). It gated the candidate atoms `S01`-`S07` in `CAPABILITY_DAG.md` (`S08`, the first
+data-local J03 handlers, is `OPEN_DEFERABLE` on an evidence trigger).
 
 DG-K delivered the J02 families, the `runtime` stores, the single worker host and the deck protocol client, but no
 executable composes them and nothing proves them on the real topology: `tools/api_server.py` serves the J02 v1

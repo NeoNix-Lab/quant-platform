@@ -1,8 +1,8 @@
 # Scope: DG-K2 — Server/deck deployment composition v1 (design gate)
 
-Status: **OPEN — design gate only (governance issue #382, 2026-10-16). No implementation is authorized by this scope.** The single design-gate issue is #383 (an ADR for the composition decisions below; its number is the next free one at authoring time). The scope id `DG-K2`, the atom names `S01`-`S08` and the integration branch name are **provisional placeholders** for the maintainer to confirm: `DG-L` (FEI) and `DG-C` (L2) already exist on other lines.
+Status: **OPEN — design gate CLOSED, implementation of `S01`-`S07` AUTHORIZED (governance issue #389, 2026-10-16).** The design gate #383 produced ADR-0072, `ACCEPTED` by the maintainer on 2026-10-16 with the clarification of its section 11 (issue #387, PR #388). The scope id `DG-K2` and the atom names `S01`-`S08` are confirmed. No atom is implemented yet and the topology is **not deployable** until `S07` is proven in both of its parts.
 
-Scope kind: a Part A-style design-gate sequencing scope. It registers the open decisions, fixes the decisions already taken as inputs, and names the candidate atoms the gate must make implementable. A Part B implementation inventory is added only by a later governance reconciliation, after #383's ADR is `ACCEPTED` (or #383 closes with an explicit disposition and evidence trigger).
+Scope kind: a design-gate sequencing scope that, after the gate closed, carries the Part B authorized inventory `S01`-`S07` below. `S08` stays deferred on its trigger.
 
 ---
 
@@ -31,7 +31,7 @@ This scope exists so that the split can be composed, deployed and proven, withou
 ## Fixed inputs (already decided; the gate does not reopen them)
 
 1. **ADR-0057:** two surfaces, the server (sole authority for canonical data, `K12`/`K13`, data-local work) and the deck (compute, on its own initiative). The server never delegates or pushes work to the deck; no remote worker pulls from the server queue.
-2. **ADR-0068:** five units; domain packages stay in-process libraries; hosts stay in `tools/`; exactly one J03 worker; the API records its deployment commit and the worker refuses a different one; the deck may run another commit, compatibility is the wire family version, never the package version.
+2. **ADR-0068:** five units; domain packages stay in-process libraries; hosts stay in `tools/`; exactly one J03 worker; the API records its deployment commit and the worker refuses a different one; compatibility is the wire family version, never the package version. (The allowance for a deck on another commit is not exercised in v1: ADR-0072 section 5 pins the deck to the server's commit, which is what `K13` already enforces.)
 3. **ADR-0069 and its amendments:** the families, one least-privilege scope per family, `j02-admitted-input-v2`, the J13 reconstruction representation, the deck client outside `src/quant_platform`.
 4. **ADR-0063:** non-loopback is WSS with mutual TLS; credentials map by exact fingerprint to a principal and an explicit scope set; **no** credential service, IAM, OAuth/OIDC or bearer tokens.
 5. **ADR-0064:** the sealed manifest, the server as sole authority, the deck without any path or storage mount.
@@ -40,26 +40,35 @@ This scope exists so that the split can be composed, deployed and proven, withou
 
 ---
 
-## Design gate
+## Design gate (closed)
 
-| Gate | Issue | Output | Atoms it must make implementable |
+| Gate | Issue | Output | Result |
 |---|---|---|---|
-| **DG-K2** | #383 | One ADR (next free number) for the composition decisions below, with its guard test | `S01`-`S07` (and `S08` only when its trigger exists) |
+| **DG-K2** | #383, #387 | ADR-0072 (`docs/decisions/ADR-0072-server-deck-deployment-composition-v1.md`) with its guard test | `ACCEPTED` 2026-10-16 (PR #386 proposed it, PR #388 accepted it with section 11); all nine questions answered |
 
-Valid closes: an `ACCEPTED` ADR in which every closed set, bound, name and default is stated (no `[TBD]`, no `[DA CONFERMARE]`), or an explicit, recorded deferral with an evidence trigger. The ADR may not create a credential service, move a host out of `tools/`, add a binary transport family or give the server a way to push work to the deck.
+Maintainer decisions recorded at acceptance: ADR-0072 accepted in full; `S04` stays in this scope; Omega adoption is
+out of scope (ADR-0072 section 8); the K12 input is a dataset selector only and artifact inputs stay refused in v1 (a
+server-side accepted-artifact store would be its own design gate); strategy testing under that rule is stated in
+ADR-0072 section 11; the deck is pinned to the server's commit (ADR-0072 section 5).
 
-### Candidate atoms (names provisional; final names are the design gate's call)
+## Part B — Authorized implementation inventory
 
-| Atom | Proposition | Requires |
-|---|---|---|
-| `S01` | K12 server authority seams: `resolve`, `members`, `read_member` over the DataGateway/catalog; the closed sets of accepted operation and profile identities; expiry policy values; byte and member bounds | DG-K2, `P06` |
-| `S02` | K13 composition: the output-role registry and its `ResultOutputContractV1` (including replay roles requiring `replay_feature_provider`), staging bounds, a `GovernedResultImportService` factory over the `runtime` role | DG-K2, `P02`, `P06` |
-| `S03` | API host composition in `tools/api_server.py`: TLS/mTLS configuration, principals, all families, the J14 store, fail-closed startup, per-host import rules | DG-K2, `S01`, `S02`, `P03`, `P05a`, `P05b` |
-| `S04` | Credential and trust operations under `infra/`: issuance, rotation, revocation procedure and tooling, fingerprint mapping, secret handling; no credential service | DG-K2 |
-| `S05` | Deck workload library: producer of `GovernedResultBundleV1` with `deck_code_identity` and the feature-provider identity, submit-flow glue, commit pinning; `clients/deck/` keeps importing nothing from `quant_platform` | DG-K2, `P06` |
-| `S06` | Deployment units: systemd units and environment examples for the API and the worker, the runbook (ADR-0057 handoff) and the promotion procedure | DG-K2, `S03`, `P04b` |
-| `S07` | Real-topology proof: PostgreSQL + API + worker + deck client over WSS/mTLS, with the fault cases the gate defines | `S01`-`S06` |
-| `S08` | First data-local J03 handlers (feature/representation materialization, historical imports, catalog maintenance), each through its own issue | `P04a`, `P04b`; evidence trigger: the maintainer names a first handler |
+Each atom is its own implementation issue (`[implementation]` template), opened after this reconciliation merges,
+citing its row here. Every one targets the integration branch below, never `main`.
+
+**Integration branch:** `implement/dgk2`, cut from `implement/dgk` (proposed name; the maintainer confirms it and the
+cut). Atom branches are `agent/issue-<n>-<slug>`.
+
+| Atom | Result | Requires (besides ADR-0072) | Start gate |
+|---|---|---|---|
+| `S01` | K12 server authority (`admitted_input_authority`) | `P06` | startable |
+| `S02` | K13 composition (role registry and import factory) | `P02`, `P06` | startable |
+| `S03` | API host composition in `tools/api_server.py` | `S01`, `S02`, `P03`, `P05a`, `P05b` | after `S01` and `S02` are merged |
+| `S04` | Credential and trust operations under `infra/pki/` | none | startable |
+| `S05` | Deck workload module (`deck_result_bundle`) | `P06` | startable |
+| `S06` | Deployment units, promotion and runbook | `S03`, `P04b` | after `S03` is merged |
+| `S07` | Two-part topology proof | `S01`-`S06` | after `S01`-`S06` are merged |
+| `S08` | First data-local J03 handlers | `P04a`, `P04b` | **not authorized**; trigger: the maintainer names a first handler |
 
 ```text
 S01 ──┐
@@ -69,28 +78,61 @@ S05 ──────────────────┘
 S08   (deferable; trigger: a named first handler)
 ```
 
-(`S04` and `S05` are independent of `S01`-`S03`; `S07` requires all of `S01`-`S06`.)
+Order: the default is `S01`, `S02`, `S03`, `S04`, `S05`, `S06`, `S07`, one bounded mutation slice at a time.
+`S01`, `S02`, `S04` and `S05` have no dependency on each other, so the maintainer may run them concurrently; that is
+his call, not an implication of this scope.
 
-### Question set (see `docs/architecture/OPEN_DECISIONS.md`, DG-K2)
+### Acceptance per atom (from ADR-0072; an implementation issue adds no semantic decision)
 
-1. **K12 server authority.** Which component resolves a semantic request to a sealed manifest, its ordered members, lengths and bytes; how partitions and content hashes are aligned; how accepted artifact identities are resolved; the closed sets of operation and profile identities; the expiry policy values; the byte and member bounds.
-2. **K13 composition.** The closed registry of output roles and their contracts, including replay roles; staging bounds and retention; the runtime role that registers.
-3. **API host composition.** The configuration surface (TLS/mTLS material, principals file, enabled families, J14 store bounds, evidence log), the fail-closed startup checks and the default composition.
-4. **Credential and trust operations.** Issuance, rotation and revocation, the location of the fingerprint-to-principal mapping and of secrets, within ADR-0063 §2.
-5. **Deck side.** Where the producer of `GovernedResultBundleV1` lives given that `clients/deck/` must not import `quant_platform`; how the deck code identity and the feature-provider identity are assembled; how a workload is pinned to a commit.
-6. **Operations.** systemd units and environment examples, the runbook and promotion updates, and the compatibility rule between server and deck.
-7. **Proof.** What "ready to split" means: the real-topology proof, its pinned dataset and its fault cases (lost response, expired admission, concurrent attempts, a refused bundle, restart).
-8. **Omega.** Out of scope, or the trigger for its own ADR-0067 amendment gate.
-9. **Data-local handlers.** Whether any handler is required for the split (`S08`), or whether the empty registry is an accepted state until a handler is named.
+- **`S01`** (ADR-0072 section 1). A module over the DataGateway that provides `resolve`, `members` and `read_member` for
+  `admitted_input_family_handlers`. The input is a `ConsumerMarketDataQuery` resolved by `resolve_market_data_request`;
+  the manifest is built from `DataScanOpenMetadata` without reading a record, with the field values of the ADR table
+  (`git_identity` from `runtime.deployment_commit`, `result_identity` null, members = catalog partitions with
+  `manifest_sha256`/`content_sha256`). Refusals: `no_coverage`, `source_not_found`, `unsupported_representation`
+  through the public projection, and `invalid_request`/`artifact_inputs_unavailable` for any `artifact_identities`;
+  nothing is sealed on a refusal. Operation/profile identities are carried, not a closed set. No time-based expiry.
+  Bounds: `max_members` 16, `max_member_bytes` 32 MiB, `max_total_bytes` 64 MiB, `max_retained_payload_bytes` 96 MiB,
+  `max_in_flight_transfers` 32, `retention_seconds` 300.
+- **`S02`** (section 2). A factory for `GovernedResultImportService` over the API login's `runtime` connection with the
+  Experiment repository on the same connection; the closed registry of the six roles in the ADR table
+  (`ResultOutputContractV1` for the four supervised roles, `ReplayOutputContractV1` for `replay-result` and
+  `replay-summary`); the content identity is the checksum of the uploaded bytes; staging bounds 64 KiB frames, 8 MiB
+  output, 32 MiB staged, 8 uploads, 900 s; a role outside the registry is refused.
+- **`S03`** (section 3). `tools/api_server.py` gains `--tls-certificate`, `--tls-private-key`, `--client-trust-anchor`,
+  `--principals-file` (with environment equivalents) and `--families` (default none, so an unchanged invocation stays
+  the J02 v1 market-data server); the policy and trust-bundle versions are SHA-256 of the file bytes and appear in the
+  startup output and the security evidence; every fail-closed startup refusal of the ADR before bind; one shared
+  `FramedResultTransferStore` with `framed_resume_scopes`; one database connection per request; the per-host import
+  rule (ADR-0068 section 7).
+- **`S04`** (section 4). `openssl` scripts under `infra/pki/` (offline CA, server certificate, client certificate with
+  its `sha256:<hex>` fingerprint; EC P-256; CA 3650, server 397, client 90 days), an example principals file without
+  fingerprints, the key-handling rules (outside Git, mode `0600`, never environment or unit file) and the
+  restart-based rotation and revocation procedure with the 14-day overlap limit. No credential service, CRL or OCSP.
+- **`S05`** (section 5). A `quant_platform.application` module `deck_result_bundle` that takes the verified admission as
+  plain data and returns the wire document: refuses an unclean tree or a commit different from the manifest's
+  `git_identity`; builds the `RunIdentity` covering the logical inputs and definitions; builds each output's upload
+  bytes and `ArtifactRegistration` with the checksum content identity for a registry role; adds
+  `replay_feature_provider` for replay roles; builds the bundle and `bundle_to_wire`. `clients/deck/` imports nothing
+  from `quant_platform`; the module opens no connection and imports no client.
+- **`S06`** (section 6). `quant-platform-api.service` and `quant-platform-worker.service` with environment examples
+  under `infra/systemd/` (hardening as `quant-platform-live-ingest.service`), the worker ordering and exit-3 rule, the
+  promotion and the same-commit rule for the deck, the compatibility rule (family versions plus commit equality for
+  result acceptance), and the rewritten handoff runbook in `docs/engineering/` with the ADR-0064 Amendment 1 failure
+  procedures.
+- **`S07`** (section 7). The hermetic topology proof (API and worker as separate processes, the deck client and the
+  workload module as a third; loopback TLS 1.3 mTLS; a disposable PostgreSQL; the catalog from the generated trade
+  fixtures; the six listed groups of cases including the faults, the security cases with the rotation drill and the
+  measured peak API memory) and the supervised real-environment proof (the `real-server-proof` pattern, recording the
+  real partition sizes against the bounds). The topology may be called deployable only after both parts.
 
 ---
 
 ## Authority
 
 - `AGENTS.md`
-- governance issues #318, #381, #382; design-gate issue #383; DG-K design gate #319
+- governance issues #318, #381, #382, #389; design-gate issues #383, #387; DG-K design gate #319
 - `docs/product/ROADMAP.md`, `docs/product/CAPABILITY_DAG.md` (`S` atoms), `docs/architecture/OPEN_DECISIONS.md` (DG-K2)
-- ADR-0043, ADR-0050, ADR-0057, ADR-0062 through ADR-0069 (with Amendments)
+- ADR-0043, ADR-0050, ADR-0057, ADR-0062 through ADR-0069 (with Amendments), **ADR-0072** (`ACCEPTED`; the normative text of Part B)
 - `tests/test_package_boundaries_v1.py`
 
 Accepted ADRs and frozen contracts remain normative. Registering this gate weakens none of them.
@@ -100,9 +142,9 @@ Accepted ADRs and frozen contracts remain normative. Registering this gate weake
 ## Baseline and Credited State
 
 ```text
-implement/dgk @ 93471e4 (DG-K closeout #381 reconciled; promotion into main is the operator's separate PR)
+implement/dgk @ the merge of PR #388 (ADR-0072 ACCEPTED; DG-K closeout #381 reconciled; promotion into main is the operator's separate PR)
 DG-K: P01-P06 FROZEN / COMPLETE within recorded bounds
-DG-K2: S01-S07 OPEN_BLOCKING / MISSING; S08 OPEN_DEFERABLE / MISSING
+DG-K2: S01-S07 FROZEN / MISSING (authorized by #389); S08 OPEN_DEFERABLE / MISSING (not authorized)
 ```
 
 Credit, do not reimplement or re-prove absent invalidating evidence: every atom `COMPLETE` in `CAPABILITY_DAG.md`, within the bound its row records. The families, stores, the worker host and the deck protocol client are reused, not rebuilt.
@@ -111,25 +153,27 @@ Credit, do not reimplement or re-prove absent invalidating evidence: every atom 
 
 ## Explicit non-claims
 
-- DG-K2 and `S01`-`S08` are decided nowhere and built nowhere; nothing here is authorized for implementation.
-- The server/deck topology is not deployable until `S07` is proven.
+- No atom is implemented: `S01`-`S07` are decided and authorized, built nowhere.
+- The server/deck topology is not deployable until `S07` is proven in both parts (hermetic and supervised).
+- `S08` and any data-local J03 handler are not authorized; the registry stays empty.
 - Omega remote use of ADR-0069 families is not authorized.
+- Accepted-artifact inputs, time-based expiry, a closed operation/profile registry and a deck on a commit other than the server's are not provided in v1.
 - `J11` is not planned; `J07`/`J08`, `I06`/`I07`, `A13`-`A15` and second venue are untouched.
 
 ---
 
 ## Mutation policy
 
-- This scope is governance-only until the design gate closes: only `governance/` or `admin/` branches may change `SCOPE.md`, `ROADMAP.md`, `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md` or `OPEN_DECISIONS.md`.
-- The design gate (#383) produces one ADR and its guard test and no code.
-- Implementation issues are opened only after the gate's ADR is `ACCEPTED` and a later reconciliation authorizes the atoms; each then targets the scope's integration branch (name to be confirmed), never `main`.
+- `SCOPE.md`, `ROADMAP.md`, `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md` and `OPEN_DECISIONS.md` change only on `governance/` or `admin/` branches under an issue designated governance-only.
+- Each of `S01`-`S07` is an ordinary `[implementation]` issue on an `agent/issue-<n>-<slug>` branch targeting `implement/dgk2`; it edits no governance file and reports staleness findings instead.
+- An implementation issue may add or update only what its atom authorizes (its module, tests, `infra/` files, docs); a change to ADR-0072 needs a design-gate issue.
 
 ---
 
 ## Exit criteria for this scope
 
-- Part A: #383's ADR `ACCEPTED`, reconciled by a later governance issue.
-- Part B (after that reconciliation): `S01`-`S07` implemented and merged into the integration branch within the acceptance the ADR states, `S07` proven, followed by a governance closeout and the operator's promotion PR.
+- Part A (done): ADR-0072 `ACCEPTED`, reconciled by #389.
+- Part B: `S01`-`S07` implemented and merged into the integration branch within the acceptance above, `S07` proven in both parts, followed by a governance closeout and the operator's promotion PR.
 
 ---
 
@@ -154,4 +198,5 @@ Stop and report rather than register or decide unilaterally if:
 
 - a candidate atom cannot be stated without a semantic decision the design gate has not taken;
 - the scope would require weakening an accepted ADR (a credential service, a non-`tools/` host, an admission path that bypasses a sealed manifest, giving the deck a canonical storage mount or the server a way to push work to the deck);
-- an implementation issue is proposed before #383's ADR is `ACCEPTED` and a reconciliation authorizes its atom.
+- an implementation issue needs a semantic decision ADR-0072 does not state (report it; do not decide it in the issue);
+- an implementation issue is proposed for `S08` or for any atom outside `S01`-`S07`.
