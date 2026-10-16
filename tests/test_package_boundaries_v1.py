@@ -32,6 +32,7 @@ OWNERS = {
     "quant_platform.data.manifests": "producer",
     "quant_platform.data.materializer": "producer",
     "quant_platform.data.l2_materializer": "producer",
+    "quant_platform.data.l2_publication": "producer",
     "quant_platform.data.publication": "producer",
     "quant_platform.data.publication_catalog": "producer",
     "quant_platform.data.publication_eligibility": "producer",
