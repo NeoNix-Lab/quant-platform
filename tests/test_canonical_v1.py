@@ -115,7 +115,12 @@ class CanonicalV1Tests(unittest.TestCase):
             "ordinal": 1, "scope": "_canonical",
             "argument_ast": ast.dump(ast.parse("value", mode="eval").body, include_attributes=False),
             "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
-        }]  # #338: existing J12 canonical identities, unchanged byte profile.
+        }, {
+            "path": "src/quant_platform/application/training_transport.py",
+            "ordinal": 1, "scope": "encode_train_evaluate_message",
+            "argument_ast": ast.dump(ast.parse("message", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }]  # #338: existing J12 canonical identities, unchanged byte profile; #339: the J13 wire message.
         # #342: the feature-provider identity (ADR-0069 s7, the ADR-0068
         # sorted-compact-ascii-v1 profile) and the size bound of a bundle's JSON
         # documents; each is one declared call site, no new profile.
