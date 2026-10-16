@@ -21,8 +21,8 @@ translated by the same functions it uses; nothing is sealed on a refusal. An
 (it is all those seams receive) names the dataset (its one logical input
 identity), the requested interval (its declared coverage) and the partitions;
 the catalog is re-queried through the gateway and must still yield exactly the
-sealed manifest -- the same request identity, schema, manifest hashes, content
-hashes and natural partition identities. Anything else (a revised partition, a
+sealed manifest -- the same request identity, schema, partition manifest hashes,
+content hashes and natural partition identities. Anything else (a revised partition, a
 changed dataset) is an integrity failure: bytes are never delivered for a
 manifest the catalog no longer stands behind. A partition's length is its
 file's size, its bytes are that file read through the catalog's storage root;
@@ -223,7 +223,7 @@ class DatasetAdmittedInputAuthority:
     def resolve(self, request: AdmittedInputRequest) -> AdmittedInputManifestV1:
         if request.dataset is None:
             raise _refusal("artifact_inputs_unavailable")
-        metadata, _ = self._open(request.dataset)
+        metadata, partitions = self._open(request.dataset)
         if not metadata.coverage_complete:
             raise ConsumerApiError(
                 ConsumerErrorCode.NO_COVERAGE, "the requested coverage is not available",
@@ -235,6 +235,7 @@ class DatasetAdmittedInputAuthority:
         if (
             not metadata.natural_partitions
             or len(metadata.natural_partitions) != len(metadata.content_hashes)
+            or len(partitions) != len(metadata.natural_partitions)
         ):
             raise _integrity("partitions_not_deliverable")
         try:
@@ -246,7 +247,7 @@ class DatasetAdmittedInputAuthority:
                 schema_identity=metadata.record_schema_id,
                 schema_version=str(metadata.schema_version),
                 schema_hash=metadata.schema_hash,
-                manifest_hashes=metadata.manifest_hashes,
+                manifest_hashes=tuple(partition.manifest_sha256 for partition in partitions),
                 content_hashes=metadata.content_hashes,
                 declared_coverage=metadata.requested_interval.stable_dict(),
                 request_identity=metadata.request_identity,
@@ -327,7 +328,7 @@ class DatasetAdmittedInputAuthority:
             or metadata.record_schema_id != manifest.schema_identity
             or str(metadata.schema_version) != manifest.schema_version
             or metadata.schema_hash != manifest.schema_hash
-            or tuple(metadata.manifest_hashes) != tuple(manifest.manifest_hashes)
+            or tuple(partition.manifest_sha256 for partition in partitions) != tuple(manifest.manifest_hashes)
             or tuple(metadata.content_hashes) != tuple(manifest.content_hashes)
             or tuple(partition_identity_text(item) for item in metadata.natural_partitions)
             != tuple(manifest.natural_partition_identities)

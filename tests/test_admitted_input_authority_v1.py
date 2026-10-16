@@ -178,11 +178,13 @@ class AdmittedInputAuthorityV1Tests(unittest.TestCase):
             (hashlib.sha256(FILE_ONE).hexdigest(), hashlib.sha256(FILE_TWO).hexdigest()),
             manifest.content_hashes,
         )
-        # The dataset's manifest hash first, then each partition's, in the gateway's order.
+        # Only the selected partitions' manifest hashes, in the gateway's order: the
+        # dataset's own manifest hash is not part of the sealed manifest (ADR-0072 s1).
         self.assertEqual(
-            (DATASET.manifest_sha256,) + tuple(item.manifest_sha256 for item in self.partitions),
-            manifest.manifest_hashes,
+            tuple(item.manifest_sha256 for item in self.partitions), manifest.manifest_hashes,
         )
+        self.assertEqual(len(manifest.natural_partition_identities), len(manifest.manifest_hashes))
+        self.assertNotIn(DATASET.manifest_sha256, manifest.manifest_hashes)
         self.assertEqual("trade-v1", manifest.schema_identity)
         self.assertEqual("1", manifest.schema_version)
         self.assertEqual(DATASET.schema_hash, manifest.schema_hash)
@@ -341,6 +343,21 @@ class AdmittedInputAuthorityV1Tests(unittest.TestCase):
                 lambda: self.authority.members(other),
                 ConsumerErrorCode.INTEGRITY_FAILURE, "catalog_no_longer_matches_manifest",
             )
+
+    def test_a_manifest_carrying_the_datasets_hash_is_not_the_adr_manifest(self) -> None:
+        manifest = self.authority.resolve(request())
+        # The ADR-conformant manifest revalidates (members resolve) ...
+        self.assertEqual(2, len(self.authority.members(manifest)))
+        # ... and one with the dataset's manifest hash added in front does not.
+        extended = AdmittedInputManifestV1(**{
+            **_manifest_fields(manifest),
+            "manifest_hashes": (DATASET.manifest_sha256,) + manifest.manifest_hashes,
+        })
+        self.assertNotEqual(manifest.admission_id, extended.admission_id)
+        self.refusal(
+            lambda: self.authority.members(extended),
+            ConsumerErrorCode.INTEGRITY_FAILURE, "catalog_no_longer_matches_manifest",
+        )
 
     def test_a_new_revision_with_identical_bytes_is_a_different_partition(self) -> None:
         manifest = self.authority.resolve(request())
