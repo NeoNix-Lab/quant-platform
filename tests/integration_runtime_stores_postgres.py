@@ -53,6 +53,9 @@ from quant_platform.application.job_worker_runtime import (  # noqa: E402
     recorded_deployment_commit,
 )
 from quant_platform.experiments import ExperimentRepository, RunState  # noqa: E402
+from quant_platform.application.framed_result_transport import (  # noqa: E402
+    FramedResultConfig, FramedResultTransferStore,
+)
 from quant_platform.experiments.accounting import (  # noqa: E402
     TrialAttemptResult, record_trial_attempt,
 )
@@ -791,6 +794,65 @@ class PostgresAdmittedInputTransport(
                 admin.execute("DROP FUNCTION runtime.reject_pending_commit()")
         delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
         self.assertEqual(1, delivery["delivery_attempt"])
+
+    async def test_two_concurrent_deliveries_both_refused_at_commit_free_their_capacity(self):
+        """#357 review: nobody undecided, nobody confirmed: the copies must not hold the slots."""
+
+        import asyncio
+        import threading
+
+        self.transfers = FramedResultTransferStore(
+            FramedResultConfig(
+                frame_payload_bytes=admitted_transport.FRAME_BYTES, max_in_flight_transfers=2,
+            )
+        )
+        handlers = self.routes(bounds=admitted_transport.AdmittedInputBounds(max_members=2))
+        first = self.ok(await self.call("admit", admitted_transport.admit_body(), handlers=handlers))
+        admission_id = first["admission_id"]
+        # A second, unrelated admission: it needs the two slots the first one's members use.
+        second = self.ok(await self.call("admit", admitted_transport.admit_body(
+            operation_identity="strategy-compose-v2",
+        ), handlers=handlers))
+        self.assertNotEqual(admission_id, second["admission_id"])
+
+        barrier = threading.Barrier(2, timeout=10)
+        reserve = FramedResultTransferStore.reserve_many
+
+        def reserve_then_meet(store, *args, **options):
+            reservation = reserve(store, *args, **options)
+            barrier.wait()  # both deliveries hold the same copies before either starts K12
+            return reservation
+
+        with connect("ADMIN") as admin:
+            admin.execute(
+                "CREATE FUNCTION runtime.reject_pending_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                "BEGIN IF NEW.state = 'DELIVERY_PENDING' THEN "
+                "RAISE EXCEPTION 'commit refused by the test'; END IF; RETURN NEW; END $$"
+            )
+            admin.execute(
+                "CREATE CONSTRAINT TRIGGER reject_pending_commit AFTER UPDATE ON runtime.admitted_inputs "
+                "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION runtime.reject_pending_commit()"
+            )
+        try:
+            with mock.patch.object(FramedResultTransferStore, "reserve_many", reserve_then_meet):
+                responses = await asyncio.gather(
+                    self.call("deliver", {"admission_id": admission_id}, handlers=handlers),
+                    self.call("deliver", {"admission_id": admission_id}, handlers=handlers),
+                )
+            self.assertEqual(["error", "error"], [response["status"] for response in responses])
+            record = self.open_store().get(admission_id)
+            self.assertEqual((AdmittedInputState.SEALED, 0), (record.state, record.delivery_attempt))
+            self.assertEqual({}, dict(self.transfers._transfers))
+            self.assertEqual({}, dict(self.transfers._participants))
+        finally:
+            with connect("ADMIN") as admin:
+                admin.execute("DROP TRIGGER reject_pending_commit ON runtime.admitted_inputs")
+                admin.execute("DROP FUNCTION runtime.reject_pending_commit()")
+        # The capacity is free: another admission delivers at once, and so does the first.
+        other = self.ok(await self.call(
+            "deliver", {"admission_id": second["admission_id"]}, handlers=handlers,
+        ))
+        self.assertEqual(1, other["delivery_attempt"])
 
 
 class PostgresResultImportTransport(

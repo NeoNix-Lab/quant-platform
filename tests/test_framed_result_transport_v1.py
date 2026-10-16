@@ -560,7 +560,7 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         mine.withdraw()  # published by this reservation alone: gone
         self.assertEqual({}, dict(store._transfers))
         self.assertEqual({}, dict(store._generations))
-        self.assertEqual({}, dict(store._creators))
+        self.assertEqual({}, dict(store._participants))
         self.assertIsNone(store.retained_owner(transfer_id))
 
         # Another reservation reused the copy after it was created: not withdrawn.
@@ -594,6 +594,65 @@ class FramedResultTransportV1Tests(unittest.TestCase):
         frames = store.resume(FramedResultResumeRequest(transfer_id, 0), owner="a")
         self.assertEqual(publisher.frames[0], frames)
 
+    def test_deliveries_that_all_fail_free_the_capacity_they_held(self) -> None:
+        store = FramedResultTransferStore(
+            FramedResultConfig(frame_payload_bytes=4, max_in_flight_transfers=1)
+        )
+        item = ("result:A", {"p": "data"})
+        first = store.reserve_many([item], owner="x", gate=lambda: False)
+        second = store.reserve_many([item], owner="x", gate=lambda: False)  # sees the same copy
+        first.commit()
+        second.withdraw()  # still undecided: the first one is
+        self.assertEqual(1, len(store._transfers))
+        first.withdraw()  # the last one to be undecided: nothing keeps the copy
+        self.assertEqual({}, dict(store._transfers))
+        self.assertEqual({}, dict(store._participants))
+        store.reserve_many([("result:B", {"p": "other"})], owner="x").release()  # no transfer_refused
+
+    def test_a_copy_that_one_delivery_confirmed_survives_every_other_failure(self) -> None:
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        item = ("result:A", {"p": "data"})
+        loser = store.reserve_many([item], owner="x")
+        winner = store.reserve_many([item], owner="x")
+        loser.commit()
+        winner.commit()
+        winner.confirm()  # the winner's external step succeeded
+        loser.withdraw()
+        transfer_id = winner.frames[0][0].transfer_id
+        self.assertEqual(("x",), store.retained_owner(transfer_id))
+        # And the other way round: the confirmation came first.
+        later = store.reserve_many([item], owner="x")
+        later.commit()
+        later.withdraw()
+        self.assertEqual(("x",), store.retained_owner(transfer_id))
+
+    def test_a_copy_an_undecided_delivery_still_needs_is_kept_when_another_fails(self) -> None:
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        item = ("result:A", {"p": "data"})
+        undecided = store.reserve_many([item], owner="x")
+        failing = store.reserve_many([item], owner="x")
+        undecided.commit()
+        failing.commit()
+        failing.withdraw()
+        transfer_id = undecided.frames[0][0].transfer_id
+        self.assertEqual(("x",), store.retained_owner(transfer_id))
+        undecided.confirm()  # it then succeeds: the copy is the winner's
+        self.assertEqual(("x",), store.retained_owner(transfer_id))
+        self.assertIn(transfer_id, store._confirmed)
+
+    def test_admit_many_keeps_what_it_admits(self) -> None:
+        store = FramedResultTransferStore(FramedResultConfig(frame_payload_bytes=4))
+        frames = store.admit(logical_result_identity="result:1", result={"p": "abcdefgh"}, owner="a")
+        transfer_id = frames[0].transfer_id
+        again = store.reserve_many([("result:1", {"p": "abcdefgh"})], owner="a")
+        again.commit()
+        again.withdraw()  # a failure elsewhere never frees an admitted copy
+        self.assertEqual(("a",), store.retained_owner(transfer_id))
+        self.assertIn(transfer_id, store._confirmed)
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 if __name__ == "__main__":
     unittest.main()

@@ -219,11 +219,12 @@ needs a new admission are unchanged.
    members are one step on the K12 side: the members are published inside the
    attempt's transaction, so no other transition can occur between the two, and
    a delivery that cannot publish records no attempt and consumes no number. If
-   the transaction is then refused (including at its commit), the copies that
-   delivery alone created and published are withdrawn, and whatever cannot be
-   withdrawn stays unrecoverable until an attempt at least as high is recorded.
-   A refused delivery never withdraws, and never makes recoverable, a copy that
-   an earlier or a concurrent attempt retained.
+   the transaction is then refused (including at its commit), that delivery
+   stops being a reason to keep what it published: a copy is freed when no other
+   delivery is still undecided about it and none succeeded, so deliveries that
+   all fail leave nothing holding capacity. A copy that an earlier attempt, or a
+   concurrent one that succeeded, kept is never freed by a failure, and whatever
+   stays is unrecoverable until an attempt at least as high is recorded.
 7. **A pending attempt without recoverable transfers is a valid state.** The
    in-memory transfer store and PostgreSQL are not one atomic unit. If a
    response is lost, or the process restarts, the attempt may be pending while

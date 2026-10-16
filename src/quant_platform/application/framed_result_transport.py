@@ -207,11 +207,13 @@ class FramedResultTransferStore:
         # expires and is later admitted again is a new generation, so a stale
         # reservation can never publish, or withdraw, somebody else's copy.
         self._generations: dict[str, int] = {}
-        # transfer_id -> the lease that *created* the retained copy, and the ids
-        # some other reservation has since reused. A reservation may withdraw
-        # (after publishing) only a copy it created and nobody has touched.
-        self._creators: dict[str, int] = {}
-        self._reused: set[str] = set()
+        # transfer_id -> the leases that reserved the retained copy and have not
+        # yet closed (confirmed or withdrawn), and the ids a caller confirmed as
+        # kept for good. A copy published by reservations whose external outcome
+        # failed is freed by the *last* of them to withdraw, never while one is
+        # still undecided, and never once one confirmed it.
+        self._participants: dict[str, set[int]] = {}
+        self._confirmed: set[str] = set()
         self._leases = itertools.count(1)
         self._generation_numbers = itertools.count(1)
         self._lock = threading.RLock()
@@ -241,6 +243,7 @@ class FramedResultTransferStore:
                 reservation = self.reserve_many(items, owner=owner)
                 try:
                     reservation.commit()
+                    reservation.confirm()  # there is no external step: the copies are kept
                 except BaseException as error:
                     # Whatever failed, nothing of this attempt stays held: a
                     # reservation that is not released occupies capacity until
@@ -326,12 +329,12 @@ class FramedResultTransferStore:
                     expiry, frames, sum(len(frame.chunk_payload) for frame in frames), owner, gate,
                 )
                 self._generations[transfer_id] = generation
-                self._creators[transfer_id] = lease
+                self._participants[transfer_id] = {lease}
                 self._pending[transfer_id] = {lease}
                 seen[transfer_id] = generation
                 held.add(transfer_id)
             for transfer_id in reused:
-                self._reused.add(transfer_id)
+                self._participants.setdefault(transfer_id, set()).add(lease)
                 seen[transfer_id] = self._generations[transfer_id]
                 holders = self._pending.get(transfer_id)
                 if holders is not None:  # reusing another reservation's provisional hold
@@ -380,34 +383,56 @@ class FramedResultTransferStore:
     ) -> None:
         with self._lock:
             for transfer_id in transfer_ids:
+                if self._generations.get(transfer_id) != seen[transfer_id]:
+                    continue  # expired and replaced: never ours to touch
                 holders = self._pending.get(transfer_id)
-                if (
-                    holders is None or lease not in holders
-                    or self._generations.get(transfer_id) != seen[transfer_id]
-                ):
-                    continue  # committed, expired and replaced, or never ours to remove
-                holders.discard(lease)
-                if not holders:
-                    del self._pending[transfer_id]
-                    self._transfers.pop(transfer_id, None)
-                    self._generations.pop(transfer_id, None)
-                    self._creators.pop(transfer_id, None)
-                    self._reused.discard(transfer_id)
+                if holders is not None and lease in holders:
+                    holders.discard(lease)
+                    if not holders:
+                        del self._pending[transfer_id]
+                self._close_lease(transfer_id, lease)
 
-    def _withdraw(self, lease: int, transfer_ids: tuple[str, ...], seen: Mapping[str, int]) -> None:
-        """Remove what this lease created, published, and nobody else has since reused."""
+    def _close_lease(self, transfer_id: str, lease: int) -> None:
+        """This lease no longer decides about the copy; free it if nobody does and none kept it."""
+
+        participants = self._participants.get(transfer_id)
+        if participants is not None:
+            participants.discard(lease)
+        if (
+            transfer_id in self._transfers
+            and transfer_id not in self._pending
+            and transfer_id not in self._confirmed
+            and not self._participants.get(transfer_id)
+        ):
+            self._forget(transfer_id)
+
+    def _forget(self, transfer_id: str) -> None:
+        self._transfers.pop(transfer_id, None)
+        self._generations.pop(transfer_id, None)
+        self._participants.pop(transfer_id, None)
+        self._confirmed.discard(transfer_id)
+
+    def _confirm(self, lease: int, transfer_ids: tuple[str, ...], seen: Mapping[str, int]) -> None:
+        """The caller's external step succeeded: these copies are kept for good."""
 
         with self._lock:
             for transfer_id in transfer_ids:
-                if (
-                    self._creators.get(transfer_id) == lease
-                    and self._generations.get(transfer_id) == seen[transfer_id]
-                    and transfer_id not in self._reused
-                    and transfer_id not in self._pending
-                ):
-                    self._transfers.pop(transfer_id, None)
-                    self._generations.pop(transfer_id, None)
-                    self._creators.pop(transfer_id, None)
+                if self._generations.get(transfer_id) == seen[transfer_id]:
+                    self._confirmed.add(transfer_id)
+                    self._close_lease(transfer_id, lease)
+
+    def _withdraw(self, lease: int, transfer_ids: tuple[str, ...], seen: Mapping[str, int]) -> None:
+        """The caller's external step failed after publication: close this lease.
+
+        A copy is freed only when no other reservation is still undecided about
+        it and none confirmed it. A participant that has also aborted is not a
+        reason to keep a copy; one that is still deciding, or succeeded, is.
+        """
+
+        with self._lock:
+            for transfer_id in transfer_ids:
+                if self._generations.get(transfer_id) == seen[transfer_id]:
+                    self._close_lease(transfer_id, lease)
 
     def retained_owner(self, transfer_id: str) -> tuple[str | None] | None:
         """``(owner,)`` of a retained transfer; ``None`` if unknown or expired."""
@@ -458,8 +483,8 @@ class FramedResultTransferStore:
                 del self._transfers[transfer_id]
                 self._pending.pop(transfer_id, None)
                 self._generations.pop(transfer_id, None)
-                self._creators.pop(transfer_id, None)
-                self._reused.discard(transfer_id)
+                self._participants.pop(transfer_id, None)
+                self._confirmed.discard(transfer_id)
 
 
 class FramedResultReservation:
@@ -497,13 +522,24 @@ class FramedResultReservation:
         self._closed = True
         self._published = True
 
-    def withdraw(self) -> None:
-        """Undo this reservation, including a publication that its caller cannot keep.
+    def confirm(self) -> None:
+        """The caller's external step (a database commit) succeeded: keep these copies.
 
-        Before :meth:`commit` it is :meth:`release`. After it, it removes only the
-        copies this reservation itself created and that no other reservation has
-        reused since: never a copy that an earlier or a concurrent delivery holds
-        or has published. What it cannot remove stays gated by its publisher.
+        A confirmed copy is never freed by anybody's :meth:`withdraw`.
+        """
+
+        if self._published:
+            self._published = False
+            self._store._confirm(self._lease, self._transfer_ids, self._seen)
+
+    def withdraw(self) -> None:
+        """Undo this reservation, including a publication whose external step failed.
+
+        Before :meth:`commit` it is :meth:`release`. After it, this reservation
+        stops being a reason to keep its copies: a copy is freed when no other
+        reservation is still undecided about it and none confirmed it. A copy that
+        an earlier delivery confirmed, a concurrent one still holds, or a winner
+        confirmed stays. What cannot be freed stays gated by its publisher.
         """
 
         if not self._published:

@@ -61,9 +61,10 @@ Delivery attempts (ADR-0064 Amendment 1, issue #357):
   attempt, so an attempt is recorded only if its transfers were published, and
   no other K12 transition (expiry, an acknowledgement, a newer attempt) can
   interleave between the two. If that transaction is then refused, even at its
-  commit, what this delivery alone created is withdrawn, and any copy that
-  cannot be is not recoverable until the admission has recorded the attempt it
-  was published for.
+  commit, this delivery stops being a reason to keep what it published (the
+  last delivery still undecided frees the copy; one that succeeded keeps it),
+  and any copy that stays is not recoverable until the admission has recorded
+  the attempt it was published for.
 - J14 ``resume`` of a member consults the admission at the time of the request:
   after ``EXPIRED`` (or an admission that no longer exists, or cannot be read,
   or has not recorded the attempt the copy was published for) a member is
@@ -667,6 +668,7 @@ class AdmittedInputTransport:
                 reservation.commit()
 
             record = store.begin_delivery(admission_id, before_commit=publish)
+            reservation.confirm()  # K12 committed the attempt: its copies are kept for good
         except AdmittedInputExpired as error:
             reservation.withdraw()
             raise _refusal("admission_expired") from error
@@ -682,9 +684,11 @@ class AdmittedInputTransport:
             raise _integrity("transfer_expired") from error
         except BaseException:
             # Includes a K12 commit that was refused *after* the publication
-            # above: the attempt was rolled back, so what this reservation
-            # alone published is withdrawn (and, whatever cannot be, is not
-            # recoverable: the gate wants the attempt it was published for).
+            # above: the attempt was rolled back, so this delivery stops being a
+            # reason to keep what it published (the last undecided delivery
+            # frees it; one that is still deciding, or succeeded, keeps it) and,
+            # whatever stays, is not recoverable until the admission has
+            # recorded the attempt it was published for.
             reservation.withdraw()
             raise
         descriptors = [

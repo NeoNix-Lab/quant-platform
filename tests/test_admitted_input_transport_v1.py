@@ -1286,6 +1286,53 @@ class AdmittedInputTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         for descriptor in first["members"]:  # and attempt 1's members are still served
             self.assertEqual(descriptor["content_hash"], (await self.fetch(descriptor))["content_hash"])
 
+    async def test_a_recorded_attempt_confirms_its_copies(self) -> None:
+        admitted = await self.admit()
+        delivery = self.ok(await self.call("deliver", {"admission_id": admitted["admission_id"]}))
+        ids = {item["transfer_id"] for item in delivery["members"]}
+        self.assertEqual(ids, set(self.transfers._confirmed))
+        self.assertFalse(any(self.transfers._participants.values()))  # nobody is left undecided
+
+    async def test_two_deliveries_that_are_both_refused_free_their_capacity(self) -> None:
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        authority = self.authority
+        inner = AdmittedInputTransport(
+            self.provider(), authority.resolve, authority.members, authority.read_member,
+            transfers=self.transfers,
+        )
+        original = AdmittedInputStore.begin_delivery
+        calls = []
+
+        def refusing(store, admitted_id, *, before_commit=None):
+            first = not calls
+            calls.append(True)
+            if first:
+                # A concurrent delivery of the same admission reserves the same
+                # copies while this one waits, publishes them, and is refused too.
+                with self.assertRaises(RuntimeError):
+                    inner.execute("deliver", admitted_id)
+
+            def publish_then_fail(record):
+                before_commit(record)
+                raise RuntimeError("the commit was refused")
+            return original(store, admitted_id, before_commit=publish_then_fail)
+
+        with patch.object(AdmittedInputStore, "begin_delivery", refusing):
+            response = await self.call("deliver", {"admission_id": admission_id})
+        self.assertEqual(2, len(calls))
+        self.assertEqual("error", response["status"])
+        # Neither delivery recorded an attempt, and nothing is left holding capacity.
+        record = self.open_store().get(admission_id)
+        self.assertEqual((AdmittedInputState.SEALED, 0), (record.state, record.delivery_attempt))
+        self.assertEqual({}, dict(self.transfers._transfers))
+        self.assertEqual({}, dict(self.transfers._participants))
+        self.assertEqual({}, dict(self.transfers._pending))
+        delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.assertEqual(1, delivery["delivery_attempt"])
+        for descriptor in delivery["members"]:
+            self.assertEqual(descriptor["content_hash"], (await self.fetch(descriptor))["content_hash"])
+
     # -- recoverability follows the admission (ADR-0064 Amendment 1, point 6) -----------
 
     async def test_members_are_not_recoverable_after_expiry_and_stay_so_after_the_attempt_ends(self) -> None:
