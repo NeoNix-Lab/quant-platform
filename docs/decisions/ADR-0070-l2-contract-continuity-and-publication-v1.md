@@ -1,6 +1,6 @@
 # ADR-0070 - L2 contract, continuity and publication v1 (DG-C / A14)
 
-**Status:** PROPOSED (design gate #367; accepted when the maintainer merges the PR that carries it)
+**Status:** ACCEPTED (design gate #367, PR #370, 2026-10-15; amended by Amendment 1, issue #402)
 **Date:** 2026-10-14
 
 The ADR number is provisional until acceptance (the FEI gate #363 also assigns its number at
@@ -441,3 +441,49 @@ for N = 50 vs 200. It is not a test of 500 vs 200.
 Governance #364 (PR #360). Design gate #367. Consumes ADR-0004, ADR-0018, ADR-0022, ADR-0029,
 ADR-0030, ADR-0032, ADR-0040, ADR-0041-0044, ADR-0050, ADR-0054, ADR-0057, ADR-0063, ADR-0066,
 ADR-0068. Groundwork: PR #317 / #316.
+
+## Amendment 1 (issue #402) — partitioning at continuity discontinuities
+
+**Date:** 2026-10-16
+**Amends:** §2 (discontinuity and partition boundary), §3 (lossless wording), §4 (partition key and path), §5 (outcomes), Consequences. **Does not amend:** §1, §6-§9, the atom set, the evidence items, or any other ADR.
+
+### Why
+
+`A14c` (PR #401) found that §2/§5 cannot be realized on the frozen coverage fold. §2 split a day with a `u` discontinuity into `complete` and `known_gap` intervals *inside one partition* and §5 published it as `degraded`. The fold (`data/coverage.py`, ADR-0022/ADR-0029) requires one contiguous `complete` interval per partition (`COVERAGE_NOT_CONTIGUOUS`), forbids it to overlap a non-complete assertion (`COVERAGE_CONTRADICTION`) and requires every observed record to lie inside it (`OBSERVED_OUTSIDE_DECLARED`); the quality lifecycle accepts a `warn` only when the `source` category warns and the partition still seals. The maintainer chose, on 2026-10-16, to keep the frozen contracts and cut the day instead (**owner decision 7**). A gap *between* partitions is already representable: the fold attributes complete coverage per partition and ADR-0029 defines non-contiguous reads.
+
+### Decision
+
+1. **Publishable run.** A *run* is a maximal sequence of events that starts at an in-band `snapshot` and ends immediately before the delta that opens a discontinuity (the A14a definition: `u` is not `previous u + 1` with no snapshot in between), or at the end of the source day. Several snapshots inside one run are not cuts (a snapshot without a `u` gap loses nothing). The cut points are exactly the discontinuities reported by the A14a certifier over the whole source day; no second definition exists.
+2. **What is excluded.** Events inside a `book_state_unknown` interval (from the delta that opened it to the event before the next snapshot, or to the end of the day) and events before the first snapshot of the day carry no usable book state. They are **not written to the canonical layer**. They remain in the retained source archive (ADR-0032) and are counted, with the source archive's SHA-256, in the gap evidence. Every canonical L2 event is therefore anchored.
+3. **Partition key and path.** Uniform for every day, content-independent in form and deterministic in value: partition key `dt=YYYY-MM-DD/seg=NNN`, where `NNN` is the 1-based ordinal of the run within the UTC day of its first event, zero-padded to at least three digits; artifact path `canonical/l2/bybit/BTCUSDT/l2-book-event-v1/dt=YYYY-MM-DD/seg=NNN/part-001.parquet`. A day with no discontinuity is exactly one partition, `seg=001`. Every event of a run must lie inside the UTC day of its source file (item 4 refuses the day otherwise); the live case is item 9.
+4. **Declared coverage.** One coverage document **per run** and one **per gap**, all with `basis = source_archive` and intent `[day start, day end)`. The documents are separate because S13 evidence is partition-scoped: `seal` folds the supplied documents against the one partition being sealed and any complete reference to another partition is `PARTITION_UNKNOWN`, so a document used as evidence names exactly one partition. Coverage timestamps carry at most six fractional digits (`coverage-manifest-v1`), so the unit is **1 µs**: for a time `t`, `ceil_us(t)` is the least µs-aligned instant strictly greater than `t`, and `floor_us(t)` the greatest µs-aligned instant not greater than `t`.
+   - the run's document carries one `complete` assertion, naming exactly that partition and revision. `start` is the day's intent start for the first run when the day's first event is a snapshot, and `floor_us(first event time)` otherwise; `end` is `ceil_us(last event time of the run)` when a gap follows, or the intent end for the last run of a day that ends cleanly. Evidence: `archive_completeness` and `sequence_continuity` whose `detail` is `bybit_l2_continuity_evidence_detail` of that partition's own events.
+   - each gap document carries one `known_gap` assertion (never a partition reference) for an excluded interval: `[ceil_us(last event time of the previous run), floor_us(first event time of the next run))`, or `[ceil_us(last event time of the last run), intent end)` when the day ends inside a discontinuity, or `[intent start, floor_us(first snapshot time))` for events before the first snapshot. Evidence: `sequence_discontinuity` whose `detail` is `expected_u:<n>|observed_u:<n>|excluded_events:<n>|source_sha256:<hex>`, or `unanchored_head|excluded_events:<n>|source_sha256:<hex>` for the head.
+   - If a gap interval is empty or negative (`ceil_us(last) >= floor_us(next first)`, for example two events in the same microsecond), the day is refused with `discontinuity_not_representable`. A day with no run (empty, or no snapshot at all) is refused with `no_anchored_run`, and a day with an event whose `exchange_ts` lies outside the UTC day of its source file is refused with `event_outside_day`. Nothing is published for a refused day.
+5. **Certification.** Each run is a partition certified `eligible` by A14a and published `valid` through the unchanged S13/S14 path. A partition that contains a discontinuity or an unanchored head never exists in the canonical layer, so the `A14c` rule that fails such a partition stays as the guard against a producer defect. The `degraded` outcome of A14a is a *producer-side signal* used to find the cut points; it is never a published lifecycle state for L2 in `v1`.
+6. **Binding of continuity evidence.** The `sequence_continuity` evidence of a `complete` assertion binds to the bytes of the partition the assertion names. Because the evidence documents of one S13 run name exactly one partition (item 4), the `A14c` binding check (`validate_bybit_l2_coverage_against_events`) needs no change.
+7. **Feasibility, checked on the merged code.** A source day with one `u` discontinuity (two runs, two excluded events) was cut as above with `materialize_l2_book_event_v1`, `emit_partition_manifest` and `emit_coverage_manifest` (one document per run, one per gap). `reconstruct_catalog_coverage` over all documents and both partitions returned no violation and the folded intervals `seg=001 = [day start, ceil_us(last event of run 1))` and `seg=002 = [floor_us(first event of run 2), day end)`; each run, run through `L2PublicationCertification` with its own document, certified `pass`. No frozen code was modified.
+8. **Re-acquisition.** A source day is acquired once. A repeated acquisition must reproduce byte-identical partitions (same keys and `canonical_content_hash_v1`); any difference in the set of runs or in a run's content is refused (`day_already_published_differently`) and is outside `v1` (repair is ADR-0033's explicit-defect flow, not an acquisition loop).
+9. **Live day roll (`v2`), principle only.** No synthetic snapshot is ever written. A run that crosses UTC midnight is split at the day boundary; the continuation partition (`dt=<next day>/seg=001`) starts with a delta and is anchored only by evidence that links its predecessor partition (key, revision, last `native_sequence` and `native_update_id`) and that the certifier verifies against the catalog. The mechanics (a certifier parameter and the catalog lookup) are fixed in the `A14f` issue; this is the one item the amendment defers, because it depends on measured live behaviour.
+10. **Effect on the atoms.** `A14d` finds the cut points with the A14a certifier, writes one partition per run with `materialize_l2_book_event_v1`, emits the partition manifests and the per-run and per-gap coverage documents above, and refuses a day as stated; `A14c` and `A14a` are unchanged; `A14e` reports each `known_gap` as a consumer gap and never fills it. `A14b` must accept the `raw` layer when `A14g` is implemented (already recorded for that atom).
+
+### Superseded text
+
+| Where | Original | Replaced by |
+|---|---|---|
+| §2, third bullet | "…so a day with a discontinuity is split into `complete` and `known_gap` intervals. Events inside that interval are preserved as received (lossless) but flagged `unanchored` by the certification report." | Items 1, 2 and 4: the day is cut into runs; excluded events are not in the canonical layer. |
+| §2, "Partition boundary" | "Partitions are natural UTC days by `exchange_ts` (`dt=YYYY-MM-DD`, `part-001.parquet`, as for `trade-v1`)… A day that does not start with a snapshot and does not continue its predecessor has an *unanchored head*… the partition state is `degraded`." | Items 3, 4 and 9: partitions are runs, `dt=YYYY-MM-DD/seg=NNN`; events before the first snapshot are excluded and declared as a `known_gap`; the live continuation head is item 9. |
+| §3, opening sentence | "The canonical layer stores **source events**: snapshots and deltas exactly as normalized by the adapter…" | Unchanged in meaning for anchored events; unanchored events are excluded (item 2). |
+| §4, "Path" | `canonical/l2/…/dt=YYYY-MM-DD/part-001.parquet` | Item 3. |
+| §4, "Declared coverage" | "A day is `complete` only with attributable `archive_completeness` evidence and no unresolved discontinuity…" | Item 4: a run is `complete`; the discontinuity is a `known_gap` between partitions. |
+| §5, "Outcomes" | "Check 5 findings and an unanchored head make it `degraded`… A `degraded` partition is published with its non-complete coverage…" | Item 5: a partition is `eligible` or it does not exist; `degraded` is a producer-side signal. |
+| Consequences | "…the governance reconciliation after acceptance re-states `A14a`-`A14f` as authorized…" | Unchanged; a further reconciliation re-states `A14d` and `A14f` after this amendment. |
+
+### Consequences
+
+- The frozen coverage fold, the manifests, the catalog DDL, J02 v1 and `trade-v1` are unchanged. No accepted ADR other than ADR-0070 §2/§3/§4/§5 as listed is weakened.
+- Events in a `book_state_unknown` interval are not in the canonical dataset. They are not lost: the source archive is retained and the gap evidence names it by SHA-256 and counts the events.
+- A day with many discontinuities yields many small partitions; the number is bounded by the source's re-snapshot behaviour, which E4 measures.
+- The partition-key shape `dt=…/seg=…` is a two-level key already accepted by the manifest key pattern; the catalog's one-live-revision-per-key rule applies per run.
+- `A14d` and `A14f` need a governance reconciliation (a separate `governance/` issue) to restate their sequencing notes; `A14c` needs no change.
+- The evidence items E2-E5 are unchanged. A measured discontinuity rate changes how many partitions a day yields, not the rule.
