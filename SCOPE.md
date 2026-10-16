@@ -1,14 +1,44 @@
 # Scope: DG-K — Process Topology v1
 
-Status: **Part A (design gate) CLOSED — ADR-0068 and ADR-0069 ACCEPTED (#319, 2026-10-10). Part B implementation inventory AUTHORIZED; its implementation issues are not yet opened (maintainer direction 2026-10-10: reconcile without generating issues).**
+Status: **CLOSED — operator closeout, issue #381 (2026-10-16). Part A (design gate) closed by #319 (ADR-0068, ADR-0069 ACCEPTED, 2026-10-10). Part B: `P01`-`P06` implemented and merged into `implement/dgk` (head `93471e4`) within the bounds recorded under "Closeout result". Promotion of `implement/dgk` into `main` is the operator's separate PR. No Golden proof is claimed, and the server/deck split is not composed in any executable (see "Not claimed").**
 
-Scope kind: this document has two parts. Part A recorded the DG-K design gate registered by governance issue #318 and closed by #319. Part B is the implementation inventory that gate makes implementable. No implementation may start until its own implementation issue exists, cites the governing ADR section below, and targets the DG-K integration branch.
+Scope kind: this document has two parts. Part A recorded the DG-K design gate registered by governance issue #318 and closed by #319. Part B is the implementation inventory that gate makes implementable. Every Part B atom had its own implementation issue citing the governing ADR section and targeting the DG-K integration branch `implement/dgk`; all are merged (see "Closeout result").
 
 ---
 
 ## Historical scope archive
 
-This file previously recorded **Wave 8 — Full Platform API & Remote Service Topology v1** (CLOSED — operator closeout, issue #327/PR #328, 2026-10-10; implementation promoted to `main` by PR #322 and PR #326; no Golden proof claimed), and then **this same DG-K scope while its design gate was still open** (governance issue #318). Both are preserved in git history (`git log -- SCOPE.md`). `SCOPE.md` is overwritten in place for each governance reconciliation.
+This file previously recorded **Wave 8 — Full Platform API & Remote Service Topology v1** (CLOSED — operator closeout, issue #327/PR #328, 2026-10-10; implementation promoted to `main` by PR #322 and PR #326; no Golden proof claimed), and then **this same DG-K scope while its design gate was still open** (governance issue #318) and while its implementation was authorized (reconciliation #319). All are preserved in git history (`git log -- SCOPE.md`). `SCOPE.md` is overwritten in place for each governance reconciliation.
+
+---
+
+## Closeout result (issue #381)
+
+| Atom | Merged evidence (into `implement/dgk`) | Bound of the credit |
+|---|---|---|
+| `P01` | PR #344 (issue #330) | `quant_platform.canonical`; byte parity and cross-process proof in `tests/test_canonical_v1.py`. |
+| `P02` | PR #349 (#331), PR #350 (#332), PR #355 (#354) | `runtime` schema, unit-scoped roles, atomic K13 registration, concurrent identical resubmission refused. Operational confirmation that no production SQLite runtime state exists is recorded by the maintainer, not by code. |
+| `P03` | PR #345 (#333) | Per-host import rules; no host moved. |
+| `P04a` | PR #351 (#334) | Closed registry mechanism; `DATA_LOCAL_JOB_REGISTRY` ships **empty**. |
+| `P04b` | PR #352 (#335) | `tools/job_worker.py`, PostgreSQL advisory lock plus process-lifetime lock (ADR-0068 Amendment 1). |
+| `P05a` | PR #346 (#336), #347 (#337), #348 (#338), #380 (#339) | Per-family dispatch and scopes before decode; `j02-strategy-v1`, `j02-validation-v1`, `j02-training-v1` (ADR-0069 Amendment 2). |
+| `P05b` | PR #353 (#340), PR #359 (#358) | `j02-job-v1`, opt-in handlers. |
+| `P06` | PR #356 (#341), #361 (#342), #366 (#343), #373 (#357) | K12 delivery as `j02-admitted-input-v2`, K13 import with feature-provider identity, `clients/deck` protocol client; ADR-0064 Am.1, ADR-0066 Am.1, ADR-0069 Am.1. |
+
+Amendments that landed: ADR-0064 Amendment 1, ADR-0066 Amendment 1, ADR-0068 Amendment 1, ADR-0069 Amendments 1 and 2.
+
+## Not claimed (verified against `implement/dgk` at `93471e4`)
+
+- No executable composes the new families: `tools/api_server.py` serves the J02 v1 market-data message only and has no TLS/mTLS options; `RemoteJ02SecurityConfig` is constructed only in tests.
+- No production implementation of the K12 server-owned seams (`resolve`, `members`, `read_member`); no composition of `GovernedResultImportService` (K13) in a host; no output-contract registry.
+- No deck-side executable or producer of `GovernedResultBundleV1` for a deck workload; `clients/deck/` is a protocol client only.
+- No data-local J03 handler (the registry ships empty), so `j02-job-v1` has nothing to submit.
+- No credential issuance, trust-bundle management, secret storage or deployment runbook for the new scopes (ADR-0063 leaves them out of scope).
+- No end-to-end proof on the real topology (PostgreSQL + API + worker + deck over WSS/mTLS); the acceptance tests use SQLite or `FakeConnection` stores behind a real WSS/mTLS listener, and the PostgreSQL suite is separate.
+- No Golden proof. Omega use of any new family (needs an ADR-0067 amendment); more than one J03 worker; a durable J14 transfer store (in-memory by design, ADR-0064 Amendment 1 point 7).
+- `J11` is not planned and remains `OPEN_DEFERABLE`/`MISSING`.
+
+The statement that the topology is deployable, or that the server/deck split is ready, must not be derived from this scope.
 
 ---
 
@@ -42,7 +72,7 @@ Answers to the nine DG-K questions are in ADR-0068 §1-§9 and ADR-0069 §1-§9;
 
 ## Part B — Authorized DG-K implementation inventory
 
-Each atom below has an `ACCEPTED` governing ADR. Each later receives its own implementation issue; **this reconciliation opens none**.
+Each atom below has an `ACCEPTED` governing ADR and was delivered by its own implementation issue (see "Closeout result"). The table is kept as the authorized inventory and its start gates.
 
 | Atom | Capability | Governing ADR | Requires | Sequencing note |
 |---|---|---|---|---|
@@ -63,7 +93,7 @@ P05a       (J02/J09 on main)
 P06        (J09, J14 on main; requires P02)
 ```
 
-Immediately startable once their issues exist: `P01`, `P02`, `P03`, `P05a`.
+All atoms were started in dependency order and are merged.
 
 ### Integration branch
 
@@ -86,9 +116,10 @@ Accepted ADRs and frozen contracts remain normative. No Part B issue may change 
 ## Baseline and Credited State
 
 ```text
-main @ 56f6375 (Wave 8 governance closeout #327 / PR #328 merged)
+main @ 56f6375 (Wave 8 governance closeout #327 / PR #328 merged) at registration
 Wave 8: J03,J09,J10,J12,J13,J14,J15,K12,K13 COMPLETE within recorded bounds
-DG-K: ADR-0068, ADR-0069 ACCEPTED (#319); P01-P06 FROZEN / MISSING
+DG-K: ADR-0068, ADR-0069 ACCEPTED (#319); P01-P06 FROZEN / COMPLETE within recorded bounds (#381)
+implement/dgk @ 93471e4 (not yet promoted into main)
 ```
 
 Credit, do not reimplement or re-prove absent invalidating evidence: every atom `COMPLETE` in `CAPABILITY_DAG.md`, within the bound its row records. `J14`'s RFC 8785 framing, `J15`'s `clients/omega` location, #313's replay identity parity tests and the K12/K13 server logic are reused as evidence, not rebuilt.
@@ -97,8 +128,7 @@ Credit, do not reimplement or re-prove absent invalidating evidence: every atom 
 
 ## Explicit non-claims
 
-- `P01`-`P06` are `FROZEN`/`MISSING`: decided, not built. No implementation issue exists yet.
-- `J10`/`J12`/`J13` remain unreachable over J02 until `P05a` is implemented; `K13` stays non-atomic until `P02`.
+- `P01`-`P06` are `COMPLETE` only within the bounds under "Closeout result"; the list under "Not claimed" applies.
 - `J11` is not planned and remains `OPEN_DEFERABLE`/`MISSING`.
 - Omega remote use of ADR-0069 families needs its own ADR-0067 amendment and is not authorized.
 - `J07`/`J08` (Wave 10), `I06`/`I07` (Wave 9), `A13`-`A15` and second venue are untouched.
@@ -117,7 +147,7 @@ Credit, do not reimplement or re-prove absent invalidating evidence: every atom 
 ## Exit criteria for this scope
 
 - Part A: **met** — ADR-0068 and ADR-0069 `ACCEPTED` (#319), reconciled here.
-- Part B: each of the eight atoms is implemented, merged into the integration branch and promoted to `main`, within the acceptance its governing ADR section states, followed by a governance closeout.
+- Part B: each of the eight atoms is implemented and merged into the integration branch, within the acceptance its governing ADR section states: **met** (closeout #381). Promotion of `implement/dgk` into `main` remains the operator's separate PR.
 
 ---
 

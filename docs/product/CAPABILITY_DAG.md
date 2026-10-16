@@ -1,6 +1,6 @@
 # Quant Platform Capability DAG vNext
 
-Status: **CANONICAL; Wave 8 — Full Platform API & Remote Service Topology v1 CLOSED by operator closeout (issue #327): `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` implemented and promoted to `main` (PR #322, #326), within the bounds recorded in their rows; no Wave 8 Golden proof claimed; `J11` remains `OPEN_DEFERABLE` (not planned, owner decision 2026-10-10). DG-K Process Topology v1 is resolved by ADR-0068 and ADR-0069 (#319); atoms `P01`-`P06` are `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B, with no implementation issue opened yet.**
+Status: **CANONICAL; Wave 8 — Full Platform API & Remote Service Topology v1 CLOSED by operator closeout (issue #327): `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` implemented and promoted to `main` (PR #322, #326), within the bounds recorded in their rows; no Wave 8 Golden proof claimed; `J11` remains `OPEN_DEFERABLE` (not planned, owner decision 2026-10-10). DG-K Process Topology v1 is closed by operator closeout, issue #381 (design gate #319; ADR-0068, ADR-0069): atoms `P01`-`P06` are `FROZEN`/`COMPLETE` within the bounds recorded in their rows and merged into `implement/dgk`; no Golden proof is claimed and the server/deck split is not composed in any executable: `tools/api_server.py` serves the J02 v1 market-data message only and has no TLS/mTLS options; there is no production K12 authority (`resolve`/`members`/`read_member`), no K13 composition in a host, no deck-side bundle producer, no credential issuance or deployment runbook, no data-local J03 handler, and no end-to-end proof on the real topology.**
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -10,8 +10,8 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after the DG-K design-gate reconciliation (#319;
-recomputed mechanically from the atom tables below, not by hand):
+Current audited inventory after the DG-K closeout (#381; recomputed mechanically
+from the atom tables below, not by hand):
 
 ```text
 TOTAL_ATOMS                     = 104
@@ -22,12 +22,19 @@ OPEN_BLOCKING                   = 4
 OPEN_DEFERABLE                  = 8
 ROADMAP_DEFINED                 = 92 + 4 + 8 = 104
 ROADMAP_PLANNING_COMPLETENESS   = 104 / 104 = 100%
-IMPLEMENTATION_COMPLETE         = 78 / 104 = 75.0%
+IMPLEMENTATION_COMPLETE         = 86 / 104 = 82.7%
 ```
 
-DG-K design-gate reconciliation (#319): ADR-0068 and ADR-0069 are accepted, so
+DG-K closeout (#381): the eight `P` atoms `P01`, `P02`, `P03`, `P04a`, `P04b`, `P05a`,
+`P05b` and `P06` move from `MISSING` to `COMPLETE` (78 -> 86), each within the
+bound recorded in its row. No decision state changes, so the semantic score stays
+at 88.5%. The credit is for libraries, wire families, the worker host and the deck
+protocol client; it is not a claim that the topology is deployed (see the row
+bounds and `SCOPE.md`).
+
+Earlier, DG-K design-gate reconciliation (#319): ADR-0068 and ADR-0069 are accepted, so
 the eight `P` atoms move from `OPEN_BLOCKING` to `FROZEN` (84 -> 92 decided).
-Implementation stays `MISSING`; `IMPLEMENTATION_COMPLETE` is unchanged.
+Implementation stayed `MISSING` until the closeout above.
 
 Earlier, DG-K registration (issue #318): eight candidate atoms `P01`, `P02`, `P03`,
 `P04a`, `P04b`, `P05a`, `P05b` and `P06` are added as `OPEN_BLOCKING`/`MISSING`
@@ -206,18 +213,18 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 |---|---|---|---|---|---|---|---|
 | J01 | Consumer API semantics | Application/API | D01 | C02,J02 | FROZEN | COMPLETE | Stable semantic selector/result/error boundary; ADR-0020 |
 | J02 | Canonical API transport | API Runtime | C03,real client need | J04-J06 | RESOLVED | COMPLETE | ADR-0050; WebSocket transport preserves Consumer API semantics without domain/storage logic. Amendment 1 froze a 50,000-row/16 MiB bound; auth/TLS for non-loopback remains open (see J09/DG-J G1) |
-| J03 | Job runtime | Runtime | C03,I02 | long operations | FROZEN | COMPLETE | ADR-0062 durable admission record, deterministic `job_id`, §3 lifecycle, attempt evidence, no automatic retry and restart -> `RECOVERY_REQUIRED` implemented by PR #307 / issue #296 (`application/durable_jobs.py`, SQLite store). Handler dispatch, worker process and PostgreSQL store are not claimed (DG-K P02/P04) |
+| J03 | Job runtime | Runtime | C03,I02 | long operations | FROZEN | COMPLETE | ADR-0062 durable admission record, deterministic `job_id`, §3 lifecycle, attempt evidence, no automatic retry and restart -> `RECOVERY_REQUIRED` implemented by PR #307 / issue #296 (`application/durable_jobs.py`, SQLite store). Handler dispatch, worker process and PostgreSQL store are not claimed (DG-K P02/P04) Since DG-K (#381): PostgreSQL store (P02), dispatch registry (P04a, empty) and single worker (P04b) exist; no data-local handler ships. |
 | J04 | CLI client | Client Layer | J02 or explicitly bounded in-process C03 | operator workflow | RESOLVED | COMPLETE | Thin client; no quantitative/storage logic |
 | J05 | TUI client | Client Layer | J02 | interactive workflow | RESOLVED | COMPLETE | Same canonical semantics |
 | J06 | App UI | Client Layer | J02 | product workflow | RESOLVED | COMPLETE | Business logic remains behind service boundary |
 | J07 | Paper/shadow mode | Runtime | A11,H05,I05,J02,K03 | J08 | RESOLVED | MISSING | Same decisions, simulated routing, explicit evidence |
 | J08 | Live product mode | Runtime/Operations | J07,K02,K03,K05,K06,K08,K09,K10 | production | RESOLVED | MISSING | Explicit authorization/audit/recovery gates |
-| J09 | Authenticated/TLS transport v1 | API Runtime | J02 | K12,K13,J10-J13,J15 | FROZEN | COMPLETE | ADR-0063 WSS+TLS 1.3+mTLS non-loopback J02, exact-fingerprint principal mapping, `j02.market_data.read` scope and security evidence implemented by PR #310 / issue #297. Only `j02.market_data.read` exists |
-| J10 | Strategy Consumer-API seam v1 | Application/API | C03,G01-G04,J02 | J04-J06 extension | FROZEN | COMPLETE | ADR-0065 §2 `strategy-compose-v1` implemented as an in-process application seam by PR #308 / issue #300. Not reachable over J02 (no wire message or remote scope; owner decision 2026-10-08 assigns that to DG-K P05) |
+| J09 | Authenticated/TLS transport v1 | API Runtime | J02 | K12,K13,J10-J13,J15 | FROZEN | COMPLETE | ADR-0063 WSS+TLS 1.3+mTLS non-loopback J02, exact-fingerprint principal mapping, `j02.market_data.read` scope and security evidence implemented by PR #310 / issue #297. Only `j02.market_data.read` exists Since DG-K (#381): the per-family scopes `j02.strategy.compose`, `j02.validation.evaluate`, `j02.training.evaluate`/`.register`, `j02.jobs.submit`/`.read`, `j02.admitted_input.read` and `j02.result.submit` are enforced before decode (P05a/P05b/P06); the server executable does not yet configure TLS/mTLS. |
+| J10 | Strategy Consumer-API seam v1 | Application/API | C03,G01-G04,J02 | J04-J06 extension | FROZEN | COMPLETE | ADR-0065 §2 `strategy-compose-v1` implemented as an in-process application seam by PR #308 / issue #300. Not reachable over J02 (no wire message or remote scope; owner decision 2026-10-08 assigns that to DG-K P05) Since DG-K (#381): carried over J02 by `j02-strategy-v1` (P05a), opt-in handler; no host composes it. |
 | J11 | Replay Consumer-API seam v1 | Application/API | C03,H05,J02 | J04-J06 extension | OPEN_DEFERABLE | MISSING | ADR-0065 §5 explicitly defers `DG-J` G4's Replay seam: `HistoricalReplayRuntime.run()`'s injected `feature_provider` callable has no accepted identity-bearing, serializable, server-resolved definition yet. Owner decision 2026-10-10 (DG-K, #318): not planned; replay runs only on the deck over K12-admitted inputs, results return through K13 (P06). Trigger: an explicit maintainer request for server-side or remote-client replay, then a future ADR defining that feature/provider reference and whether the operation is synchronous or J03-admitted |
-| J12 | Validation Consumer-API seam v1 | Application/API | C03,F06-F08,J02 | J04-J06 extension | FROZEN | COMPLETE | ADR-0065 §3 and Amendment 1 finite Validation seam (folds, classification, DSR, bounded synchronous PBO) implemented in-process by PR #312 / issue #301. Not reachable over J02 (DG-K P05) |
-| J13 | Training Consumer-API seam v1 | Application/API | C03,I03-I05,J02 | J04-J06 extension | FROZEN | COMPLETE | ADR-0065 §4 and Amendment 2 bounded `supervised-train-evaluate-v1` seam implemented in-process by PR #315 / issue #302, including RunIdentity/projection provenance refusal. Not reachable over J02 (DG-K P05) |
-| J14 | Streaming/live transport extension v1 | API Runtime | J02 | future live consumer seams | FROZEN | COMPLETE | ADR-0066 `j14-framed-result-v1` framing (RFC 8785, per-chunk/transfer SHA-256, transfer-local resume, bounded retention) implemented by PR #320 / issue #303 (`application/framed_result_transport.py`). Not yet dispatched by the J02 server; no live family |
+| J12 | Validation Consumer-API seam v1 | Application/API | C03,F06-F08,J02 | J04-J06 extension | FROZEN | COMPLETE | ADR-0065 §3 and Amendment 1 finite Validation seam (folds, classification, DSR, bounded synchronous PBO) implemented in-process by PR #312 / issue #301. Not reachable over J02 (DG-K P05) Since DG-K (#381): carried over J02 by `j02-validation-v1` (P05a), opt-in handler; no host composes it. |
+| J13 | Training Consumer-API seam v1 | Application/API | C03,I03-I05,J02 | J04-J06 extension | FROZEN | COMPLETE | ADR-0065 §4 and Amendment 2 bounded `supervised-train-evaluate-v1` seam implemented in-process by PR #315 / issue #302, including RunIdentity/projection provenance refusal. Not reachable over J02 (DG-K P05) Since DG-K (#381): carried over J02 by `j02-training-v1` (P05a, ADR-0069 Amendment 2), opt-in handler; no host composes it. |
+| J14 | Streaming/live transport extension v1 | API Runtime | J02 | future live consumer seams | FROZEN | COMPLETE | ADR-0066 `j14-framed-result-v1` framing (RFC 8785, per-chunk/transfer SHA-256, transfer-local resume, bounded retention) implemented by PR #320 / issue #303 (`application/framed_result_transport.py`). Not yet dispatched by the J02 server; no live family Since DG-K (#381): dispatched for admitted-input member transfers and job results; the transfer store is in-memory (ADR-0064 Amendment 1 point 7). |
 | J15 | Omega API client adapter v1 | Client Layer | J02,J09,PUBLIC_PYTHON_API.md | first real remote-API client | FROZEN | COMPLETE | ADR-0067 Omega remote client implemented outside `src/quant_platform` (`clients/omega`) by PR #321 / issue #304: J02 only, `j02.market_data.read`, `wire_incompatible`, `remote_security_failure`. No capability beyond market data |
 
 ### K — Operations
@@ -235,26 +242,26 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | K09 | Retention/deletion authority | Operations | K08 | sustainable live | FROZEN | COMPLETE | ADR-0049; never delete protected/sole recoverable evidence; PR #211 implementation; PR #212 Golden proof |
 | K10 | Checkpoint/recovery | Operations/Data Plane | A11,K03,K08 | J08 | FROZEN | COMPLETE | ADR-0042; PR #114 implements persisted checkpoint/recovery + full hermetic proof matrix; PR #122 closes the bounded real-server restart/deployed checkpoint proof (issues #109, #121) |
 | K11 | Governance-state consistency | Governance | K01 | reliable planning | RESOLVED | COMPLETE | Canonical docs represent accepted state without ambiguity; Wave 4 closeout reconciled by governance issue #147 |
-| K12 | Server-owned admitted-input export/reference v1 | Operations | K02,B01-B04 | deck/consumer-machine compute | FROZEN | COMPLETE | ADR-0064 §2 sealed `AdmittedInputManifestV1`, `admission_id` and `ADMITTED`..`DELIVERED` state machine implemented by PR #309 / issue #298 (`application/admitted_input.py`, SQLite store). Physical byte transfer to the deck and a deck-side reader are not claimed |
-| K13 | Governed experiment-result import/registration v1 | Operations | K12,I01,I02 | attributable deck results | FROZEN | COMPLETE | ADR-0064 §3 full-bundle refusal, idempotent re-submission and distinct identities implemented by PR #311 / issue #299 (`application/governed_result_import.py`). Experiment write (PostgreSQL) and evidence record (SQLite) are not one transaction; DG-K P02 must establish it |
+| K12 | Server-owned admitted-input export/reference v1 | Operations | K02,B01-B04 | deck/consumer-machine compute | FROZEN | COMPLETE | ADR-0064 §2 sealed `AdmittedInputManifestV1`, `admission_id` and `ADMITTED`..`DELIVERED` state machine implemented by PR #309 / issue #298 (`application/admitted_input.py`, SQLite store). Physical byte transfer to the deck and a deck-side reader are not claimed Since DG-K (#381): PostgreSQL store with delivery-attempt identity and byte delivery over `j02-admitted-input-v2` (P06); the production authority seams (`resolve`/`members`/`read_member`) are not implemented. |
+| K13 | Governed experiment-result import/registration v1 | Operations | K12,I01,I02 | attributable deck results | FROZEN | COMPLETE | ADR-0064 §3 full-bundle refusal, idempotent re-submission and distinct identities implemented by PR #311 / issue #299 (`application/governed_result_import.py`). Experiment write (PostgreSQL) and evidence record (SQLite) are not one transaction; DG-K P02 must establish it Since DG-K (#381): registration is one PostgreSQL transaction (P02) and submission is carried by `j02-result-import-v1` (P06); the service is not composed in a host and no output-contract registry exists. |
 
 ### P — Process Topology (DG-K; ADR-0068, ADR-0069)
 
 Registered by governance issue #318 and frozen by the design gate #319
 (ADR-0068 process topology v1, ADR-0069 J02 carriage of consumer seams and
 deck handoff v1), which kept the registered names. `SCOPE.md` Part B
-authorizes them; no implementation issue is open yet.
+authorized them; all are implemented and credited by the closeout #381, each within the bound its row records.
 
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
-| P01 | Canonical identity serializer v1 | Engineering/Application | — | P04a, identities computed in several processes | FROZEN | MISSING | ADR-0068 §5. One module with named, versioned byte profiles; every existing identity site declares its profile; golden-hash parity on every existing identity vector (including #313's replay vectors); no identity changes. RFC 8785 is one profile, for J14 and new contracts only |
-| P02 | Runtime store on PostgreSQL v1 | Operations/Application | J03,K12,K13 | P04a,P06 | FROZEN | MISSING | ADR-0068 §4. `runtime` schema and DB role for the J03/K12/K13 stores (today SQLite); establishes atomic K13 registration with the Experiment write (today PostgreSQL then SQLite, `application/governed_result_import.py:268-288`) |
-| P03 | Executable host boundaries v1 | Engineering | — | P04b | FROZEN | MISSING | ADR-0068 §7. Hosts stay in `tools/` (owner decision; ADR-0043 unchanged); per-host import rules in `tests/test_package_boundaries_v1.py`; `clients/*` stay outside `tools/` and `src/quant_platform` |
-| P04a | J03 handler registry and dispatch v1 | Application | P01,P02 | P04b | FROZEN | MISSING | ADR-0068 §6. Closed, declared, data-local handler set inside `quant_platform.application` (owner decision: no replay/sweep/training handlers on the server); no generic executor (ADR-0062 §6) |
-| P04b | Single J03 worker process v1 | Runtime | P03,P04a | P05b | FROZEN | MISSING | ADR-0068 §6, §8. Exactly one worker process over the PostgreSQL-backed queue; no broker; restart recovery stays correct with one worker; evidence trigger recorded for more than one (ADR-0062 §3/§4) |
-| P05a | J02 carriage of synchronous J10/J12/J13 v1 | API Runtime | J02,J09 | J04-J06 extension | FROZEN | MISSING | ADR-0069 §1-§3. J02 wire messages and one remote scope per operation family (ADR-0063) without changing ADR-0065 semantics or J02 v1; J13 requests respect the 16 MiB bound (ADR-0050 §2) |
-| P05b | J02 submit/status/result for J03 data-local jobs v1 | API Runtime | P04b | remote data-local jobs | FROZEN | MISSING | ADR-0069 §4. Submit/status/result messages for data-local operations admitted through J03 |
-| P06 | Deck handoff over J02 v1 | API Runtime/Operations | J09,J14,P02 | deck replay/training with governed results | FROZEN | MISSING | ADR-0069 §5-§8. K12 delivery of admitted input bytes (J14 framing for large payloads) and K13 result-bundle submission, one least-privilege scope each; deck-side client verifies delivered digests and submits the bundle; the K13 bundle carries the replay feature-provider code identity. ADR-0064 §4 defines no wire shape today |
+| P01 | Canonical identity serializer v1 | Engineering/Application | — | P04a, identities computed in several processes | FROZEN | COMPLETE | ADR-0068 §5. One module with named, versioned byte profiles; every existing identity site declares its profile; golden-hash parity on every existing identity vector (including #313's replay vectors); no identity changes. RFC 8785 is one profile, for J14 and new contracts only Credit (#381): PR #344 (issue #330), `quant_platform.canonical`; byte parity on the pinned identity vectors and the two-`PYTHONHASHSEED` cross-process proof are in `tests/test_canonical_v1.py`. |
+| P02 | Runtime store on PostgreSQL v1 | Operations/Application | J03,K12,K13 | P04a,P06 | FROZEN | COMPLETE | ADR-0068 §4. `runtime` schema and DB role for the J03/K12/K13 stores (today SQLite); establishes atomic K13 registration with the Experiment write (today PostgreSQL then SQLite, `application/governed_result_import.py:268-288`) Credit (#381): PR #349 (issue #331: `runtime` schema, unit-scoped roles, J03/K12/K13 stores on PostgreSQL), PR #350 (issue #332: atomic K13 registration), PR #355 (issue #354: a concurrent identical resubmission is refused). Bound: the confirmation that no production SQLite runtime state exists is operational evidence, not code, and is recorded by the maintainer (#381). |
+| P03 | Executable host boundaries v1 | Engineering | — | P04b | FROZEN | COMPLETE | ADR-0068 §7. Hosts stay in `tools/` (owner decision; ADR-0043 unchanged); per-host import rules in `tests/test_package_boundaries_v1.py`; `clients/*` stay outside `tools/` and `src/quant_platform` Credit (#381): PR #345 (issue #333), per-host import rules in `tests/test_package_boundaries_v1.py`; no host moved. |
+| P04a | J03 handler registry and dispatch v1 | Application | P01,P02 | P04b | FROZEN | COMPLETE | ADR-0068 §6. Closed, declared, data-local handler set inside `quant_platform.application` (owner decision: no replay/sweep/training handlers on the server); no generic executor (ADR-0062 §6) Credit (#381): PR #351 (issue #334), `application/job_dispatch.py`. Bound: the registry mechanism is complete; `DATA_LOCAL_JOB_REGISTRY` ships **empty**, so no data-local handler exists yet (each enters through its own implementation issue). |
+| P04b | Single J03 worker process v1 | Runtime | P03,P04a | P05b | FROZEN | COMPLETE | ADR-0068 §6, §8. Exactly one worker process over the PostgreSQL-backed queue; no broker; restart recovery stays correct with one worker; evidence trigger recorded for more than one (ADR-0062 §3/§4) Credit (#381): PR #352 (issue #335), `tools/job_worker.py` with the PostgreSQL advisory lock and the process-lifetime lock (ADR-0068 Amendment 1). Bound: with an empty handler registry it has nothing to run. |
+| P05a | J02 carriage of synchronous J10/J12/J13 v1 | API Runtime | J02,J09 | J04-J06 extension | FROZEN | COMPLETE | ADR-0069 §1-§3. J02 wire messages and one remote scope per operation family (ADR-0063) without changing ADR-0065 semantics or J02 v1; J13 requests respect the 16 MiB bound (ADR-0050 §2) Credit (#381): PR #346 (issue #336, per-family dispatch and scope enforcement before decode), PR #347 (issue #337, `j02-strategy-v1`), PR #348 (issue #338, `j02-validation-v1`), PR #380 (issue #339, `j02-training-v1` with the J13 reconstruction codec of ADR-0069 Amendment 2 and the pre-decode `register` grant). Bound: application-owned codecs and opt-in family handlers proven over a real WSS/mTLS listener in tests; no executable composes them. |
+| P05b | J02 submit/status/result for J03 data-local jobs v1 | API Runtime | P04b | remote data-local jobs | FROZEN | COMPLETE | ADR-0069 §4. Submit/status/result messages for data-local operations admitted through J03 Credit (#381): PR #353 (issue #340, `j02-job-v1`) and PR #359 (issue #358, multi-body results). Bound: opt-in handlers, not composed in a host, and the data-local registry is empty. |
+| P06 | Deck handoff over J02 v1 | API Runtime/Operations | J09,J14,P02 | deck replay/training with governed results | FROZEN | COMPLETE | ADR-0069 §5-§8. K12 delivery of admitted input bytes (J14 framing for large payloads) and K13 result-bundle submission, one least-privilege scope each; deck-side client verifies delivered digests and submits the bundle; the K13 bundle carries the replay feature-provider code identity. ADR-0064 §4 defines no wire shape today Credit (#381): PR #356 (issue #341, K12 delivery, now `j02-admitted-input-v2`), PR #361 (issue #342, K13 import and feature-provider identity), PR #366 (issue #343, `clients/deck`), PR #373 (issue #357, delivery-attempt identity, admission-gated resume; ADR-0064 Amendment 1, ADR-0066 Amendment 1, ADR-0069 Amendment 1). Bound: protocol client and server-side transports with test authorities; no production K12 authority, no K13 composition in a host, no deck-side bundle producer, no deployment. |
 
 ## Dependency integrity
 
@@ -390,9 +397,9 @@ store are carried to DG-K Process Topology v1 (#318/#319), not to this gate.
 Registered by governance issue #318 after the Wave 8 closeout and resolved by
 design gate #319: ADR-0068 (process topology v1) freezes `P01`-`P04b` and
 ADR-0069 (J02 carriage of consumer seams and deck handoff v1) freezes `P05a`,
-`P05b` and `P06`. Implementation is `MISSING`; `SCOPE.md` Part B authorizes
-the inventory and records start gates, and no implementation issue is open
-yet. Fixed owner inputs: identity-preserving canonical profiles (P01), hosts
+`P05b` and `P06`. Closed by operator closeout #381: all eight atoms are `COMPLETE` within
+the bounds recorded in their rows, merged into `implement/dgk`; `SCOPE.md` records the
+result and what is not claimed. Fixed owner inputs: identity-preserving canonical profiles (P01), hosts
 in `tools/` (P03), one J03 worker (P04), P05 in DG-K, a free server with
 data-local J03 handlers only and heavy compute on the deck on its own
 initiative, and `J11` not planned. Full question set and stop conditions:
@@ -443,13 +450,15 @@ identity cost) and #314 (uniqueness weights) are also on `main` via the ad-hoc
 `implement/wave-8.1` branch, with identities unchanged. No Wave 8 Golden E2E
 proof artifact is claimed. `J11` remains `OPEN_DEFERABLE`.
 
-The current scope is DG-K Process Topology v1. Its design gate is closed
-(ADR-0068, ADR-0069, #319) and `SCOPE.md` Part B authorizes `P01`-`P06`: J02
-wiring of `J10`/`J12`/`J13` (P05a/P05b), J03 dispatch and a single worker
-(P04a/P04b), the runtime store on PostgreSQL (P02), one canonical identity
-module (P01), host boundaries (P03) and the deck handoff over J02 (P06).
-Startable once their issues exist: `P01`, `P02`, `P03`, `P05a`. No
-implementation issue is open yet.
+DG-K Process Topology v1 is closed by operator closeout (issue #381): its design gate
+(ADR-0068, ADR-0069, #319) is resolved and `P01`-`P06` are implemented on `implement/dgk`
+within the bounds recorded in their rows: J02 families for `J10`/`J12`/`J13` and jobs
+(P05a/P05b), the closed J03 handler registry (P04a, empty) and the single worker host
+(P04b), the runtime store on PostgreSQL (P02), one canonical identity module (P01),
+host boundaries (P03) and the deck handoff over J02 (P06). Promotion of `implement/dgk`
+into `main` is the operator's separate closeout PR. The topology is not composed in any executable: `tools/api_server.py` serves the J02 v1 market-data message only and has no TLS/mTLS options; there is no production K12 authority (`resolve`/`members`/`read_member`), no K13 composition in a host, no deck-side bundle producer, no credential issuance or deployment runbook, no data-local J03 handler, and no end-to-end proof on the real topology;
+the follow-on scope that would compose and prove it is registered by its own governance
+issue and is not authorized by this closeout.
 
 No new runtime/product frontier is authorized by this document. Neither the
 Wave 7 closeout, the Omega stabilization line, the `DG-J` resolution nor the
@@ -534,7 +543,8 @@ Wave 7  Runtime / Clients                                 COMPLETE (J02 -> J04/J
 Wave 8  Full Platform API & Remote Service Topology v1    COMPLETE (J03,J09,J10,J12,J13,J14,J15,K12,K13 within
                                                            recorded bounds; J10/J12/J13 in-process only; J11
                                                            deferred; no Golden proof claimed; operator closeout #327)
-DG-K   Process Topology v1                               ADRs ACCEPTED (#319); P01-P06 authorized, MISSING; before Wave 9
+DG-K   Process Topology v1                               COMPLETE within recorded bounds (operator closeout #381); P01-P06;
+                                                           not composed in a host, no Golden proof claimed; before Wave 9
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```

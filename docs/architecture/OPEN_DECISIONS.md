@@ -560,13 +560,23 @@ remote implementation of `J15` is explicitly blocked until `J09` is
 implemented** — this ADR authorizes neither that server work nor an Omega
 adapter by itself. Freezes `J15`. Anchors: ADR-0055; `PUBLIC_PYTHON_API.md`.
 
-## DG-K — Process Topology v1 — RESOLVED (ADR-0068, ADR-0069)
+## DG-K — Process Topology v1 — RESOLVED and IMPLEMENTED within recorded bounds (ADR-0068, ADR-0069)
+
+**Closed by operator closeout #381 (2026-10-16):** `P01`-`P06` are implemented and merged into
+`implement/dgk` (PR #344-#353, #355, #356, #359, #361, #366, #373, #380). Amendments that landed
+with them: ADR-0064 Amendment 1 (delivery attempt identity), ADR-0066 Amendment 1 (family
+`j02-admitted-input-v2`), ADR-0068 Amendment 1 (worker exclusion bound to the process lifetime),
+ADR-0069 Amendment 1 (attempt-attributed delivery, public error projection) and Amendment 2 (J13
+reconstruction evidence, pre-decode `register` grant). Not decided and not implemented by DG-K:
+composition of the families in an executable, the production K12 authority, K13 composition,
+a deck-side bundle producer, credential issuance, deployment, a data-local J03 handler and an
+end-to-end proof. These belong to a follow-on scope registered by its own governance issue.
 
 **Resolved 2026-10-10 by design gate #319:** ADR-0068 (process topology v1)
 and ADR-0069 (J02 carriage of consumer seams and deck handoff v1) are
 `ACCEPTED`. `P01`-`P04b` are `FROZEN` under ADR-0068 and `P05a`, `P05b`, `P06`
-under ADR-0069; implementation is `MISSING` and no implementation issue is
-open yet. Answers in summary: (1) five units: ingest, platform API, exactly one
+under ADR-0069; implementation is complete within recorded bounds (closeout #381,
+see above). Answers in summary: (1) five units: ingest, platform API, exactly one
 J03 worker, PostgreSQL, deck compute; (2) every domain package stays an
 in-process library; (3) a `runtime` schema with per-unit login roles, no deck
 database login; (4) J03/K12/K13 stores move to `runtime` and K13 registration
