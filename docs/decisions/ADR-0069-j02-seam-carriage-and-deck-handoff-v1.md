@@ -258,3 +258,35 @@ is a design regression guard, not an implementation proof.
 ## Related
 
 Governance issue #318; design gate #319; ADR-0068. Amends no ADR.
+
+## Amendment 1 (issue #357) — attempt-attributed delivery and public error projection
+
+**Date:** 2026-10-15
+
+The family of section 5 is `j02-admitted-input-v2`: wherever the sections above
+name `j02-admitted-input-v1`, that is the same family at its new version
+(ADR-0066 Amendment 1). The scope, operations and initiation by the deck are
+unchanged.
+
+- `admit`, `manifest` and `deliver` return `delivery_attempt` (the admission's
+  current attempt number; `0` before any delivery, the started attempt for
+  `deliver`). `acknowledge` carries the `delivery_attempt` it reports on,
+  together with the existing outcome fields. ADR-0064 Amendment 1 defines when
+  a report is applied and when it is refused (`delivery_attempt_mismatch`,
+  `acknowledgement_not_expected`, `admission_expired`).
+- A J14 `resume` of a member transfer is answered only for an admission that
+  exists and is not `EXPIRED`; otherwise the typed `transfer_expired` outcome of
+  ADR-0066 section 3 is returned, which adds no new outcome. The member's
+  logical result identity,
+  `admitted-input-member-v1:<admission_id>:<member index>`, is unchanged: the
+  bytes of a member do not depend on the attempt, and the same transfers serve
+  successive attempts of one admission.
+- `ok` on `deliver` means the members were published at the time of the
+  response. A later `transfer_expired` at `resume` is a normal typed outcome:
+  the deck reports the attempt as failed with its number and delivers again.
+- **Errors of the server's own authority.** A `ConsumerApiError` raised by the
+  server-owned seams (`resolve`, `members`, `read_member`) reaches the wire only
+  as a verified public projection: the frozen Consumer API code, the fixed
+  message of that code, and a `reason` that is a short token of lowercase letters
+  and underscores (or the seam's stable default). The seam's own message,
+  context and request identity are never forwarded. No error code is added.

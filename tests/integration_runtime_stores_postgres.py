@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from quant_platform.application.admitted_input import (  # noqa: E402
-    AdmittedInputConflict, AdmittedInputState, AdmittedInputStore,
+    AdmittedInputConflict, AdmittedInputError, AdmittedInputState, AdmittedInputStore,
 )
 from quant_platform.application.durable_jobs import (  # noqa: E402
     DurableJobConflict, DurableJobStore, EffectSafety, JobState,
@@ -53,6 +53,9 @@ from quant_platform.application.job_worker_runtime import (  # noqa: E402
     recorded_deployment_commit,
 )
 from quant_platform.experiments import ExperimentRepository, RunState  # noqa: E402
+from quant_platform.application.framed_result_transport import (  # noqa: E402
+    FramedResultConfig, FramedResultTransferStore,
+)
 from quant_platform.experiments.accounting import (  # noqa: E402
     TrialAttemptResult, record_trial_attempt,
 )
@@ -670,6 +673,71 @@ class PostgresInputs(DisposableCase, k12.AdmittedInputManifestV1Tests):
     def store(self):
         return AdmittedInputStore(self.connection())
 
+    def test_concurrent_delivery_starts_record_exactly_one_attempt(self):
+        """#357: the attempt number is written with the state, under the store's lock."""
+
+        store = self.store()
+        sealed = store.seal(store.admit(k12.manifest()).admission_id)
+
+        def begin(_):
+            with connect("API") as connection:
+                connection.execute("SET statement_timeout = '5s'")
+                try:
+                    return AdmittedInputStore(connection).begin_delivery(sealed.admission_id).delivery_attempt
+                except AdmittedInputConflict:
+                    return None
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(begin, range(4)))
+        self.assertEqual([1], [attempt for attempt in results if attempt is not None])
+        record = store.get(sealed.admission_id)
+        self.assertEqual((AdmittedInputState.DELIVERY_PENDING, 1), (record.state, record.delivery_attempt))
+
+    def test_a_stale_report_loses_to_a_concurrent_newer_attempt(self):
+        store = self.store()
+        sealed = store.seal(store.admit(k12.manifest()).admission_id)
+        store.begin_delivery(sealed.admission_id)  # attempt 1
+        digest = sealed.manifest.manifest_digest
+
+        def stale(_):
+            with connect("API") as connection:
+                connection.execute("SET statement_timeout = '5s'")
+                try:
+                    AdmittedInputStore(connection).record_delivery(
+                        sealed.admission_id, digest, delivery_attempt=1,
+                    )
+                    return "applied"
+                except AdmittedInputError as error:
+                    return type(error).__name__
+
+        def newer(_):
+            with connect("API") as connection:
+                connection.execute("SET statement_timeout = '5s'")
+                other = AdmittedInputStore(connection)
+                try:
+                    other.record_delivery_failure(
+                        sealed.admission_id, "delivery_interrupted", delivery_attempt=1,
+                    )
+                    return other.begin_delivery(sealed.admission_id).delivery_attempt
+                except AdmittedInputError:
+                    return None  # the stale report ended attempt 1 first
+
+        # The two orders are both legal: the stale report runs first (applied to the
+        # attempt it names) or after the newer attempt began (refused). It is never
+        # applied to attempt 2.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reported, started = pool.submit(stale, 0), pool.submit(newer, 0)
+            outcome, attempt = reported.result(), started.result()
+        record = store.get(sealed.admission_id)
+        if outcome == "applied":
+            self.assertEqual(AdmittedInputState.DELIVERED, record.state)  # attempt 1 ended; the newer one conflicted
+        else:
+            self.assertEqual(
+                (AdmittedInputState.DELIVERY_PENDING, 2, None),
+                (record.state, record.delivery_attempt, record.delivery_failure_reason),
+            )
+            self.assertEqual(2, attempt)
+
 
 class PostgresAdmittedInputTransport(
     DisposableCase, admitted_transport.AdmittedInputTransportV1Tests
@@ -692,6 +760,99 @@ class PostgresAdmittedInputTransport(
             finally:
                 connection.close()
         return session
+
+    async def test_a_commit_refused_by_postgresql_after_publication_leaves_nothing_recoverable(self):
+        """#357 review: the refusal comes from the database, at COMMIT, not from the callback.
+
+        A deferred constraint trigger rejects the move to DELIVERY_PENDING when the
+        transaction commits, after the members were published. State and attempt
+        number are rolled back by PostgreSQL itself; nothing may stay recoverable.
+        """
+
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        with connect("ADMIN") as admin:
+            admin.execute(
+                "CREATE FUNCTION runtime.reject_pending_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                "BEGIN IF NEW.state = 'DELIVERY_PENDING' THEN "
+                "RAISE EXCEPTION 'commit refused by the test'; END IF; RETURN NEW; END $$"
+            )
+            admin.execute(
+                "CREATE CONSTRAINT TRIGGER reject_pending_commit AFTER UPDATE ON runtime.admitted_inputs "
+                "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION runtime.reject_pending_commit()"
+            )
+        try:
+            response = await self.call("deliver", {"admission_id": admission_id})
+            self.assertEqual("error", response["status"])
+            record = self.open_store().get(admission_id)
+            self.assertEqual((AdmittedInputState.SEALED, 0), (record.state, record.delivery_attempt))
+            self.assertEqual({}, dict(self.transfers._transfers))
+            self.assertEqual({}, dict(self.transfers._pending))
+        finally:
+            with connect("ADMIN") as admin:
+                admin.execute("DROP TRIGGER reject_pending_commit ON runtime.admitted_inputs")
+                admin.execute("DROP FUNCTION runtime.reject_pending_commit()")
+        delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.assertEqual(1, delivery["delivery_attempt"])
+
+    async def test_two_concurrent_deliveries_both_refused_at_commit_free_their_capacity(self):
+        """#357 review: nobody undecided, nobody confirmed: the copies must not hold the slots."""
+
+        import asyncio
+        import threading
+
+        self.transfers = FramedResultTransferStore(
+            FramedResultConfig(
+                frame_payload_bytes=admitted_transport.FRAME_BYTES, max_in_flight_transfers=2,
+            )
+        )
+        handlers = self.routes(bounds=admitted_transport.AdmittedInputBounds(max_members=2))
+        first = self.ok(await self.call("admit", admitted_transport.admit_body(), handlers=handlers))
+        admission_id = first["admission_id"]
+        # A second, unrelated admission: it needs the two slots the first one's members use.
+        second = self.ok(await self.call("admit", admitted_transport.admit_body(
+            operation_identity="strategy-compose-v2",
+        ), handlers=handlers))
+        self.assertNotEqual(admission_id, second["admission_id"])
+
+        barrier = threading.Barrier(2, timeout=10)
+        reserve = FramedResultTransferStore.reserve_many
+
+        def reserve_then_meet(store, *args, **options):
+            reservation = reserve(store, *args, **options)
+            barrier.wait()  # both deliveries hold the same copies before either starts K12
+            return reservation
+
+        with connect("ADMIN") as admin:
+            admin.execute(
+                "CREATE FUNCTION runtime.reject_pending_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                "BEGIN IF NEW.state = 'DELIVERY_PENDING' THEN "
+                "RAISE EXCEPTION 'commit refused by the test'; END IF; RETURN NEW; END $$"
+            )
+            admin.execute(
+                "CREATE CONSTRAINT TRIGGER reject_pending_commit AFTER UPDATE ON runtime.admitted_inputs "
+                "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION runtime.reject_pending_commit()"
+            )
+        try:
+            with mock.patch.object(FramedResultTransferStore, "reserve_many", reserve_then_meet):
+                responses = await asyncio.gather(
+                    self.call("deliver", {"admission_id": admission_id}, handlers=handlers),
+                    self.call("deliver", {"admission_id": admission_id}, handlers=handlers),
+                )
+            self.assertEqual(["error", "error"], [response["status"] for response in responses])
+            record = self.open_store().get(admission_id)
+            self.assertEqual((AdmittedInputState.SEALED, 0), (record.state, record.delivery_attempt))
+            self.assertEqual({}, dict(self.transfers._transfers))
+            self.assertEqual({}, dict(self.transfers._participants))
+        finally:
+            with connect("ADMIN") as admin:
+                admin.execute("DROP TRIGGER reject_pending_commit ON runtime.admitted_inputs")
+                admin.execute("DROP FUNCTION runtime.reject_pending_commit()")
+        # The capacity is free: another admission delivers at once, and so does the first.
+        other = self.ok(await self.call(
+            "deliver", {"admission_id": second["admission_id"]}, handlers=handlers,
+        ))
+        self.assertEqual(1, other["delivery_attempt"])
 
 
 class PostgresResultImportTransport(
@@ -1053,10 +1214,14 @@ class PostgresSafety(DisposableCase, unittest.TestCase):
         store = AdmittedInputStore(self.connection())
         record = store.admit(k12.manifest())
         store.seal(record.admission_id)
-        store.begin_delivery(record.admission_id)
-        store.expire(record.admission_id)
-        with self.assertRaises(AdmittedInputConflict):
-            store.record_delivery(record.admission_id, record.manifest.manifest_digest)
+        store.expire(
+            record.admission_id,
+            delivery_attempt=store.begin_delivery(record.admission_id).delivery_attempt,
+        )
+        with self.assertRaises(AdmittedInputError):
+            store.record_delivery(
+                record.admission_id, record.manifest.manifest_digest, delivery_attempt=1,
+            )
         self.assertEqual(AdmittedInputState.EXPIRED, store.get(record.admission_id).state)
 
     def test_admission_read_check_write_obeys_transaction_lock(self):

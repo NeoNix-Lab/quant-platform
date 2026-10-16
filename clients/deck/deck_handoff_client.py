@@ -4,9 +4,11 @@
 ADR-0069 section 8. This client speaks exactly two J02 message families over
 WSS/mTLS, with the deck's own credential:
 
-- ``j02-admitted-input-v1`` (scope ``j02.admitted_input.read``): ``admit``,
+- ``j02-admitted-input-v2`` (scope ``j02.admitted_input.read``): ``admit``,
   ``manifest``, ``deliver``, ``acknowledge``, and the J14 ``resume`` of each
-  delivered member;
+  delivered member. Every ``acknowledge`` names the ``delivery_attempt`` that
+  ``deliver`` returned (ADR-0064 Amendment 1); :meth:`DeckHandoffClient.end_pending_attempt`
+  ends an attempt whose ``deliver`` response was lost;
 - ``j02-result-import-v1`` (scope ``j02.result.submit``): ``upload_output`` and
   ``submit``.
 
@@ -57,7 +59,7 @@ import uuid
 import websockets
 from websockets.exceptions import ConnectionClosed, InvalidMessage
 
-ADMITTED_INPUT_FAMILY = "j02-admitted-input-v1"
+ADMITTED_INPUT_FAMILY = "j02-admitted-input-v2"
 ADMITTED_INPUT_REQUEST_VERSION = ADMITTED_INPUT_FAMILY + "-request-v1"
 ADMITTED_INPUT_RESPONSE_VERSION = ADMITTED_INPUT_FAMILY + "-response-v1"
 ADMITTED_INPUT_SCOPE = "j02.admitted_input.read"
@@ -127,6 +129,7 @@ class Admission:
     manifest_digest: str
     manifest: Mapping[str, Any]
     state: str
+    delivery_attempt: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -552,6 +555,7 @@ class DeckHandoffClient:
             digest = result["manifest_digest"]
             admission_id = result["admission_id"]
             state = result["state"]
+            attempt = result["delivery_attempt"]
         except KeyError as error:
             raise WireIncompatible(f"admission document is missing {error}") from error
         if (
@@ -562,7 +566,9 @@ class DeckHandoffClient:
             raise DeliveryIntegrityFailure(
                 "transfer_integrity_failure", None, "manifest does not hash to its identity",
             )
-        return Admission(admission_id, digest, manifest, state)
+        if type(attempt) is not int or attempt < 0:
+            raise WireIncompatible("the admission carries no valid delivery_attempt")
+        return Admission(admission_id, digest, manifest, state, attempt)
 
     async def fetch_inputs(self, admission: Admission) -> AdmittedInput:
         """Deliver, verify every member, acknowledge, and only then hand the bytes over."""
@@ -573,13 +579,17 @@ class DeckHandoffClient:
         delivery = await self._call(
             ADMITTED_INPUT_FAMILY, "deliver", {"admission_id": admission.admission_id},
         )
+        attempt = delivery.get("delivery_attempt")
+        if type(attempt) is not int or attempt < 1:
+            # No attempt number: nothing can be acknowledged, so nothing is trusted.
+            raise WireIncompatible("the delivery carries no valid delivery_attempt")
         members = delivery.get("members")
         if (
             delivery.get("admission_id") != admission.admission_id
             or delivery.get("manifest_digest") != admission.manifest_digest
             or not isinstance(members, list) or len(members) != len(content_hashes)
         ):
-            await self._acknowledge_failure(admission, "transfer_integrity_failure", None)
+            await self._acknowledge_failure(admission, attempt, "transfer_integrity_failure", None)
             raise DeliveryIntegrityFailure(
                 "transfer_integrity_failure", None, "the delivery does not describe the admission",
             )
@@ -590,11 +600,11 @@ class DeckHandoffClient:
                     admission, index, descriptor, content_hashes[index], identities[index],
                 ))
             except _FrameFailure as failure:
-                await self._acknowledge_failure(admission, failure.reason, index)
+                await self._acknowledge_failure(admission, attempt, failure.reason, index)
                 raise DeliveryIntegrityFailure(failure.reason, index, str(failure)) from failure
         await self._call(ADMITTED_INPUT_FAMILY, "acknowledge", {
-            "admission_id": admission.admission_id, "outcome": "delivered",
-            "manifest_digest": admission.manifest_digest,
+            "admission_id": admission.admission_id, "delivery_attempt": attempt,
+            "outcome": "delivered", "manifest_digest": admission.manifest_digest,
             "failure_reason": None, "failed_member_index": None,
         })
         return AdmittedInput(
@@ -648,12 +658,31 @@ class DeckHandoffClient:
             raise _FrameFailure("transfer_integrity_failure", "payload is not UTF-8") from error
 
     async def _acknowledge_failure(
-        self, admission: Admission, reason: str, member_index: int | None,
+        self, admission: Admission, attempt: int, reason: str, member_index: int | None,
     ) -> None:
         await self._call(ADMITTED_INPUT_FAMILY, "acknowledge", {
-            "admission_id": admission.admission_id, "outcome": "failed", "manifest_digest": None,
+            "admission_id": admission.admission_id, "delivery_attempt": attempt,
+            "outcome": "failed", "manifest_digest": None,
             "failure_reason": reason, "failed_member_index": member_index,
         })
+
+    async def end_pending_attempt(self, admission_id: str) -> Admission:
+        """End the attempt of a delivery whose response was lost (ADR-0064 Amendment 1, point 5).
+
+        Reads the admission, and if it is ``DELIVERY_PENDING`` reports *that*
+        attempt as failed (``delivery_interrupted``) so the sealed admission can
+        be delivered again. A report made against a number that has since been
+        replaced is refused by the server (``delivery_attempt_mismatch``) and
+        ends nothing. Any other state is returned as read.
+        """
+
+        admission = await self.manifest(admission_id)
+        if admission.state == "DELIVERY_PENDING":
+            await self._acknowledge_failure(
+                admission, admission.delivery_attempt, "delivery_interrupted", None,
+            )
+            admission = await self.manifest(admission_id)
+        return admission
 
     # -- K13: result import -------------------------------------------------------
 

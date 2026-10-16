@@ -153,8 +153,10 @@ class ResultImportTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         if key not in self._delivered:
             admitted = self.admissions.admit(manifest(**overrides))
             sealed = self.admissions.seal(admitted.admission_id)
-            self.admissions.begin_delivery(sealed.admission_id)
-            self.admissions.record_delivery(sealed.admission_id, sealed.manifest.manifest_digest)
+            self.admissions.record_delivery(
+                sealed.admission_id, sealed.manifest.manifest_digest,
+                delivery_attempt=self.admissions.begin_delivery(sealed.admission_id).delivery_attempt,
+            )
             self._delivered[key] = sealed.manifest
         return self._delivered[key]
 
@@ -565,8 +567,10 @@ class ResultImportTransportV1Tests(unittest.IsolatedAsyncioTestCase):
         twin_admissions = AdmittedInputStore(self._connect(":memory:"))
         admitted = twin_admissions.admit(bundle.consumed_manifest)
         twin_admissions.seal(admitted.admission_id)
-        twin_admissions.begin_delivery(admitted.admission_id)
-        twin_admissions.record_delivery(admitted.admission_id, admitted.manifest.manifest_digest)
+        twin_admissions.record_delivery(
+            admitted.admission_id, admitted.manifest.manifest_digest,
+            delivery_attempt=twin_admissions.begin_delivery(admitted.admission_id).delivery_attempt,
+        )
         twin = GovernedResultImportService(
             twin_admissions, ExperimentRepository(FakeConnection()),
             GovernedResultEvidenceStore(self._connect(":memory:")),

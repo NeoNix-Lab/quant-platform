@@ -88,7 +88,7 @@ _FAMILY_OPERATION_SCOPES = {
         "submit": "j02.jobs.submit", "cancel": "j02.jobs.submit",
         "status": "j02.jobs.read", "result": "j02.jobs.read",
     },
-    "j02-admitted-input-v1": dict.fromkeys(
+    "j02-admitted-input-v2": dict.fromkeys(
         ("admit", "manifest", "deliver", "acknowledge"), "j02.admitted_input.read",
     ),
     "j02-result-import-v1": dict.fromkeys(("upload_output", "submit"), "j02.result.submit"),
@@ -834,7 +834,8 @@ async def _serve_framed_resume(
     frames = ()
     if outcome is None:
         try:
-            frames = transfers.resume(request, owner=owner)
+            # The transfer's owner may consult state (an admission) with I/O.
+            frames = await asyncio.to_thread(transfers.resume, request, owner=owner)
         except FramedResultTransportError as error:
             outcome = error.outcome
     if outcome is not None:

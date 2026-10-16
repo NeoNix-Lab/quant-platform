@@ -172,7 +172,7 @@ class FamilyAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         for family, operation in (
             ("j02-strategy-v1", "compose"), ("j02-validation-v1", "build_folds"),
             ("j02-training-v1", "train_evaluate"), ("j02-job-v1", "submit"),
-            ("j02-admitted-input-v1", "admit"), ("j02-result-import-v1", "submit"),
+            ("j02-admitted-input-v2", "admit"), ("j02-result-import-v1", "submit"),
         ):
             with self.subTest(family=family):
                 socket, _, legacy = await self.exchange(SCOPES, envelope(
@@ -191,7 +191,7 @@ class FamilyAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             ("j02-job-v1", "cancel", "j02.jobs.submit"),
             ("j02-job-v1", "status", "j02.jobs.read"),
             ("j02-job-v1", "result", "j02.jobs.read"),
-            ("j02-admitted-input-v1", "deliver", "j02.admitted_input.read"),
+            ("j02-admitted-input-v2", "deliver", "j02.admitted_input.read"),
             ("j02-result-import-v1", "submit", "j02.result.submit"),
         )
         for family, operation, required in cases:
