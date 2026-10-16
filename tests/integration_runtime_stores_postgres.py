@@ -43,6 +43,9 @@ from quant_platform.application.governed_result_import import (  # noqa: E402
     GovernedResultEvidenceStore, GovernedResultImportError, GovernedResultImportService,
     GovernedResultRefused, ResultOutputContractV1,
 )
+from quant_platform.application.result_import_composition import (  # noqa: E402
+    governed_result_import_service_provider,
+)
 from quant_platform.application.job_dispatch import (  # noqa: E402
     DATA_LOCAL_JOB_REGISTRY, JobHandler, JobHandlerRegistry, JobResult,
 )
@@ -65,6 +68,7 @@ import test_job_dispatch_v1 as dispatch  # noqa: E402
 import test_admitted_input_transport_v1 as admitted_transport  # noqa: E402
 import test_job_transport_v1 as job_transport  # noqa: E402
 import test_result_import_transport_v1 as result_import  # noqa: E402
+import test_result_import_composition_v1 as k13_composition  # noqa: E402
 import api_server  # noqa: E402  (tools/api_server.py: the API host's commit record)
 import test_governed_result_import_v1 as k13  # noqa: E402
 
@@ -895,6 +899,95 @@ class PostgresResultImportTransport(
                 "SELECT payload FROM runtime.governed_result_bundles WHERE bundle_digest = %s",
                 (bundle_digest,),
             ).fetchone()[0]
+
+
+class PostgresK13Composition(DisposableCase, k13_composition.K13CompositionV1Tests):
+    """#392: the K13 factory and registry over the runtime schema as the API login.
+
+    Every request opens its own autocommit connection of the login; the admission
+    store, the Experiment repository and the evidence ledger share it.
+    """
+
+    def setUp(self):
+        DisposableCase.setUp(self)
+        k13_composition.K13CompositionV1Tests.setUp(self)
+
+    def build_backend(self):
+        self.admissions = AdmittedInputStore(self.connection())
+        self.experiments = ExperimentRepository(self.connection())
+        self.service_provider = self.provider_for("API")
+
+    def provider_for(self, role):
+        @contextmanager
+        def connections():
+            connection = connect(role)
+            try:
+                yield connection
+            finally:
+                connection.close()
+        return governed_result_import_service_provider(connections, self.staging)
+
+    def bundle_rows(self):
+        return self.admin_count("runtime.governed_result_bundles")
+
+    def admin_count(self, table):
+        with connect("ADMIN") as admin:
+            return admin.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+
+    def stored_payload(self, bundle_digest):
+        with connect("ADMIN") as admin:
+            return admin.execute(
+                "SELECT payload FROM runtime.governed_result_bundles WHERE bundle_digest = %s",
+                (bundle_digest,),
+            ).fetchone()[0]
+
+    def test_the_worker_login_cannot_register_a_result(self):
+        data, bundle = self.role_bundle("metrics", "deck-run-1")
+        self.stage(data)
+        self.transport = k13_composition.ResultImportTransport(self.provider_for("WORKER"), self.staging)
+        with self.assertRaises(k13_composition.ConsumerApiError) as raised:
+            self.submit(bundle)
+        self.assertEqual("integrity_failure", raised.exception.code.value)
+        self.assertEqual(0, self.bundle_rows())
+        self.assertEqual(0, self.admin_count("experiment.runs"))
+        self.assertEqual(0, self.admin_count("experiment.artifacts"))
+
+    def test_the_experiment_write_and_the_evidence_are_one_transaction_through_the_provider(self):
+        data, bundle = self.role_bundle("metrics", "deck-run-1")
+        self.stage(data)
+        with connect("ADMIN") as admin:
+            admin.execute(
+                "CREATE FUNCTION runtime.reject_output_row() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                "BEGIN RAISE EXCEPTION 'evidence row refused'; END $$"
+            )
+            admin.execute(
+                "CREATE TRIGGER reject_output_row BEFORE INSERT ON runtime.governed_result_outputs "
+                "FOR EACH ROW EXECUTE FUNCTION runtime.reject_output_row()"
+            )
+        try:
+            with self.assertRaises(k13_composition.ConsumerApiError):
+                self.submit(bundle)
+            # The evidence row failed after the Experiment write: nothing of it remains.
+            self.assertEqual(0, self.admin_count("experiment.runs"))
+            self.assertEqual(0, self.admin_count("experiment.artifacts"))
+            self.assertEqual(0, self.bundle_rows())
+        finally:
+            with connect("ADMIN") as admin:
+                admin.execute("DROP TRIGGER reject_output_row ON runtime.governed_result_outputs")
+                admin.execute("DROP FUNCTION runtime.reject_output_row()")
+        # With the fault removed an identical resubmission registers once.
+        first = self.submit(bundle)
+        self.assertEqual(first, self.submit(bundle))
+        self.assertEqual(1, self.admin_count("experiment.runs"))
+        self.assertEqual(1, self.bundle_rows())
+
+    def test_the_registration_is_committed_and_visible_to_another_login(self):
+        data, bundle = self.role_bundle("predictions", "deck-run-1")
+        self.stage(data)
+        self.submit(bundle)
+        self.assertEqual(1, self.admin_count("experiment.runs"))
+        self.assertEqual(1, self.admin_count("experiment.artifacts"))
+        self.assertEqual(1, self.admin_count("runtime.governed_result_outputs"))
 
 
 class PostgresResults(DisposableCase, k13.GovernedResultImportV1Tests):

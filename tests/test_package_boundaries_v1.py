@@ -99,6 +99,7 @@ OWNERS = {
     "quant_platform.application.admitted_input_transport": "application",
     "quant_platform.application.feature_provider_identity": "application",
     "quant_platform.application.result_import_transport": "application",
+    "quant_platform.application.result_import_composition": "application",
     "quant_platform.application.job_transport": "application",
     "quant_platform.application.job_worker_runtime": "application",
     "quant_platform.application.runtime_store": "application",
