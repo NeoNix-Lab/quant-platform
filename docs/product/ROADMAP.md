@@ -78,6 +78,7 @@ Topology v1 (PR #322, #326)                         J10/J12/J13 in-process only;
 DG-K Process Topology v1                         COMPLETE within recorded bounds (operator closeout #381; ADR-0068,
                                                     ADR-0069; P01-P06 on implement/dgk; not composed in a host,
                                                     no Golden proof claimed)
+DG-K2 Server/deck deployment composition        OPEN design gate (#382/#383; provisional name; S01-S08 registered, none authorized)
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
@@ -100,18 +101,22 @@ Completed checkpoints are credited and must not be re-proved absent a concrete i
 ## Roadmap vNext planning state
 
 ```text
-TOTAL_ATOMS                     104
-CLASSIFIED_ATOMS                104
+TOTAL_ATOMS                     112
+CLASSIFIED_ATOMS                112
 UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     92 / 104 = 88.5%
-OPEN_BLOCKING                   4
-OPEN_DEFERABLE                  8
-ROADMAP_DEFINED                 92 + 4 + 8 = 104
-ROADMAP_PLANNING_COMPLETENESS   104 / 104 = 100%
-IMPLEMENTATION_COMPLETE         86 / 104 = 82.7%
+SEMANTIC_FROZEN_OR_RESOLVED     92 / 112 = 82.1%
+OPEN_BLOCKING                   11
+OPEN_DEFERABLE                  9
+ROADMAP_DEFINED                 92 + 11 + 9 = 112
+ROADMAP_PLANNING_COMPLETENESS   112 / 112 = 100%
+IMPLEMENTATION_COMPLETE         86 / 112 = 76.8%
 ```
 
-DG-K closeout (#381): `P01`, `P02`, `P03`, `P04a`, `P04b`, `P05a`, `P05b` and `P06` move from
+DG-K2 registration (#382): eight candidate atoms `S01`-`S08` (`OPEN_BLOCKING` except the deferable `S08`) are added,
+all `MISSING`. No existing atom changes state; the percentages fall because the inventory grows from 104 to 112
+atoms (semantic 88.5% -> 82.1%; implementation 82.7% -> 76.8%), not because anything regressed.
+
+Earlier, DG-K closeout (#381): `P01`, `P02`, `P03`, `P04a`, `P04b`, `P05a`, `P05b` and `P06` move from
 `MISSING` to `COMPLETE` (78 -> 86), each within the bound recorded in
 `CAPABILITY_DAG.md`; no decision state changes (semantic score stays 88.5%).
 
@@ -153,6 +158,7 @@ DG-H  Operational safety
 DG-I  API transport / client convergence        RESOLVED / IMPLEMENTED
 DG-J  Remote Service Topology (Wave 8)           RESOLVED / IMPLEMENTED
 DG-K  Process Topology v1                        RESOLVED / IMPLEMENTED within recorded bounds (ADR-0068, ADR-0069; closeout #381)
+DG-K2 Server/deck deployment composition         OPEN (design gate #383; registered by #382; provisional name)
 ```
 
 Important current boundaries:
@@ -170,6 +176,7 @@ Explicit deferables — second-provider resolution, exact L3/MBO semantics, Data
 
 - DG-J: all six gates resolved (ADR-0062 through ADR-0067); see `docs/architecture/OPEN_DECISIONS.md` for the full G1-G6 disposition text. `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` are frozen and implemented (Wave 8 closeout #327, within recorded bounds); `J11` remains `OPEN_DEFERABLE`.
 - DG-K: Process Topology v1 is resolved (#318 registration, #319 design gate: ADR-0068 process topology v1, ADR-0069 J02 carriage of consumer seams and deck handoff v1). `P01`-`P06` are `FROZEN`/`COMPLETE` within recorded bounds (operator closeout #381), merged into `implement/dgk`, not composed in any executable and without a Golden proof; owner inputs fix identity-preserving canonical profiles, hosts in `tools/`, one J03 worker, a free server with data-local J03 handlers only, heavy compute on the deck on its own initiative, and `J11` not planned. See `OPEN_DECISIONS.md` (DG-K).
+- DG-K2 (provisional): registered by #382 after the DG-K closeout; the single design gate is #383. It decides how the DG-K building blocks are composed into the deployable server/deck split (K12 authority, K13 composition, API host with TLS/mTLS, credential and trust operations, deck workload library, deployment units, real-topology proof). Nothing under it is authorized; Omega adoption is out of scope. Default proposed placement: before Wave 9, because the split is the precondition for any remote consumer; the order remains the maintainer's.
 
 ## Operational dependency direction
 
@@ -224,8 +231,8 @@ DG-K Process Topology v1 is closed by operator closeout (issue #381): `P01`-`P06
 implemented on `implement/dgk` within the bounds recorded in `CAPABILITY_DAG.md`.
 Promotion into `main` is the operator's separate PR. No executable composes the
 new families, no data-local J03 handler ships and nothing is proven on the real
-topology; the follow-on scope that would do so is registered by its own governance
-issue and is not authorized by this closeout.
+topology; the follow-on scope that would do so, DG-K2 (provisional name), is registered by
+governance issue #382 as an open design gate (#383) and authorizes nothing.
 
 No new runtime/product frontier is authorized by this closeout, the Wave 8
 closeout or the stabilization line. H06, I06-I07, J07/J08, RL, live broker execution, second
@@ -252,6 +259,7 @@ Wave 8  Full Platform API & Remote Service Topology v1    COMPLETE (J03,J09,J10,
                                                            deferred; no Golden proof claimed; operator closeout
                                                            #327). J02 carriage of J10/J12/J13 moves to DG-K P05.
 DG-K    Process Topology v1 (design-gate line, not a wave) COMPLETE within recorded bounds (operator closeout #381); before Wave 9
+DG-K2   Server/deck deployment composition (provisional)  OPEN design gate (#382/#383); S01-S08 registered, none authorized
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL; harvest-audit
                                                            evidence sources: ml_core (already the Wave 5 legacy
                                                            baseline), JJJerome/mbt_gym, sadighian/crypto-rl
