@@ -26,9 +26,17 @@ from quant_platform.application import (  # noqa: E402
     record_deployment_commit,
     run_api_transport_server,
 )
+from quant_platform.application.api_host_composition import (  # noqa: E402
+    ApiHostComposition,
+    ApiHostCompositionError,
+    ApiHostOptions,
+    compose_api_host,
+    parse_families,
+)
 
 
 EXIT_RUNTIME_NOT_CONFIGURED = 2
+EXIT_COMPOSITION_REFUSED = 4
 
 
 def _default_dsn() -> str:
@@ -51,7 +59,7 @@ def _record_commit(dsn: str) -> None:
     print(f"deployment_commit={commit}")
 
 
-async def _run(args: argparse.Namespace) -> int:
+async def _run(args: argparse.Namespace, composition: ApiHostComposition) -> int:
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -73,14 +81,27 @@ async def _run(args: argparse.Namespace) -> int:
         batch_size=args.batch_size,
         max_result_rows=args.max_result_rows,
         allow_non_loopback=args.allow_non_loopback,
+        remote_security=composition.remote_security,
     )
     print("=== J02 API transport server v1 ===")
     print(f"host={config.host}")
     print(f"port={config.port}")
     print(f"batch_size={config.batch_size}")
     print(f"max_result_rows={config.max_result_rows}")
+    for notice in composition.notices:
+        print(notice)
     _record_commit(args.runtime_dsn)
-    await run_api_transport_server(config, stop_event=stop_event)
+    if composition.family_handlers:
+        # Opt-in composition (ADR-0072 section 3): one shared J14 store, resumable
+        # only under the scopes of the families that frame results.
+        await run_api_transport_server(
+            config, stop_event=stop_event,
+            family_handlers=composition.family_handlers,
+            framed_transfers=composition.framed_transfers,
+            framed_resume_scopes=composition.framed_resume_scopes or None,
+        )
+    else:
+        await run_api_transport_server(config, stop_event=stop_event)
     print("J02_API_TRANSPORT_SERVER: STOPPED")
     return 0
 
@@ -108,6 +129,27 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("QP_API_ALLOW_NON_LOOPBACK", "").lower() in {"1", "true", "yes"},
         help="Permit binding to a non-loopback interface; authentication remains out of scope for J02 v1",
     )
+    parser.add_argument(
+        "--tls-certificate", default=os.environ.get("QP_API_TLS_CERTIFICATE", ""),
+        help="server certificate (PEM) for WSS with mutual TLS (ADR-0063)",
+    )
+    parser.add_argument(
+        "--tls-private-key", default=os.environ.get("QP_API_TLS_PRIVATE_KEY", ""),
+        help="server private key (PEM); a file outside the repository",
+    )
+    parser.add_argument(
+        "--client-trust-anchor", default=os.environ.get("QP_API_CLIENT_TRUST_ANCHOR", ""),
+        help="CA certificate (PEM) the client certificates must chain to",
+    )
+    parser.add_argument(
+        "--principals-file", default=os.environ.get("QP_API_PRINCIPALS_FILE", ""),
+        help="JSON mapping of client certificate fingerprints to principals and scopes",
+    )
+    parser.add_argument(
+        "--families", default=os.environ.get("QP_API_FAMILIES", ""),
+        help="comma-separated subset of strategy,validation,training,jobs,admitted-input,"
+             "result-import; the default is none (the J02 v1 market-data server)",
+    )
     args = parser.parse_args(argv)
     if not args.runtime_dsn.strip():
         # Checked before anything binds or connects: no transport may start
@@ -118,7 +160,21 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EXIT_RUNTIME_NOT_CONFIGURED
-    return asyncio.run(_run(args))
+    try:
+        composition = compose_api_host(ApiHostOptions(
+            families=parse_families(args.families),
+            tls_certificate=args.tls_certificate,
+            tls_private_key=args.tls_private_key,
+            client_trust_anchor=args.client_trust_anchor,
+            principals_file=args.principals_file,
+            catalog_dsn=args.dsn,
+            runtime_dsn=args.runtime_dsn,
+        ))
+    except ApiHostCompositionError as error:
+        # Before anything binds, connects or records the deployment commit.
+        print(f"api_server: FATAL: {error}", file=sys.stderr)
+        return EXIT_COMPOSITION_REFUSED
+    return asyncio.run(_run(args, composition))
 
 
 if __name__ == "__main__":

@@ -102,7 +102,13 @@ OWNERS = {
     "quant_platform.application.conformity": "application",
     "quant_platform.application.durable_jobs": "application",
     "quant_platform.application.job_dispatch": "application",
+    "quant_platform.application.api_host_composition": "application",
+    "quant_platform.application.admitted_input_authority": "application",
+    "quant_platform.application.deck_result_bundle": "application",
     "quant_platform.application.admitted_input_transport": "application",
+    "quant_platform.application.feature_provider_identity": "application",
+    "quant_platform.application.result_import_transport": "application",
+    "quant_platform.application.result_import_composition": "application",
     "quant_platform.application.job_transport": "application",
     "quant_platform.application.job_worker_runtime": "application",
     "quant_platform.application.runtime_store": "application",
@@ -124,6 +130,7 @@ OWNERS = {
     "quant_platform.application.storage_relocation": "application",
     "quant_platform.application.strategy_consumer": "application",
     "quant_platform.application.strategy_transport": "application",
+    "quant_platform.application.training_transport": "application",
     "quant_platform.application.training_consumer": "application",
     "quant_platform.application.validation_consumer": "application",
     "quant_platform.application.validation_transport": "application",
@@ -612,7 +619,14 @@ class PackageBoundaryTests(unittest.TestCase):
         clients = client_inventory()
         self.assertIn("clients/tui/market_data_tui.py", clients)
         self.assertIn("clients/app_ui/app.js", clients)
+        self.assertIn("clients/deck/deck_handoff_client.py", clients)
         self.assertEqual([], client_import_violations(clients))
+        # The deck client is a separate trust surface (ADR-0069 section 8): the
+        # scan above must really see an import of the platform inside it.
+        injected = {
+            "clients/deck/deck_handoff_client.py": "from quant_platform.application import x\n",
+        }
+        self.assertTrue(client_import_violations(injected))
 
     def test_migration_ledgers_describe_real_unmigrated_modules(self):
         scripts = script_inventory()

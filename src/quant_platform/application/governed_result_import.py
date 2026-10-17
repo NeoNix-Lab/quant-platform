@@ -238,6 +238,27 @@ class GovernedResultEvidenceStore:
             if existing is not None:
                 raise GovernedResultRefused("conflicting accepted bundle for the same Run/output role")
 
+    def is_recorded(self, bundle: GovernedResultBundleV1) -> bool:
+        """Whether this exact bundle is already accepted (a read; nothing is written).
+
+        The whole canonical payload is compared, not only the digest: a stored
+        bundle with the same digest and another payload is a conflict, never a
+        match. The result lets a transport recognize a re-submission without
+        depending on transient state; the registration itself still goes
+        through :meth:`GovernedResultImportService.import_result`.
+        """
+
+        with self._db.transaction():
+            row = self._db.execute(
+                "SELECT payload FROM governed_result_bundles WHERE bundle_digest = ?",
+                (bundle.bundle_digest,),
+            ).fetchone()
+        if row is None:
+            return False
+        if str(row[0]) != bundle.canonical_payload_v1:
+            raise GovernedResultRefused("bundle digest payload conflicts")
+        return True
+
     def record(self, bundle: GovernedResultBundleV1) -> None:
         """Persist one accepted immutable bundle after the I02 owner succeeds."""
 

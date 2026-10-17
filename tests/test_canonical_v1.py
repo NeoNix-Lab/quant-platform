@@ -101,19 +101,41 @@ class CanonicalV1Tests(unittest.TestCase):
         # application codecs declare their additional usage explicitly rather
         # than weakening the complete source inventory or altering that fixture.
         additional = [{
+            "path": "src/quant_platform/application/l2_market_data.py",
+            "ordinal": 1, "scope": "_event_bytes",
+            "argument_ast": ast.dump(ast.parse("event.stable_dict()", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }, {
             "path": "src/quant_platform/application/validation_transport.py",
             "ordinal": 1, "scope": "_bytes",
             "argument_ast": ast.dump(ast.parse("value", mode="eval").body, include_attributes=False),
             "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
         }, {
-            "path": "src/quant_platform/application/l2_market_data.py",
-            "ordinal": 1, "scope": "_event_bytes",
-            "argument_ast": ast.dump(ast.parse("event.stable_dict()", mode="eval").body, include_attributes=False),
+            "path": "src/quant_platform/application/feature_provider_identity.py",
+            "ordinal": 1, "scope": "_canonical",
+            "argument_ast": ast.dump(ast.parse("value", mode="eval").body, include_attributes=False),
             "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
-        }]  # #338: existing J12 canonical identities, unchanged byte profile.
-        # A14e: the l2_book_events@1 result-size estimate. It is a byte count of the
-        # compact sorted ASCII encoding of one event, not an identity; it declares its
-        # use here instead of weakening the inventory.
+        }, {
+            "path": "src/quant_platform/application/result_import_transport.py",
+            "ordinal": 1, "scope": "_canonical",
+            "argument_ast": ast.dump(ast.parse("value", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }, {
+            "path": "src/quant_platform/application/training_transport.py",
+            "ordinal": 1, "scope": "encode_train_evaluate_message",
+            "argument_ast": ast.dump(ast.parse("message", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }, {
+            "path": "src/quant_platform/application/admitted_input_authority.py",
+            "ordinal": 1, "scope": "partition_identity_text",
+            "argument_ast": ast.dump(ast.parse("identity.stable_dict()", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }]  # #338: existing J12 canonical identities, unchanged byte profile; #339: the J13 wire message; #391: the natural partition identity text.
+        # #342: the feature-provider identity (ADR-0069 s7, the ADR-0068
+        # sorted-compact-ascii-v1 profile) and the size bound of a bundle's JSON
+        # documents; each is one declared call site, no new profile.
+        # A14e adds the L2 event-size encoding with the same declared profile;
+        # it is a byte-size estimate, not an identity or a fixture change.
         self.assertEqual(sorted(expected + additional, key=lambda site: (site["path"], site["ordinal"])), sites)
         expected_raw = [[path, ast.dump(ast.parse(expression, mode="eval").body,
                                        include_attributes=False)]

@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from quant_platform.application.admitted_input import (  # noqa: E402
-    AdmittedInputConflict, AdmittedInputState, AdmittedInputStore,
+    AdmittedInputConflict, AdmittedInputError, AdmittedInputState, AdmittedInputStore,
 )
 from quant_platform.application.durable_jobs import (  # noqa: E402
     DurableJobConflict, DurableJobStore, EffectSafety, JobState,
@@ -43,6 +43,11 @@ from quant_platform.application.governed_result_import import (  # noqa: E402
     GovernedResultEvidenceStore, GovernedResultImportError, GovernedResultImportService,
     GovernedResultRefused, ResultOutputContractV1,
 )
+from quant_platform.application.result_import_composition import (  # noqa: E402
+    governed_result_import_service_provider,
+)
+from quant_platform.application.api_host_composition import compose_api_host  # noqa: E402
+from quant_platform.application.market_data import ConsumerApiError  # noqa: E402
 from quant_platform.application.job_dispatch import (  # noqa: E402
     DATA_LOCAL_JOB_REGISTRY, JobHandler, JobHandlerRegistry, JobResult,
 )
@@ -53,6 +58,9 @@ from quant_platform.application.job_worker_runtime import (  # noqa: E402
     recorded_deployment_commit,
 )
 from quant_platform.experiments import ExperimentRepository, RunState  # noqa: E402
+from quant_platform.application.framed_result_transport import (  # noqa: E402
+    FramedResultConfig, FramedResultTransferStore,
+)
 from quant_platform.experiments.accounting import (  # noqa: E402
     TrialAttemptResult, record_trial_attempt,
 )
@@ -61,8 +69,12 @@ import test_durable_job_runtime_v1 as j03  # noqa: E402
 import test_job_dispatch_v1 as dispatch  # noqa: E402
 import test_admitted_input_transport_v1 as admitted_transport  # noqa: E402
 import test_job_transport_v1 as job_transport  # noqa: E402
+import test_result_import_transport_v1 as result_import  # noqa: E402
+import test_api_host_composition_v1 as api_host  # noqa: E402
+import test_result_import_composition_v1 as k13_composition  # noqa: E402
 import api_server  # noqa: E402  (tools/api_server.py: the API host's commit record)
 import test_governed_result_import_v1 as k13  # noqa: E402
+import split_topology_proof_v1 as split_proof  # noqa: E402
 
 
 def connect(role: str, *, autocommit: bool = True):
@@ -669,6 +681,71 @@ class PostgresInputs(DisposableCase, k12.AdmittedInputManifestV1Tests):
     def store(self):
         return AdmittedInputStore(self.connection())
 
+    def test_concurrent_delivery_starts_record_exactly_one_attempt(self):
+        """#357: the attempt number is written with the state, under the store's lock."""
+
+        store = self.store()
+        sealed = store.seal(store.admit(k12.manifest()).admission_id)
+
+        def begin(_):
+            with connect("API") as connection:
+                connection.execute("SET statement_timeout = '5s'")
+                try:
+                    return AdmittedInputStore(connection).begin_delivery(sealed.admission_id).delivery_attempt
+                except AdmittedInputConflict:
+                    return None
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(begin, range(4)))
+        self.assertEqual([1], [attempt for attempt in results if attempt is not None])
+        record = store.get(sealed.admission_id)
+        self.assertEqual((AdmittedInputState.DELIVERY_PENDING, 1), (record.state, record.delivery_attempt))
+
+    def test_a_stale_report_loses_to_a_concurrent_newer_attempt(self):
+        store = self.store()
+        sealed = store.seal(store.admit(k12.manifest()).admission_id)
+        store.begin_delivery(sealed.admission_id)  # attempt 1
+        digest = sealed.manifest.manifest_digest
+
+        def stale(_):
+            with connect("API") as connection:
+                connection.execute("SET statement_timeout = '5s'")
+                try:
+                    AdmittedInputStore(connection).record_delivery(
+                        sealed.admission_id, digest, delivery_attempt=1,
+                    )
+                    return "applied"
+                except AdmittedInputError as error:
+                    return type(error).__name__
+
+        def newer(_):
+            with connect("API") as connection:
+                connection.execute("SET statement_timeout = '5s'")
+                other = AdmittedInputStore(connection)
+                try:
+                    other.record_delivery_failure(
+                        sealed.admission_id, "delivery_interrupted", delivery_attempt=1,
+                    )
+                    return other.begin_delivery(sealed.admission_id).delivery_attempt
+                except AdmittedInputError:
+                    return None  # the stale report ended attempt 1 first
+
+        # The two orders are both legal: the stale report runs first (applied to the
+        # attempt it names) or after the newer attempt began (refused). It is never
+        # applied to attempt 2.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reported, started = pool.submit(stale, 0), pool.submit(newer, 0)
+            outcome, attempt = reported.result(), started.result()
+        record = store.get(sealed.admission_id)
+        if outcome == "applied":
+            self.assertEqual(AdmittedInputState.DELIVERED, record.state)  # attempt 1 ended; the newer one conflicted
+        else:
+            self.assertEqual(
+                (AdmittedInputState.DELIVERY_PENDING, 2, None),
+                (record.state, record.delivery_attempt, record.delivery_failure_reason),
+            )
+            self.assertEqual(2, attempt)
+
 
 class PostgresAdmittedInputTransport(
     DisposableCase, admitted_transport.AdmittedInputTransportV1Tests
@@ -691,6 +768,350 @@ class PostgresAdmittedInputTransport(
             finally:
                 connection.close()
         return session
+
+    async def test_a_commit_refused_by_postgresql_after_publication_leaves_nothing_recoverable(self):
+        """#357 review: the refusal comes from the database, at COMMIT, not from the callback.
+
+        A deferred constraint trigger rejects the move to DELIVERY_PENDING when the
+        transaction commits, after the members were published. State and attempt
+        number are rolled back by PostgreSQL itself; nothing may stay recoverable.
+        """
+
+        admitted = await self.admit()
+        admission_id = admitted["admission_id"]
+        with connect("ADMIN") as admin:
+            admin.execute(
+                "CREATE FUNCTION runtime.reject_pending_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                "BEGIN IF NEW.state = 'DELIVERY_PENDING' THEN "
+                "RAISE EXCEPTION 'commit refused by the test'; END IF; RETURN NEW; END $$"
+            )
+            admin.execute(
+                "CREATE CONSTRAINT TRIGGER reject_pending_commit AFTER UPDATE ON runtime.admitted_inputs "
+                "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION runtime.reject_pending_commit()"
+            )
+        try:
+            response = await self.call("deliver", {"admission_id": admission_id})
+            self.assertEqual("error", response["status"])
+            record = self.open_store().get(admission_id)
+            self.assertEqual((AdmittedInputState.SEALED, 0), (record.state, record.delivery_attempt))
+            self.assertEqual({}, dict(self.transfers._transfers))
+            self.assertEqual({}, dict(self.transfers._pending))
+        finally:
+            with connect("ADMIN") as admin:
+                admin.execute("DROP TRIGGER reject_pending_commit ON runtime.admitted_inputs")
+                admin.execute("DROP FUNCTION runtime.reject_pending_commit()")
+        delivery = self.ok(await self.call("deliver", {"admission_id": admission_id}))
+        self.assertEqual(1, delivery["delivery_attempt"])
+
+    async def test_two_concurrent_deliveries_both_refused_at_commit_free_their_capacity(self):
+        """#357 review: nobody undecided, nobody confirmed: the copies must not hold the slots."""
+
+        import asyncio
+        import threading
+
+        self.transfers = FramedResultTransferStore(
+            FramedResultConfig(
+                frame_payload_bytes=admitted_transport.FRAME_BYTES, max_in_flight_transfers=2,
+            )
+        )
+        handlers = self.routes(bounds=admitted_transport.AdmittedInputBounds(max_members=2))
+        first = self.ok(await self.call("admit", admitted_transport.admit_body(), handlers=handlers))
+        admission_id = first["admission_id"]
+        # A second, unrelated admission: it needs the two slots the first one's members use.
+        second = self.ok(await self.call("admit", admitted_transport.admit_body(
+            operation_identity="strategy-compose-v2",
+        ), handlers=handlers))
+        self.assertNotEqual(admission_id, second["admission_id"])
+
+        barrier = threading.Barrier(2, timeout=10)
+        reserve = FramedResultTransferStore.reserve_many
+
+        def reserve_then_meet(store, *args, **options):
+            reservation = reserve(store, *args, **options)
+            barrier.wait()  # both deliveries hold the same copies before either starts K12
+            return reservation
+
+        with connect("ADMIN") as admin:
+            admin.execute(
+                "CREATE FUNCTION runtime.reject_pending_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                "BEGIN IF NEW.state = 'DELIVERY_PENDING' THEN "
+                "RAISE EXCEPTION 'commit refused by the test'; END IF; RETURN NEW; END $$"
+            )
+            admin.execute(
+                "CREATE CONSTRAINT TRIGGER reject_pending_commit AFTER UPDATE ON runtime.admitted_inputs "
+                "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION runtime.reject_pending_commit()"
+            )
+        try:
+            with mock.patch.object(FramedResultTransferStore, "reserve_many", reserve_then_meet):
+                responses = await asyncio.gather(
+                    self.call("deliver", {"admission_id": admission_id}, handlers=handlers),
+                    self.call("deliver", {"admission_id": admission_id}, handlers=handlers),
+                )
+            self.assertEqual(["error", "error"], [response["status"] for response in responses])
+            record = self.open_store().get(admission_id)
+            self.assertEqual((AdmittedInputState.SEALED, 0), (record.state, record.delivery_attempt))
+            self.assertEqual({}, dict(self.transfers._transfers))
+            self.assertEqual({}, dict(self.transfers._participants))
+        finally:
+            with connect("ADMIN") as admin:
+                admin.execute("DROP TRIGGER reject_pending_commit ON runtime.admitted_inputs")
+                admin.execute("DROP FUNCTION runtime.reject_pending_commit()")
+        # The capacity is free: another admission delivers at once, and so does the first.
+        other = self.ok(await self.call(
+            "deliver", {"admission_id": second["admission_id"]}, handlers=handlers,
+        ))
+        self.assertEqual(1, other["delivery_attempt"])
+
+
+class PostgresResultImportTransport(
+    DisposableCase, result_import.ResultImportTransportV1Tests
+):
+    """#342: the j02-result-import-v1 contract on the runtime schema as the API login.
+
+    K13 registers the Experiment write and the evidence row in one transaction on
+    one connection (ADR-0068 s4), so the service shares one autocommit connection
+    with its repository and ledger.
+    """
+
+    def setUp(self):
+        DisposableCase.setUp(self)
+        result_import.ResultImportTransportV1Tests.setUp(self)
+
+    def build_backend(self):
+        self.admissions = AdmittedInputStore(self.connection())
+        self.shared = self.connection()
+        self.evidence = GovernedResultEvidenceStore(self.shared)
+        self.experiments = ExperimentRepository(self.shared)
+
+    def service_session(self, verify=None):
+        verifier = self.staging.verify_output if verify is None else verify
+
+        @contextmanager
+        def session():
+            yield GovernedResultImportService(
+                self.admissions, self.experiments, self.evidence, verifier, result_import.CONTRACTS,
+            )
+        return session
+
+    def bundle_rows(self):
+        with connect("ADMIN") as admin:
+            return admin.execute("SELECT count(*) FROM runtime.governed_result_bundles").fetchone()[0]
+
+    def stored_payload(self, bundle_digest):
+        with connect("ADMIN") as admin:
+            return admin.execute(
+                "SELECT payload FROM runtime.governed_result_bundles WHERE bundle_digest = %s",
+                (bundle_digest,),
+            ).fetchone()[0]
+
+
+class PostgresK13Composition(DisposableCase, k13_composition.K13CompositionV1Tests):
+    """#392: the K13 factory and registry over the runtime schema as the API login.
+
+    Every request opens its own autocommit connection of the login; the admission
+    store, the Experiment repository and the evidence ledger share it.
+    """
+
+    def setUp(self):
+        DisposableCase.setUp(self)
+        k13_composition.K13CompositionV1Tests.setUp(self)
+
+    def build_backend(self):
+        self.admissions = AdmittedInputStore(self.connection())
+        self.experiments = ExperimentRepository(self.connection())
+        self.service_provider = self.provider_for("API")
+
+    def provider_for(self, role):
+        @contextmanager
+        def connections():
+            connection = connect(role)
+            try:
+                yield connection
+            finally:
+                connection.close()
+        return governed_result_import_service_provider(connections, self.staging)
+
+    def bundle_rows(self):
+        return self.admin_count("runtime.governed_result_bundles")
+
+    def admin_count(self, table):
+        with connect("ADMIN") as admin:
+            return admin.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+
+    def stored_payload(self, bundle_digest):
+        with connect("ADMIN") as admin:
+            return admin.execute(
+                "SELECT payload FROM runtime.governed_result_bundles WHERE bundle_digest = %s",
+                (bundle_digest,),
+            ).fetchone()[0]
+
+    def test_the_worker_login_cannot_register_a_result(self):
+        data, bundle = self.role_bundle("metrics", "deck-run-1")
+        self.stage(data)
+        self.transport = k13_composition.ResultImportTransport(self.provider_for("WORKER"), self.staging)
+        with self.assertRaises(k13_composition.ConsumerApiError) as raised:
+            self.submit(bundle)
+        self.assertEqual("integrity_failure", raised.exception.code.value)
+        self.assertEqual(0, self.bundle_rows())
+        self.assertEqual(0, self.admin_count("experiment.runs"))
+        self.assertEqual(0, self.admin_count("experiment.artifacts"))
+
+    def test_the_experiment_write_and_the_evidence_are_one_transaction_through_the_provider(self):
+        data, bundle = self.role_bundle("metrics", "deck-run-1")
+        self.stage(data)
+        with connect("ADMIN") as admin:
+            admin.execute(
+                "CREATE FUNCTION runtime.reject_output_row() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                "BEGIN RAISE EXCEPTION 'evidence row refused'; END $$"
+            )
+            admin.execute(
+                "CREATE TRIGGER reject_output_row BEFORE INSERT ON runtime.governed_result_outputs "
+                "FOR EACH ROW EXECUTE FUNCTION runtime.reject_output_row()"
+            )
+        try:
+            with self.assertRaises(k13_composition.ConsumerApiError):
+                self.submit(bundle)
+            # The evidence row failed after the Experiment write: nothing of it remains.
+            self.assertEqual(0, self.admin_count("experiment.runs"))
+            self.assertEqual(0, self.admin_count("experiment.artifacts"))
+            self.assertEqual(0, self.bundle_rows())
+        finally:
+            with connect("ADMIN") as admin:
+                admin.execute("DROP TRIGGER reject_output_row ON runtime.governed_result_outputs")
+                admin.execute("DROP FUNCTION runtime.reject_output_row()")
+        # With the fault removed an identical resubmission registers once.
+        first = self.submit(bundle)
+        self.assertEqual(first, self.submit(bundle))
+        self.assertEqual(1, self.admin_count("experiment.runs"))
+        self.assertEqual(1, self.bundle_rows())
+
+    def test_the_registration_is_committed_and_visible_to_another_login(self):
+        data, bundle = self.role_bundle("predictions", "deck-run-1")
+        self.stage(data)
+        self.submit(bundle)
+        self.assertEqual(1, self.admin_count("experiment.runs"))
+        self.assertEqual(1, self.admin_count("experiment.artifacts"))
+        self.assertEqual(1, self.admin_count("runtime.governed_result_outputs"))
+
+
+class PostgresApiHostProviders(DisposableCase, unittest.TestCase):
+    """#395: the providers the API host composes open one runtime connection per request.
+
+    The routes are driven through their own decode/execute (no listener): what is
+    proved here is that each reaches the runtime schema as the API login and
+    leaves no connection behind. Authorization and the listener are proved in
+    tests/test_api_host_composition_v1.py.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="api_host_pg_")
+        cwd = cls.cwd = Path(cls._tmp.name)
+        pki = api_host.pki
+        pki._generate_ec_key(cwd, "ca.key")
+        pki._self_signed_ca(cwd, key="ca.key", out="ca.crt", cn="Test CA")
+        pki._generate_ec_key(cwd, "server.key")
+        (cwd / "ext.cnf").write_text("subjectAltName=IP:127.0.0.1\n", encoding="utf-8")
+        pki._signed_certificate(
+            cwd, key="server.key", csr="server.csr", cn="127.0.0.1",
+            ca_cert="ca.crt", ca_key="ca.key", out="server.crt", extfile="ext.cnf",
+        )
+        (cwd / "principals.json").write_bytes(api_host.principals_document(
+            api_host.entry("deck", "sha256:" + "ab" * 32, api_host.ALL_SCOPES),
+        ))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def setUp(self):
+        DisposableCase.setUp(self)
+        self.composition = compose_api_host(api_host.ApiHostOptions(
+            families=api_host.FAMILY_NAMES,
+            tls_certificate=str(self.cwd / "server.crt"),
+            tls_private_key=str(self.cwd / "server.key"),
+            client_trust_anchor=str(self.cwd / "ca.crt"),
+            principals_file=str(self.cwd / "principals.json"),
+            catalog_dsn=os.environ["RUNTIME_TEST_API_DSN"],
+            runtime_dsn=os.environ["RUNTIME_TEST_API_DSN"],
+        ))
+
+    def call(self, family, operation, body):
+        handler = self.composition.family_handlers[(family, f"{family}-request-v1", operation)]
+        return handler.execute(handler.decode_request(body))
+
+    def api_connections(self):
+        with connect("ADMIN") as admin:
+            return admin.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE usename = 'platform_api'"
+            ).fetchone()[0]
+
+    def test_the_job_family_reaches_the_runtime_schema_and_keeps_no_connection(self):
+        before = self.api_connections()
+        for _ in range(3):
+            with self.assertRaises(ConsumerApiError) as raised:
+                self.call("j02-job-v1", "status", {"job_id": "job-v1:" + "0" * 64})
+            self.assertEqual("job_not_found", raised.exception.context["reason"])
+        self.assertEqual(before, self.api_connections())
+
+    def test_the_admission_family_reads_the_runtime_schema_as_the_api_login(self):
+        before = self.api_connections()
+        with self.assertRaises(ConsumerApiError) as raised:
+            self.call(
+                "j02-admitted-input-v2", "manifest", {"admission_id": "admitted-input-v1:" + "0" * 64},
+            )
+        self.assertEqual("invalid_request", raised.exception.code.value)
+        self.assertEqual(before, self.api_connections())
+
+    def test_the_job_family_refuses_an_unregistered_kind_with_the_empty_registry(self):
+        with self.assertRaises(ConsumerApiError) as raised:
+            self.call("j02-job-v1", "submit", {
+                "operation_kind": "materialize", "request_identity": "request-v1:materialize",
+                "canonical_parameters": {}, "input_identities": [],
+                "effect_safety_proof_reference": None,
+            })
+        self.assertEqual("unregistered_operation_kind", raised.exception.context["reason"])
+
+    def composed_training_provider(self):
+        """The repository provider ``compose_api_host`` really hands to the training family."""
+        import quant_platform.application.api_host_composition as module
+
+        with mock.patch.object(
+            module, "training_family_handlers", wraps=module.training_family_handlers,
+        ) as factory:
+            compose_api_host(api_host.ApiHostOptions(
+                families=("training",),
+                tls_certificate=str(self.cwd / "server.crt"),
+                tls_private_key=str(self.cwd / "server.key"),
+                client_trust_anchor=str(self.cwd / "ca.crt"),
+                principals_file=str(self.cwd / "principals.json"),
+                runtime_dsn=os.environ["RUNTIME_TEST_API_DSN"],
+            ))
+        (provider,) = factory.call_args.args
+        return provider
+
+    def test_the_training_provider_yields_a_repository_on_a_per_request_api_connection(self):
+        provider = self.composed_training_provider()
+        before = self.api_connections()
+        seen = []
+        for failure in (None, RuntimeError("boom")):
+            try:
+                with provider() as repository:
+                    self.assertIsInstance(repository, ExperimentRepository)
+                    connection = repository.connection
+                    seen.append(connection)
+                    self.assertFalse(connection.autocommit)  # the repository commits per call
+                    self.assertEqual(
+                        "platform_api", connection.execute("SELECT current_user").fetchone()[0],
+                    )
+                    self.assertEqual(before + 1, self.api_connections())
+                    if failure is not None:
+                        raise failure
+            except RuntimeError:
+                self.assertIsNotNone(failure)
+            self.assertTrue(connection.closed)  # on success and on error alike
+        self.assertIsNot(seen[0], seen[1])  # one connection per request
+        self.assertEqual(before, self.api_connections())
 
 
 class PostgresResults(DisposableCase, k13.GovernedResultImportV1Tests):
@@ -1010,10 +1431,14 @@ class PostgresSafety(DisposableCase, unittest.TestCase):
         store = AdmittedInputStore(self.connection())
         record = store.admit(k12.manifest())
         store.seal(record.admission_id)
-        store.begin_delivery(record.admission_id)
-        store.expire(record.admission_id)
-        with self.assertRaises(AdmittedInputConflict):
-            store.record_delivery(record.admission_id, record.manifest.manifest_digest)
+        store.expire(
+            record.admission_id,
+            delivery_attempt=store.begin_delivery(record.admission_id).delivery_attempt,
+        )
+        with self.assertRaises(AdmittedInputError):
+            store.record_delivery(
+                record.admission_id, record.manifest.manifest_digest, delivery_attempt=1,
+            )
         self.assertEqual(AdmittedInputState.EXPIRED, store.get(record.admission_id).state)
 
     def test_admission_read_check_write_obeys_transaction_lock(self):
@@ -1100,6 +1525,15 @@ class PostgresSafety(DisposableCase, unittest.TestCase):
         DurableJobStore(auto).admit(j03.admission())
         self.assertFalse(auto.closed)
         self.assertEqual(psycopg.pq.TransactionStatus.IDLE, auto.info.transaction_status)
+
+
+class PostgresSplitTopology(DisposableCase, split_proof.SplitTopologyProofV1):
+    """#397 (ADR-0072 section 7, part 1): the hermetic proof of the split server/deck topology.
+
+    The API and the worker run as separate processes from the units' commands, over TLS 1.3 mutual TLS with
+    credentials issued by infra/pki, a catalog of generated trades on this database and the deck client and
+    workload module in the test process. See tests/split_topology_proof_v1.py.
+    """
 
 
 if __name__ == "__main__":

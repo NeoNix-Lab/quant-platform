@@ -39,23 +39,21 @@ cd /opt/market-platform
 sudo -v
 set -euo pipefail
 
+# The code is promoted first, by the procedure of DECK_HANDOFF_RUNBOOK.md (Promotion): infra/promote-main.sh, clean tree,
+# fast-forward only, on the branch main. This runbook never switches or merges branches: live-ingest runs the same commit as
+# the API and the worker (ADR-0068 section 8), whatever that promotion moved the checkout to.
 git status --short --branch
 test -z "$(git status --porcelain)"
 git remote get-url origin
-
-git fetch origin governance/ingest-server-production-v1-scope codex/issue-135-lipr06a-supervised-deployment
-if git show-ref --verify --quiet refs/heads/codex/issue-135-lipr06a-supervised-deployment; then
-  git switch codex/issue-135-lipr06a-supervised-deployment
-else
-  git switch --track -c codex/issue-135-lipr06a-supervised-deployment \
-    origin/codex/issue-135-lipr06a-supervised-deployment
-fi
-git merge --ff-only origin/codex/issue-135-lipr06a-supervised-deployment
+test "$(git symbolic-ref --short -q HEAD)" = main
 
 DEPLOYED_SHA="$(git rev-parse HEAD)"
 echo "DEPLOYED_SHA=$DEPLOYED_SHA"
 
-sudo install -d -m 0750 -o root -g marketdata /etc/quant-platform
+# /etc/quant-platform is shared with the API and worker units (DECK_HANDOFF_RUNBOOK.md), which run as users outside
+# marketdata: root:root 0751 lets every unit's user reach its own files without listing the directory; the files
+# keep their own owner and mode. Do not narrow it to root:marketdata 0750.
+sudo install -d -m 0751 -o root -g root /etc/quant-platform
 sudo install -m 0644 -o root -g root \
   infra/systemd/quant-platform-live-ingest.service \
   /etc/systemd/system/quant-platform-live-ingest.service

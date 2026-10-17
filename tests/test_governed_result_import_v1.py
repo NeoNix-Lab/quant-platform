@@ -111,8 +111,10 @@ class GovernedResultImportV1Tests(unittest.TestCase):
     def delivered_manifest(self) -> AdmittedInputManifestV1:
         admitted = self.admissions.admit(manifest())
         sealed = self.admissions.seal(admitted.admission_id)
-        self.admissions.begin_delivery(sealed.admission_id)
-        self.admissions.record_delivery(sealed.admission_id, sealed.manifest.manifest_digest)
+        self.admissions.record_delivery(
+            sealed.admission_id, sealed.manifest.manifest_digest,
+            delivery_attempt=self.admissions.begin_delivery(sealed.admission_id).delivery_attempt,
+        )
         return sealed.manifest
 
     def bundle(self, identity: RunIdentity | None = None, *, consumed: AdmittedInputManifestV1 | None = None) -> GovernedResultBundleV1:
@@ -166,8 +168,10 @@ class GovernedResultImportV1Tests(unittest.TestCase):
 
         expiring = self.admissions.admit(manifest(request="request-v1:expiring"))
         sealed = self.admissions.seal(expiring.admission_id)
-        self.admissions.begin_delivery(sealed.admission_id)
-        self.admissions.expire(sealed.admission_id)
+        self.admissions.expire(
+            sealed.admission_id,
+            delivery_attempt=self.admissions.begin_delivery(sealed.admission_id).delivery_attempt,
+        )
         expired_identity = run("expired")
         expired = GovernedResultBundleV1(
             sealed.admission_id, sealed.manifest.manifest_digest, sealed.manifest, sealed.manifest.git_identity or "",

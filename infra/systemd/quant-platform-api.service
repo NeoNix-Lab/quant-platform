@@ -1,0 +1,33 @@
+[Unit]
+Description=Quant Platform API server v1 (J02 over WSS/mTLS)
+Documentation=https://github.com/NeoNix-Lab/quant-platform/blob/main/docs/engineering/DECK_HANDOFF_RUNBOOK.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qp-api
+Group=qp-api
+WorkingDirectory=/opt/market-platform
+EnvironmentFile=/etc/quant-platform/api-server.env
+UMask=0027
+# Every option is read from the environment file (see tools/api_server.py). The API records the
+# deployment commit in PostgreSQL before it listens; the worker refuses to start on any other commit.
+ExecStart=/opt/market-platform/.venv/bin/python /opt/market-platform/tools/api_server.py
+Restart=on-failure
+RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=90s
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

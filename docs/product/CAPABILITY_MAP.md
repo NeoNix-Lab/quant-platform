@@ -84,17 +84,17 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | RL | Execution RL contract | OPEN_BLOCKING | MISSING | Execution RL | I07 | DG-G execution-RL branch; structurally separate from strategic RL. |
 | Interfaces | Consumer API semantic boundary | FROZEN | COMPLETE | Application/API | J01 | ADR-0020; semantic API is not a DataGateway wrapper and does not imply transport runtime. |
 | Interfaces | Canonical API transport | RESOLVED | COMPLETE | API Runtime | J02 | ADR-0050; WebSocket transport over the frozen Consumer API semantics, implemented in Wave 7. Amendment 1 froze a 50,000-row/16 MiB result bound; auth/TLS for non-loopback deployment remains explicitly open (DG-J G1). |
-| Runtime | Job runtime | FROZEN | COMPLETE | Runtime | J03 | ADR-0062; durable admission/lifecycle/attempt/recovery record implemented by PR #307 (Wave 8). No dispatcher, worker or PostgreSQL store (DG-K). |
+| Runtime | Job runtime | FROZEN | COMPLETE | Runtime | J03 | ADR-0062; durable admission/lifecycle/attempt/recovery record implemented by PR #307 (Wave 8). No dispatcher, worker or PostgreSQL store (DG-K). Since DG-K (#381): PostgreSQL store, dispatch registry (empty) and single worker host exist. |
 | Clients | CLI | RESOLVED | COMPLETE | Client Layer | J04 | Thin canonical CLI client integrated in Wave 7. |
 | Clients | TUI | RESOLVED | COMPLETE | Client Layer | J05 | Thin canonical TUI client integrated in Wave 7. |
 | Clients | App UI | RESOLVED | COMPLETE | Client Layer | J06 | Thin canonical App UI client integrated in Wave 7. |
 | Runtime | Paper/shadow mode | RESOLVED | MISSING | Runtime | J07 | Vertical gate before live operation. |
 | Runtime | Live product mode | RESOLVED | MISSING | Runtime/Operations | J08 | Requires explicit operational authorization; roadmap state is not authorization. |
 | Interfaces | Authenticated/TLS transport v1 | FROZEN | COMPLETE | API Runtime | J09 | ADR-0063; WSS+mTLS 1.3, exact-fingerprint principal mapping, `j02.market_data.read` scope implemented by PR #310 (Wave 8). |
-| Interfaces | Strategy Consumer-API seam v1 | FROZEN | COMPLETE | Application/API | J10 | ADR-0065 §2; in-process `strategy-compose-v1` seam, PR #308 (Wave 8). Not reachable over J02 (DG-K P05). |
+| Interfaces | Strategy Consumer-API seam v1 | FROZEN | COMPLETE | Application/API | J10 | ADR-0065 §2; in-process `strategy-compose-v1` seam, PR #308 (Wave 8). Not reachable over J02 (DG-K P05). Since DG-K (#381): carried over J02 by `j02-strategy-v1`; opt-in, no host composes it. |
 | Interfaces | Replay Consumer-API seam v1 | OPEN_DEFERABLE | MISSING | Application/API | J11 | ADR-0065 §5 explicitly defers: no accepted identity for `HistoricalReplayRuntime`'s `feature_provider` callable yet. Not planned (owner decision 2026-10-10, DG-K #318): replay runs on the deck over K12/K13. |
-| Interfaces | Validation Consumer-API seam v1 | FROZEN | COMPLETE | Application/API | J12 | ADR-0065 §3 + Amendment 1; in-process Validation seam, PR #312 (Wave 8). Not reachable over J02 (DG-K P05). |
-| Interfaces | Training Consumer-API seam v1 | FROZEN | COMPLETE | Application/API | J13 | ADR-0065 §4 + Amendment 2; in-process bounded Training seam, PR #315 (Wave 8). Not reachable over J02 (DG-K P05). |
+| Interfaces | Validation Consumer-API seam v1 | FROZEN | COMPLETE | Application/API | J12 | ADR-0065 §3 + Amendment 1; in-process Validation seam, PR #312 (Wave 8). Not reachable over J02 (DG-K P05). Since DG-K (#381): carried over J02 by `j02-validation-v1`; opt-in, no host composes it. |
+| Interfaces | Training Consumer-API seam v1 | FROZEN | COMPLETE | Application/API | J13 | ADR-0065 §4 + Amendment 2; in-process bounded Training seam, PR #315 (Wave 8). Not reachable over J02 (DG-K P05). Since DG-K (#381): carried over J02 by `j02-training-v1`; opt-in, no host composes it. |
 | Interfaces | Streaming/live transport extension v1 | FROZEN | COMPLETE | API Runtime | J14 | ADR-0066; `j14-framed-result-v1` framing/verification/resume module, PR #320 (Wave 8). Not yet dispatched by the J02 server; no live family. |
 | Clients | Omega API client adapter v1 | FROZEN | COMPLETE | Client Layer | J15 | ADR-0067; Omega remote client in `clients/omega`, `j02.market_data.read` only, PR #321 (Wave 8). |
 | Operations | Provisioning/fixtures/CI | RESOLVED | COMPLETE | Engineering | K01 | Repository validation foundation complete. |
@@ -108,39 +108,43 @@ Implementation-state vocabulary is exactly `COMPLETE | PARTIAL | MISSING`.
 | Operations | Retention/deletion authority | FROZEN | COMPLETE | Operations | K09 | ADR-0049 freezes retention/deletion authority; PR #211 implements governed deletion and PR #212 proves the bounded Wave 6 storage lifecycle path. |
 | Operations | Checkpoint/recovery | FROZEN | COMPLETE | Operations/Data Plane | K10 | ADR-0042; PR #114 implements persisted checkpoint/recovery and the full hermetic proof matrix; PR #122 supplies the bounded real-server restart/deployed checkpoint-path proof (`K10_REAL_RESTART_PROOF: PASS`). |
 | Governance | Governance-state consistency | RESOLVED | COMPLETE | Governance | K11 | Canonical authority reconciled through Wave 4 closeout by governance issue #147. |
-| Operations | Server-owned admitted-input export/reference v1 | FROZEN | COMPLETE | Operations | K12 | ADR-0064; sealed `AdmittedInputManifestV1`/`admission_id` and delivery states, PR #309 (Wave 8). No physical byte transfer or deck reader. |
-| Operations | Governed experiment-result import/registration v1 | FROZEN | COMPLETE | Operations | K13 | ADR-0064 §3; full-bundle refusal and idempotent import, PR #311 (Wave 8). Not one transaction across PostgreSQL and SQLite (DG-K P02). |
-| Topology | Canonical identity serializer v1 | FROZEN | MISSING | Engineering/Application | P01 | ADR-0068 (#319); named versioned byte profiles, no identity changes. |
-| Topology | Runtime store on PostgreSQL v1 | FROZEN | MISSING | Operations/Application | P02 | ADR-0068 (#319); `runtime` schema for J03/K12/K13; atomic K13 registration. |
-| Topology | Executable host boundaries v1 | FROZEN | MISSING | Engineering | P03 | ADR-0068 (#319); hosts stay in `tools/`, per-host import rules. |
-| Topology | J03 handler registry and dispatch v1 | FROZEN | MISSING | Application | P04a | ADR-0068 (#319); closed data-local handler set. |
-| Topology | Single J03 worker process v1 | FROZEN | MISSING | Runtime | P04b | ADR-0068 (#319); exactly one worker, no broker. |
-| Topology | J02 carriage of synchronous J10/J12/J13 v1 | FROZEN | MISSING | API Runtime | P05a | ADR-0069 (#319); wire messages and one scope per operation family. |
-| Topology | J02 submit/status/result for J03 data-local jobs v1 | FROZEN | MISSING | API Runtime | P05b | ADR-0069 (#319); requires P04b. |
-| Topology | Deck handoff over J02 v1 | FROZEN | MISSING | API Runtime/Operations | P06 | ADR-0069 (#319); K12 byte delivery and K13 submission, deck-side client, feature-provider code identity in the bundle. |
+| Operations | Server-owned admitted-input export/reference v1 | FROZEN | COMPLETE | Operations | K12 | ADR-0064; sealed `AdmittedInputManifestV1`/`admission_id` and delivery states, PR #309 (Wave 8). No physical byte transfer or deck reader. Since DG-K (#381): byte delivery over `j02-admitted-input-v2` and a deck protocol client exist; production authority seams do not. |
+| Operations | Governed experiment-result import/registration v1 | FROZEN | COMPLETE | Operations | K13 | ADR-0064 §3; full-bundle refusal and idempotent import, PR #311 (Wave 8). Not one transaction across PostgreSQL and SQLite (DG-K P02). Since DG-K (#381): registration is one PostgreSQL transaction and submission is carried by `j02-result-import-v1`; not composed in a host. |
+| Topology | Canonical identity serializer v1 | FROZEN | COMPLETE | Engineering/Application | P01 | ADR-0068 (#319); named versioned byte profiles, no identity changes. Closeout #381: PR #344 (issue #330), `quant_platform.canonical`; byte parity on the pinned identity vectors and the two-`PYTHONHASHSEED` cross-process proof are in `tests/test_canonical_v1.py`. |
+| Topology | Runtime store on PostgreSQL v1 | FROZEN | COMPLETE | Operations/Application | P02 | ADR-0068 (#319); `runtime` schema for J03/K12/K13; atomic K13 registration. Closeout #381: PR #349 (issue #331: `runtime` schema, unit-scoped roles, J03/K12/K13 stores on PostgreSQL), PR #350 (issue #332: atomic K13 registration), PR #355 (issue #354: a concurrent identical resubmission is refused). Bound: the confirmation that no production SQLite runtime state exists is operational evidence, not code, and is recorded by the maintainer (#381). |
+| Topology | Executable host boundaries v1 | FROZEN | COMPLETE | Engineering | P03 | ADR-0068 (#319); hosts stay in `tools/`, per-host import rules. Closeout #381: PR #345 (issue #333), per-host import rules in `tests/test_package_boundaries_v1.py`; no host moved. |
+| Topology | J03 handler registry and dispatch v1 | FROZEN | COMPLETE | Application | P04a | ADR-0068 (#319); closed data-local handler set. Closeout #381: PR #351 (issue #334), `application/job_dispatch.py`. Bound: the registry mechanism is complete; `DATA_LOCAL_JOB_REGISTRY` ships **empty**, so no data-local handler exists yet (each enters through its own implementation issue). |
+| Topology | Single J03 worker process v1 | FROZEN | COMPLETE | Runtime | P04b | ADR-0068 (#319); exactly one worker, no broker. Closeout #381: PR #352 (issue #335), `tools/job_worker.py` with the PostgreSQL advisory lock and the process-lifetime lock (ADR-0068 Amendment 1). Bound: with an empty handler registry it has nothing to run. |
+| Topology | J02 carriage of synchronous J10/J12/J13 v1 | FROZEN | COMPLETE | API Runtime | P05a | ADR-0069 (#319); wire messages and one scope per operation family. Closeout #381: PR #346 (issue #336, per-family dispatch and scope enforcement before decode), PR #347 (issue #337, `j02-strategy-v1`), PR #348 (issue #338, `j02-validation-v1`), PR #380 (issue #339, `j02-training-v1` with the J13 reconstruction codec of ADR-0069 Amendment 2 and the pre-decode `register` grant). Bound: application-owned codecs and opt-in family handlers proven over a real WSS/mTLS listener in tests; no executable composes them. |
+| Topology | J02 submit/status/result for J03 data-local jobs v1 | FROZEN | COMPLETE | API Runtime | P05b | ADR-0069 (#319); requires P04b. Closeout #381: PR #353 (issue #340, `j02-job-v1`) and PR #359 (issue #358, multi-body results). Bound: opt-in handlers, not composed in a host, and the data-local registry is empty. |
+| Topology | Deck handoff over J02 v1 | FROZEN | COMPLETE | API Runtime/Operations | P06 | ADR-0069 (#319); K12 byte delivery and K13 submission, deck-side client, feature-provider code identity in the bundle. Closeout #381: PR #356 (issue #341, K12 delivery, now `j02-admitted-input-v2`), PR #361 (issue #342, K13 import and feature-provider identity), PR #366 (issue #343, `clients/deck`), PR #373 (issue #357, delivery-attempt identity, admission-gated resume; ADR-0064 Amendment 1, ADR-0066 Amendment 1, ADR-0069 Amendment 1). Bound: protocol client and server-side transports with test authorities; no production K12 authority, no K13 composition in a host, no deck-side bundle producer, no deployment. |
+| Topology | K12 server authority seams v1 | FROZEN | COMPLETE | Application/Operations | S01 | ADR-0072 §1 (accepted); authorized by #389; implemented (closeout #409). `resolve`/`members`/`read_member` over the DataGateway/catalog for `j02-admitted-input-v2`; closed sets of accepted operation and profile identities; expiry policy values; byte and member bounds. Today only test authorities exist. Credit (#409): PR #398 (issue #391), `application/admitted_input_authority.py`: `DatasetAdmittedInputAuthority` over the DataGateway, manifest built from the open scan metadata without reading a record, dataset selector only (`artifact_inputs_unavailable`). Bound: whole-file, in-memory delivery; the bounds were raised by ADR-0072 Amendment 1 (issue #431, PR #432) to 512 MiB per file, 1 GiB and 16 files per admission; `definition_identities` is empty (the server passes no feature identity). |
+| Topology | K13 composition v1 | FROZEN | COMPLETE | Application/Operations | S02 | ADR-0072 §2 (accepted); authorized by #389; implemented (closeout #409). Closed output-role registry with `ResultOutputContractV1` (replay roles require `replay_feature_provider`), staging bounds, a `GovernedResultImportService` factory over the `runtime` role. Composed in no host today. Credit (#409): PR #400 (issue #392), `application/result_import_composition.py`: the closed six-role registry, the staging bounds and the service factory over one autocommit connection. Bound: the 8 MiB output bound and the staging bounds were not measured on a real output. |
+| Topology | API host composition v1 | FROZEN | COMPLETE | API Runtime | S03 | ADR-0072 §3 (accepted); authorized by #389; implemented (closeout #409). `tools/api_server.py` composes TLS/mTLS (ADR-0063), principals, all DG-K families and the J14 store, with fail-closed startup and per-host import rules. Today the host serves J02 v1 market data only. Credit (#409): PR #405 (issue #395), `application/api_host_composition.py` and `tools/api_server.py`: opt-in families, TLS 1.3 mutual TLS, principals file, fail-closed startup, one shared J14 store; the default invocation is unchanged. Bound: `jobs` is composed without a result resolver (no handler exists). |
+| Topology | Credential and trust operations v1 | FROZEN | COMPLETE | Operations | S04 | ADR-0072 §4 (accepted); authorized by #389; implemented (closeout #409). Issuance, rotation and revocation procedure and tooling under `infra/`, fingerprint-to-principal mapping and secret handling, within ADR-0063 §2: no credential service, IAM or bearer tokens. Credit (#409): PR #414 (issue #393), `infra/pki/` and `docs/engineering/DECK_PKI_OPERATIONS.md`: offline CA, server and client certificates, fingerprints, restart-based rotation and revocation. Bound: no CRL or OCSP; the file-mode test is skipped where modes are not enforced and runs on Linux CI. |
+| Topology | Deck workload library v1 | FROZEN | COMPLETE | Client/Application | S05 | ADR-0072 §5 (accepted); authorized by #389; implemented (closeout #409). Producer of `GovernedResultBundleV1` (deck code identity, feature-provider identity, input digests), submit-flow glue and commit pinning; `clients/deck/` keeps importing nothing from `quant_platform`. Credit (#409): PR #418 (issue #394), `application/deck_result_bundle.py`: the producer of the K13 bundle from the verified admission, clean tree and server commit required. Bound: the provider identity is attribution evidence, not a server-defined feature definition; a bundle names one admission. |
+| Topology | Deployment units and runbook v1 | FROZEN | COMPLETE | Operations | S06 | ADR-0072 §6 (accepted); authorized by #389; implemented (closeout #409). systemd units and environment examples for the API and the worker, the ADR-0057 handoff runbook, the promotion procedure and the server/deck compatibility rule. Credit (#409): PR #421 (issue #396), `infra/systemd/` units and environment examples, `docs/engineering/DECK_HANDOFF_RUNBOOK.md`, `docs/engineering/SERVER_DECK_COMPATIBILITY.md`. Bound: the import accepts a result against its own admission's commit, so an admission made before a promotion stays valid (an operator obligation, recorded); no memory limit on the API unit. |
+| Topology | Real-topology proof v1 | FROZEN | COMPLETE | Operations | S07 | ADR-0072 §7 (accepted); authorized by #389; implemented (closeout #409). PostgreSQL + API + worker + deck client over WSS/mTLS: admit, deliver, verify, acknowledge, run, upload, submit and register, plus the fault cases the gate defines. Defines "ready to split". Credit (#409): PR #427 (issue #397), part 1, the hermetic proof `PostgresSplitTopology` (14 tests, run by the CI job of the runtime stores), and PR #428, the record of part 2. Bound: part 2 is one happy path on the smallest real partition (3 122 bytes) executed by the maintainer and reported from the session log, on a pull-request commit; no fault was repeated there and the largest real day (252.8 MiB) was not delivered. The topology is deployable only within the bounds of ADR-0072 Amendment 1; see `docs/engineering/DGK2_SPLIT_TOPOLOGY_PROOF.md`. |
+| Topology | First data-local J03 handlers v1 | OPEN_DEFERABLE | MISSING | Application | S08 | DG-K2 (#382/#383, ADR-0072 §9); not authorized. Trigger: the maintainer names a first handler (feature/representation materialization, historical import or catalog maintenance). `DATA_LOCAL_JOB_REGISTRY` ships empty; each handler enters through its own issue citing ADR-0068 §6. |
 
-## Inventory checkpoint — DG-C / A14 v1 closeout (#442)
+## Inventory checkpoint — L2/main reconciliation (#444)
 
-Recomputed from the atomic rows in `CAPABILITY_DAG.md`, cross-checked against the
-expanded `CAPABILITY_MAP.md` atom rows. The executable check is in
-[SCOPE.md](../../SCOPE.md#executable-governance-verification). This snapshot credits
-only `A14` and `A14a`-`A14e` on `implement/l2`; it adds no atom or follow-on authority.
-
-This is the L2 integration-line inventory. Non-L2 rows retain the inherited branch
-checkpoint; DG-K references to its SCOPE.md Part B describe that historical
-scope and grant no authorization from the CLOSED L2 scope. Cross-line
-reconciliation belongs to the separate promotion.
+Recomputed from the union of the actual DAG rows and checked against expanded
+Capability Map rows, preserving both parents' accepted credits. No new atom,
+capability or follow-on authorization is created. DG-K/DG-K2 are already on main
+(#434/#437); L2 remains on implement/l2 pending its separate final wave promotion.
+The [scope verifier](../../SCOPE.md#executable-governance-verification) captures both OIDs.
 
 ```text
-TOTAL_ATOMS                     = 111
-CLASSIFIED_ATOMS                = 111
+TOTAL_ATOMS                     = 119
+CLASSIFIED_ATOMS                = 119
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 100 / 111 = 90.1%
+SEMANTIC_FROZEN_OR_RESOLVED     = 107 / 119 = 89.9%
 OPEN_BLOCKING                   = 3
-OPEN_DEFERABLE                  = 8
-ROADMAP_DEFINED                 = 100 + 3 + 8 = 111
-ROADMAP_PLANNING_COMPLETENESS   = 111 / 111 = 100%
-IMPLEMENTATION_COMPLETE         = 84 / 111 = 75.7%
+OPEN_DEFERABLE                  = 9
+ROADMAP_DEFINED                 = 107 + 3 + 9 = 119
+ROADMAP_PLANNING_COMPLETENESS   = 119 / 119 = 100%
+IMPLEMENTATION_COMPLETE         = 99 / 119 = 83.2%
 ```
 
 ## Gate / evidence state
@@ -181,7 +185,8 @@ IMPLEMENTATION_COMPLETE         = 84 / 111 = 75.7%
 | Omega external-audit stabilization line (`implement/omega`, tracking #232) | COMPLETE for the audited findings | Not a wave; a post-Wave-7 stabilization line reconciling an external audit from integrating `NeoNix-Lab/omega`. 25 PRs (#254, #256-#278) merged: safety tooling/package hygiene (#254), workflow non-wave integration-branch detection (#256), exception-handling narrowing (#257), SQLite covering-index preflight (#258), systemd hardening (#259), J02 result-size bound (ADR-0050 Am.1, #260), StrategySpec extensions (ADR-0051/52/53, #261-263), A07 day-boundary (ADR-0054, #264), H05 repeated-entry gating (#265-266), `k_eff` permanent disposition (ADR-0037 Am.1, #267), `shell=True` removal (#268), promotion-candidate validation (#269), public dependency surface (#270), Omega validation bridge (ADR-0055, #271), Golden proof/test-double boundary (ADR-0056, #272), server/deck topology (ADR-0057, #273), replay sweep orchestration boundary (ADR-0058, #274), D05 representation-replay input (ADR-0059, #275), canonical replay I/O profile (ADR-0060, #276), replay summary mode (ADR-0061, #277), and replay strategy-identity caching (#278). This governance pass (issue "Omega stabilization-line reconciliation and platform-v1.0 service-topology scope") reconciles the above into governance state; it adds no new code itself. |
 | `DG-J` Remote Service Topology design-gate line (issues #282-#287, parent #281) | RESOLVED for all six gates | Six design-gate issues on `implement/omega` each produced one ACCEPTED ADR: G1/`J09` (ADR-0063, #283/PR #290), G2/`J03` (ADR-0062, #282/PR #289), G3/`K12`+`K13` (ADR-0064, #284/PR #291), G4/`J10`,`J12`,`J13` (ADR-0065, #285/PR #292; `J11` explicitly deferred), G5/`J14` (ADR-0066, #286/PR #293), G6/`J15` (ADR-0067, #287/PR #294). Issue #288 reconciles these outcomes into governance state and authorizes the Wave 8 implementation inventory; `implement/omega` is closed as the bounded design-integration line for this scope. |
 | Wave 8 Full Platform API & Remote Service Topology | COMPLETE (operator closeout #327) | J03/J09/J10/J12/J13/J14/J15/K12/K13 implemented by PR #307-#312, #315, #320, #321 and promoted by PR #322; owner-accepted extras #313/#314 by PR #323/#324 via `implement/wave-8.1` and PR #326. J10/J12/J13 are in-process seams only; no Wave 8 Golden proof artifact is claimed. PR #317 (A14 L2 groundwork) does not complete A14. |
-| `DG-K` Process Topology v1 design gate (governance #318, design gate #319) | RESOLVED | ADR-0068 (process topology v1) and ADR-0069 (J02 carriage of consumer seams and deck handoff v1) accepted; P01-P06 `FROZEN`/`MISSING` and authorized in `SCOPE.md` Part B; no implementation issue opened yet. |
+| `DG-K2` Server/deck deployment composition (governance #382, #389, #409; design gate #383, #387; Amendment 1 #431) | COMPLETE within recorded bounds (operator closeout #409) | ADR-0072 `ACCEPTED`, Amendment 1 raises the delivery bounds to 512 MiB per file and 1 GiB per admission. `S01`-`S07` (K12 authority, K13 composition, API host composition, credential and trust operations, deck workload module, deployment units, two-part topology proof) are implemented and merged into `implement/dgk2`; the supervised proof is one happy path on the real server. Deployable only within the bounds; promotion into `main` is the operator's separate PR. `S08` (first data-local handlers) is not authorized. Omega adoption out of scope. |
+| `DG-K` Process Topology v1 (governance #318, design gate #319, closeout #381) | COMPLETE within recorded bounds (operator closeout #381) | ADR-0068 and ADR-0069 accepted (#319); P01-P06 implemented and merged into `implement/dgk` (PR #344-#353, #355, #356, #359, #361, #366, #373, #380; amendments ADR-0064 Am.1, ADR-0066 Am.1, ADR-0068 Am.1, ADR-0069 Am.1 and Am.2). Not claimed: any executable that composes the families (`tools/api_server.py` serves J02 v1 only, without TLS/mTLS options), production K12 authority seams, K13 composition in a host, a deck-side bundle producer, credential issuance and deployment runbook, a data-local J03 handler (the registry ships empty), and an end-to-end proof on the real topology. Promotion into `main` is the operator's separate PR; no Golden proof claimed. |
 | `DG-C` L2 historical v1 closeout (#442, `implement/l2`) | COMPLETE within v1 bounds | `A14`, `A14a`-`A14e` COMPLETE (PR #375/#379/#401/#411/#417/#408); golden #413/#430 accepted, 11/11 at `1cdd78f`. ADR-0070 Amendments 1-2; ADR-0049 Amendment 1 (#424): one redundant copy only, never the last. #425/#426 credited as operational tool, no A14 atom or new K09 credit. `A14f`/`A14g` held; separate promotion to `main` after DG-K. [Limits and eight triggers, none authorized](../architecture/OPEN_DECISIONS.md#l2-v1-reopening-triggers-442). |
 | Wave 1 (`implement/wave-1`, issues #51-#77) | CONCLUDED | 2026-09-19; issue #73's Human Golden E2E closeout (1440-candle 1m D03, official `GOLDEN E2E: PASS`) is closed and credited. |
 | Wave 2 (`implement/wave-2`, issues #83,#85,#86) | COMPLETE | E06/F02/F03 merged (PR #88/#89/#90); reconciled by issue #87. |
@@ -202,22 +207,20 @@ The DG-B long-gap remediation proposition remains disposed `NO_AUTHORITATIVE_REP
 
 DG-B has no remaining B06 atom blocker after Wave 6; its only still-disposed proposition is issue #110's long-gap remediation rule. DG-H has no currently identified open atom after K07/K09 completion. DG-G remains open only for I06 and I07 (J03 is frozen under ADR-0062 and its durable record is implemented by Wave 8). DG-I is resolved by Wave 7; J02's auth/TLS is frozen under ADR-0063 and implemented by `J09` (Wave 8). J07 remains missing and is not implemented by any closeout so far.
 
-Wave 8 — Full Platform API & Remote Service Topology v1 is closed by operator
-closeout (issue #327): `J03`, `J09`, `J10`, `J12`, `J13`, `J14`, `J15`, `K12`,
-`K13` are implemented and on `main` (PR #322, #326) within the bounds in their
-rows; `J11` remains deferred; no Wave 8 Golden proof artifact is claimed. The
-inherited DG-K scope checkpoint is Process Topology v1: its design gate is resolved by
-ADR-0068 and ADR-0069 (#319), and `SCOPE.md` Part B authorizes P01-P06 (J02
-wiring of `J10`/`J12`/`J13`, J03 dispatch and one worker, the runtime store on
-PostgreSQL, one canonical identity module, host boundaries and the K12/K13
-deck handoff over J02). No implementation issue is open yet. `J11` is not
-planned. J07, J08, RL, broker/live execution, second venue
-and L1/L3 remain outside those closed scopes. On `implement/l2`, DG-C / `A14`
-batch v1 is closed by #442: `A14` and `A14a`-`A14e` COMPLETE, golden accepted
-(#413/#430, 11/11). ADR-0070 Amendments 1-2 retain explicit gaps and UTC-day
-ownership by `exchange_ts`; no gap-free midnight read is claimed. `A14f`/`A14g`
-remain held and MISSING. Promotion to `main` is separate, after DG-K closeout.
-See [Not claimed](../../SCOPE.md#not-claimed). Frontier/readiness state is
-**not concurrent implementation authorization**.
+Wave 8 is closed (#327), with its original credit bounds and no additional
+Golden proof. DG-K P01-P06 (#381) and DG-K2 S01-S07 (#409) are COMPLETE within
+their row bounds and already on main (#434/#437). DG-K2 supplies the executable
+composition that DG-K's library closeout did not claim; its supervised proof
+remains one happy path on the smallest real partition, within ADR-0072 Amendment 1
+bounds and the recorded findings. S08 is not authorized; J11 is not planned.
+
+L2 v1 is CLOSED on implement/l2 (#442/#443), A14 and A14a-A14e COMPLETE,
+golden #413/#430 accepted 11/11 with explicit gaps. A14f/A14g remain held;
+no live L2, ob500, population guarantee or gap-free UTC-midnight L2 is claimed.
+Reconciliation #444 combines both histories before a separate L2 promotion.
+J07/J08, RL, broker/live execution, second venue and L1/L3 remain outside those
+closed scopes. Frontier/readiness state is **not concurrent implementation
+authorization**. The historical gate rows above record each closeout's bounds;
+later DG-K2 credits do not broaden the earlier proof.
 
 See [`ROADMAP.md`](ROADMAP.md) for macro progression and [`CAPABILITY_DAG.md`](CAPABILITY_DAG.md) for exact dependency/decision-gate semantics.
