@@ -30,6 +30,7 @@ import os
 from pathlib import Path
 import shutil
 
+from ..canonical import canonical_bytes
 from ..data.l2_materializer import materialize_l2_book_event_v1
 from ..data.l2_parquet import scan_l2_book_event_v1_all
 from ..data.manifests import (
@@ -210,7 +211,10 @@ class _DayRouting:
     def detail(self) -> str:
         edges = {name: block.detail() for name, block in (("head", self.head), ("tail", self.tail))
                  if block.count}
-        return "|source_file_edges:" + json.dumps(edges, sort_keys=True, separators=(",", ":")) if edges else ""
+        if not edges:
+            return ""
+        encoded = canonical_bytes(edges, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
+        return f"|source_file_edges:{encoded}"
 
 
 def _ceil_us(ns: int) -> int:
