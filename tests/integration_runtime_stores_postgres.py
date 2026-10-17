@@ -46,6 +46,8 @@ from quant_platform.application.governed_result_import import (  # noqa: E402
 from quant_platform.application.result_import_composition import (  # noqa: E402
     governed_result_import_service_provider,
 )
+from quant_platform.application.api_host_composition import compose_api_host  # noqa: E402
+from quant_platform.application.market_data import ConsumerApiError  # noqa: E402
 from quant_platform.application.job_dispatch import (  # noqa: E402
     DATA_LOCAL_JOB_REGISTRY, JobHandler, JobHandlerRegistry, JobResult,
 )
@@ -68,6 +70,7 @@ import test_job_dispatch_v1 as dispatch  # noqa: E402
 import test_admitted_input_transport_v1 as admitted_transport  # noqa: E402
 import test_job_transport_v1 as job_transport  # noqa: E402
 import test_result_import_transport_v1 as result_import  # noqa: E402
+import test_api_host_composition_v1 as api_host  # noqa: E402
 import test_result_import_composition_v1 as k13_composition  # noqa: E402
 import api_server  # noqa: E402  (tools/api_server.py: the API host's commit record)
 import test_governed_result_import_v1 as k13  # noqa: E402
@@ -988,6 +991,126 @@ class PostgresK13Composition(DisposableCase, k13_composition.K13CompositionV1Tes
         self.assertEqual(1, self.admin_count("experiment.runs"))
         self.assertEqual(1, self.admin_count("experiment.artifacts"))
         self.assertEqual(1, self.admin_count("runtime.governed_result_outputs"))
+
+
+class PostgresApiHostProviders(DisposableCase, unittest.TestCase):
+    """#395: the providers the API host composes open one runtime connection per request.
+
+    The routes are driven through their own decode/execute (no listener): what is
+    proved here is that each reaches the runtime schema as the API login and
+    leaves no connection behind. Authorization and the listener are proved in
+    tests/test_api_host_composition_v1.py.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="api_host_pg_")
+        cwd = cls.cwd = Path(cls._tmp.name)
+        pki = api_host.pki
+        pki._generate_ec_key(cwd, "ca.key")
+        pki._self_signed_ca(cwd, key="ca.key", out="ca.crt", cn="Test CA")
+        pki._generate_ec_key(cwd, "server.key")
+        (cwd / "ext.cnf").write_text("subjectAltName=IP:127.0.0.1\n", encoding="utf-8")
+        pki._signed_certificate(
+            cwd, key="server.key", csr="server.csr", cn="127.0.0.1",
+            ca_cert="ca.crt", ca_key="ca.key", out="server.crt", extfile="ext.cnf",
+        )
+        (cwd / "principals.json").write_bytes(api_host.principals_document(
+            api_host.entry("deck", "sha256:" + "ab" * 32, api_host.ALL_SCOPES),
+        ))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def setUp(self):
+        DisposableCase.setUp(self)
+        self.composition = compose_api_host(api_host.ApiHostOptions(
+            families=api_host.FAMILY_NAMES,
+            tls_certificate=str(self.cwd / "server.crt"),
+            tls_private_key=str(self.cwd / "server.key"),
+            client_trust_anchor=str(self.cwd / "ca.crt"),
+            principals_file=str(self.cwd / "principals.json"),
+            catalog_dsn=os.environ["RUNTIME_TEST_API_DSN"],
+            runtime_dsn=os.environ["RUNTIME_TEST_API_DSN"],
+        ))
+
+    def call(self, family, operation, body):
+        handler = self.composition.family_handlers[(family, f"{family}-request-v1", operation)]
+        return handler.execute(handler.decode_request(body))
+
+    def api_connections(self):
+        with connect("ADMIN") as admin:
+            return admin.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE usename = 'platform_api'"
+            ).fetchone()[0]
+
+    def test_the_job_family_reaches_the_runtime_schema_and_keeps_no_connection(self):
+        before = self.api_connections()
+        for _ in range(3):
+            with self.assertRaises(ConsumerApiError) as raised:
+                self.call("j02-job-v1", "status", {"job_id": "job-v1:" + "0" * 64})
+            self.assertEqual("job_not_found", raised.exception.context["reason"])
+        self.assertEqual(before, self.api_connections())
+
+    def test_the_admission_family_reads_the_runtime_schema_as_the_api_login(self):
+        before = self.api_connections()
+        with self.assertRaises(ConsumerApiError) as raised:
+            self.call(
+                "j02-admitted-input-v2", "manifest", {"admission_id": "admitted-input-v1:" + "0" * 64},
+            )
+        self.assertEqual("invalid_request", raised.exception.code.value)
+        self.assertEqual(before, self.api_connections())
+
+    def test_the_job_family_refuses_an_unregistered_kind_with_the_empty_registry(self):
+        with self.assertRaises(ConsumerApiError) as raised:
+            self.call("j02-job-v1", "submit", {
+                "operation_kind": "materialize", "request_identity": "request-v1:materialize",
+                "canonical_parameters": {}, "input_identities": [],
+                "effect_safety_proof_reference": None,
+            })
+        self.assertEqual("unregistered_operation_kind", raised.exception.context["reason"])
+
+    def composed_training_provider(self):
+        """The repository provider ``compose_api_host`` really hands to the training family."""
+        import quant_platform.application.api_host_composition as module
+
+        with mock.patch.object(
+            module, "training_family_handlers", wraps=module.training_family_handlers,
+        ) as factory:
+            compose_api_host(api_host.ApiHostOptions(
+                families=("training",),
+                tls_certificate=str(self.cwd / "server.crt"),
+                tls_private_key=str(self.cwd / "server.key"),
+                client_trust_anchor=str(self.cwd / "ca.crt"),
+                principals_file=str(self.cwd / "principals.json"),
+                runtime_dsn=os.environ["RUNTIME_TEST_API_DSN"],
+            ))
+        (provider,) = factory.call_args.args
+        return provider
+
+    def test_the_training_provider_yields_a_repository_on_a_per_request_api_connection(self):
+        provider = self.composed_training_provider()
+        before = self.api_connections()
+        seen = []
+        for failure in (None, RuntimeError("boom")):
+            try:
+                with provider() as repository:
+                    self.assertIsInstance(repository, ExperimentRepository)
+                    connection = repository.connection
+                    seen.append(connection)
+                    self.assertFalse(connection.autocommit)  # the repository commits per call
+                    self.assertEqual(
+                        "platform_api", connection.execute("SELECT current_user").fetchone()[0],
+                    )
+                    self.assertEqual(before + 1, self.api_connections())
+                    if failure is not None:
+                        raise failure
+            except RuntimeError:
+                self.assertIsNotNone(failure)
+            self.assertTrue(connection.closed)  # on success and on error alike
+        self.assertIsNot(seen[0], seen[1])  # one connection per request
+        self.assertEqual(before, self.api_connections())
 
 
 class PostgresResults(DisposableCase, k13.GovernedResultImportV1Tests):
