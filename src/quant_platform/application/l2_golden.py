@@ -128,8 +128,8 @@ def run_l2_golden(
     stored = sum(p.materialization.row_count for p in result.partitions)
     _claim(
         claims, "event_accounting",
-        measurement["events"] == result.source_events == stored + result.excluded_events,
-        {"measured": measurement["events"], "stored": stored, "excluded": result.excluded_events},
+        measurement["source_events"] == result.source_events == stored + result.excluded_events,
+        {"measured": measurement["source_events"], "stored": stored, "excluded": result.excluded_events},
     )
     _claim(
         claims, "partitions_eligible",
