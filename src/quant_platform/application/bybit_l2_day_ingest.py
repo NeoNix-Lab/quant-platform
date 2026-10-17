@@ -1,10 +1,11 @@
-"""Bybit historical L2 day ingest (A14d, ADR-0070 Amendment 1).
+"""Bybit historical L2 day ingest (A14d, ADR-0070 Amendments 1-2).
 
 One pinned ``ob200`` archive day becomes canonical L2 partitions, cut at the ``u``
 discontinuities the A14a certifier reports:
 
-* **Pass 1** streams the day through the A14a certifier (and refuses an event
-  outside the UTC day).  Its report fixes the cut points; nothing else defines them.
+* **Pass 1** routes contiguous source-file head/tail blocks outside the UTC day
+  to retained-source evidence, then streams the in-day events through A14a.
+  Its report fixes the cut points; nothing else defines them.
 * **Pass 2** streams the archive once more and demultiplexes it into one
   ``materialize_l2_book_event_v1`` call per run (``dt=YYYY-MM-DD/seg=NNN``).  Events
   in a ``book_state_unknown`` interval, and before the first snapshot, are excluded
@@ -23,12 +24,13 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
 import shutil
 
+from ..canonical import canonical_bytes
 from ..data.l2_materializer import materialize_l2_book_event_v1
 from ..data.l2_parquet import scan_l2_book_event_v1_all
 from ..data.manifests import (
@@ -141,6 +143,80 @@ class _Run:
     partition_manifest: Path
 
 
+@dataclass(slots=True)
+class _SourceBlock:
+    """Bounded evidence for an excluded source edge, not a retained event list."""
+
+    count: int = 0
+    first: dict | None = None
+    last: dict | None = None
+    last_snapshot_repeats_previous: bool = False
+
+    def record(self, event: L2BookEvent, previous: L2BookEvent | None) -> None:
+        point = {
+            "native_sequence": event.native_sequence,
+            "native_update_id": event.native_update_id,
+            "exchange_ts": event.exchange_ts.isoformat(),
+        }
+        if not self.count:
+            self.first = point
+        self.last = point
+        self.count += 1
+        self.last_snapshot_repeats_previous = (
+            event.event_type == "snapshot" and previous is not None
+            and event.native_sequence == previous.native_sequence
+            and event.native_update_id == previous.native_update_id
+        )
+
+    def detail(self) -> dict:
+        return {
+            "count": self.count, "first": self.first, "last": self.last,
+            "last_snapshot_repeats_previous": self.last_snapshot_repeats_previous,
+        }
+
+
+@dataclass(slots=True)
+class _DayRouting:
+    start: int
+    end: int
+    source_events: int = 0
+    head: _SourceBlock = field(default_factory=_SourceBlock)
+    tail: _SourceBlock = field(default_factory=_SourceBlock)
+
+    def events(self, source: Iterator[L2BookEvent]) -> Iterator[L2BookEvent]:
+        phase = 0  # head -> in-day -> tail; source order is never sorted/repaired
+        previous = None
+        for event in source:
+            ts = event.exchange_ts.epoch_ns
+            region = 0 if ts < self.start else (2 if ts >= self.end else 1)
+            edge_regression = (
+                previous is not None and ts < previous.exchange_ts.epoch_ns
+                and (region != 1 or phase != 1)
+            )
+            if region < phase or edge_regression:
+                raise L2DayRefusal(
+                    "event_outside_day", "out-of-day events must be monotone source-edge blocks",
+                    context={"native_sequence": event.native_sequence, "exchange_ts": _iso(ts)},
+                )
+            phase = region
+            self.source_events += 1
+            if region == 0:
+                self.head.record(event, previous)
+            elif region == 2:
+                self.tail.record(event, previous)
+            else:
+                yield event  # A14a still owns in-day seq/u/time/replay certification.
+            previous = event
+
+    def detail(self) -> str:
+        edges = {name: block.detail() for name, block in (("head", self.head), ("tail", self.tail))
+                 if block.count}
+        if not edges:
+            return ""
+        encoded = canonical_bytes(edges, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
+        return f"|source_file_edges:{encoded}"
+
+
 def _ceil_us(ns: int) -> int:
     """Least microsecond-aligned instant strictly greater than ``ns``."""
 
@@ -198,18 +274,11 @@ def ingest_bybit_l2_day(
     intent_start = Instant.parse(f"{day}T00:00:00Z").epoch_ns
     intent_end = intent_start + _DAY_NS
 
-    # ---- pass 1: certify the whole day; the report fixes the cut points ------
-    def day_events() -> Iterator[L2BookEvent]:
-        for event in iter_bybit_l2_archive_events(archive_path, day):
-            if not (intent_start <= event.exchange_ts.epoch_ns < intent_end):
-                raise L2DayRefusal(
-                    "event_outside_day",
-                    f"exchange_ts {event.exchange_ts.isoformat()} lies outside UTC day {day}",
-                    context={"native_sequence": str(event.native_sequence)},
-                )
-            yield event
-
-    report = profile.certify(L2_IDENTITY, day_events())
+    # ---- pass 1: route file edges, certify only the owning UTC day's input ---
+    routing = _DayRouting(intent_start, intent_end)
+    report = profile.certify(
+        L2_IDENTITY, routing.events(iter_bybit_l2_archive_events(archive_path, day))
+    )
     if report.outcome == OUTCOME_INELIGIBLE:
         raise L2DayRefusal(
             "source_day_ineligible",
@@ -245,27 +314,33 @@ def ingest_bybit_l2_day(
     staging = dataset_root / f".ingest-{day}.staging"
     shutil.rmtree(staging, ignore_errors=True)
     try:
+        second = _DayRouting(intent_start, intent_end)
         runs, counts = _pass_two(
-            archive_path, day, staging, profile, cut_of, cuts, run_count,
+            second.events(iter_bybit_l2_archive_events(archive_path, day)),
+            day, staging, profile, cut_of, cuts, run_count,
             created_at, closed_at, producer, code_ref,
         )
-        complete, gaps = _plan_intervals(runs, cuts, intent_start, intent_end)
+        if second.source_events != routing.source_events or second.detail() != routing.detail():
+            raise L2DayRefusal("plan_mismatch", "source-edge evidence changed between passes")
+        complete, gaps = _plan_intervals(
+            runs, cuts, intent_start, intent_end, has_tail=bool(routing.tail.count)
+        )
         gap_documents = _emit_coverage(
             staging, day, runs, complete, gaps, counts, cuts, source_sha,
-            created_at, producer, code_ref, intent_start, intent_end,
+            created_at, producer, code_ref, intent_start, intent_end, routing,
         )
         return _install(
             staging, dataset_root, day, runs, complete, gap_documents, source_sha,
-            report, counts, storage_root_id, created_at,
+            routing, counts, storage_root_id, created_at,
         )
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
 
-def _pass_two(archive_path, day, staging, profile, cut_of, cuts, run_count,
+def _pass_two(events, day, staging, profile, cut_of, cuts, run_count,
               created_at, closed_at, producer, code_ref):
-    source = _Peekable(iter_bybit_l2_archive_events(archive_path, day))
+    source = _Peekable(events)
     counts = [0] * len(cuts)
     runs: list[_Run] = []
 
@@ -328,24 +403,29 @@ def _pass_two(archive_path, day, staging, profile, cut_of, cuts, run_count,
     return runs, counts
 
 
-def _plan_intervals(runs, cuts, intent_start, intent_end):
-    """Complete intervals per run and gap intervals (Amendment 1 item 4)."""
+def _plan_intervals(runs, cuts, intent_start, intent_end, *, has_tail=False):
+    """Per-run coverage with explicit source-file head/tail gaps (Amendment 2)."""
 
     head = bool(cuts) and cuts[0].head
     discontinuity_cuts = [(i, cut) for i, cut in enumerate(cuts) if not cut.head]
     first = [run.materialization.first_exchange_ts.epoch_ns for run in runs]
     last = [run.materialization.last_exchange_ts.epoch_ns for run in runs]
+    if first[0] % 1000:
+        raise L2DayRefusal("discontinuity_not_representable", "source head is not microsecond-aligned")
     complete: list[tuple[int, int]] = []
     for n in range(len(runs)):
-        start = intent_start if (n == 0 and not head) else _floor_us(first[n])
-        end = _ceil_us(last[n]) if n < len(discontinuity_cuts) else intent_end
+        start = first[n] if n == 0 else _floor_us(first[n])
+        end = _ceil_us(last[n]) if n < len(discontinuity_cuts) or not has_tail else intent_end
         complete.append((start, end))
-    gaps: list[tuple[int, int, int]] = []  # (start, end, cut index)
-    if head:
-        gaps.append((intent_start, _floor_us(first[0]), 0))
+    gaps: list[tuple[int, int, int | str]] = []  # cut index, or source-file edge cause
+    if head or first[0] > intent_start:
+        gaps.append((intent_start, first[0], 0 if head else "source_file_head"))
     for n, (index, cut) in enumerate(discontinuity_cuts):
         end = intent_end if cut.high is None else _floor_us(first[n + 1])
         gaps.append((_ceil_us(last[n]), end, index))
+    open_gap = bool(discontinuity_cuts) and discontinuity_cuts[-1][1].high is None
+    if not has_tail and not open_gap and complete[-1][1] < intent_end:
+        gaps.append((complete[-1][1], intent_end, "source_file_tail"))
     for start, end, _ in gaps:
         if start >= end:
             raise L2DayRefusal(
@@ -366,7 +446,7 @@ def _gap_detail(cut: _Cut, excluded: int, source_sha: str) -> str:
 
 
 def _emit_coverage(staging, day, runs, complete, gaps, counts, cuts, source_sha,
-                   created_at, producer, code_ref, intent_start, intent_end):
+                   created_at, producer, code_ref, intent_start, intent_end, routing):
     acquisition = {
         "basis": BYBIT_L2_COVERAGE_BASIS_ARCHIVE,
         "intent_start": _iso(intent_start),
@@ -387,7 +467,7 @@ def _emit_coverage(staging, day, runs, complete, gaps, counts, cuts, source_sha,
                 "partitions": [{"partition_key": run.key, "revision": 1}],
                 "evidence": [
                     {"kind": "archive_completeness",
-                     "detail": f"source_archive:{archive_file_name(day)}|sha256:{source_sha}"},
+                     "detail": f"source_archive:{archive_file_name(day)}|sha256:{source_sha}" + routing.detail()},
                     {"kind": "sequence_continuity",
                      "detail": bybit_l2_continuity_evidence_detail(run.report)},
                 ],
@@ -396,7 +476,16 @@ def _emit_coverage(staging, day, runs, complete, gaps, counts, cuts, source_sha,
         )
     documents = []
     for number, (start, end, index) in enumerate(gaps, 1):
-        detail = _gap_detail(cuts[index], counts[index], source_sha)
+        excluded = counts[index] if isinstance(index, int) else 0
+        if index == "source_file_head":
+            detail = f"source_file_head|first_event:{_iso(end)}|source_sha256:{source_sha}"
+        elif index == "source_file_tail":
+            last = runs[-1].materialization.last_exchange_ts.isoformat()
+            detail = f"source_file_tail|last_event:{last}|source_sha256:{source_sha}"
+        else:
+            detail = _gap_detail(cuts[index], excluded, source_sha)
+            if cuts[index].head:
+                detail += f"|source_file_head|first_event:{_iso(end)}"
         path = staging / f"dt={day}" / f"gap={number:03d}" / "coverage-manifest.json"
         emit_coverage_manifest(
             path, dataset_identity=L2_IDENTITY, source_dataset_identity=L2_IDENTITY,
@@ -409,12 +498,12 @@ def _emit_coverage(staging, day, runs, complete, gaps, counts, cuts, source_sha,
             }],
             producer=producer, code_ref=code_ref,
         )
-        documents.append((f"gap={number:03d}", _iso(start), _iso(end), counts[index], detail))
+        documents.append((f"gap={number:03d}", _iso(start), _iso(end), excluded, detail))
     return documents
 
 
 def _install(staging, dataset_root, day, runs, complete, gap_documents, source_sha,
-             report, counts, storage_root_id, created_at):
+             routing, counts, storage_root_id, created_at):
     final_day = dataset_root / f"dt={day}"
     dataset_manifest = dataset_root / "dataset-manifest.json"
     already = False
@@ -432,6 +521,15 @@ def _install(staging, dataset_root, day, runs, complete, gap_documents, source_s
                 f"dt={day} exists with different partitions",
                 context={"existing": sorted(existing), "produced": sorted(produced)},
             )
+        # Equal rows cannot silently widen coverage or replace source-edge evidence.
+        old_coverage = {p.relative_to(final_day): json.loads(p.read_text(encoding="utf-8"))
+                        for p in final_day.glob("*/coverage-manifest.json")}
+        new_day = staging / f"dt={day}"
+        new_coverage = {p.relative_to(new_day): json.loads(p.read_text(encoding="utf-8"))
+                        for p in new_day.glob("*/coverage-manifest.json")}
+        if ({k: (d["acquisition"], d["assertions"]) for k, d in old_coverage.items()}
+                != {k: (d["acquisition"], d["assertions"]) for k, d in new_coverage.items()}):
+            raise L2DayRefusal("day_already_published_differently", "declared coverage or source evidence differs")
         already = True
         shutil.rmtree(staging, ignore_errors=True)
     else:
@@ -466,8 +564,9 @@ def _install(staging, dataset_root, day, runs, complete, gap_documents, source_s
         for key, start, end, excluded, detail in gap_documents
     )
     return L2DayIngestResult(
-        day=day, source_sha256=source_sha, source_events=report.event_count,
-        excluded_events=sum(counts), partitions=partitions, gaps=gaps,
+        day=day, source_sha256=source_sha, source_events=routing.source_events,
+        excluded_events=sum(counts) + routing.head.count + routing.tail.count,
+        partitions=partitions, gaps=gaps,
         dataset_manifest_path=dataset_manifest, already_published=already,
     )
 
