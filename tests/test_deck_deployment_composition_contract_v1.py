@@ -42,6 +42,21 @@ class DeckDeploymentCompositionContractV1Tests(unittest.TestCase):
         ):
             self.assertIn(required_text, text)
 
+    def test_amendment_1_raises_the_delivery_bounds_to_the_measured_history(self) -> None:
+        text = adr_text()
+        for required_text in (
+            "## Amendment 1 (issue #431)",
+            "| `max_member_bytes` | 32 MiB | **512 MiB** |",
+            "| `max_total_bytes` | 64 MiB | **1 GiB** |",
+            "| `max_retained_payload_bytes` (J14) | 96 MiB | **1.5 GiB** |",
+            "| `retention_seconds` (J14) | 300 | **600** |",
+            "**719 partitions (34 %) exceed",
+            "| 2 members of 512 MiB (1 GiB, the new total) |",
+            "concurrent deliveries and a real network between deck and server were",
+            "A delivery of the largest real day (252.8 MiB) on the real server",
+        ):
+            self.assertIn(required_text, text)
+
     def test_k13_registry_is_closed_and_uses_the_checksum_as_content_identity(self) -> None:
         text = adr_text()
         for required_text in (

@@ -98,6 +98,8 @@ no real partition size was measured for this gate, and `S07` records the measure
 exceeds the member bound the remedy is configuration; a request beyond what bounded JSON/base64 framing can carry
 needs the deferred binary family (ADR-0069 §5) and is not a v1 input.
 
+**Amendment 1 (issue #431) supersedes the v1 values above** with the ones measured against the real history.
+
 ### 2. K13 composition (S02)
 
 A factory builds `GovernedResultImportService` over the `runtime` PostgreSQL connection of the API login, with the
@@ -316,3 +318,64 @@ design authority. It is not implementation or a proof of the topology.
 Governance issues #381, #382; design gate #383; acceptance #387. Builds on ADR-0057, ADR-0063, ADR-0064 (Amendment 1), ADR-0066
 (Amendment 1), ADR-0067, ADR-0068 (Amendment 1) and ADR-0069 (Amendments 1 and 2). Amends no ADR; section 5 records a
 conflict between ADR-0068 §8 and the implemented `K13` and resolves it in `K13`'s direction without editing either.
+
+## Amendment 1 (issue #431) — delivery bounds raised to the measured history
+
+Section 1 states that the bounds are configuration, that they were derived and not measured, and that "if a measured
+partition exceeds the member bound the remedy is configuration". `S07` part 2 measured them (#428) and a third of the
+history exceeds the member bound. This amendment applies that remedy; it changes no wire format, no framing and no other
+bound.
+
+**Evidence: the real catalog** (`bybit:BTCUSDT` canonical trades, reported by the maintainer on 2026-10-17). 2 116 valid
+partitions, exactly one per day, from 2021-01-01 to 2026-10-17. Sizes in MiB: minimum 0.003 (a partial day), p25 9.8,
+median 21.5, p75 38.9, p90 58.3, p95 71.7, p99 117.3, **maximum 252.8** (2026-02-05). **719 partitions (34 %) exceed
+32 MiB and 161 (7.6 %) exceed 64 MiB**; the yearly medians and peaks grow every year, and most days since 2024 are above
+32 MiB. Under the v1 values those days cannot be delivered by any selection, because a member is a whole file.
+
+**Decision.**
+
+| Bound | v1 (section 1) | Amendment 1 |
+| --- | ---: | ---: |
+| `max_members` | 16 | 16 (unchanged) |
+| `max_member_bytes` | 32 MiB | **512 MiB** |
+| `max_total_bytes` | 64 MiB | **1 GiB** |
+| `max_retained_payload_bytes` (J14) | 96 MiB | **1.5 GiB** |
+| `max_in_flight_transfers` | 32 | 32 (unchanged) |
+| `retention_seconds` (J14) | 300 | **600** |
+
+The member bound is twice the largest day measured, the total is 16 days at about p90, and the retained bytes follow the
+composition rule (`4 * ceil(1 GiB / 3)` plus 8 KiB per member is about 1.37 GiB; 1.5 GiB leaves headroom). The
+`max_output_bytes` of section 2 (8 MiB) and the staging bounds are unchanged: they were not measured here.
+
+**Evidence: cost of a delivery.** The API process and the deck client of this repository over loopback, TLS 1.3 mutual
+TLS, a disposable PostgreSQL, Linux 6.6 (WSL2), Python 3.12; members are incompressible random bytes registered in the
+catalog, delivered and verified against the manifest hashes. Peak resident set of the API (VmHWM; 52.8 MiB before any
+client), time from `deliver` to the verified bytes, and the peak of the deck test process:
+
+| Delivery | API peak | `deliver` and verify | Deck process peak |
+| --- | ---: | ---: | ---: |
+| 1 member of 256 MiB | 1 336 MiB | 16.5 s | 1 507 MiB |
+| 2 members of 256 MiB (512 MiB) | 2 020 MiB | 35.3 s | 1 763 MiB |
+| 1 member of 512 MiB | 2 618 MiB | 34.3 s | 3 080 MiB |
+| 2 members of 512 MiB (1 GiB, the new total) | 3 986 MiB | 70.6 s | 3 592 MiB |
+
+The API peak is about 5 times the delivered bytes for a single member and about 3.9 times for several; the deck test
+process includes the process that generated the data, so its figure is an upper bound. The speed is about 15 MiB/s on
+loopback; at that speed the 600 s retention covers about 9 GiB, and at 5 MiB/s about 3 GiB, more than the total bound.
+
+**Consequences.**
+
+- A host serving the deck must plan for about 4 GiB of API memory for a delivery at the total bound and about 2.6 GiB
+  for one 512 MiB member (a 16 GB host runs one such delivery at a time with PostgreSQL and live-ingest beside it). The
+  retained-bytes cap is global, so a second delivery that does not fit is refused; the transient copies made while a
+  member is read are not inside that cap, and **concurrent deliveries and a real network between deck and server were
+  not measured**.
+- Every day of the measured history is deliverable. A request still covers at most 16 members (16 days here) and 1 GiB;
+  longer periods are several admissions, one result bundle per admission (a bundle names one admission).
+- Delivery stays whole-file and in memory. A history that does not fit these bounds, or a lower memory cost, needs
+  delivery by member or by range, which is a new family version and not a configuration change; the trigger of section 1
+  (a binary or incremental transport) is unchanged.
+- The units do not set a memory limit on the API (a `MemoryMax` is an operational decision, not made here).
+
+**Not measured.** A delivery of the largest real day (252.8 MiB) on the real server with these bounds; the supervised
+re-measurement belongs to the first deployment after this amendment.

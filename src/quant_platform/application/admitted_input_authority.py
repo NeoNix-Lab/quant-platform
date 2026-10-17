@@ -84,14 +84,14 @@ MIB = 1024 * 1024
 # values; S07 records the measured sizes against them.
 ADMITTED_INPUT_BOUNDS_V1 = AdmittedInputBounds(
     max_members=16,
-    max_member_bytes=32 * MIB,
-    max_total_bytes=64 * MIB,
+    max_member_bytes=512 * MIB,
+    max_total_bytes=1024 * MIB,
 )
 # The J14 store sized by the composition rule the transport enforces
 # (``4 * ceil(max_total_bytes / 3)`` plus 8 KiB per member) with headroom.
 ADMITTED_INPUT_TRANSFER_CONFIG_V1 = FramedResultConfig(
-    retention_seconds=300,
-    max_retained_payload_bytes=96 * MIB,
+    retention_seconds=600,
+    max_retained_payload_bytes=1536 * MIB,
     max_in_flight_transfers=32,
 )
 

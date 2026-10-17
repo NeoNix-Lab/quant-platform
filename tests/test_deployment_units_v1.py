@@ -321,6 +321,18 @@ class DeploymentUnitTests(unittest.TestCase):
                 with self.subTest(target=target):
                     self.assertEqual(0, int(mode, 8) & 0o007, f"{target} readable by others")
 
+    def test_the_runbook_installs_the_runtime_dependencies_of_the_package_and_not_the_package(self) -> None:
+        import tomllib
+
+        dependencies = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
+        text = RUNBOOK.read_text(encoding="utf-8")
+        install = text[text.index("## Install (once per host)"):text.index("## What a delivery costs")]
+        self.assertIn("python3 -m venv /opt/market-platform/.venv", install)
+        for requirement in dependencies:
+            self.assertIn(f"'{requirement}'", install, requirement)
+        # An editable install would dirty the checkout the promotion requires clean.
+        self.assertNotIn("pip install -e", install.replace("Do NOT `pip install -e .`", ""))
+
     def test_the_install_procedure_lets_each_service_user_reach_the_files_it_opens(self) -> None:
         text = RUNBOOK.read_text(encoding="utf-8")
         install = text[text.index("## Install (once per host)"):text.index("## Promotion")]

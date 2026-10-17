@@ -43,6 +43,12 @@ Ordering and exit status:
 Run on the server as the operator account. `/opt/market-platform` is the deployed checkout.
 
 ```bash
+# The units run /opt/market-platform/.venv/bin/python. The environment holds the runtime dependencies only (pyproject.toml
+# is the authority; a test keeps this list in step with it). Do NOT `pip install -e .`: it writes src/quant_platform.egg-info
+# into the checkout, and the promotion needs a clean work tree.
+python3 -m venv /opt/market-platform/.venv
+/opt/market-platform/.venv/bin/pip install 'pyarrow>=15' 'psycopg[binary]>=3.1' 'rfc8785>=0.1.4' 'websockets>=12'
+
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-api
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-worker
 
@@ -136,6 +142,15 @@ sudo journalctl -u quant-platform-worker.service -n 40 --no-pager   # commit=<sh
 The two `<sha>` values are the same, and equal `git -C /opt/market-platform rev-parse HEAD`. The API output also shows
 `authorization_policy_version` and `server_trust_bundle_version`, and lists a family whose scope no principal holds
 (allowed, but unreachable).
+
+## What a delivery costs the API host
+
+A delivery holds the delivered files in the API's memory (read, encoded for the wire, framed) and is limited by the bounds of
+[ADR-0072 Amendment 1](../decisions/ADR-0072-server-deck-deployment-composition-v1.md#amendment-1-issue-431--delivery-bounds-raised-to-the-measured-history):
+512 MiB per file, 1 GiB and 16 files per admission, 1.5 GiB of frames retained at once, 600 s to fetch them. Measured peaks
+of the API process: about 2.6 GiB for one 512 MiB file and about 4 GiB for 1 GiB in several files, plus about 53 MiB when idle;
+the deck needs about the same on its side. Plan the host for one such delivery at a time: the retained-bytes cap refuses a
+second delivery that does not fit, but concurrent deliveries were not measured. The unit sets no memory limit.
 
 ## Promotion
 
