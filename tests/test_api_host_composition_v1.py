@@ -330,6 +330,47 @@ class ApiHostCompositionV1Tests(unittest.IsolatedAsyncioTestCase):
             set(composition.family_handlers),
         )
 
+    def test_a_principal_holding_only_the_register_scope_does_not_make_training_reachable(self) -> None:
+        for scopes, reachable in (
+            (["j02.training.register"], False),
+            (["j02.training.evaluate"], True),
+            (["j02.training.evaluate", "j02.training.register"], True),
+        ):
+            with self.subTest(scopes):
+                path = self.cwd / "training_scopes.json"
+                path.write_bytes(principals_document(entry("deck", self.fingerprints["all"], scopes)))
+                composition = compose_api_host(self.options(("training",), principals_file=str(path)))
+                notices = " ".join(composition.notices)
+                self.assertEqual(not reachable, "unreachable_family=training" in notices)
+
+    def test_the_training_repository_provider_is_the_real_composed_one(self) -> None:
+        import quant_platform.application.api_host_composition as module
+        from quant_platform.experiments import ExperimentRepository
+
+        with mock.patch.object(
+            module, "training_family_handlers", wraps=module.training_family_handlers,
+        ) as factory, mock.patch.object(module.psycopg, "connect") as connect:
+            compose_api_host(self.options(("training",)))
+            (provider,) = factory.call_args.args
+            connections = []
+            connect.side_effect = lambda *a, **k: connections.append(MagicMock(name="connection")) or connections[-1]
+            for failure in (None, RuntimeError("boom")):
+                with self.subTest(failure=failure):
+                    try:
+                        with provider() as repository:
+                            self.assertIsInstance(repository, ExperimentRepository)
+                            self.assertIs(connections[-1], repository.connection)
+                            connections[-1].close.assert_not_called()
+                            if failure is not None:
+                                raise failure
+                    except RuntimeError:
+                        self.assertIsNotNone(failure)
+                    connections[-1].close.assert_called_once()
+            self.assertEqual(2, len(connections))  # one connection per request
+            for call in connect.call_args_list:
+                self.assertEqual((RUNTIME_DSN,), call.args)
+                self.assertNotIn("autocommit", call.kwargs)  # the repository commits per call
+
     # -- routes and the shared J14 store -----------------------------------------------
 
     def test_each_family_installs_exactly_its_own_routes(self) -> None:
@@ -538,6 +579,68 @@ class ApiHostCompositionV1Tests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(security.authorization_policy_version, item.authorization_policy_version)
             self.assertEqual(security.server_trust_bundle_version, item.server_trust_bundle_version)
             self.assertEqual("TLSv1.3", item.tls_version)
+
+    def swapped_anchor_options(self, anchor_path, *, scopes=("j02.strategy.compose",)):
+        """Options whose principals map the client of another CA (``foreign``) to strategy."""
+        principals = self.cwd / "foreign_principals.json"
+        principals.write_bytes(principals_document(entry("foreign", self.fingerprints["foreign"], list(scopes))))
+        return self.options(
+            ("strategy",), client_trust_anchor=str(anchor_path), principals_file=str(principals),
+        )
+
+    async def foreign_outcome(self, composition):
+        async with self.serve(composition) as server:
+            try:
+                return await self.probe(server, "foreign", "strategy")
+            except (ssl.SSLError, websockets.InvalidHandshake, websockets.ConnectionClosed, OSError):
+                return ("tls_denied",)
+
+    async def test_the_trust_in_force_is_the_one_whose_version_is_recorded_after_composition(self) -> None:
+        anchor = self.cwd / "swap_after.crt"
+        anchor.write_bytes((self.cwd / "ca.crt").read_bytes())
+        composition = compose_api_host(self.swapped_anchor_options(anchor))
+        self.assertEqual(("tls_denied",), await self.foreign_outcome(composition))
+        # The file is replaced after composing and before the listener starts.
+        anchor.write_bytes((self.cwd / "other_ca.crt").read_bytes())
+        self.assertEqual(("tls_denied",), await self.foreign_outcome(composition))
+        self.assertEqual(
+            file_version((self.cwd / "ca.crt").read_bytes()),
+            composition.remote_security.server_trust_bundle_version,
+        )
+
+    async def test_the_trust_in_force_is_the_one_whose_bytes_were_hashed_while_composing(self) -> None:
+        import quant_platform.application.api_host_composition as module
+
+        anchor = self.cwd / "swap_during.crt"
+        anchor.write_bytes((self.cwd / "ca.crt").read_bytes())
+        genuine = module._read
+
+        def read_then_swap(path, reason):
+            data = genuine(path, reason)
+            if Path(path) == anchor:
+                anchor.write_bytes((self.cwd / "other_ca.crt").read_bytes())  # replaced right after the read
+            return data
+
+        with mock.patch.object(module, "_read", read_then_swap):
+            composition = compose_api_host(self.swapped_anchor_options(anchor))
+        self.assertEqual(
+            file_version((self.cwd / "ca.crt").read_bytes()),
+            composition.remote_security.server_trust_bundle_version,
+        )
+        self.assertEqual(("tls_denied",), await self.foreign_outcome(composition))
+        # And the client of the recorded CA is still served by the same composition.
+        async with self.serve(composition) as server:
+            probe = await self.probe(server, "all", "strategy")
+        self.assertIn(probe, (("closed", 1008),))  # "all" is not mapped in this principals file
+
+    async def test_the_validated_context_is_the_one_the_listener_serves_with(self) -> None:
+        composition = compose_api_host(self.options(("strategy",)))
+        security = composition.remote_security
+        context = security.build_server_ssl_context()
+        self.assertIs(context, security.ssl_context)
+        self.assertIs(context, security.build_server_ssl_context())
+        self.assertEqual(ssl.CERT_REQUIRED, context.verify_mode)
+        self.assertEqual(ssl.TLSVersion.TLSv1_3, context.minimum_version)
 
     async def test_without_families_a_listener_serves_no_family_route(self) -> None:
         composition = compose_api_host(self.options(()))

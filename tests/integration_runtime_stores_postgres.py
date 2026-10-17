@@ -1071,10 +1071,46 @@ class PostgresApiHostProviders(DisposableCase, unittest.TestCase):
             })
         self.assertEqual("unregistered_operation_kind", raised.exception.context["reason"])
 
-    def test_the_training_family_has_a_repository_for_registration(self):
-        handlers = [key for key in self.composition.family_handlers if key[0] == "j02-training-v1"]
-        self.assertEqual(1, len(handlers))
-        self.assertIsNotNone(self.composition.family_handlers[handlers[0]].additional_scopes)
+    def composed_training_provider(self):
+        """The repository provider ``compose_api_host`` really hands to the training family."""
+        import quant_platform.application.api_host_composition as module
+
+        with mock.patch.object(
+            module, "training_family_handlers", wraps=module.training_family_handlers,
+        ) as factory:
+            compose_api_host(api_host.ApiHostOptions(
+                families=("training",),
+                tls_certificate=str(self.cwd / "server.crt"),
+                tls_private_key=str(self.cwd / "server.key"),
+                client_trust_anchor=str(self.cwd / "ca.crt"),
+                principals_file=str(self.cwd / "principals.json"),
+                runtime_dsn=os.environ["RUNTIME_TEST_API_DSN"],
+            ))
+        (provider,) = factory.call_args.args
+        return provider
+
+    def test_the_training_provider_yields_a_repository_on_a_per_request_api_connection(self):
+        provider = self.composed_training_provider()
+        before = self.api_connections()
+        seen = []
+        for failure in (None, RuntimeError("boom")):
+            try:
+                with provider() as repository:
+                    self.assertIsInstance(repository, ExperimentRepository)
+                    connection = repository.connection
+                    seen.append(connection)
+                    self.assertFalse(connection.autocommit)  # the repository commits per call
+                    self.assertEqual(
+                        "platform_api", connection.execute("SELECT current_user").fetchone()[0],
+                    )
+                    self.assertEqual(before + 1, self.api_connections())
+                    if failure is not None:
+                        raise failure
+            except RuntimeError:
+                self.assertIsNotNone(failure)
+            self.assertTrue(connection.closed)  # on success and on error alike
+        self.assertIsNot(seen[0], seen[1])  # one connection per request
+        self.assertEqual(before, self.api_connections())
 
 
 class PostgresResults(DisposableCase, k13.GovernedResultImportV1Tests):

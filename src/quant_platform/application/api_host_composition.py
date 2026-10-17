@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -260,23 +260,22 @@ def compose_api_host(options: ApiHostOptions) -> ApiHostComposition:
             principals_by_fingerprint=principals,
             evidence_log=RemoteJ02SecurityEvidenceLog(),
         )
+        # One snapshot: the trust is loaded from the very bytes that were hashed, and
+        # the validated context is the one the listener serves with. Nothing reads
+        # the anchor path again, so the recorded version names the trust in force.
         try:
-            remote_security.build_server_ssl_context()
+            context = remote_security.build_server_ssl_context(
+                client_trust_anchor_data=_trust_data(anchor_bytes),
+            )
         except (ssl.SSLError, OSError, ValueError) as error:
             raise ApiHostCompositionError("tls_material_invalid", "the TLS stack cannot load it") from error
+        remote_security = replace(remote_security, ssl_context=context)
         notices.append(f"authorization_policy_version={remote_security.authorization_policy_version}")
         notices.append(f"server_trust_bundle_version={remote_security.server_trust_bundle_version}")
         notices.append(f"principals={len(principals)}")
     notices.append("families=" + (",".join(families) if families else "none"))
 
-    held = frozenset().union(*(principal.scopes for principal in (
-        remote_security.principals_by_fingerprint.values() if remote_security is not None else ()
-    )))
-    for family in families:
-        if not FAMILY_SCOPES[family] & held:
-            notices.append(f"unreachable_family={family} (no principal holds {','.join(sorted(FAMILY_SCOPES[family]))})")
-
-    routes: dict[tuple[str, str, str], Any] = {}
+    family_routes: dict[str, dict[tuple[str, str, str], Any]] = {}
     transfers: FramedResultTransferStore | None = None
     resume_scopes: frozenset[str] = frozenset()
 
@@ -291,11 +290,11 @@ def compose_api_host(options: ApiHostOptions) -> ApiHostComposition:
         return session()
 
     if "strategy" in families:
-        routes.update(strategy_family_handlers())
+        family_routes["strategy"] = dict(strategy_family_handlers())
     if "validation" in families:
-        routes.update(validation_family_handlers())
+        family_routes["validation"] = dict(validation_family_handlers())
     if "training" in families:
-        routes.update(training_family_handlers(
+        family_routes["training"] = dict(training_family_handlers(
             _experiment_repositories(runtime_dsn) if runtime_dsn else None,
         ))
     if "jobs" in families:
@@ -303,7 +302,7 @@ def compose_api_host(options: ApiHostOptions) -> ApiHostComposition:
         def job_stores():
             with runtime_connections() as connection:
                 yield DurableJobStore(connection)
-        routes.update(job_family_handlers(job_stores, DATA_LOCAL_JOB_REGISTRY))
+        family_routes["jobs"] = dict(job_family_handlers(job_stores, DATA_LOCAL_JOB_REGISTRY))
     if "admitted-input" in families:
         transfers = FramedResultTransferStore(ADMITTED_INPUT_TRANSFER_CONFIG_V1)
         resume_scopes = FAMILY_SCOPES["admitted-input"]
@@ -316,16 +315,38 @@ def compose_api_host(options: ApiHostOptions) -> ApiHostComposition:
         def admission_stores():
             with runtime_connections() as connection:
                 yield AdmittedInputStore(connection)
-        routes.update(admitted_input_family_handlers(
+        family_routes["admitted-input"] = dict(admitted_input_family_handlers(
             admission_stores, authority.resolve, authority.members, authority.read_member,
             transfers=transfers, bounds=ADMITTED_INPUT_BOUNDS_V1,
         ))
     if "result-import" in families:
         staging = StagedOutputStore(K13_STAGING_BOUNDS_V1)
-        routes.update(result_import_family_handlers(
+        family_routes["result-import"] = dict(result_import_family_handlers(
             governed_result_import_service_provider(runtime_connections, staging), staging=staging,
         ))
+
+    # A family is reachable when a principal holds the scope one of its routes
+    # requires. A grant that is only an additional, body-dependent scope (training
+    # registration) opens nothing on its own, so it does not count.
+    held = frozenset().union(*(principal.scopes for principal in (
+        remote_security.principals_by_fingerprint.values() if remote_security is not None else ()
+    )))
+    routes: dict[tuple[str, str, str], Any] = {}
+    for family in families:
+        routes.update(family_routes[family])
+        required = frozenset(route.required_scope for route in family_routes[family].values())
+        if not required & held:
+            notices.append(f"unreachable_family={family} (no principal holds {','.join(sorted(required))})")
     return ApiHostComposition(remote_security, routes, transfers, resume_scopes, tuple(notices))
+
+
+def _trust_data(anchor: bytes) -> str | bytes:
+    """The exact anchor bytes in the form ``load_verify_locations(cadata=)`` takes."""
+
+    try:
+        return anchor.decode("ascii")  # PEM
+    except UnicodeDecodeError:
+        return anchor  # DER
 
 
 def _recorded_commit(runtime_dsn: str) -> Callable[[], str | None]:
