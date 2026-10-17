@@ -80,7 +80,10 @@ class LiveIngestDeploymentArtifactTests(unittest.TestCase):
 
         self.assertIn("GitHub `origin` as the code authority", text)
         self.assertIn("test -z \"$(git status --porcelain)\"", text)
-        self.assertIn("git merge --ff-only", text)
+        # The commit arrives by the fast-forward-only promotion of the handoff runbook; this runbook moves no branch.
+        self.assertIn("infra/promote-main.sh", text)
+        self.assertIn("fast-forward only", text)
+        self.assertIn("never switches or merges branches", text)
         self.assertIn("Do not add `PGPASSWORD`", text)
         self.assertIn("user=mkt-transform", text)
         self.assertIn("is_root=False", text)
