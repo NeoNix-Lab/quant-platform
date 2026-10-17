@@ -209,8 +209,8 @@ class L2CheckpointStore:
         doc["checkpoint_identity"] = checkpoint.checkpoint_identity
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._path.with_name(f"{self._path.name}.tmp-{os.getpid()}")
-        raw = json.dumps(doc, indent=2, sort_keys=True)
-        tmp_path.write_text(raw, encoding="utf-8")
+        raw_bytes = canonical_bytes(doc, profile="sorted-compact-ascii-v1", allow_nan=False)
+        tmp_path.write_bytes(raw_bytes)
         os.replace(tmp_path, self._path)
 
 
