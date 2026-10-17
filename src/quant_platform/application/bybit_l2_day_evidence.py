@@ -47,11 +47,12 @@ def measure_bybit_l2_day(
     day_start = Instant.parse(f"{day}T00:00:00Z").epoch_ns
     day_end = day_start + _DAY_NS
 
-    stats = {"snapshots": 0, "snapshots_with_u_1": 0, "u_backwards_snapshots": 0, "outside_day": 0}
+    stats = {"read": 0, "snapshots": 0, "snapshots_with_u_1": 0, "u_backwards_snapshots": 0, "outside_day": 0}
     previous_u: list[int] = []
 
     def tap() -> Iterator[L2BookEvent]:
         for event in iter_bybit_l2_archive_events(path, day):
+            stats["read"] += 1
             if not (day_start <= event.exchange_ts.epoch_ns < day_end):
                 stats["outside_day"] += 1
             if event.event_type == "snapshot":
@@ -71,6 +72,10 @@ def measure_bybit_l2_day(
     return {
         "archive": {"name": path.name, "bytes": size, "sha256": sha},
         "day": day,
+        # ``source_events`` counts every event read from the file, before certification;
+        # ``events`` is the certifier's count, which leaves out an event it rejects (for example
+        # the closing snapshot that repeats the previous delta's ``seq``/``u``).
+        "source_events": stats["read"],
         "events": report.event_count,
         "outcome": report.outcome,
         "violation_counts": document["violation_counts"],

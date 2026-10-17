@@ -36,6 +36,20 @@ DAY = fixtures.DAY
 msg = fixtures.msg
 
 
+def seam_messages():
+    """A real-shaped day: it starts late, and its tail runs past midnight and ends with a
+    closing snapshot that repeats the previous delta's ``seq`` and ``u``."""
+
+    end = fixtures.DAY_START + 86_400 * 1_000_000_000
+    return [
+        msg(1, 10, "snapshot", ms=1112, day_base=fixtures.DAY_START),
+        msg(2, 11, ms=-50, day_base=end),
+        msg(3, 12, ms=14, day_base=end),
+        msg(4, 13, ms=1113, day_base=end),
+        msg(4, 13, "snapshot", ms=1113, day_base=end),
+    ]
+
+
 def strip_timing(document):
     """The evidence minus its named wall-clock fields."""
 
@@ -83,6 +97,16 @@ class MeasurementTests(Base):
         self.assertEqual(measured["archive"]["bytes"], path.stat().st_size)
         self.assertEqual(len(measured["archive"]["sha256"]), 64)
         self.assertEqual(measured["timing"].keys(), {"elapsed_seconds"})
+
+    def test_source_events_counts_every_event_read_not_the_certifier_count(self):
+        clean = measure_bybit_l2_day(self.archive(fixtures.CLEAN), DAY)
+        self.assertEqual((clean["source_events"], clean["events"]), (5, 5))
+        seam = measure_bybit_l2_day(self.archive(seam_messages()), DAY)
+        self.assertEqual(seam["source_events"], 5)
+        self.assertEqual(seam["events"], 4, "the certifier leaves out the rejected closing duplicate")
+        self.assertEqual(seam["outcome"], "ineligible")
+        self.assertEqual(seam["violation_counts"], {"duplicate_sequence": 1})
+        self.assertEqual(seam["events_outside_day"], 3)
 
     def test_a_cut_day_reports_the_discontinuity_and_the_restart_signals(self):
         # run 1, a gap (u 12 -> 50), then a snapshot whose u goes back to 1 (a provider restart)
@@ -162,6 +186,17 @@ class MeasurementTests(Base):
 
 
 class GoldenChainTests(Base):
+    def test_a_real_shaped_day_with_a_post_midnight_tail_and_a_closing_duplicate_holds_every_claim(self):
+        evidence = self.golden(seam_messages())
+        self.assertTrue(evidence["ok"], evidence["claims"])
+        claims = self.claims(evidence)
+        self.assertEqual(claims["event_accounting"]["detail"], {"measured": 5, "stored": 2, "excluded": 3})
+        self.assertTrue(claims["partitions_eligible"]["ok"])
+        self.assertTrue(claims["reproducible_byte_identical"]["ok"])
+        # the file-level measurement is still reported honestly: it is ineligible as a file
+        self.assertEqual(evidence["measurement"]["outcome"], "ineligible")
+        self.assertEqual(evidence["measurement"]["source_events"], 5)
+
     def test_the_chain_on_a_cut_day_holds_every_claim(self):
         evidence = self.golden(fixtures.ONE_GAP)
         self.assertTrue(evidence["ok"], evidence["claims"])
