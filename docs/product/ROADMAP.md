@@ -78,7 +78,7 @@ Topology v1 (PR #322, #326)                         J10/J12/J13 in-process only;
 DG-K Process Topology v1 design gate             RESOLVED (#318/#319; ADR-0068, ADR-0069; P01-P06 FROZEN,
                                                     authorized in SCOPE.md Part B, issues not yet opened)
 DG-C L2 market depth line (implement/l2, #364)   RESOLVED (#367; ADR-0070 ACCEPTED; A14, A14a-A14g FROZEN,
-                                                    authorized in SCOPE.md Part B, issues not yet opened;
+                                                    authorized in SCOPE.md Part B; A14a-A14c implemented on the branch, A14d/A14e startable;
                                                     v1 historical ingest + consumer read, v2 live; A13 not a prerequisite)
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
@@ -231,8 +231,8 @@ implementation issues are not opened yet. Startable first: `P01`, `P02`, `P03`,
 `P05a`.
 
 The L2 market-depth line (governance #364) runs in parallel on `implement/l2`, cut from `implement/dgk`:
-ADR-0070 is accepted (#367) and `SCOPE.md` Part B authorizes `A14a`-`A14g` with start gates (`A14a` is
-startable; no implementation issue is open yet). It shares no code
+ADR-0070 is accepted (#367) with Amendment 1 (#402) and `SCOPE.md` Part B authorizes `A14a`-`A14g` with start
+gates (`A14a`-`A14c` are implemented on the branch; `A14d` and `A14e` are startable, issues not yet opened). It shares no code
 with DG-K; promotion order is DG-K first, then L2, with `SCOPE.md` reconciled by hand at the second merge
 (accepted maintainer debt, not a blocker).
 
