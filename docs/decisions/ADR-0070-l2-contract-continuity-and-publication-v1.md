@@ -487,3 +487,167 @@ ADR-0068. Groundwork: PR #317 / #316.
 - The partition-key shape `dt=…/seg=…` is a two-level key already accepted by the manifest key pattern; the catalog's one-live-revision-per-key rule applies per run.
 - `A14d` and `A14f` need a governance reconciliation (a separate `governance/` issue) to restate their sequencing notes; `A14c` needs no change.
 - The evidence items E2-E5 are unchanged. A measured discontinuity rate changes how many partitions a day yields, not the rule.
+
+## Amendment 2 (issue #416) — source-file boundary and UTC-day ownership
+
+**Date:** 2026-10-17
+**Authority:** the maintainer accepted rule **B** and the microsecond clarification below on
+2026-10-17, recorded in [issue #416](https://github.com/NeoNix-Lab/quant-platform/issues/416#issuecomment-6231872964).
+**Amends:** §2's partition-boundary interpretation, Amendment 1 items 3-4 and 9 as specified
+below, and the v1 golden's day-boundary acceptance. Earlier text remains historical; the
+supersession table identifies the operative replacements. **Does not amend:** the ordering
+key, event identities, schemas, manifest fields, catalog DDL, the coverage fold, `trade-v1`,
+any other ADR, or the start gates of `A14f` and `A14g`.
+
+### Why and bounded evidence
+
+The real-archive measurements reported in #416 show that a Bybit archive file is a delivery
+unit, not a UTC day. Treating its name as ownership of every event either refuses an otherwise
+usable day or shifts L2's `dt` relative to trades. `bybit_import.run_import` uses
+`utc_day_bounds_ms` and `[start, end)` for trades; L2 retains that same day coordinate, not a
+file-relative day. This amendment records the measurements from #416, not a second full-day
+golden run or a provider guarantee:
+
+- `2025-12-01_BTCUSDT_ob200.data.zip`: 289,149,302 bytes, SHA-256
+  `27b6cdc5f2976e7f8a9c2f02fe03eb57b170efe3a861748fafc53ae72d2816d3`, 863,929 lines.
+  Its first snapshot is at `2025-12-01T00:00:01.112Z`. Its final 13 records are in the next
+  UTC day: 12 deltas (`u = 16177201..16177212`), starting at `00:00:00.014Z`, then a snapshot
+  at `00:00:01.113Z` with the preceding delta's `seq = 491216696603` and `u = 16177212`
+  but a different event payload. Replay from the opening snapshot reproduced the terminal
+  snapshot's 200 bid and 200 ask levels exactly. The observed update run was
+  `15313285..16177212`, with no discontinuity, provider restart, mid-day snapshot, absent-level
+  delete or crossed state; replayed depth did not exceed 200 per side.
+- The first 3,145,728 bytes of the next archive, `2025-12-02_BTCUSDT_ob200.data.zip`, have
+  SHA-256 `c4226489126bc290e79214efcdd42e3f614534673d9545df9da2406c263f4d24`.
+  This is a **prefix hash, not the full archive hash**. The reported full size is 246,712,688
+  bytes, ETag `9303459e6d6b9d20f711663f946612fb`; the prefix contains 11,523 complete lines
+  from `00:00:01.113Z` through `00:19:13.713Z`. Its opening snapshot is identical to the
+  preceding file's closing snapshot in `seq`, `u`, `cts`, `ts` and all levels; the next delta
+  has `u = 16177213`. No further snapshot, update discontinuity or sequence regression was
+  observed in that prefix. The early next-day deltas are in the preceding file, not in this
+  prefix: acquiring only the next file cannot recover them.
+
+This establishes one rolling-file seam, not all historical seams. The repeated seam snapshot
+does not justify a global duplicate exception or a reconstructed/synthetic snapshot.
+
+### Decision
+
+1. **UTC-day ownership, independent of delivery.** For day `D`, intent is
+   `[D 00:00:00Z, D+1 00:00:00Z)`. An event belongs to the UTC day of its `exchange_ts`
+   (`cts`), exactly as `trade-v1`; the event at the exclusive end belongs to `D+1`.
+   Historical ingest from file `D` writes only its in-day, anchored events under
+   `dt=D/seg=NNN`. The run ordinal, paths and one-partition-per-run rule of Amendment 1 stay
+   unchanged. The source filename is provenance, never a substitute for this ownership rule.
+
+2. **Route source-edge blocks before certifying the in-day stream.** In source order, events
+   before intent start may form a contiguous file-head block; events at or after intent end
+   may form a contiguous file-tail block. These blocks are excluded from day `D`'s canonical
+   input, not refused as `event_outside_day` and not counted as in-day certification
+   violations. They remain in the retained source archive (ADR-0032). Routing here means
+   exclusion plus attributable evidence, **not** automatic publication into the adjacent day.
+   For each non-empty excluded block, evidence in existing `detail` text records its head/tail
+   disposition, source archive SHA-256, count, first/last `native_sequence`, `native_update_id`
+   and `exchange_ts`, and whether its last event is a snapshot repeating the immediately
+   preceding event's `seq`/`u`. No new manifest field or evidence kind is added.
+   Only these contiguous edge blocks are routed: an earlier-day event after in-day events, an
+   in-day event after the tail has begun, an out-of-day block in the middle, or a `cts`
+   regression still refuses the day. No sorting, timestamp correction or missing-`cts`
+   fallback makes such a file admissible. The usual in-day certification and discontinuity
+   rules continue to apply.
+
+3. **The seam snapshot has no special in-day exemption.** The measured closing snapshot is
+   outside day `D`, so neither it nor the preceding out-of-day delta reaches day `D`'s
+   duplicate-sequence check. Ingest of file `D+1` treats that file's opening snapshot as its
+   ordinary first in-day snapshot. It is not compared with a record excluded from day `D`
+   as though both were in one canonical partition. Within the in-day stream, strict sequence
+   order, duplicate/conflict refusal and all other certification checks remain unchanged;
+   two different in-day events sharing `seq` are not made legal by this amendment. Numeric
+   sequence order, rather than `exchange_ts` sorting, is still §1's ordering rule.
+
+4. **Declare the source-file head gap.** If the first anchored in-day event is later than
+   intent start, the first run's `complete` assertion starts at that event's time, **not**
+   at intent start. One leading `known_gap` assertion covers
+   `[intent start, first anchored event time)`, without a partition reference. Its existing
+   `sequence_discontinuity` evidence carries
+   `source_file_head|first_event:<ts>|source_sha256:<sha>`; excluded unanchored head events
+   retain their Amendment 1 counts and `unanchored_head` evidence in that same leading gap,
+   not in an overlapping assertion. This is a missing-support claim about this acquisition,
+   not a claim that the venue sent no events. The boundary must be exactly representable at
+   the frozen **1 µs** coverage resolution; otherwise refuse
+   `discontinuity_not_representable`, rather than round the head back to midnight. A first
+   snapshot at `2025-12-01T00:00:01.112Z` therefore yields a head gap ending at that instant
+   and a first complete run starting there. If the first anchored event is at intent start,
+   there is no head gap. Empty input or input without an anchored in-day run still refuses
+   `no_anchored_run`. Later run starts and internal gaps retain Amendment 1 item 4.
+
+5. **End coverage only where the source evidence supports it.** For a clean final run, a
+   valid file-tail block at or beyond intent end proves that the source stream continues
+   across midnight: that run's `complete` assertion ends at intent end. If the file ends
+   before intent end and has no such tail, the complete interval ends at
+   `ceil_us(last event time)` and a trailing `known_gap` covers the remainder to intent end.
+   `ceil_us` is exactly Amendment 1's least microsecond-aligned instant **strictly greater**
+   than its argument; it replaces #416's initial `last event + 1 ns` wording, which cannot
+   generally be encoded by `coverage-manifest-v1`. For example, a last event at
+   `23:59:59.900Z` ends complete coverage at `23:59:59.900001Z`, not
+   `23:59:59.900000001Z`. This preserves half-open containment of the last observed event
+   at the existing declared-coverage resolution, without changing its timestamp. A boundary
+   equal to intent end creates no empty trailing gap. Tail truncation evidence uses existing
+   `detail` text to identify the last event and source SHA-256. A tail block never bridges a
+   `u` discontinuity: if book state is already unknown, Amendment 1's trailing gap still
+   applies from `ceil_us(last anchored run event)` to intent end. All assertions stay within
+   intent, non-overlapping, with one complete interval per partition; an unrepresentable gap
+   still refuses `discontinuity_not_representable`.
+
+6. **B now is deliberately not lossless seam continuation.** In the measured seam, day
+   `D+1` acquired from file `D+1` declares `[00:00:00Z, 00:00:01.113Z)` a `known_gap`,
+   although early events exist in file `D`'s tail. Approximately 1.1 seconds are absent from
+   that day's canonical acquisition, not deleted from the retained raw evidence. The duration
+   is measured, not a fixed tolerance or a promise for every day. No carry-forward state,
+   synthetic snapshot, interpolation, silent re-acquisition or repair closes it (ADR-0044).
+   **Only `A14f` may close this seam gap**, by extending Amendment 1 **item 9**'s
+   predecessor-linked continuation to take the adjacent source file's seam tail, assign its
+   events to their owning UTC day and verify continuity from the predecessor partition. The
+   measured equality is between the last delta of **source file** `D` and the opening
+   snapshot of file `D+1`; it is not an assertion that the truncated canonical partition of
+   day `D` already includes those next-day deltas. A continuation may begin with a delta
+   only under that predecessor-bound anchor evidence, never by assuming the closing snapshot
+   alone fills the gap. The certifier parameter and catalog lookup remain deferred to
+   `A14f`'s own issue (the single mechanics deferral of Amendment 1 item 9; item 6 concerns
+   evidence binding, not day roll). This amendment does not start `A14f`, relax its held gate
+   or authorize mutation of an already published day. If another measured seam has a closing
+   snapshot different from the next file's opening snapshot, stop and report the conflict;
+   do not silently merge the two records.
+
+### Superseded text and precise scope
+
+| Where | Earlier sentence or rule | Operative replacement |
+|---|---|---|
+| §2, "Partition boundary", first sentence (already narrowed by Amendment 1) | "Partitions are natural UTC days by `exchange_ts` ... as for `trade-v1`." | Decision 1: UTC day owns the event; a delivery file may straddle it; per-run partitions remain inside that day. No shifted, file-relative `dt`. |
+| Amendment 1 item 3, final sentence | "Every event of a run must lie inside the UTC day of its source file (item 4 refuses the day otherwise); the live case is item 9." | Decisions 1-2: canonical runs remain inside the target UTC day; source-edge blocks are retained and evidenced, not a whole-file day refusal. |
+| Amendment 1 item 4, first sub-bullet, first-run `start` | "`start` is the day's intent start for the first run when the day's first event is a snapshot ..." | Decision 4: start at the first anchored event; declare the leading `known_gap` even when no earlier event appears in the file. |
+| Amendment 1 item 4, first sub-bullet, clean last-run `end` | "... or the intent end for the last run of a day that ends cleanly." | Decision 5: intent end requires continuation evidence from a valid tail; without it, use strict `ceil_us(last event)` and a trailing gap. |
+| Amendment 1 item 4, second sub-bullet, head gap | "... `[intent start, floor_us(first snapshot time))` for events before the first snapshot." | Decision 4 also covers the late file start itself, at an exactly representable boundary; excluded unanchored-head evidence remains attributable in the same gap. |
+| Amendment 1 item 4, third sub-bullet, blanket refusal | "... a day with an event whose `exchange_ts` lies outside the UTC day of its source file is refused with `event_outside_day`." | Decision 2: route only contiguous source-edge blocks; malformed placement or time regression still refuses. This is the operative refusal wording for the v1 golden; no such sentence appears in the original golden subsection. |
+| §1 duplicate/conflict rule, §5 check 3 and original v1 golden conflicting-duplicate refusal | Same-sequence conflicts / duplicates are refused. | Decision 3 clarifies the input boundary only: these checks still apply unchanged to the in-day canonical input; the out-of-day closing snapshot is not in that input. |
+| Amendment 1 item 9, continuation scope | "Live day roll (`v2`), principle only." | Decision 6 extends the same predecessor-bound principle to an adjacent archive-file seam; the mechanics and held `A14f` start gate are unchanged. |
+
+### Evidence status and implementation handoff
+
+- E2-E4 now have the bounded observations reported in #416: one real source file with one
+  continuous update run, no provider restart, no absent-level delete and no mid-day snapshot;
+  the rolling-file structure is observed at one seam. In particular **survival of `seq` across
+  a provider restart is still unproven**. No population rate or guarantee follows from zero
+  observed violations. No certification threshold is relaxed.
+- #416 reports 331.7 seconds for a single measurement pass over 863,928 events. This is not
+  ingest-throughput, memory, publish/read-back or full golden acceptance proof; that performance
+  evidence remains open. The original Open evidence table's E5 concerns `ob500` projection
+  parity and also remains open: this amendment neither renames nor closes it.
+- A separate `A14d` conformance issue implements decisions 1-5 and proves source-head/tail
+  routing, in-day duplicate refusal, regression/interior out-of-day refusal, head and trailing
+  gaps at 1 µs, and a real-shaped post-midnight tail with the closing duplicate snapshot. It
+  then re-runs the real-day golden and records the bounded E2-E4 results. #416 changes no code
+  and claims no successful full real-day ingest, certification, publication or consumer read.
+- The frozen coverage fold, event and dataset identities, all manifest bytes/fields, catalog
+  DDL, `trade-v1` and other ADRs are untouched. Source-edge and gap evidence uses existing
+  evidence kinds and `detail` text. Governance status is reconciled separately at the A14
+  closeout; this amendment does not edit planning files or credit an atom as complete.
