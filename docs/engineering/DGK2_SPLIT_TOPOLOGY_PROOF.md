@@ -155,8 +155,8 @@ A real partition above a bound is a **recorded configuration finding about the b
 ### Findings of part 2
 
 1. **Bounds.** The largest real partition of the dataset is about eight times the member bound. A delivery above the
-   bounds was **not exercised** on the real server, so what the API answers there (the refusal at `admit`) is shown only by
-   part 1, with generated data. Until a bound is changed by an ADR amendment, the deck can receive only selections whose
+   bounds was **not exercised** by either part (part 1 stays within them; the refusal at `admit` is covered only by the
+   unit tests of S01), so what the real API answers for such a selection has not been observed. Until a bound is changed by an ADR amendment, the deck can receive only selections whose
    partitions are each at most 32 MiB and together at most 64 MiB. The sizes of the other real partitions were not
    reported: only the smallest and the largest are known.
 2. **Install gap.** The server's virtual environment lacked the dependency `rfc8785` (declared in `pyproject.toml`), and it
