@@ -32,6 +32,7 @@ class L2BookNormalizationV1Tests(unittest.TestCase):
             "topic": "orderbook.500.BTCUSDT",
             "type": "delta",
             "ts": 1705276800123,
+            "cts": 1705276800120,
             "data": {
                 "s": "BTCUSDT",
                 "u": 123456,
@@ -47,7 +48,10 @@ class L2BookNormalizationV1Tests(unittest.TestCase):
         self.assertEqual(historical.venue, "bybit")
         self.assertEqual(historical.event_type, "delta")
         self.assertEqual(historical.source_depth_limit, 500)
-        self.assertEqual(historical.exchange_ts, Instant(1705276800123 * 1_000_000))
+        # bybit-orderbook-l2-v2 (ADR-0070 §1): exchange_ts is the matching-engine
+        # time ``cts``; provider_ts is the message generation time ``ts``.
+        self.assertEqual(historical.exchange_ts, Instant(1705276800120 * 1_000_000))
+        self.assertEqual(historical.provider_ts, Instant(1705276800123 * 1_000_000))
         self.assertEqual(historical.native_sequence, "78910")
         self.assertEqual(historical.native_update_id, "123456")
         self.assertEqual(historical.bids[0], L2LevelChange("bid", "41731.10", "0.400", "upsert"))
@@ -191,6 +195,7 @@ class L2BookNormalizationV1Tests(unittest.TestCase):
                 "topic": "orderbook.200.BTCUSDT",
                 "type": "snapshot",
                 "ts": 1705276800000,
+                "cts": 1705276799995,
                 "data": {
                     "s": "BTCUSDT",
                     "u": 1,
@@ -206,6 +211,7 @@ class L2BookNormalizationV1Tests(unittest.TestCase):
                 "topic": "orderbook.200.BTCUSDT",
                 "type": "snapshot",
                 "ts": 1705276800000,
+                "cts": 1705276799995,
                 "data": {
                     "s": "BTCUSDT",
                     "u": 1,
@@ -221,6 +227,7 @@ class L2BookNormalizationV1Tests(unittest.TestCase):
                 "topic": "orderbook.200.BTCUSDT",
                 "type": "snapshot",
                 "ts": 1705276800000,
+                "cts": 1705276799995,
                 "data": {
                     "s": "BTCUSDT",
                     "u": 1,

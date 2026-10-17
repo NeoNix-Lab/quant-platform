@@ -101,6 +101,11 @@ class CanonicalV1Tests(unittest.TestCase):
         # application codecs declare their additional usage explicitly rather
         # than weakening the complete source inventory or altering that fixture.
         additional = [{
+            "path": "src/quant_platform/application/l2_market_data.py",
+            "ordinal": 1, "scope": "_event_bytes",
+            "argument_ast": ast.dump(ast.parse("event.stable_dict()", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }, {
             "path": "src/quant_platform/application/validation_transport.py",
             "ordinal": 1, "scope": "_bytes",
             "argument_ast": ast.dump(ast.parse("value", mode="eval").body, include_attributes=False),
@@ -129,6 +134,8 @@ class CanonicalV1Tests(unittest.TestCase):
         # #342: the feature-provider identity (ADR-0069 s7, the ADR-0068
         # sorted-compact-ascii-v1 profile) and the size bound of a bundle's JSON
         # documents; each is one declared call site, no new profile.
+        # A14e adds the L2 event-size encoding with the same declared profile;
+        # it is a byte-size estimate, not an identity or a fixture change.
         self.assertEqual(sorted(expected + additional, key=lambda site: (site["path"], site["ordinal"])), sites)
         expected_raw = [[path, ast.dump(ast.parse(expression, mode="eval").body,
                                        include_attributes=False)]

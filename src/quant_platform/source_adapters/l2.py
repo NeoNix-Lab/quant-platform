@@ -15,6 +15,10 @@ from ..data.models import Instant, L2BookEvent, L2LevelChange
 
 L2_BOOK_EVENT_SCHEMA_ID = "l2-book-event-v1"
 BYBIT_L2_SOURCE_SEMANTICS_V1 = "bybit-orderbook-l2-v1"
+# ADR-0070 §1/§7: ``exchange_ts`` is the matching-engine time ``cts`` and
+# ``provider_ts`` is the message generation time ``ts``.  v1 mapped
+# ``exchange_ts = ts``; no L2 data had been persisted under it.
+BYBIT_L2_SOURCE_SEMANTICS_V2 = "bybit-orderbook-l2-v2"
 OKX_L2_SOURCE_SEMANTICS_V1 = "okx-books-l2-v1"
 BINANCE_L2_SOURCE_SEMANTICS_V1 = "binance-depth-l2-v1"
 KRAKEN_L2_SOURCE_SEMANTICS_V1 = "kraken-book-l2-v1"
@@ -24,9 +28,12 @@ COINBASE_L2_SOURCE_SEMANTICS_V1 = "coinbase-level2-l2-v1"
 class L2SourceError(ValueError):
     """A venue L2 message failed source-specific validation."""
 
-    def __init__(self, message: str, *, field: str | None = None):
+    def __init__(self, message: str, *, field: str | None = None, reason: str | None = None):
         self.field = field
+        self.reason = reason
         suffix = f"  [field={field!r}]" if field is not None else ""
+        if reason is not None:
+            suffix += f"  [reason={reason!r}]"
         super().__init__(message + suffix)
 
 
@@ -42,6 +49,11 @@ def normalize_bybit_l2_message(
     Applies to both live websocket messages and Bybit's public historical L2
     archives: both carry the same topic/type/data shape; only
     ``acquisition_mode`` differs.
+
+    Source semantics ``bybit-orderbook-l2-v2`` (ADR-0070 §1): ``exchange_ts`` is
+    the matching-engine timestamp ``cts`` and ``provider_ts`` is the message
+    ``ts``.  A message without ``cts`` is refused (``missing_engine_time``);
+    there is no fallback to ``ts``, so one dataset never mixes two clocks.
     """
 
     topic = _required_str(message, "topic")
@@ -56,6 +68,7 @@ def normalize_bybit_l2_message(
     if native_symbol != symbol:
         raise L2SourceError("Bybit topic symbol and payload symbol differ", field="data.s")
     ts_ms = _required_int({"ts": message.get("ts", data.get("ts"))}, "ts")
+    cts_ms = _engine_time_ms(message)
     update_id = _required_int(data, "u")
     seq = _required_int(data, "seq")
     bids = _levels(_required_sequence(data, "b"), side="bid", item_width=2, venue="bybit")
@@ -68,7 +81,7 @@ def normalize_bybit_l2_message(
         source_channel=topic,
         acquisition_mode=acquisition_mode,
         event_type=msg_type,
-        exchange_ts=_millis(ts_ms),
+        exchange_ts=_millis(cts_ms),
         provider_ts=_millis(ts_ms),
         source_depth_limit=depth,
         native_sequence=str(seq),
@@ -77,6 +90,25 @@ def normalize_bybit_l2_message(
         bids=bids,
         asks=asks,
     )
+
+
+def _engine_time_ms(message: Mapping[str, Any]) -> int:
+    """Return the Bybit matching-engine timestamp ``cts`` in milliseconds."""
+
+    value = message.get("cts")
+    if value is None:
+        raise L2SourceError(
+            "Bybit orderbook message carries no matching-engine timestamp",
+            field="cts",
+            reason="missing_engine_time",
+        )
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise L2SourceError(
+            "Bybit orderbook cts must be a non-negative integer",
+            field="cts",
+            reason="invalid_engine_time",
+        )
+    return value
 
 
 def normalize_okx_l2_message(
@@ -380,6 +412,7 @@ def _join_tokens(*items: tuple[str, str | None]) -> str | None:
 __all__ = [
     "BINANCE_L2_SOURCE_SEMANTICS_V1",
     "BYBIT_L2_SOURCE_SEMANTICS_V1",
+    "BYBIT_L2_SOURCE_SEMANTICS_V2",
     "COINBASE_L2_SOURCE_SEMANTICS_V1",
     "KRAKEN_L2_SOURCE_SEMANTICS_V1",
     "L2_BOOK_EVENT_SCHEMA_ID",
