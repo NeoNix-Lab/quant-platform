@@ -27,7 +27,7 @@ pki_name "$label"
 [[ -f "$dir/ca/ca.key" && -f "$dir/ca/ca.crt" ]] || fail "no CA in $dir/ca (run ca-init.sh first)"
 
 target="$dir/servers/$name/$label"
-mkdir -p "$dir/servers/$name"
+pki_parent_directory "$dir" servers "$name"
 pki_new_directory "$target"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

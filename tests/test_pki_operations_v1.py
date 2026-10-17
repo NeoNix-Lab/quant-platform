@@ -61,9 +61,9 @@ def posix(path: Path) -> str:
     return path.as_posix()
 
 
-def run(script: str, *arguments, check: bool = True) -> subprocess.CompletedProcess:
+def run(script: str, *arguments, check: bool = True, env: dict | None = None) -> subprocess.CompletedProcess:
     result = subprocess.run(
-        [BASH, posix(PKI / script), *map(str, arguments)], capture_output=True, text=True,
+        [BASH, posix(PKI / script), *map(str, arguments)], capture_output=True, text=True, env=env,
     )
     if check and result.returncode != 0:
         raise AssertionError(f"{script} {arguments} failed: {result.stderr}")
@@ -194,6 +194,111 @@ class PkiOperationsV1Tests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("Git work tree", result.stderr)
             self.assertEqual([], list(Path(inside).iterdir()))
+
+    def test_concurrent_issues_with_one_label_leave_exactly_one_intact_credential(self) -> None:
+        base = Path(self._tmp.name) / "race"
+        base.mkdir()
+        run("ca-init.sh", posix(base))
+        for script, arguments, files in (
+            ("issue-client.sh", ("deck-r", "same"), ("client.crt", "client.key")),
+            ("issue-server.sh", ("api-r", "DNS:localhost", "same"), ("server.crt", "server.key")),
+        ):
+            with self.subTest(script):
+                processes = [
+                    subprocess.Popen(
+                        [BASH, posix(PKI / script), posix(base), *arguments], stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True,
+                    )
+                    for _ in range(8)
+                ]
+                results = [(process.wait(), *process.communicate()) for process in processes]
+                winners = [stdout for code, stdout, _ in results if code == 0]
+                self.assertEqual(1, len(winners), [r[0] for r in results])
+                for code, _, stderr in results:
+                    if code != 0:
+                        self.assertIn("refusing to overwrite", stderr)
+                kind = "clients" if script == "issue-client.sh" else "servers"
+                directory = base / kind / arguments[0] / arguments[-1]
+                certificate, key = directory / files[0], directory / files[1]
+                derived = openssl("ec", "-in", key, "-pubout")
+                self.assertEqual(derived, openssl("x509", "-in", certificate, "-noout", "-pubkey"))
+                self.assertIn("OK", openssl("verify", "-CAfile", self.ca_crt(base), certificate))
+                if script == "issue-client.sh":
+                    printed = dict(line.split("=", 1) for line in winners[0].splitlines() if "=" in line)
+                    self.assertEqual(printed["fingerprint"], run("fingerprint.sh", posix(certificate)).stdout.strip())
+
+    def symlink_to(self, link: Path, target: Path) -> None:
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symbolic links cannot be created here")
+        if not link.is_symlink():
+            self.skipTest("symbolic links cannot be created here")
+
+    def test_a_link_inside_the_pki_directory_cannot_lead_the_keys_into_git(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as inside:
+            tracked = Path(inside)
+            for script, arguments, kind, name in (
+                ("issue-client.sh", ("deck-l", "t1"), "clients", "deck-l"),
+                ("issue-server.sh", ("api-l", "DNS:localhost", "t1"), "servers", "api-l"),
+            ):
+                for level in ("kind", "name"):
+                    with self.subTest(script=script, level=level):
+                        base = Path(self._tmp.name) / f"link_{kind}_{level}"
+                        base.mkdir()
+                        run("ca-init.sh", posix(base))
+                        if level == "kind":
+                            self.symlink_to(base / kind, tracked)
+                        else:
+                            (base / kind).mkdir()
+                            self.symlink_to(base / kind / name, tracked)
+                        result = run(script, posix(base), *arguments, check=False)
+                        self.assertNotEqual(0, result.returncode)
+                        self.assertIn("symbolic link", result.stderr)
+                        self.assertEqual([], list(tracked.iterdir()))
+
+    def test_a_pki_directory_that_is_a_link_into_git_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as inside:
+            link = Path(self._tmp.name) / "pki_link"
+            self.symlink_to(link, Path(inside))
+            result = run("ca-init.sh", posix(link), check=False)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Git work tree", result.stderr)
+            self.assertEqual([], list(Path(inside).iterdir()))
+
+    def test_an_ancestor_with_a_git_entry_is_refused_even_when_git_does_not_recognise_it(self) -> None:
+        outer = Path(self._tmp.name) / "damaged"
+        (outer / ".git").mkdir(parents=True)  # not a valid repository: git itself says "not a git repository"
+        base = outer / "pki"
+        base.mkdir()
+        result = run("ca-init.sh", posix(base), check=False)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Git work tree", result.stderr)
+        self.assertEqual([], list(base.iterdir()))
+
+    def fake_git(self, body: str) -> dict:
+        directory = Path(self._tmp.name) / f"fakegit_{abs(hash(body))}"
+        directory.mkdir(exist_ok=True)
+        script = directory / "git"
+        script.write_bytes(("#!/bin/sh\n" + body + "\n").encode("utf-8"))
+        script.chmod(0o755)
+        return {**os.environ, "PKI_GIT": posix(script)}
+
+    def test_a_git_that_cannot_answer_is_a_refusal_not_a_pass(self) -> None:
+        for body in ("echo 'fatal: something else broke' >&2; exit 128", "echo boom >&2; exit 2", "exit 0"):
+            with self.subTest(body):
+                base = Path(self._tmp.name) / f"gitfail_{abs(hash(body))}"
+                base.mkdir()
+                result = run("ca-init.sh", posix(base), check=False, env=self.fake_git(body))
+                self.assertNotEqual(0, result.returncode)
+                self.assertTrue("cannot establish" in result.stderr or "Git work tree" in result.stderr, result.stderr)
+                self.assertEqual([], list(base.iterdir()))
+
+    def test_a_git_that_says_not_a_repository_lets_a_plain_directory_through(self) -> None:
+        base = Path(self._tmp.name) / "gitplain"
+        base.mkdir()
+        env = self.fake_git("echo 'fatal: not a git repository (or any of the parent directories): .git' >&2; exit 128")
+        self.assertEqual(0, run("ca-init.sh", posix(base), env=env).returncode)
 
     def test_the_scripts_never_overwrite_a_credential(self) -> None:
         for arguments in (

@@ -18,6 +18,11 @@ the API authorizes by the **exact SHA-256 fingerprint** of the client certificat
 `<pki-dir>` is a directory you create **outside the repository** (the scripts refuse a Git work tree). The scripts
 need only `bash` and `openssl`. Keys are EC P-256; the listener and the deck client speak TLS 1.3 only.
 
+The scripts check the *physical* path (symbolic links resolved) both for a `.git` entry in any ancestor and with Git
+itself, and refuse when Git cannot answer; they refuse a symbolic link anywhere under `<pki-dir>` (`clients`, `servers`,
+the credential's own directory), and creating a credential directory is atomic, so two concurrent issues with the same
+label cannot both write: one wins, the other is refused. `PKI_GIT` names the git executable if it is not on `PATH`.
+
 ## Where things live
 
 - **Private keys** are files, mode `0600`, owned by the service user that reads them (`server.key` by the API user,
