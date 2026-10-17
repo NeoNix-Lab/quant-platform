@@ -1,13 +1,14 @@
 # DG-K2 split topology proof (S07)
 
 ADR-0072 section 7 defines when the server/deck topology is ready to split, and it takes two proofs. This page records
-the first, says how to repeat it, and gives the procedure and the form of the second. **The topology may be called
-deployable only after both.** Part 1 is done; part 2 needs the real server and a supervised session and is not done.
+the first, says how to repeat it, and records the procedure and the reported result of the second. **The topology may be
+called deployable only after both**, and, per the findings of part 2, only for deliveries within the bounds of
+ADR-0072 section 1 (see [the findings](#findings-of-part-2)). Both parts have been executed.
 
 | Part | What | State |
 | --- | --- | --- |
 | 1 | Hermetic proof: loopback TLS 1.3 mutual TLS, a disposable PostgreSQL, the API and the worker as separate processes started from the units' commands, the deck as a third | implemented and recorded below |
-| 2 | Supervised proof on the real server with the real deck, on the smallest real partition, recording its size against the bounds | **not done**: see [Part 2](#part-2-supervised-real-environment-proof) |
+| 2 | Supervised proof on the real server with the real deck, on the smallest real partition, recording its size against the bounds | **executed 2026-10-17**, one happy-path run on a 3 KiB partition: see [Part 2](#part-2-supervised-real-environment-proof) |
 
 ## Part 1: the hermetic proof
 
@@ -104,13 +105,14 @@ plus the process baseline, until a measurement says otherwise.
 - The data are generated; the real partition sizes are part 2.
 - The deck's replay and training are small; they prove that the delivered bytes are usable and the outputs registrable,
   not that a research workload fits the 8 MiB output bound.
-- Part 2 below is the real-environment half and has not been executed.
+- Part 2 below is the real-environment half; it ran one happy path and none of the faults of part 1.
 
 ## Part 2: supervised real-environment proof
 
-To be executed by the maintainer's operator with the real server (the API, the worker and PostgreSQL under the units of
-the [handoff runbook](DECK_HANDOFF_RUNBOOK.md)) and the real deck, following that runbook from *Install* to *A run, step
-by step*, on the smallest real partition. Nothing here requires market data to enter Git.
+Executed from the maintainer's account, in an agent-assisted session, on the real server (the API, the worker and
+PostgreSQL under the units of the [handoff runbook](DECK_HANDOFF_RUNBOOK.md)) and the real deck, on the smallest real
+partition. The values below are **as reported by the maintainer from that session's log**; they were not re-observed on
+the server by the author of this page. Nothing here requires market data to enter Git.
 
 1. List the real partitions and pick the smallest in the dataset the deck will request (read-only):
 
@@ -127,22 +129,50 @@ by step*, on the smallest real partition. Nothing here requires market data to e
 
 | Field | Value |
 | --- | --- |
-| Date, operator | |
-| Server commit (`deployment_commit=`), worker `commit=`, deck checkout | |
-| Dataset and partition(s) delivered | |
-| Size of each member, in bytes | |
-| Total delivered, in bytes | |
-| Largest partition of the requested dataset, in bytes | |
-| Peak memory of the API during the delivery (`VmHWM` of the API process) | |
-| Outcome of each step (`admit`, `deliver`, verify, `upload_output`, `submit`) | |
-| Registration (`bundle_digest`) | |
+| Field | Value |
+| --- | --- |
+| Date, operator | 2026-10-17, maintainer's account (agent-assisted session) |
+| Server commit (`deployment_commit=`), worker `commit=`, deck checkout | `f6bc82e1d70ff67790ab5b77216176348353488e` (the head of the pull request of part 1, checked out on the server; not a commit of `main`) |
+| Dataset and partition(s) delivered | `canonical/trades/bybit/BTCUSDT/trade-v1`, `dt=2026-10-03/part-235938.parquet`, requested as `2026-10-03T23:59:39Z`–`23:59:59Z` |
+| Size of each member, in bytes | 3 122 |
+| Total delivered, in bytes | 3 122 |
+| Largest partition of the requested dataset, in bytes | 265 067 553 (`dt=2026-02-05`) |
+| Peak memory of the API during the delivery (`VmHWM` of the API process) | 55 644 160 (53.07 MiB); baseline before the delivery 54 861 824 (52.32 MiB) |
+| Outcome of each step (`admit`, `deliver`, verify, `upload_output`, `submit`) | all reported OK; admission `DELIVERED`, attempt 1 |
+| Workload | a replay (`replay-result`, `replay-summary`); no training |
+| Registration (`bundle_digest`) | `833e700b554fe903bdc8b09652b060d9d8566232eec27c504557c81673e5cbeb` |
+| Observed in PostgreSQL afterwards | the run and its 2 artifacts in `experiment`, the bundle and its 2 outputs in `runtime.governed_result_*` |
 
-| Bound (ADR-0072 section 1) | Value | Smallest real partition | Largest real partition |
-| --- | ---: | ---: | ---: |
-| Member | 32 MiB | | |
-| Total of one admission | 64 MiB | | |
-| Retained by the J14 store | 96 MiB | | |
+| Bound (ADR-0072 section 1) | Value | Smallest real partition (3 122 B) | Largest real partition (265 067 553 B, 252.8 MiB) |
+| --- | ---: | --- | --- |
+| Member | 32 MiB | within | **exceeds** |
+| Total of one admission | 64 MiB | within | **exceeds** |
+| Retained by the J14 store | 96 MiB | within | **exceeds** |
 
 A real partition above a bound is a **recorded configuration finding about the bounds, not a failure of the mechanism**
-(ADR-0072 section 7): record it, and the decision to change a bound belongs to a new ADR amendment. Until this table is
-filled and both parts have passed, the topology is **not** to be called deployable and #397 stays open.
+(ADR-0072 section 7). The decision to change a bound belongs to a new ADR amendment.
+
+### Findings of part 2
+
+1. **Bounds.** The largest real partition of the dataset is about eight times the member bound. A delivery above the
+   bounds was **not exercised** on the real server, so what the API answers there (the refusal at `admit`) is shown only by
+   part 1, with generated data. Until a bound is changed by an ADR amendment, the deck can receive only selections whose
+   partitions are each at most 32 MiB and together at most 64 MiB. The sizes of the other real partitions were not
+   reported: only the smallest and the largest are known.
+2. **Install gap.** The server's virtual environment lacked the dependency `rfc8785` (declared in `pyproject.toml`), and it
+   was installed by hand. The [handoff runbook](DECK_HANDOFF_RUNBOOK.md) says nothing about creating the environment or
+   installing the platform's dependencies.
+3. **Departures from the runbook, to be reviewed by the operator of the host:** the server checkout was moved to the
+   pull-request commit with `git checkout` instead of `infra/promote-main.sh` (so it did not run a commit of `main`);
+   `src/quant_platform.egg-info` was deleted to make the tree clean; and `chmod -R g+rX` followed by
+   `chown -R mkt-transform:marketdata` was run on the whole `/srv/marketdata/canonical` tree, which is wider than the
+   runbook's `usermod -aG marketdata qp-api`. The owners and modes before the change were not recorded.
+4. **Scope.** One happy path was run; none of the faults of part 1 were repeated on the real host, and the delivery was
+   3 KiB, so the memory figure says nothing about a delivery near the bounds (part 1 measured about five times the bytes
+   delivered).
+5. **The commit that ran is not the commit that will be released.** The next promotion to `main` changes the commit, and
+   the units, the deck and every admission must follow it (see the runbook, *Promotion*).
+
+#397 is fulfilled by the two parts as ADR-0072 section 7 defines them, with these findings recorded. The topology is
+deployable for deliveries within the bounds; whether to release before the bounds are revisited is a decision of the
+maintainer.
