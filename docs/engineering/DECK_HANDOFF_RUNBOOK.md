@@ -46,6 +46,12 @@ Run on the server as the operator account. `/opt/market-platform` is the deploye
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-api
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-worker
 
+# The API reads the canonical partitions it delivers (admitted-input opens them by path). infra/provision-marketdata.sh gives
+# canonical/ and every subdirectory to mkt-transform:marketdata, mode 2750: the group reads and traverses, others have nothing,
+# and its read-only actors are members of that group. The API is one of them. Run the provisioning first (it creates the group);
+# the group gives no write, and the unit has no ReadWritePaths=. Do not make the data world-readable.
+sudo usermod -aG marketdata qp-api
+
 # Both units read the commit with `git rev-parse HEAD` in a checkout the operator owns.
 sudo git config --system --add safe.directory /opt/market-platform
 
@@ -90,10 +96,25 @@ sudo -u qp-worker test -r /etc/quant-platform/worker.pgpass || echo "qp-worker c
 sudo -u qp-worker test -r /etc/quant-platform/tls/server.key && echo "qp-worker can read server.key (wrong)"
 sudo -u qp-worker test -r /etc/quant-platform/api.pgpass && echo "qp-worker can read api.pgpass (wrong)"
 sudo -u qp-api test -r /etc/quant-platform/worker.pgpass && echo "qp-api can read worker.pgpass (wrong)"
+
+# The canonical roots the catalog serves (add the cold-tier dataset roots if the host serves them): the API reads, never writes,
+# and the worker has no access.
+for root in /srv/marketdata/canonical; do
+  sudo -u qp-api test -r "$root" -a -x "$root" || echo "qp-api cannot traverse $root"
+  sudo -u qp-api test -w "$root" && echo "qp-api can write $root (wrong)"
+  sudo -u qp-worker test -x "$root" && echo "qp-worker can traverse $root (wrong)"
+  sample="$(sudo find "$root" -type f -print -quit)"
+  if [ -n "$sample" ]; then
+    sudo -u qp-api head -c 1 "$sample" >/dev/null || echo "qp-api cannot read $sample"
+    sudo -u qp-api test -w "$sample" && echo "qp-api can write $sample (wrong)"
+  fi
+done
 ```
 
 The environment files are read by systemd as root; the checks above are for what the processes themselves open. No line
-may be printed. If live-ingest is installed on the host, `sudo -u mkt-transform test -r /etc/quant-platform/live-ingest-server.env`
+may be printed. Membership of `marketdata` is read when the unit starts, so restart `quant-platform-api.service` after the
+`usermod`. The group also lets `qp-api` read `live-ingest-server.env` (`root:marketdata 0640`), which is non-secret by
+design (no password: the catalog password is in the `mkt-transform` passfile). If live-ingest is installed on the host, `sudo -u mkt-transform test -r /etc/quant-platform/live-ingest-server.env`
 must still succeed as well (the mode `0751` of the directory is what lets all three users reach their own files).
 
 ```bash
@@ -152,8 +173,11 @@ new commit exits `3` and is started again after `RestartSec`; that is expected, 
 before you finish. Finish with one check that all running units name `$DEPLOYED_SHA`: the `deployment_commit=` of the API,
 the `commit=` of the worker, and `QP_LIVE_INGEST_CODE_REF` of live-ingest.
 
-**The deck checks out the same commit before a run.** A deck result is accepted only for the server's commit
-(ADR-0072 section 5). After a promotion, an admission made earlier names the old commit: make a new `admit`.
+**The deck checks out the same commit before a run.** The server's import accepts a result when its code identity equals
+the `git_identity` of **its own admission** (ADR-0072 section 5); it does **not** compare it with the API's current commit,
+so an admission made before a promotion stays valid and a result for it would still be accepted. Keeping results off the old
+commit is therefore an operator obligation: after a promotion, abandon earlier admissions, make a new `admit` on the
+promoted server, and check that the manifest's `git_identity` equals `$DEPLOYED_SHA` before the deck runs.
 
 ## A run, step by step
 
@@ -203,8 +227,10 @@ and act on the state it returns: `DELIVERY_PENDING` with a number higher than yo
 attempt (end that one only if it is also yours and lost), `DELIVERED` means the data was delivered, `DELIVERY_FAILED` means
 deliver again.
 
-**A refused `submit`.** The result is not registered and stays deck-local. Do not edit the document by hand. If the server
-was promoted since the run, the commit no longer matches: check out the server's commit and run again from `admit`.
+**A refused `submit`.** The result is not registered and stays deck-local. Do not edit the document by hand. A refusal
+for a code identity means the bundle's commit is not the admission's `git_identity`: check out that commit on a clean tree
+and run again from `admit`. A promotion does not make the server refuse an older admission; the rule above is what keeps a
+result off the old commit.
 
 **A deck and a server that do not speak the same families.** `WireIncompatible` from the client is a local typed failure,
 not a Consumer API error; it is never retried with another wire family. See the [compatibility rule](SERVER_DECK_COMPATIBILITY.md).
@@ -212,5 +238,6 @@ not a Consumer API error; it is never retried with another wire family. See the 
 ## What this does not do
 
 No automatic promotion, restart or rollback; no rotation of credentials (see [PKI operations](DECK_PKI_OPERATIONS.md));
-no second worker; no deck on a different commit (deferred by ADR-0072 section 5); no proof on the real host (that is
+no second worker; no deck on a different commit (deferred by ADR-0072 section 5); no automatic refusal of an older admission
+after a promotion (the import compares with the admission's manifest, and changing that is an application change outside S06); no proof on the real host (that is
 ADR-0072 section 7, `S07`).

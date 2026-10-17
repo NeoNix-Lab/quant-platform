@@ -9,15 +9,19 @@ per message family.
    version the server composes. Compatibility is a wire-family commitment (ADR-0066 section 1: a change to a required
    field or to the meaning of an accepted family needs a new family version; ADR-0067 section 3: an unexpected version is a
    local typed `wire_incompatible`, never a downgrade or a probe).
-2. **Accepting a result.** The server additionally accepts a result only when the deck's commit equals the server's commit
-   (ADR-0072 section 5: `deck_code_identity` and `RunIdentity.code_identity` equal the manifest's `git_identity`, which is the
-   commit the API recorded at startup).
+2. **Accepting a result.** The server's import accepts a result only when the deck's commit equals the commit of its
+   admission (ADR-0072 section 5: `deck_code_identity` and `RunIdentity.code_identity` equal the admitted manifest's
+   `git_identity`, which is the commit the API had recorded when it made that admission). The import does **not** compare
+   it with the API's *current* commit: an admission made before a promotion stays `DELIVERED` and a result for it is still
+   accepted after the promotion. That the result belongs to the current commit is an operator obligation: after a promotion,
+   abandon earlier admissions and `admit` again on the promoted server. An automatic refusal would need an application change
+   outside S06, which this page does not assume.
 3. **The package version decides nothing.** `pyproject.toml`'s version, a tag name or a release label is not evidence of
    compatibility in either direction.
 
-Rule 1 is checked by the wire: a family or version the server does not compose is refused. Rule 2 is checked twice: by the
+Rule 1 is checked by the wire: a family or version the server does not compose is refused. Rule 2 is checked twice, both times against the admission's manifest: by the
 deck's workload module before any work (it refuses a tree that is dirty or not at the manifest's commit) and by the server's
-import (it refuses a bundle whose code identity is not the commit it recorded).
+import (it refuses a bundle whose code identity is not the manifest's `git_identity`). Neither reads the current deployment record.
 
 ## The families
 

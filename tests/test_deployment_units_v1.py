@@ -293,7 +293,8 @@ class DeploymentUnitTests(unittest.TestCase):
         steps = {"deck": parent.findall(install), "live": parent.findall(live)}
         for name, found in steps.items():
             self.assertEqual(1, len(found), f"{name}: one install of the shared directory")
-        groups = {"mkt-transform": {"marketdata"}, "qp-api": {"qp-api"}, "qp-worker": {"qp-worker"}}
+        # qp-api is also in marketdata (the read group of the canonical data, see the canonical-data test below).
+        groups = {"mkt-transform": {"marketdata"}, "qp-api": {"qp-api", "marketdata"}, "qp-worker": {"qp-worker"}}
 
         def can_search(user: str, mode: int, owner: str, group: str) -> bool:
             return bool(
@@ -349,6 +350,58 @@ class DeploymentUnitTests(unittest.TestCase):
         self.assertEqual("mkt-transform", single(live["Service"], "User"))
         self.assertIn("sudo -u mkt-transform test -r /etc/quant-platform/live-ingest-server.env", install)
 
+    def test_the_api_can_read_and_never_write_the_canonical_partitions_the_provisioning_creates(self) -> None:
+        # admitted-input opens the catalog's partition paths with stat() and read_bytes() as the API user; the
+        # provisioned layout gives canonical/ to mkt-transform:marketdata 2750, so the API user needs that group.
+        provision = (ROOT / "infra" / "provision-marketdata.sh").read_text(encoding="utf-8")
+        match = re.search(r'for d in canonical canonical/trades[^;]*; do\n\s+dir "\$MD/\$d" (\S+)\s+(\d{4})\n', provision)
+        self.assertIsNotNone(match, "the provisioning layout of canonical/")
+        owner, mode = match.group(1), int(match.group(2), 8)
+        group = re.search(r"groupadd --system (\w+)", provision).group(1)
+        self.assertIn(f'acl "$MD/canonical" g:{group}:rx', provision)
+        self.assertEqual("mkt-transform", owner)
+        self.assertEqual(0o2750, mode)
+        runbook = RUNBOOK.read_text(encoding="utf-8")
+        install = runbook[runbook.index("## Install (once per host)"):runbook.index("## Promotion")]
+        added = re.search(r"^sudo usermod -aG (\w+) qp-api$", install, re.MULTILINE)
+        self.assertIsNotNone(added, "the API user joins the read group")
+        api_groups = {"qp-api", added.group(1)}
+
+        def access(groups: set[str], what: int) -> bool:  # what: 4 read, 2 write, 1 search
+            return bool((mode & (what << 3)) and group in groups)
+
+        self.assertTrue(access(api_groups, 4) and access(api_groups, 1), "the API reads and traverses")
+        self.assertFalse(access(api_groups, 2), "the group gives no write")
+        self.assertFalse(access({"qp-worker"}, 4) or access({"qp-worker"}, 1), "the worker has no access")
+        self.assertEqual(0, mode & 0o007, "others have nothing: the data is not made world-readable")
+        self.assertFalse(access({"qp-api"}, 4), "without the group the documented install fails to read")
+        # The API unit adds no write path and keeps the read-only file system.
+        service = self.api["Service"]
+        self.assertNotIn("ReadWritePaths", service)
+        self.assertEqual("strict", single(service, "ProtectSystem"))
+        # The procedure checks the access before the first start: read, no write, and the worker kept out.
+        for check in ('sudo -u qp-api test -r "$root" -a -x "$root"', 'sudo -u qp-api test -w "$root" &&',
+                      'sudo -u qp-worker test -x "$root" &&', 'sudo -u qp-api head -c 1 "$sample"'):
+            self.assertIn(check, install, check)
+
+    def test_the_documents_describe_the_result_check_k13_performs_not_a_stronger_one(self) -> None:
+        source = (ROOT / "src" / "quant_platform" / "application" / "governed_result_import.py").read_text(
+            encoding="utf-8")
+        self.assertIn("bundle.deck_code_identity != record.manifest.git_identity", source)
+        self.assertIn("run_spec.code_identity.identity != manifest.git_identity", source)
+        # If the import ever reads the current deployment record, these documents must change with it.
+        self.assertNotIn("deployment_commit", source)
+        compat = COMPATIBILITY.read_text(encoding="utf-8")
+        runbook = RUNBOOK.read_text(encoding="utf-8")
+        self.assertIn("does **not** compare\n   it with the API's *current* commit", compat)
+        self.assertIn("operator obligation", compat)
+        self.assertIn("does **not** compare it with the API's current commit", runbook)
+        self.assertIn("abandon earlier admissions", runbook)
+        self.assertIn("A promotion does not make the server refuse an older admission", runbook)
+        for text in (compat, runbook):
+            self.assertNotIn("the commit it recorded)", text)
+            self.assertNotIn("the commit no longer matches", text)
+
     def test_the_runbook_states_the_worker_exit_rule(self) -> None:
         text = RUNBOOK.read_text(encoding="utf-8")
         self.assertIn("**exits `3`**", text)
@@ -360,7 +413,7 @@ class DeploymentUnitTests(unittest.TestCase):
         text = COMPATIBILITY.read_text(encoding="utf-8")
         self.assertIn("for **every message family the deck speaks**", text)
         self.assertIn("the version it speaks is the\n   version the server composes", text)
-        self.assertIn("additionally accepts a result only when the deck's commit equals the server's commit", text)
+        self.assertIn("accepts a result only when the deck's commit equals the commit of its\n   admission", text)
         self.assertIn("The package version decides nothing", text)
 
     def test_the_compatibility_table_names_the_versions_in_the_code(self) -> None:
