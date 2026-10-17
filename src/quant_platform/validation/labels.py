@@ -17,11 +17,11 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from fractions import Fraction
 import hashlib
-import json
 import re
 from types import MappingProxyType
 from typing import Any
 
+from quant_platform.canonical import canonical_bytes
 from quant_platform.data.models import CoverageInterval, Instant, InvalidRequest
 from .availability import (
     DependencyCutoffRole,
@@ -86,13 +86,7 @@ def _validated_fraction_text(value: Any, field_name: str) -> str:
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 

@@ -560,13 +560,23 @@ remote implementation of `J15` is explicitly blocked until `J09` is
 implemented** — this ADR authorizes neither that server work nor an Omega
 adapter by itself. Freezes `J15`. Anchors: ADR-0055; `PUBLIC_PYTHON_API.md`.
 
-## DG-K — Process Topology v1 — RESOLVED (ADR-0068, ADR-0069)
+## DG-K — Process Topology v1 — RESOLVED and IMPLEMENTED within recorded bounds (ADR-0068, ADR-0069)
+
+**Closed by operator closeout #381 (2026-10-16):** `P01`-`P06` are implemented and merged into
+`implement/dgk` (PR #344-#353, #355, #356, #359, #361, #366, #373, #380). Amendments that landed
+with them: ADR-0064 Amendment 1 (delivery attempt identity), ADR-0066 Amendment 1 (family
+`j02-admitted-input-v2`), ADR-0068 Amendment 1 (worker exclusion bound to the process lifetime),
+ADR-0069 Amendment 1 (attempt-attributed delivery, public error projection) and Amendment 2 (J13
+reconstruction evidence, pre-decode `register` grant). Not decided and not implemented by DG-K:
+composition of the families in an executable, the production K12 authority, K13 composition,
+a deck-side bundle producer, credential issuance, deployment, a data-local J03 handler and an
+end-to-end proof. These belong to a follow-on scope registered by its own governance issue.
 
 **Resolved 2026-10-10 by design gate #319:** ADR-0068 (process topology v1)
 and ADR-0069 (J02 carriage of consumer seams and deck handoff v1) are
 `ACCEPTED`. `P01`-`P04b` are `FROZEN` under ADR-0068 and `P05a`, `P05b`, `P06`
-under ADR-0069; implementation is `MISSING` and no implementation issue is
-open yet. Answers in summary: (1) five units: ingest, platform API, exactly one
+under ADR-0069; implementation is complete within recorded bounds (closeout #381,
+see above). Answers in summary: (1) five units: ingest, platform API, exactly one
 J03 worker, PostgreSQL, deck compute; (2) every domain package stays an
 in-process library; (3) a `runtime` schema with per-unit login roles, no deck
 database login; (4) J03/K12/K13 stores move to `runtime` and K13 registration
@@ -656,6 +666,77 @@ placement or the frozen Consumer API, or change any existing identity. Out of
 this gate: L2 acquisition semantics (`A13`-`A15`), `J11`, `D05` bar-input
 replay, and Omega remote use of `P05`/`P06` (needs its own ADR-0067
 amendment).
+
+## DG-K2 — Server/deck deployment composition v1 — RESOLVED (ADR-0072 ACCEPTED), CLOSED (#409)
+
+**Closed by operator closeout #409 (2026-10-17).** `S01`-`S07` are implemented and merged into `implement/dgk2` within the bounds
+recorded in `CAPABILITY_DAG.md`. ADR-0072 Amendment 1 (issue #431) raised the delivery bounds to 512 MiB per file, 1 GiB
+and 16 files per admission after the real catalog showed that 719 of 2 116 daily partitions exceeded the original 32 MiB
+member bound; the bounds quoted under "Decisions taken" below are the ones as accepted, before that amendment. Recorded
+triggers (none authorized by the closeout) are in `SCOPE.md` under "Triggers recorded at closeout".
+
+**Resolved 2026-10-16.** The design gate #383 produced ADR-0072, `ACCEPTED` by the maintainer with the clarification
+of its section 11 (issue #387, PR #388). Governance issue #389 authorizes `S01`-`S07` in `CAPABILITY_DAG.md` (`FROZEN`,
+implementation `MISSING`); `S08` stays `OPEN_DEFERABLE` on its trigger. The scope id `DG-K2` and the atom names are
+confirmed; the integration branch name `implement/dgk2` is proposed for the maintainer's confirmation.
+
+Decisions taken (the question set below is kept as the record of what was asked; each question is answered by the ADR
+section named here): 1 -> section 1 (dataset selector only, `artifact_inputs_unavailable`, no time-based expiry, bounds
+16 / 32 MiB / 64 MiB with a 96 MiB transfer store); 2 -> section 2 (six roles, checksum content identity); 3 -> section 3
+(opt-in families, fail-closed startup); 4 -> section 4 (`openssl` scripts, restart-based rotation; `S04` stays in
+scope); 5 -> section 5 (the deck is pinned to the server's commit, resolving the ADR-0068 section 8 / `K13` conflict in
+`K13`'s direction) and section 11 (how a strategy is tested); 6 -> section 6; 7 -> section 7 (hermetic plus supervised
+proof); 8 -> section 8 (Omega out of scope); 9 -> section 9 (an empty handler registry is accepted; `S08` deferable).
+
+As originally registered:
+
+Registered by governance issue #382 (2026-10-16) after the DG-K closeout (#381). The single design-gate issue was
+#383 (one ADR). It gated the candidate atoms `S01`-`S07` in `CAPABILITY_DAG.md` (`S08`, the first
+data-local J03 handlers, is `OPEN_DEFERABLE` on an evidence trigger).
+
+DG-K delivered the J02 families, the `runtime` stores, the single worker host and the deck protocol client, but no
+executable composes them and nothing proves them on the real topology: `tools/api_server.py` serves the J02 v1
+market-data message only and has no TLS/mTLS options; the K12 server seams (`resolve`, `members`, `read_member`) have
+only test authorities; K13 is composed in no host; no component produces a `GovernedResultBundleV1` for a deck
+workload; certificate issuance, secret storage and deployment were left out of scope by ADR-0063; the J03 handler
+registry ships empty; and the acceptance tests never put PostgreSQL behind the WSS/mTLS listener.
+
+Fixed inputs (decided elsewhere; not open questions): ADR-0057 (two surfaces, the deck acts on its own initiative, the
+server never pushes work), ADR-0063 (non-loopback is WSS with mTLS, fingerprint-to-principal mapping, no credential
+service, IAM or bearer tokens), ADR-0064 (sealed manifest, server authority, no path or storage mount on the deck),
+ADR-0068 (five units, hosts in `tools/`, one worker, code identity between units) and ADR-0069 with its amendments,
+and `J11` not planned.
+
+Question set for #383:
+
+1. Which component resolves a semantic request to a sealed manifest, its ordered members, lengths and bytes (K12
+   `resolve`/`members`/`read_member`); how partitions and content hashes are aligned; how accepted artifact identities
+   are resolved; the closed sets of accepted operation and profile identities; the expiry policy values
+   (`[DA CONFERMARE]` in #357); the byte and member bounds.
+2. Which output roles exist, with which `ResultOutputContractV1` (including the replay roles that require
+   `replay_feature_provider`); staging bounds and retention; which runtime role registers.
+3. The configuration surface of `tools/api_server.py` (TLS/mTLS material, principals file, enabled families, J14 store
+   bounds, evidence log), the fail-closed startup checks and the default composition.
+4. How certificates are issued, rotated and revoked and where the fingerprint-to-principal mapping and secrets live,
+   within ADR-0063 §2.
+5. Where the producer of `GovernedResultBundleV1` lives given that `clients/deck/` must not import
+   `quant_platform`; how the deck code identity and the feature-provider identity are assembled; how a workload is
+   pinned to a commit.
+6. systemd units and environment examples for the API and the worker, the runbook and promotion updates, and the
+   compatibility rule between server and deck (wire family version, never package version).
+7. What "ready to split" means: the real-topology proof (PostgreSQL + API + worker + deck client over WSS/mTLS), its
+   pinned dataset and its fault cases (lost response, expired admission, concurrent attempts, a refused bundle,
+   restart).
+8. Omega: out of scope here, or the trigger for its own ADR-0067 amendment gate.
+9. Whether any data-local J03 handler is required for the split (`S08`), or the empty registry is an accepted state
+   until the maintainer names one.
+
+Valid closes: an `ACCEPTED` ADR in which every closed set, bound, name and default is stated (no `[TBD]`, no
+`[DA CONFERMARE]`), or an explicit recorded deferral with an evidence trigger. Stop conditions: the gate stops and
+reports if it would require a credential service, a host outside `tools/`, a binary transport family, an admission path
+that bypasses a sealed manifest, a canonical storage mount on the deck or a way for the server to push work to the
+deck, or weaken ADR-0057, ADR-0063, ADR-0064, ADR-0068 or ADR-0069. Out of this gate: Omega adoption, more than one
+J03 worker, a durable J14 transfer store, `J11`, L2 acquisition and Wave 9/10.
 
 ## Explicitly deferable decisions
 

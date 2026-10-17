@@ -7,12 +7,12 @@ publication: all partition writes made here remain ``closed``.
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from typing import Any, Mapping
 
 from .publication import QualityReport, SealedCatalogPartition
 from .models import DatasetIdentity, Instant, NaturalPartitionIdentity
+from quant_platform.canonical import canonical_bytes
 
 
 class CatalogPublicationConflict(RuntimeError):
@@ -461,7 +461,7 @@ def _manifest_sha(document: Mapping[str, Any]) -> str:
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=True).decode("utf-8")
 
 
 __all__ = ["CatalogPublicationConflict", "CatalogPublicationWriter"]

@@ -55,7 +55,10 @@ git merge --ff-only origin/codex/issue-135-lipr06a-supervised-deployment
 DEPLOYED_SHA="$(git rev-parse HEAD)"
 echo "DEPLOYED_SHA=$DEPLOYED_SHA"
 
-sudo install -d -m 0750 -o root -g marketdata /etc/quant-platform
+# /etc/quant-platform is shared with the API and worker units (DECK_HANDOFF_RUNBOOK.md), which run as users outside
+# marketdata: root:root 0751 lets every unit's user reach its own files without listing the directory; the files
+# keep their own owner and mode. Do not narrow it to root:marketdata 0750.
+sudo install -d -m 0751 -o root -g root /etc/quant-platform
 sudo install -m 0644 -o root -g root \
   infra/systemd/quant-platform-live-ingest.service \
   /etc/systemd/system/quant-platform-live-ingest.service

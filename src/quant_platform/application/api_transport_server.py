@@ -5,20 +5,22 @@ This module owns transport composition only.  It carries the already-frozen
 surface over JSON WebSocket messages, and delegates all business behavior to
 ``quant_platform.application.market_data``.
 
-The current listener is local-only. ADR-0063 defines the future non-loopback
-requirement (TLS 1.3 mutual TLS plus principal/scope authorization before JSON
-decoding); this module does not implement that remote-security contract yet.
+For original J02 v1, ADR-0063 defines the future non-loopback requirement;
+this listener now enforces its TLS/mTLS gate. ADR-0069 family dispatch
+authorizes the header's scope before invoking any semantic request decoder.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Iterable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import asyncio
 import hashlib
 import ipaddress
 import json
+import math
+import re
 import secrets
 import ssl
 from typing import Any
@@ -38,12 +40,59 @@ from .market_data import (
     ConsumerMarketDataResult,
     RepresentationRef,
 )
+from quant_platform.canonical import canonical_bytes
+
+from .framed_result_transport import (
+    J14_MESSAGE_FAMILY,
+    J14_SCHEMA_VERSION,
+    FramedResultResumeRequest,
+    FramedResultTransferStore,
+    FramedResultTransportError,
+)
 
 
 J02_REQUEST_SCHEMA_VERSION = "j02-request-v1"
 J02_RESPONSE_SCHEMA_VERSION = "j02-response-v1"
 J02_INVALID_REQUEST_MESSAGE = "the request is not valid"
 J02_MARKET_DATA_READ_SCOPE = "j02.market_data.read"
+J02_REMOTE_SCOPES = frozenset({
+    J02_MARKET_DATA_READ_SCOPE,
+    "j02.strategy.compose",
+    "j02.validation.evaluate",
+    "j02.training.evaluate",
+    "j02.training.register",
+    "j02.jobs.submit",
+    "j02.jobs.read",
+    "j02.admitted_input.read",
+    "j02.result.submit",
+})
+# Evidence-only vocabulary for ``RemoteJ02SecurityEvidence`` rows that record an
+# authenticated peer's message without any operation grant (an unsupported
+# message header). They are audit markers, not scopes: neither is in
+# ``J02_REMOTE_SCOPES``, no principal can hold them, and authorization never
+# consults them. ADR-0063 section 3 lists the evidence fields; this is the
+# only place these two values are defined.
+J02_EVIDENCE_NO_OPERATION_SCOPE = "authenticated_connection"
+J02_EVIDENCE_UNSUPPORTED_HEADER_REASON = "unsupported_message_header"
+# ADR-0069 declares these header-level grants independently of whether a
+# concrete seam handler has been installed. Training registration's additional
+# body-dependent grant belongs to the J13 codec (#339), not this dispatcher.
+_FAMILY_OPERATION_SCOPES = {
+    "j02-strategy-v1": {"compose": "j02.strategy.compose"},
+    "j02-validation-v1": dict.fromkeys(
+        ("build_folds", "classify_candidate", "evaluate_dsr", "evaluate_pbo"),
+        "j02.validation.evaluate",
+    ),
+    "j02-training-v1": {"train_evaluate": "j02.training.evaluate"},
+    "j02-job-v1": {
+        "submit": "j02.jobs.submit", "cancel": "j02.jobs.submit",
+        "status": "j02.jobs.read", "result": "j02.jobs.read",
+    },
+    "j02-admitted-input-v2": dict.fromkeys(
+        ("admit", "manifest", "deliver", "acknowledge"), "j02.admitted_input.read",
+    ),
+    "j02-result-import-v1": dict.fromkeys(("upload_output", "submit"), "j02.result.submit"),
+}
 
 # ADR-0050 Amendment 1 (#247): the wire-level message-size ceiling, set
 # explicitly on both this server (websockets.serve) and the J05 TUI client
@@ -58,6 +107,44 @@ J02_MARKET_DATA_READ_SCOPE = "j02.market_data.read"
 J02_MAX_WIRE_MESSAGE_BYTES = 16 * 1024 * 1024
 
 MarketDataExecutor = Callable[[ConsumerMarketDataQuery], ConsumerMarketDataResult]
+
+
+@dataclass(frozen=True, slots=True)
+class J02FamilyHandler:
+    """One server-composed family/version/operation route; none is installed by default.
+
+    The scope is resolved from the header route, never from the request body.
+    ``additional_scopes`` lets a codec declare grants that depend on the decoded
+    request (for example ADR-0069 section 3's ``register`` flag): the server
+    authorizes each returned scope, with evidence, after decoding and before
+    ``execute`` can run. ``pre_decode_scopes`` is the same idea for a grant that
+    one flag of the *raw* lossless request body names: it must be total and
+    side-effect free, and the server authorizes what it returns (close ``1008``
+    on a denial) before ``decode_request`` is called at all. Concrete seam
+    codecs and handlers belong to subsequent implementation atoms.
+    """
+
+    required_scope: str
+    response_schema_version: str
+    decode_request: Callable[[Mapping[str, Any]], Any]
+    execute: Callable[[Any], Mapping[str, Any]]
+    additional_scopes: Callable[[Any], Iterable[str]] | None = None
+    pre_decode_scopes: Callable[[Mapping[str, Any]], Iterable[str]] | None = None
+
+    def __post_init__(self) -> None:
+        if self.required_scope not in J02_REMOTE_SCOPES:
+            raise ValueError("required_scope must be a registered J02 scope")
+        if not isinstance(self.response_schema_version, str) or not self.response_schema_version:
+            raise ValueError("response_schema_version must be a non-empty string")
+        if not callable(self.decode_request) or not callable(self.execute):
+            raise TypeError("family decoder and executor must be callable")
+        if self.additional_scopes is not None and not callable(self.additional_scopes):
+            raise TypeError("additional_scopes must be callable")
+        if self.pre_decode_scopes is not None and not callable(self.pre_decode_scopes):
+            raise TypeError("pre_decode_scopes must be callable")
+
+
+FamilyHandlers = Mapping[tuple[str, str, str], J02FamilyHandler]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +168,12 @@ class RemoteJ02Principal:
 
 @dataclass(frozen=True, slots=True)
 class RemoteJ02SecurityEvidence:
-    """Bounded, payload-free remote J02 authorization evidence."""
+    """Bounded, payload-free remote J02 authorization evidence.
+
+    ``requested_scope`` is a registered J02 scope, or the audit marker
+    ``J02_EVIDENCE_NO_OPERATION_SCOPE`` for a message that asked for no
+    operation; the marker is never a grantable scope.
+    """
 
     timestamp: str
     session_id: str
@@ -127,6 +219,10 @@ class RemoteJ02SecurityConfig:
     authorization_policy_version: str
     principals_by_fingerprint: Mapping[str, RemoteJ02Principal]
     evidence_log: RemoteJ02SecurityEvidenceLog
+    # A host that versions the trust anchor by its bytes (issue #395) builds the
+    # context once from exactly those bytes and hands it here; the listener then
+    # serves with that context and never reads the anchor path again.
+    ssl_context: ssl.SSLContext | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for name in (
@@ -147,14 +243,33 @@ class RemoteJ02SecurityConfig:
                 raise TypeError("principals_by_fingerprint values must be RemoteJ02Principal")
         if not isinstance(self.evidence_log, RemoteJ02SecurityEvidenceLog):
             raise TypeError("evidence_log must be RemoteJ02SecurityEvidenceLog")
+        if self.ssl_context is not None and (
+            not isinstance(self.ssl_context, ssl.SSLContext)
+            or self.ssl_context.verify_mode != ssl.CERT_REQUIRED
+            or self.ssl_context.minimum_version < ssl.TLSVersion.TLSv1_3
+        ):
+            raise ValueError("ssl_context must be a TLS 1.3 context that requires a client certificate")
 
-    def build_server_ssl_context(self) -> ssl.SSLContext:
-        """Build strict TLS 1.3 mTLS context before a non-loopback listener starts."""
+    def build_server_ssl_context(
+        self, *, client_trust_anchor_data: str | bytes | None = None,
+    ) -> ssl.SSLContext:
+        """Build strict TLS 1.3 mTLS context before a non-loopback listener starts.
+
+        A configuration that carries a validated ``ssl_context`` returns it. With
+        ``client_trust_anchor_data`` (PEM text or DER bytes) the client trust is
+        loaded from those bytes instead of re-reading ``client_trust_anchor_path``,
+        so a caller that hashed them knows exactly what was trusted.
+        """
+        if self.ssl_context is not None and client_trust_anchor_data is None:
+            return self.ssl_context
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.verify_mode = ssl.CERT_REQUIRED
         context.load_cert_chain(self.server_certificate_path, self.server_private_key_path)
-        context.load_verify_locations(cafile=self.client_trust_anchor_path)
+        if client_trust_anchor_data is None:
+            context.load_verify_locations(cafile=self.client_trust_anchor_path)
+        else:
+            context.load_verify_locations(cadata=client_trust_anchor_data)
         return context
 
 
@@ -297,31 +412,171 @@ def encode_consumer_error(error: ConsumerApiError) -> dict[str, Any]:
     }
 
 
-def handle_api_transport_message(message: str | bytes, *, execute: MarketDataExecutor) -> str:
-    """Handle one JSON request message and return one JSON response message."""
+@dataclass(frozen=True, slots=True)
+class _ParsedMessage:
+    """One JSON syntax parse, shared by header selection and body handling."""
 
+    payload: Any
+    failed: bool
+    # False when the text carried a float, NaN/Infinity or a duplicate key, i.e.
+    # something ``json.loads`` would silently round, coerce or overwrite.
+    lossless: bool
+    # A partial recovery cannot prove that an undiscovered family is absent.
+    classification_complete: bool = True
+
+    @property
+    def family(self) -> bool:
+        # A body parse failure cannot turn a present family into an absent one.
+        return isinstance(self.payload, Mapping) and "message_family" in self.payload
+
+    @property
+    def legacy(self) -> bool:
+        """Select v1 only after absence is proved, never by a partial scan."""
+        return self.classification_complete and not self.family
+
+
+@dataclass(frozen=True, slots=True)
+class _RecoveredHeader:
+    header: dict[str, Any]
+    complete: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedFamilyRequest:
+    envelope: dict[str, Any]
+    decoded: Any
+    additional_scopes: frozenset[str]
+
+
+def handle_api_transport_message(
+    message: str | bytes, *, execute: MarketDataExecutor,
+    family_handler: J02FamilyHandler | None = None,
+    _parsed: _ParsedMessage | None = None,
+    _family_response: dict[str, Any] | None = None,
+) -> str:
+    """Handle one JSON request message and return one JSON response message.
+
+    This direct entry point has no principal, so a family handler that declares
+    ``additional_scopes`` cannot be authorized here and is treated as
+    unsupported; the connection handler authorizes those scopes itself.
+    ``_parsed`` and ``_family_response`` let the connection handler hand over
+    its single parse and an already-built family response, so that every
+    response keeps going through this one canonical serialization site.
+    """
+
+    family = _family_response is not None
+    if _family_response is not None:
+        response = _family_response
+    else:
+        parsed = _parsed if _parsed is not None else _parse_message(message)
+        family = not parsed.legacy
+        if family:
+            response = _build_direct_family_response(parsed, family_handler)
+        else:
+            response = _build_v1_response(parsed, execute)
+    original = response
+    while True:
+        try:
+            if family:
+                _require_finite_family_json(response)
+            encoded = canonical_bytes(response, profile="sorted-compact-ascii-v1", allow_nan=True)
+            if family and len(encoded) > J02_MAX_WIRE_MESSAGE_BYTES:
+                raise _ResponseTooLarge
+            return encoded.decode("utf-8")
+        except _ResponseTooLarge:
+            # J02 v1 has RESULT_TOO_LARGE for this; a 1009 close is not typed.
+            reflected = dict(response)
+            if response is not original:
+                if response.get("request_id") is not None:
+                    reflected["request_id"] = None
+                else:
+                    reflected = {}
+            response = _family_failure(
+                reflected,
+                ConsumerErrorCode.RESULT_TOO_LARGE, _RESULT_TOO_LARGE_MESSAGE,
+            )
+            # If reflected headers overflow the failure, drop the ID first,
+            # retaining the family/version when they fit, then other headers.
+        except Exception:
+            # Only a family result is server-composed arbitrary data; v1 keeps
+            # its existing behavior for frozen Consumer API types.
+            if not family or response is not original:
+                raise
+            response = _family_failure(
+                original, ConsumerErrorCode.INTEGRITY_FAILURE, _INTEGRITY_FAILURE_MESSAGE,
+            )
+
+
+class _ResponseTooLarge(Exception):
+    pass
+
+
+def _require_finite_family_json(value: Any) -> None:
+    """Reject non-JSON numbers without changing the frozen v1 encoder profile."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("family responses require finite JSON numbers")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _require_finite_family_json(key)
+            _require_finite_family_json(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _require_finite_family_json(item)
+
+
+def _build_direct_family_response(
+    parsed: _ParsedMessage, family_handler: J02FamilyHandler | None,
+) -> dict[str, Any]:
+    # An additive or unclassifiable envelope must never be coerced into a v1
+    # query, even when it also carries a perfectly valid legacy query.
+    try:
+        pre_scopes = _pre_decode_scopes(parsed, family_handler)
+    except Exception:
+        return _family_failure(
+            _header_envelope(parsed, family_handler), ConsumerErrorCode.INTEGRITY_FAILURE,
+            _INTEGRITY_FAILURE_MESSAGE,
+        )
+    if pre_scopes:
+        # No principal here: a grant named by the body is never decoded unauthorized.
+        return _family_failure(
+            _header_envelope(parsed, family_handler), ConsumerErrorCode.INVALID_REQUEST,
+            _FAMILY_UNSUPPORTED_MESSAGE,
+        )
+    prepared, response = _prepare_family_request(parsed, family_handler)
+    if prepared is None:
+        return response
+    if prepared.additional_scopes:
+        return _family_failure(
+            prepared.envelope, ConsumerErrorCode.INVALID_REQUEST, _FAMILY_UNSUPPORTED_MESSAGE,
+        )
+    return _execute_family_request(prepared, family_handler)
+
+
+def _build_v1_response(parsed: _ParsedMessage, execute: MarketDataExecutor) -> dict[str, Any]:
     request_id: str | None = None
     try:
-        payload = json.loads(_message_text(message))
+        if parsed.failed:
+            raise ValueError("request is not valid JSON")
+        payload = parsed.payload
         if not isinstance(payload, Mapping):
             raise ValueError("request payload must be a JSON object")
         request_id, query = decode_transport_query(payload)
         result = execute(query)
-        response = {
+        return {
             "schema_version": J02_RESPONSE_SCHEMA_VERSION,
             "request_id": request_id,
             "status": "ok",
             "result": encode_consumer_result(result),
         }
     except ConsumerApiError as exc:
-        response = {
+        return {
             "schema_version": J02_RESPONSE_SCHEMA_VERSION,
             "request_id": request_id,
             "status": "error",
             "error": encode_consumer_error(exc),
         }
     except Exception:
-        response = {
+        return {
             "schema_version": J02_RESPONSE_SCHEMA_VERSION,
             "request_id": request_id,
             "status": "error",
@@ -332,7 +587,37 @@ def handle_api_transport_message(message: str | bytes, *, execute: MarketDataExe
                 "request_identity": None,
             },
         }
-    return json.dumps(response, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _validate_family_routes(
+    routes: Mapping[tuple[str, str, str], J02FamilyHandler],
+    remote_security: RemoteJ02SecurityConfig | None,
+) -> None:
+    """Fail composition early: routes are checked at startup, not per connection."""
+
+    if routes and remote_security is None:
+        # ADR-0069 section 1 places families on the WSS/mTLS endpoint; the
+        # eight family scopes have no meaning on an unauthenticated listener.
+        raise ValueError("family routes require remote_security (TLS/mTLS authorization)")
+    for key, route in routes.items():
+        if (
+            not isinstance(key, tuple) or len(key) != 3
+            or not all(isinstance(part, str) and part for part in key)
+            or not isinstance(route, J02FamilyHandler)
+        ):
+            raise ValueError("family routes must map (family, version, operation) to J02FamilyHandler")
+        family, version, operation = key
+        declared_scope = _declared_family_scope(family, version, operation)
+        if family in _FAMILY_OPERATION_SCOPES and (
+            declared_scope is None or route.required_scope != declared_scope
+        ):
+            raise ValueError("family route must preserve its declared header scope and version")
+        if route.response_schema_version != f"{family}-response-v1":
+            raise ValueError("family route response_schema_version must be <family>-response-v1")
+        if family == "j02-training-v1" and route.additional_scopes is None:
+            # ADR-0069 section 3: the codec must declare the body-dependent
+            # register grant. Missing that hook must not silently grant it.
+            raise ValueError("training routes require an additional_scopes hook")
 
 
 async def handle_api_transport_connection(
@@ -340,23 +625,129 @@ async def handle_api_transport_connection(
     *,
     execute: MarketDataExecutor,
     remote_security: RemoteJ02SecurityConfig | None = None,
+    family_handlers: FamilyHandlers | None = None,
+    framed_transfers: FramedResultTransferStore | None = None,
+    framed_resume_scopes: Collection[str] | None = None,
 ) -> None:
-    """Serve sequential J02 request/response exchanges on one WebSocket."""
+    """Serve sequential J02 request/response exchanges on one WebSocket.
+
+    ``framed_transfers`` is opt-in and goes with ``framed_resume_scopes`` and
+    ``remote_security``: a J14 ``resume`` message is answered with the exact
+    remaining frames of a retained transfer (ADR-0066 section 3) only to an
+    authenticated peer, only for a transfer admitted under a scope, and only
+    when the peer holds that scope. The peer must hold one of
+    ``framed_resume_scopes`` before the message is decoded at all. Without
+    ``framed_transfers`` a J14 message is an unsupported family, as before.
+    """
 
     session_id = secrets.token_hex(16)
+    # Snapshot trusted composition, not a request-controlled route registry.
+    routes = dict(family_handlers or {})
+    _validate_family_routes(routes, remote_security)
+    resume_scopes = _validate_framed_composition(
+        framed_transfers, framed_resume_scopes, remote_security,
+    )
     if remote_security is not None and not await _authorize_remote_connection(
-        websocket, remote_security, session_id=session_id
+        websocket, remote_security, session_id=session_id, required_scope=None
     ):
         return
 
     async for message in websocket:
         # Revocation and policy removal take effect at every request boundary;
         # an already-open socket must not retain a prior authorization grant.
+        # An allowed recheck records nothing: the scope check below writes the
+        # single evidence row for this message.
         if remote_security is not None and not await _authorize_remote_connection(
-            websocket, remote_security, session_id=session_id
+            websocket, remote_security, session_id=session_id, required_scope=None,
+            record_allow=False,
         ):
             return
-        response = await asyncio.to_thread(handle_api_transport_message, message, execute=execute)
+        parsed = await asyncio.to_thread(_parse_message, message)
+        if (
+            framed_transfers is not None
+            and not parsed.legacy
+            and isinstance(parsed.payload, Mapping)
+            and parsed.payload.get("message_family") == J14_MESSAGE_FAMILY
+        ):
+            if not await _serve_framed_resume(
+                websocket, remote_security, session_id, parsed, framed_transfers,
+                resume_scopes,
+            ):
+                return
+            continue
+        handler = None
+        if not parsed.legacy:
+            # This includes incomplete recovery without a known family. Its
+            # partial mapping cannot grant v1: unsupported-header handling
+            # below refuses it and records no operation scope.
+            header = tuple(parsed.payload.get(name) for name in (
+                "message_family", "schema_version", "operation"
+            ))
+            well_formed = all(isinstance(value, str) and value for value in header)
+            handler = routes.get(header) if well_formed else None
+            required_scope = _declared_family_scope(*header) if well_formed else None
+            if required_scope is None and handler is not None:
+                required_scope = handler.required_scope
+        else:
+            required_scope = J02_MARKET_DATA_READ_SCOPE
+        if required_scope is not None and remote_security is not None:
+            if not await _authorize_remote_connection(
+                websocket, remote_security, session_id=session_id, required_scope=required_scope
+            ):
+                return
+        elif not parsed.legacy and remote_security is not None:
+            # An unsupported header has no operation grant to audit. Record
+            # only authenticated connection evidence, never request payload.
+            if not await _authorize_remote_connection(
+                websocket, remote_security, session_id=session_id, required_scope=None,
+                unsupported_header=True,
+            ):
+                return
+        if parsed.legacy:
+            response = await asyncio.to_thread(
+                handle_api_transport_message, message, execute=execute, _parsed=parsed,
+            )
+        else:
+            pre_scopes: frozenset[str] = frozenset()
+            early = None
+            if handler is not None:
+                try:
+                    pre_scopes = await asyncio.to_thread(_pre_decode_scopes, parsed, handler)
+                except Exception:
+                    # A broken server-side hook is a platform fault; nothing was decoded.
+                    early = _family_failure(
+                        _header_envelope(parsed, handler), ConsumerErrorCode.INTEGRITY_FAILURE,
+                        _INTEGRITY_FAILURE_MESSAGE,
+                    )
+                for pre_scope in sorted(pre_scopes):
+                    # Body-named grants (ADR-0069 section 3's ``register``) are
+                    # authorized strictly before the decoder can run.
+                    if not await _authorize_remote_connection(
+                        websocket, remote_security, session_id=session_id,
+                        required_scope=pre_scope,
+                    ):
+                        return
+            if early is not None:
+                prepared = None
+            else:
+                prepared, early = await asyncio.to_thread(_prepare_family_request, parsed, handler)
+            if prepared is None:
+                response = await asyncio.to_thread(
+                    handle_api_transport_message, message, execute=execute,
+                    _family_response=early,
+                )
+            else:
+                # Body-dependent grants (ADR-0069 section 3) are authorized
+                # after decode but strictly before the executor can run.
+                for extra_scope in sorted(prepared.additional_scopes - pre_scopes):
+                    if not await _authorize_remote_connection(
+                        websocket, remote_security, session_id=session_id,
+                        required_scope=extra_scope,
+                    ):
+                        return
+                response = await asyncio.to_thread(
+                    _execute_family_wire, message, prepared, handler, execute,
+                )
         await websocket.send(response)
 
 
@@ -365,15 +756,24 @@ async def run_api_transport_server(
     *,
     stop_event: asyncio.Event | None = None,
     execute: MarketDataExecutor | None = None,
+    family_handlers: FamilyHandlers | None = None,
+    framed_transfers: FramedResultTransferStore | None = None,
+    framed_resume_scopes: Collection[str] | None = None,
 ) -> None:
     """Run the J02 server until ``stop_event`` is set."""
 
-    executor = execute or compose_market_data_executor(config)
     remote_security = config.remote_security
+    # Invalid composition must stop the process at startup, not surface as a
+    # ValueError inside every connection handler.
+    _validate_family_routes(dict(family_handlers or {}), remote_security)
+    _validate_framed_composition(framed_transfers, framed_resume_scopes, remote_security)
+    executor = execute or compose_market_data_executor(config)
     ssl_context = remote_security.build_server_ssl_context() if remote_security is not None else None
     async with websockets.serve(
         lambda websocket: handle_api_transport_connection(
-            websocket, execute=executor, remote_security=remote_security
+            websocket, execute=executor, remote_security=remote_security,
+            family_handlers=family_handlers, framed_transfers=framed_transfers,
+            framed_resume_scopes=framed_resume_scopes,
         ),
         config.host,
         config.port,
@@ -386,6 +786,131 @@ async def run_api_transport_server(
             await stop_event.wait()
 
 
+def _encode_message(message: dict[str, Any]) -> str:
+    """Encode one outbound message through the module's single serialization site."""
+
+    return handle_api_transport_message(b"", execute=_unused_executor, _family_response=message)
+
+
+def _unused_executor(_query: Any) -> Any:  # pragma: no cover - never invoked
+    raise AssertionError("a pre-built response is never executed")
+
+
+def _digest_or_none(value: Any) -> str | None:
+    """``value`` if it is a lowercase SHA-256 hex digest, else ``None``."""
+
+    if (
+        isinstance(value, str) and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    ):
+        return value
+    return None
+
+
+def _j14_outcome(outcome: str, transfer_id: Any) -> dict[str, Any]:
+    """A typed transport outcome (ADR-0066 section 3), attributable to a transfer."""
+
+    return {
+        "message_family": J14_MESSAGE_FAMILY,
+        "schema_version": J14_SCHEMA_VERSION,
+        "message_type": "outcome",
+        "outcome": outcome,
+        "transfer_id": _digest_or_none(transfer_id),
+    }
+
+
+def _validate_framed_composition(
+    transfers: FramedResultTransferStore | None,
+    resume_scopes: Collection[str] | None,
+    remote_security: RemoteJ02SecurityConfig | None,
+) -> frozenset[str]:
+    """Fail composition early: J14 retrieval is never an unauthenticated route."""
+
+    if transfers is None:
+        if resume_scopes:
+            raise ValueError("framed_resume_scopes requires framed_transfers")
+        return frozenset()
+    if not isinstance(transfers, FramedResultTransferStore):
+        raise TypeError("framed_transfers must be a FramedResultTransferStore")
+    if remote_security is None:
+        # A retained result is observation data. Like the family routes
+        # (ADR-0069 section 1), it has no meaning on an unauthenticated listener.
+        raise ValueError("framed transfers require remote_security (TLS/mTLS authorization)")
+    if isinstance(resume_scopes, str) or not resume_scopes:
+        raise ValueError("framed transfers require framed_resume_scopes")
+    scopes = frozenset(resume_scopes)
+    if not scopes <= J02_REMOTE_SCOPES:
+        raise ValueError("framed_resume_scopes must be J02 remote scopes")
+    return scopes
+
+
+async def _serve_framed_resume(
+    websocket: Any,
+    security: RemoteJ02SecurityConfig,
+    session_id: str,
+    parsed: _ParsedMessage,
+    transfers: FramedResultTransferStore,
+    resume_scopes: frozenset[str],
+) -> bool:
+    """Answer one J14 resume. ``False`` means the connection was closed (denied).
+
+    Authorization comes strictly before decoding. First the peer must hold a
+    scope a transfer can be admitted under, whatever the message says (so a
+    malformed message gets no more than a well-formed one). Then, from the raw
+    ``transfer_id`` alone, the scope that transfer was admitted under must be
+    held *before* the resume decoder runs. A transfer with no scope, or one
+    outside ``resume_scopes``, is never served over the wire and is
+    indistinguishable from an expired one.
+    """
+
+    if not await _authorize_remote_connection(
+        websocket, security, session_id=session_id, required_scope=None,
+        required_any=resume_scopes, record_allow=False,
+    ):
+        return False
+    payload = parsed.payload
+    retained = transfers.retained_owner(_digest_or_none(payload.get("transfer_id")) or "")
+    owner = retained[0] if retained is not None and retained[0] in resume_scopes else None
+    if owner is not None:
+        # Retrieval needs the scope the transfer was admitted under.
+        allowed = await _authorize_remote_connection(
+            websocket, security, session_id=session_id, required_scope=owner,
+        )
+    else:
+        # Nothing to grant: authenticated-connection evidence only.
+        allowed = await _authorize_remote_connection(
+            websocket, security, session_id=session_id, required_scope=None,
+            unsupported_header=True,
+        )
+    if not allowed:
+        return False
+    request = None
+    outcome: str | None = None
+    if parsed.failed or not parsed.lossless:
+        outcome = "integrity_failure"
+    else:
+        try:
+            request = FramedResultResumeRequest.from_message(payload)
+        except FramedResultTransportError as error:
+            outcome = error.outcome
+    if outcome is None and owner is None:
+        outcome = "transfer_expired"
+    frames = ()
+    if outcome is None:
+        try:
+            # The transfer's owner may consult state (an admission) with I/O.
+            frames = await asyncio.to_thread(transfers.resume, request, owner=owner)
+        except FramedResultTransportError as error:
+            outcome = error.outcome
+    if outcome is not None:
+        transfer_id = request.transfer_id if request is not None else payload.get("transfer_id")
+        await websocket.send(_encode_message(_j14_outcome(outcome, transfer_id)))
+        return True
+    for frame in frames:
+        await websocket.send(_encode_message(frame.message()))
+    return True
+
+
 def _message_text(message: str | bytes) -> str:
     if isinstance(message, str):
         return message
@@ -394,24 +919,402 @@ def _message_text(message: str | bytes) -> str:
     raise TypeError("WebSocket messages must be text or UTF-8 bytes")
 
 
+def _parse_message(message: str | bytes) -> _ParsedMessage:
+    """Parse JSON syntax once; never decodes a semantic body and never raises."""
+
+    lossless = True
+
+    def lossy_float(text: str) -> float:
+        nonlocal lossless
+        lossless = False
+        return float(text)
+
+    def lossy_constant(name: str) -> float:
+        nonlocal lossless
+        lossless = False
+        return float(name)
+
+    def unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        nonlocal lossless
+        mapping = dict(pairs)
+        if len(mapping) != len(pairs):
+            lossless = False
+        return mapping
+
+    text = None
+    try:
+        text = _message_text(message)
+        payload = json.loads(
+            text, parse_float=lossy_float,
+            parse_constant=lossy_constant, object_pairs_hook=unique_pairs,
+        )
+    except Exception:
+        # Parse only top-level header values independently of the failed body.
+        # No recovered payload may reach a decoder, even if its header routes.
+        # A header key can only be written without the literal name through a
+        # JSON escape, so a text with neither the name nor a backslash cannot
+        # carry one: skip the scan for that (C-speed) test.
+        recovered = (
+            _recover_family_header(text)
+            if text is not None and ("message_family" in text or "\\" in text)
+            else _RecoveredHeader({}, True)
+        )
+        header = recovered.header
+        return _ParsedMessage(
+            header if "message_family" in header or not recovered.complete else None,
+            True, False, recovered.complete,
+        )
+    return _ParsedMessage(payload, False, lossless)
+
+
+# One lexical unit of the boundary scan below. An unterminated string consumes
+# the rest of the text, as an open quote always did; a trailing lone backslash
+# is left to the scalar-run alternative. Commas only end a value at the top
+# level, so inside a container they are folded into the scalar run: a dense
+# array is then a handful of tokens, not one per element.
+_JSON_BOUNDARY_TOP = re.compile(
+    r'"[^"\\]*(?:\\.[^"\\]*)*"?|[\[\]{},]|[^"\[\]{},]+', re.DOTALL,
+)
+_JSON_BOUNDARY_NESTED = re.compile(
+    r'"[^"\\]*(?:\\.[^"\\]*)*"?|[\[\]{}]|[^"\[\]{}]+', re.DOTALL,
+)
+# Bounds for the recovery scan on hostile input. A protocol envelope has five
+# members, and a well-formed value is skipped at C speed. These are work
+# budgets, not proof of header absence: exhausting either leaves classification
+# incomplete and must never select the legacy authorization path.
+_MAX_RECOVERY_MEMBERS = 64
+_MAX_RECOVERY_TOKENS = 100_000
+_FAMILY_HEADER_KEYS = ("message_family", "schema_version", "operation", "request_id")
+# Number-preserving: never converts, so the integer-digit limit cannot trigger.
+_VALUE_SKIPPER = json.JSONDecoder(parse_int=str, parse_float=str, parse_constant=str)
+
+
+def _well_formed_value_end(text: str, start: int) -> int | None:
+    """Boundary index of a complete JSON value at ``start``, else ``None``.
+
+    Returns the position of the ``,`` or ``}`` that follows the value (after
+    whitespace), exactly where the token scan would stop. Anything that is not
+    a complete value followed by one of those is left to the token scan.
+    """
+    try:
+        _, end = _VALUE_SKIPPER.raw_decode(text, start)
+    except (ValueError, RecursionError):
+        return None
+    while end < len(text) and text[end] in " \t\r\n":
+        end += 1
+    if end < len(text) and text[end] in ",}":
+        return end
+    return None
+
+
+def _could_spell_header_key(text: str, start: int, end: int | None = None) -> bool:
+    """Whether ``text[start:end]`` can contain a header key (C-speed).
+
+    A member name is written either literally or with a JSON escape, which
+    needs a backslash: the same argument as the entry guard in
+    ``_parse_message``. No slice is made, so a 16 MiB range is not copied.
+    """
+    end = len(text) if end is None else end
+    return text.find("message_family", start, end) != -1 or text.find("\\", start, end) != -1
+
+
+def _recover_family_header(text: str) -> _RecoveredHeader:
+    """Retain top-level headers on a failed parse, without converting the body.
+
+    This is not an alternate request parser: the failed message stays failed.
+    Scan value boundaries with quote/escape and nesting tracking, then use the
+    standard decoder only for scalar header values. Never search for a header
+    substring inside a string or a nested object. Normal messages use one parse.
+    Absence is proved only by reaching a closing brace *and* finding nothing
+    that could still spell a header key after it: the depth count cannot tell
+    ``]`` from ``}``, so a mismatched bracket can end the body early. A syntax
+    stop, an exhausted budget or an unread remainder that carries the header
+    name or an escape preserves an explicit incomplete classification instead.
+    """
+    decoder = json.JSONDecoder()
+    header: dict[str, Any] = {}
+    index = len(text) - len(text.lstrip(" \t\r\n"))
+    if index == len(text) or text[index] != "{":
+        # Not an object, so no member can be a header; but a header spelled
+        # after a BOM or other prefix is not proved absent by that alone.
+        return _RecoveredHeader({}, not _could_spell_header_key(text, 0))
+    index += 1
+    members = tokens = 0
+    complete = unproven_region = False
+    while index < len(text):
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if index < len(text) and text[index] == "}":
+            complete = True
+            break
+        members += 1
+        if members > _MAX_RECOVERY_MEMBERS:
+            break
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if index == len(text) or text[index] != '"':
+            break
+        try:
+            key, index = decoder.raw_decode(text, index)
+        except (ValueError, RecursionError):
+            break
+        if not isinstance(key, str):
+            break
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        if index == len(text) or text[index] != ":":
+            break
+        index += 1
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        start = index
+        depth = 0
+        abandoned = False
+        # A well-formed value (the usual reason a whole-message parse failed:
+        # an integer past the conversion limit) is skipped by the C decoder.
+        skipped = _well_formed_value_end(text, index)
+        if skipped is not None:
+            index = skipped
+        while skipped is None and index < len(text):
+            # Malformed value: one token per string, bracket, comma or run of
+            # other characters, within a bounded budget.
+            tokens += 1
+            if tokens > _MAX_RECOVERY_TOKENS:
+                abandoned = True
+                break
+            pattern = _JSON_BOUNDARY_TOP if depth == 0 else _JSON_BOUNDARY_NESTED
+            token_end = pattern.match(text, index).end()
+            character = text[index]
+            if character in "[{":
+                depth += 1
+            elif character in "]}":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif character == "," and depth == 0:
+                break
+            index = token_end
+        if abandoned:
+            # The value boundary is unknown, so nothing after it can be read.
+            if key in _FAMILY_HEADER_KEYS:
+                header[key] = None
+            break
+        if skipped is None and _could_spell_header_key(text, start, index):
+            # A malformed value is bounded by the token scan, not by a parser:
+            # an unbalanced quote or mismatched bracket may have swallowed
+            # members that follow. Keys are read exactly and well-formed values
+            # are proven by the C decoder; this region is neither.
+            unproven_region = True
+        if key in _FAMILY_HEADER_KEYS:
+            # Presence is retained even for an invalid header value. Only
+            # strings can route; do not recursively decode header containers.
+            value = None
+            if start < len(text) and text[start] == '"':
+                try:
+                    decoded, end = decoder.raw_decode(text, start)
+                    if end <= index and not text[end:index].strip(" \t\r\n"):
+                        value = decoded
+                except (ValueError, RecursionError):
+                    pass
+            header[key] = value
+        if index == len(text) or text[index] != ",":
+            complete = index < len(text) and text[index] == "}"
+            break
+        index += 1
+    if complete and (unproven_region or _could_spell_header_key(text, index + 1)):
+        # ``index`` is the brace the scan took for the top-level one. If a
+        # malformed value, or whatever follows that brace, carries the header
+        # name or an escape, the brace may have been a mismatched inner closer
+        # or a swallowed delimiter and the header may be elsewhere.
+        complete = False
+    return _RecoveredHeader(header, complete)
+
+
+def _declared_family_scope(family: str, version: str, operation: str) -> str | None:
+    if version != f"{family}-request-v1":
+        return None
+    return _FAMILY_OPERATION_SCOPES.get(family, {}).get(operation)
+
+
+_FAMILY_UNSUPPORTED_MESSAGE = "unsupported message family, schema_version or operation"
+_INTEGRITY_FAILURE_MESSAGE = "the platform cannot produce a trustworthy result"
+_RESULT_TOO_LARGE_MESSAGE = "the result would exceed the maximum J02 response size"
+
+
+def _family_failure(
+    envelope: Mapping[str, Any], code: ConsumerErrorCode, message: str,
+) -> dict[str, Any]:
+    response = {
+        name: envelope.get(name) for name in ("message_family", "schema_version", "request_id")
+    }
+    for name, value in response.items():
+        if not isinstance(value, str):
+            response[name] = None
+    response.update(status="error", error={
+        "code": code.value, "message": message, "context": {}, "request_identity": None,
+    })
+    return response
+
+
+def _header_envelope(parsed: _ParsedMessage, handler: J02FamilyHandler | None) -> dict[str, Any]:
+    """The response envelope a failure before decoding carries (header fields only)."""
+
+    payload = parsed.payload if isinstance(parsed.payload, Mapping) else {}
+    family = payload.get("message_family")
+    request_id = payload.get("request_id")
+    return {
+        "message_family": family if isinstance(family, str) else None,
+        "schema_version": handler.response_schema_version if handler else None,
+        "request_id": request_id if isinstance(request_id, str) else None,
+    }
+
+
+def _pre_decode_scopes(parsed: _ParsedMessage, handler: J02FamilyHandler | None) -> frozenset[str]:
+    """Grants the raw lossless request body names, before any decoder runs."""
+
+    if handler is None or handler.pre_decode_scopes is None:
+        return frozenset()
+    request = parsed.payload.get("request") if isinstance(parsed.payload, Mapping) else None
+    if parsed.failed or not parsed.lossless or not isinstance(request, Mapping):
+        return frozenset()  # the decoder is never reached for such a body either
+    scopes = frozenset(handler.pre_decode_scopes(request))
+    if not scopes <= J02_REMOTE_SCOPES:
+        raise ValueError("pre-decode scope is not a registered J02 scope")
+    return scopes
+
+
+def _prepare_family_request(
+    parsed: _ParsedMessage, handler: J02FamilyHandler | None,
+) -> tuple[_PreparedFamilyRequest | None, dict[str, Any] | None]:
+    """Decode a family body after header authorization.
+
+    Returns a prepared request, or a finished error response in its place.
+    """
+
+    if not parsed.family:
+        # No family can be selected from an incomplete scan, even if a trusted
+        # direct caller supplied a handler. Do not invent reflected headers.
+        return None, _family_failure(
+            {}, ConsumerErrorCode.INVALID_REQUEST, _FAMILY_UNSUPPORTED_MESSAGE,
+        )
+    payload = parsed.payload
+    family = payload.get("message_family")
+    family = family if isinstance(family, str) else None
+    envelope = {
+        "message_family": family,
+        "schema_version": handler.response_schema_version if handler else (
+            f"{family}-response-v1" if family else None
+        ),
+        "request_id": (
+            payload.get("request_id") if isinstance(payload.get("request_id"), str) else None
+        ),
+    }
+    try:
+        if handler is None:
+            raise ValueError(_FAMILY_UNSUPPORTED_MESSAGE)
+        request_id = payload.get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            raise ValueError("request_id must be a non-empty string")
+        envelope["request_id"] = request_id
+        if parsed.failed or not parsed.lossless:
+            raise ValueError("request must be lossless canonical JSON")
+        request = payload.get("request")
+        if not isinstance(request, Mapping):
+            raise ValueError("request must be a mapping")
+        decoded = handler.decode_request(request)
+    except ConsumerApiError as exc:
+        response = dict(envelope)
+        response.update(status="error", error=encode_consumer_error(exc))
+        return None, response
+    except Exception:
+        return None, _family_failure(
+            envelope, ConsumerErrorCode.INVALID_REQUEST,
+            _FAMILY_UNSUPPORTED_MESSAGE if handler is None else J02_INVALID_REQUEST_MESSAGE,
+        )
+    try:
+        extra = (
+            frozenset(handler.additional_scopes(decoded))
+            if handler.additional_scopes is not None else frozenset()
+        )
+        if not extra <= J02_REMOTE_SCOPES:
+            raise ValueError("additional scope is not a registered J02 scope")
+    except Exception:
+        # A broken server-side hook is a platform fault, not a client error.
+        return None, _family_failure(
+            envelope, ConsumerErrorCode.INTEGRITY_FAILURE, _INTEGRITY_FAILURE_MESSAGE,
+        )
+    return _PreparedFamilyRequest(envelope, decoded, extra), None
+
+
+def _execute_family_request(
+    prepared: _PreparedFamilyRequest, handler: J02FamilyHandler,
+) -> dict[str, Any]:
+    response = dict(prepared.envelope)
+    try:
+        result = handler.execute(prepared.decoded)
+    except ConsumerApiError as exc:
+        response.update(status="error", error=encode_consumer_error(exc))
+    except Exception:
+        # The request already decoded: an executor fault is the server's, and
+        # no raw exception text may reach the wire (ADR-0065 section 1).
+        return _family_failure(
+            prepared.envelope, ConsumerErrorCode.INTEGRITY_FAILURE, _INTEGRITY_FAILURE_MESSAGE,
+        )
+    else:
+        response.update(status="ok", result=result)
+    return response
+
+
+def _execute_family_wire(
+    message: str | bytes, prepared: _PreparedFamilyRequest, handler: J02FamilyHandler,
+    execute: MarketDataExecutor,
+) -> str:
+    return handle_api_transport_message(
+        message, execute=execute, _family_response=_execute_family_request(prepared, handler),
+    )
+
+
 async def _authorize_remote_connection(
-    websocket: Any, security: RemoteJ02SecurityConfig, *, session_id: str
+    websocket: Any, security: RemoteJ02SecurityConfig, *, session_id: str,
+    required_scope: str | None = J02_MARKET_DATA_READ_SCOPE,
+    record_allow: bool = True,
+    unsupported_header: bool = False,
+    required_any: frozenset[str] | None = None,
 ) -> bool:
-    """Authorize an already TLS-authenticated peer before JSON decoding starts."""
+    """Authorize an already TLS-authenticated peer before JSON decoding starts.
+
+    ``required_any`` admits a peer holding at least one of the given scopes (a
+    pre-decode admission where the exact scope depends on the message); a
+    denial records that scope when there is exactly one, else no operation scope.
+    """
     ssl_object = websocket.transport.get_extra_info("ssl_object")
     certificate_der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
     fingerprint = certificate_fingerprint(certificate_der) if certificate_der else None
     principal = security.principals_by_fingerprint.get(fingerprint) if fingerprint is not None else None
-    allowed = (
-        principal is not None
-        and not principal.revoked
-        and J02_MARKET_DATA_READ_SCOPE in principal.scopes
-    )
+    if required_any is not None and required_scope is None and len(required_any) == 1:
+        (required_scope,) = required_any
+        required_any = None
+    if required_any is not None:
+        scope_held = principal is not None and bool(principal.scopes & required_any)
+        unsupported_header = True  # the evidence names no single operation scope
+    elif required_scope is not None:
+        scope_held = principal is not None and required_scope in principal.scopes
+    else:
+        scope_held = principal is not None and bool(principal.scopes & J02_REMOTE_SCOPES)
+    allowed = principal is not None and not principal.revoked and scope_held
     tls_version = ssl_object.version() if ssl_object is not None else None
     cipher = ssl_object.cipher() if ssl_object is not None else None
     cipher_name = cipher[0] if cipher is not None else None
     if not allowed:
         await websocket.close(code=1008, reason="policy denied")
+    elif not record_allow or (
+        required_scope is None and J02_MARKET_DATA_READ_SCOPE not in principal.scopes
+        and not unsupported_header
+    ):
+        # An allowed recheck, or the scope-less admission of a family-only
+        # principal, grants no operation: the per-request scope row is the
+        # evidence, never an empty or invented scope.
+        return True
     security.evidence_log.record(
         RemoteJ02SecurityEvidence(
             timestamp=datetime.now(UTC).isoformat(),
@@ -422,9 +1325,18 @@ async def _authorize_remote_connection(
             credential_fingerprint=fingerprint,
             principal_id=principal.principal_id if principal is not None else None,
             authorization_policy_version=security.authorization_policy_version,
-            requested_scope=J02_MARKET_DATA_READ_SCOPE,
+            # A connection admission is not an operation grant: it keeps the
+            # legacy admission label, and family-only peers record their real
+            # requested scope at the message boundary.
+            requested_scope=(
+                J02_EVIDENCE_NO_OPERATION_SCOPE if unsupported_header
+                else required_scope or J02_MARKET_DATA_READ_SCOPE
+            ),
             decision="allow" if allowed else "deny",
-            terminal_close_reason="application_session_authorized" if allowed else "policy_denied",
+            terminal_close_reason=(
+                J02_EVIDENCE_UNSUPPORTED_HEADER_REASON if allowed and unsupported_header
+                else "application_session_authorized" if allowed else "policy_denied"
+            ),
         )
     )
     return allowed
@@ -475,6 +1387,10 @@ __all__ = [
     "ApiTransportServerConfig",
     "J02_MAX_WIRE_MESSAGE_BYTES",
     "J02_MARKET_DATA_READ_SCOPE",
+    "J02_REMOTE_SCOPES",
+    "J02_EVIDENCE_NO_OPERATION_SCOPE",
+    "J02_EVIDENCE_UNSUPPORTED_HEADER_REASON",
+    "J02FamilyHandler",
     "J02_REQUEST_SCHEMA_VERSION",
     "J02_RESPONSE_SCHEMA_VERSION",
     "decode_transport_query",

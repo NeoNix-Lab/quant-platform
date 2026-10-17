@@ -87,7 +87,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, localcontext
 import hashlib
-import json
 import re
 from typing import Any, ClassVar
 
@@ -102,6 +101,7 @@ from .outcomes import (
     OutcomeState,
     evaluate_outcome,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 EVENT_STUDY_SPEC_IDENTITY_DOMAIN = "event-study-spec-v1"
@@ -153,13 +153,7 @@ def _semantic_version(value: Any, field_name: str = "semantic_version") -> str:
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -303,13 +297,7 @@ class EventStudySpec:
 
     @property
     def canonical_utf8_serialization(self) -> str:
-        return json.dumps(
-            self.canonical_payload(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
+        return canonical_bytes(self.canonical_payload(), profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
     @property
     def spec_id(self) -> EventStudySpecId:
@@ -604,13 +592,7 @@ class ParameterSweepSpec:
 
     @property
     def canonical_utf8_serialization(self) -> str:
-        return json.dumps(
-            self.canonical_payload(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
+        return canonical_bytes(self.canonical_payload(), profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
     @property
     def spec_id(self) -> ParameterSweepSpecId:

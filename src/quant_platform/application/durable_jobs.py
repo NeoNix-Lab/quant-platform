@@ -16,6 +16,12 @@ import json
 import sqlite3
 from typing import Any
 
+from psycopg import Connection
+
+from quant_platform.canonical import canonical_bytes
+
+from .runtime_store import RuntimeStoreConnection
+
 
 class DurableJobError(RuntimeError):
     """Base class for durable Job admission and lifecycle refusals."""
@@ -143,24 +149,24 @@ class JobAttempt:
 
 
 class DurableJobStore:
-    """SQLite-backed server-local Job storage, separate from I02 persistence."""
+    """PostgreSQL runtime Job storage; SQLite is a hermetic test double."""
 
-    def __init__(self, connection: sqlite3.Connection):
-        if not isinstance(connection, sqlite3.Connection):
-            raise TypeError("connection must be a sqlite3.Connection")
+    def __init__(self, connection: sqlite3.Connection | Connection):
         self.connection = connection
-        self._initialize()
+        self._db = RuntimeStoreConnection(connection, 33101)
+        if not self._db.postgres:
+            self._initialize()
 
     def admit(self, admission: JobAdmission) -> JobRecord:
         if not isinstance(admission, JobAdmission):
             raise TypeError("admission must be a JobAdmission")
         payload = _canonical_json(admission.payload())
-        with self.connection:
-            row = self.connection.execute(
+        with self._db.transaction():
+            row = self._db.execute(
                 "SELECT payload FROM durable_jobs WHERE job_id = ?", (admission.job_id,)
             ).fetchone()
             if row is None:
-                self.connection.execute(
+                self._db.execute(
                     "INSERT INTO durable_jobs (job_id, payload, state) VALUES (?, ?, ?)",
                     (admission.job_id, payload, JobState.ADMITTED.value),
                 )
@@ -169,13 +175,49 @@ class DurableJobStore:
         return self.get(admission.job_id)
 
     def get(self, job_id: str) -> JobRecord:
-        row = self.connection.execute(
+        row = self._db.execute(
             "SELECT job_id, payload, state, reason_code, result_references, diagnostic_reference "
             "FROM durable_jobs WHERE job_id = ?", (job_id,)
         ).fetchone()
         if row is None:
             raise DurableJobNotFound("job is not admitted")
-        return _job_record(row)
+        return _job_record((
+            row[0], row[1], row[2], self._evidence_from_storage(row[3]),
+            row[4], self._evidence_from_storage(row[5]),
+        ))
+
+    def queued_job_ids(self, limit: int = 100, *, after: str | None = None) -> tuple[str, ...]:
+        """Identities of ``QUEUED`` Jobs, in deterministic ``job_id`` order.
+
+        Read-only. The order is not a queue position: ADR-0062 section 2
+        excludes queue positions from identity, and no ordering is promised
+        beyond determinism. ``after`` is a keyset cursor: pass the last
+        ``job_id`` of the previous page to continue strictly after it, so a
+        caller can walk every ``QUEUED`` Job in bounded pages.
+        """
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        if after is not None and not isinstance(after, str):
+            raise ValueError("after must be a job_id or None")
+        rows = self._db.execute(
+            "SELECT job_id FROM durable_jobs WHERE state = ? AND job_id > ? "
+            "ORDER BY job_id LIMIT ?",
+            (JobState.QUEUED.value, after or "", limit),
+        ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
+    def claim(self, job_id: str) -> JobRecord:
+        """``QUEUED -> RUNNING`` and its durable attempt, or a refusal.
+
+        Unlike ``transition``, which treats a repeated state as an idempotent
+        success, a claim of a Job that is not ``QUEUED`` is always refused, so
+        two callers can never both be told they own the same attempt.
+        """
+        with self._db.transaction():
+            current = self.get(job_id)
+            if current.state != JobState.QUEUED:
+                raise DurableJobConflict("only a QUEUED job can be claimed")
+            return self.transition(job_id, JobState.RUNNING)
 
     def transition(
         self,
@@ -192,7 +234,7 @@ class DurableJobStore:
         _bounded_optional_text(diagnostic_reference, "diagnostic_reference")
         if any(not isinstance(item, str) or not item.strip() for item in result_references):
             raise ValueError("result_references must contain non-empty strings")
-        with self.connection:
+        with self._db.transaction():
             current = self.get(job_id)
             if current.state == state:
                 if (
@@ -202,9 +244,9 @@ class DurableJobStore:
                     and current.diagnostic_reference is None
                     and diagnostic_reference is not None
                 ):
-                    self.connection.execute(
+                    self._db.execute(
                         "UPDATE durable_jobs SET diagnostic_reference = ? WHERE job_id = ?",
-                        (diagnostic_reference, job_id),
+                        (self._evidence_for_storage(diagnostic_reference), job_id),
                     )
                     return self.get(job_id)
                 if (
@@ -222,19 +264,22 @@ class DurableJobStore:
                 raise DurableJobConflict("successful job requires result references")
             if state in frozenset({JobState.FAILED, JobState.CANCELLED}) and not reason_code:
                 raise DurableJobConflict("failed or cancelled job requires a reason code")
-            self.connection.execute(
+            self._db.execute(
                 "UPDATE durable_jobs SET state = ?, reason_code = ?, result_references = ?, "
                 "diagnostic_reference = ? WHERE job_id = ?",
-                (state.value, reason_code, _canonical_json(list(result_references)), diagnostic_reference, job_id),
+                (state.value, self._evidence_for_storage(reason_code),
+                 _canonical_json(list(result_references)),
+                 self._evidence_for_storage(diagnostic_reference), job_id),
             )
             if current.state in frozenset({JobState.RUNNING, JobState.CANCELLATION_REQUESTED}):
-                self.connection.execute(
+                self._db.execute(
                     "UPDATE durable_job_attempts SET state = ?, failure_code = ?, evidence_reference = ? "
                     "WHERE job_id = ? AND attempt_no = (SELECT MAX(attempt_no) FROM durable_job_attempts WHERE job_id = ?)",
-                    (state.value, reason_code, diagnostic_reference, job_id, job_id),
+                    (state.value, self._evidence_for_storage(reason_code),
+                     self._evidence_for_storage(diagnostic_reference), job_id, job_id),
                 )
             if state == JobState.RUNNING:
-                self.connection.execute(
+                self._db.execute(
                     "INSERT INTO durable_job_attempts (job_id, attempt_no, state) "
                     "VALUES (?, COALESCE((SELECT MAX(attempt_no) + 1 FROM durable_job_attempts WHERE job_id = ?), 1), ?)",
                     (job_id, job_id, JobState.RUNNING.value),
@@ -244,50 +289,69 @@ class DurableJobStore:
     def recover_after_restart(self) -> tuple[JobRecord, ...]:
         """Mark interrupted work recoverable; never infer liveness or redispatch."""
         recovered: list[JobRecord] = []
-        with self.connection:
-            rows = self.connection.execute(
+        with self._db.transaction():
+            rows = self._db.execute(
                 "SELECT job_id FROM durable_jobs WHERE state IN (?, ?) ORDER BY job_id",
                 (JobState.RUNNING.value, JobState.CANCELLATION_REQUESTED.value),
             ).fetchall()
             for (job_id,) in rows:
                 current = self.get(str(job_id))
-                self.connection.execute(
+                self._db.execute(
                     "UPDATE durable_jobs SET state = ?, reason_code = ? WHERE job_id = ?",
-                    (JobState.RECOVERY_REQUIRED.value, "restart_recovery_required", current.job_id),
+                    (JobState.RECOVERY_REQUIRED.value,
+                     self._evidence_for_storage("restart_recovery_required"), current.job_id),
                 )
-                self.connection.execute(
+                self._db.execute(
                     "UPDATE durable_job_attempts SET state = ?, failure_code = ? "
                     "WHERE job_id = ? AND attempt_no = (SELECT MAX(attempt_no) FROM durable_job_attempts WHERE job_id = ?)",
-                    (JobState.RECOVERY_REQUIRED.value, "restart_recovery_required", current.job_id, current.job_id),
+                    (JobState.RECOVERY_REQUIRED.value,
+                     self._evidence_for_storage("restart_recovery_required"), current.job_id, current.job_id),
                 )
                 recovered.append(self.get(current.job_id))
         return tuple(recovered)
 
     def retry_or_resume(self, job_id: str) -> JobRecord:
         """Explicitly queue a recovered Job only with admitted effect-safety proof."""
-        current = self.get(job_id)
-        if current.state != JobState.RECOVERY_REQUIRED:
-            raise DurableJobConflict("retry or resume requires RECOVERY_REQUIRED")
-        if not _has_effect_safety_proof(current.admission):
-            raise DurableJobConflict("handler effect safety proof is unavailable")
-        return self.transition(job_id, JobState.QUEUED)
+        with self._db.transaction():
+            current = self.get(job_id)
+            if current.state != JobState.RECOVERY_REQUIRED:
+                raise DurableJobConflict("retry or resume requires RECOVERY_REQUIRED")
+            if not _has_effect_safety_proof(current.admission):
+                raise DurableJobConflict("handler effect safety proof is unavailable")
+            return self.transition(job_id, JobState.QUEUED)
 
     def attempts(self, job_id: str) -> tuple[JobAttempt, ...]:
         self.get(job_id)
-        rows = self.connection.execute(
+        rows = self._db.execute(
             "SELECT job_id, attempt_no, state, failure_code, evidence_reference "
             "FROM durable_job_attempts WHERE job_id = ? ORDER BY attempt_no", (job_id,)
         ).fetchall()
-        return tuple(JobAttempt(str(row[0]), int(row[1]), JobState(str(row[2])), row[3], row[4]) for row in rows)
+        return tuple(JobAttempt(
+            str(row[0]), int(row[1]), JobState(str(row[2])),
+            self._evidence_from_storage(row[3]), self._evidence_from_storage(row[4]),
+        ) for row in rows)
+
+    def _evidence_for_storage(self, value: str | None) -> str | None:
+        # PostgreSQL TEXT cannot contain NUL. Encode the entire optional string,
+        # not just NUL, so literal escape sequences roundtrip unambiguously.
+        # This representation is not an identity payload or an input restriction.
+        if value is None or not self._db.postgres:
+            return value
+        return _canonical_json(value)
+
+    def _evidence_from_storage(self, value: str | None) -> str | None:
+        if value is None or not self._db.postgres:
+            return value
+        return json.loads(value)
 
     def _initialize(self) -> None:
-        with self.connection:
-            self.connection.execute(
+        with self._db.transaction():
+            self._db.execute(
                 "CREATE TABLE IF NOT EXISTS durable_jobs ("
                 "job_id TEXT PRIMARY KEY, payload TEXT NOT NULL, state TEXT NOT NULL, "
                 "reason_code TEXT, result_references TEXT NOT NULL DEFAULT '[]', diagnostic_reference TEXT)"
             )
-            self.connection.execute(
+            self._db.execute(
                 "CREATE TABLE IF NOT EXISTS durable_job_attempts ("
                 "job_id TEXT NOT NULL, attempt_no INTEGER NOT NULL, state TEXT NOT NULL, "
                 "failure_code TEXT, evidence_reference TEXT, PRIMARY KEY (job_id, attempt_no), "
@@ -327,7 +391,7 @@ def _has_effect_safety_proof(admission: JobAdmission) -> bool:
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 __all__ = [

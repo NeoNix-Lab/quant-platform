@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 import hashlib
-import json
 import re
 from typing import Any
 
@@ -24,6 +23,7 @@ from .bybit import (
     bybit_trade_v1_ordering_key,
     validate_bybit_trade_v1_eligibility,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 BYBIT_LIVE_SOURCE_SEMANTICS_V1 = "bybit-public-trades-websocket-v1"
@@ -689,7 +689,7 @@ def _positive_decimal(value: Any, *, field: str, trade_id: str | None = None) ->
 
 
 def _stable_fingerprint(document: Mapping[str, Any]) -> str:
-    payload = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    payload = canonical_bytes(document, profile="sorted-compact-ascii-v1", allow_nan=True)
     digest = hashlib.sha256()
     digest.update(_FINGERPRINT_DOMAIN)
     digest.update(len(payload).to_bytes(8, "big"))

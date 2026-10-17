@@ -5,20 +5,34 @@ compares the deck's complete declared input manifest with the server's sealed
 admission, then verifies each result checksum, and only then calls the I02
 Experiment owner.  Its SQLite evidence ledger retains the accepted immutable
 bundle and prevents a later, conflicting result from sharing a Run/output role.
+
+Atomicity (ADR-0068 section 4). With the PostgreSQL evidence ledger, the
+Experiment registration and the bundle evidence commit or roll back together
+in one transaction on one connection: the service refuses to be composed with
+an Experiment repository on a different connection, so a crash between the two
+writes can no longer leave an Experiment without its evidence. The SQLite
+ledger is a hermetic test double only and is explicitly NOT atomic with the
+Experiment repository: there the two writes are separate commits.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
 import sqlite3
 from typing import Any
 
+from psycopg import Connection
+
+from quant_platform.canonical import canonical_bytes
 from quant_platform.experiments.accounting import TrialAttemptResult, record_trial_attempt
 from quant_platform.experiments.identities import RunIdentity
 from quant_platform.experiments.persistence import ArtifactRegistration, ExperimentRepository, RunRecord, RunState
+
+from .runtime_store import RuntimeStoreConnection
 
 from .admitted_input import (
     AdmittedInputError,
@@ -162,19 +176,20 @@ class GovernedResultRegistration:
 
 
 class GovernedResultEvidenceStore:
-    """SQLite evidence ledger for accepted result bundles and output roles."""
+    """PostgreSQL K13 evidence ledger; SQLite is a hermetic test double."""
 
-    def __init__(self, connection: sqlite3.Connection):
-        if not isinstance(connection, sqlite3.Connection):
-            raise TypeError("connection must be a sqlite3.Connection")
+    def __init__(self, connection: sqlite3.Connection | Connection):
         self.connection = connection
-        with self.connection:
-            self.connection.execute(
+        self._db = RuntimeStoreConnection(connection, 33103)
+        if self._db.postgres:
+            return
+        with self._db.transaction():
+            self._db.execute(
                 "CREATE TABLE IF NOT EXISTS governed_result_bundles ("
                 "bundle_digest TEXT PRIMARY KEY, payload TEXT NOT NULL, "
                 "run_spec_fingerprint TEXT NOT NULL, execution_id TEXT NOT NULL)"
             )
-            self.connection.execute(
+            self._db.execute(
                 "CREATE TABLE IF NOT EXISTS governed_result_outputs ("
                 "run_spec_fingerprint TEXT NOT NULL, execution_id TEXT NOT NULL, "
                 "artifact_role TEXT NOT NULL, content_checksum TEXT NOT NULL, bundle_digest TEXT NOT NULL, "
@@ -182,10 +197,30 @@ class GovernedResultEvidenceStore:
                 "FOREIGN KEY (bundle_digest) REFERENCES governed_result_bundles(bundle_digest))"
             )
 
-    def assert_admissible(self, bundle: GovernedResultBundleV1) -> None:
-        """Refuse a conflicting accepted bundle before I02 receives a mutation."""
+    @property
+    def is_postgresql(self) -> bool:
+        """Whether this ledger is the production PostgreSQL implementation."""
 
-        row = self.connection.execute(
+        return self._db.postgres
+
+    def assert_admissible(self, bundle: GovernedResultBundleV1) -> None:
+        """Refuse a conflicting accepted bundle before I02 receives a mutation.
+
+        One consistent read: it runs inside the store's transaction, so it holds
+        the same advisory lock as ``record`` and no import can commit between
+        its reads. Without that, an *identical* import committing between the
+        bundle read and the output read looked like a conflicting one and an
+        idempotent resubmission was refused (#354). The lock is released when
+        this returns, before any registration transaction opens.
+        """
+
+        with self._db.transaction():
+            self._check_admissible(bundle)
+
+    def _check_admissible(self, bundle: GovernedResultBundleV1) -> None:
+        """The check itself; callers hold the store's transaction."""
+
+        row = self._db.execute(
             "SELECT payload FROM governed_result_bundles WHERE bundle_digest = ?", (bundle.bundle_digest,)
         ).fetchone()
         if row is not None:
@@ -195,7 +230,7 @@ class GovernedResultEvidenceStore:
         run_spec, execution_id = _run_key(bundle.run_identity)
         for output in bundle.outputs:
             role = output.registration.identity.artifact_role
-            existing = self.connection.execute(
+            existing = self._db.execute(
                 "SELECT content_checksum FROM governed_result_outputs "
                 "WHERE run_spec_fingerprint = ? AND execution_id = ? AND artifact_role = ?",
                 (run_spec, execution_id, role),
@@ -203,23 +238,44 @@ class GovernedResultEvidenceStore:
             if existing is not None:
                 raise GovernedResultRefused("conflicting accepted bundle for the same Run/output role")
 
+    def is_recorded(self, bundle: GovernedResultBundleV1) -> bool:
+        """Whether this exact bundle is already accepted (a read; nothing is written).
+
+        The whole canonical payload is compared, not only the digest: a stored
+        bundle with the same digest and another payload is a conflict, never a
+        match. The result lets a transport recognize a re-submission without
+        depending on transient state; the registration itself still goes
+        through :meth:`GovernedResultImportService.import_result`.
+        """
+
+        with self._db.transaction():
+            row = self._db.execute(
+                "SELECT payload FROM governed_result_bundles WHERE bundle_digest = ?",
+                (bundle.bundle_digest,),
+            ).fetchone()
+        if row is None:
+            return False
+        if str(row[0]) != bundle.canonical_payload_v1:
+            raise GovernedResultRefused("bundle digest payload conflicts")
+        return True
+
     def record(self, bundle: GovernedResultBundleV1) -> None:
         """Persist one accepted immutable bundle after the I02 owner succeeds."""
 
-        self.assert_admissible(bundle)
-        existing = self.connection.execute(
-            "SELECT 1 FROM governed_result_bundles WHERE bundle_digest = ?", (bundle.bundle_digest,)
-        ).fetchone()
-        if existing is not None:
-            return
-        run_spec, execution_id = _run_key(bundle.run_identity)
-        with self.connection:
-            self.connection.execute(
+        with self._db.transaction():
+            self._check_admissible(bundle)
+            existing = self._db.execute(
+                "SELECT 1 FROM governed_result_bundles WHERE bundle_digest = ?", (bundle.bundle_digest,)
+            ).fetchone()
+            if existing is not None:
+                return
+            run_spec, execution_id = _run_key(bundle.run_identity)
+            self._db.execute(
                 "INSERT INTO governed_result_bundles "
                 "(bundle_digest, payload, run_spec_fingerprint, execution_id) VALUES (?, ?, ?, ?)",
                 (bundle.bundle_digest, bundle.canonical_payload_v1, run_spec, execution_id),
             )
-            self.connection.executemany(
+            self._db.executemany(
                 "INSERT INTO governed_result_outputs "
                 "(run_spec_fingerprint, execution_id, artifact_role, content_checksum, bundle_digest) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -249,6 +305,13 @@ class GovernedResultImportService:
             raise TypeError("evidence_store must be a GovernedResultEvidenceStore")
         if not callable(verify_output_checksum):
             raise TypeError("verify_output_checksum must be callable")
+        if evidence_store.is_postgresql and experiments.connection is not evidence_store.connection:
+            # Fail closed at composition: separate connections would silently
+            # restore the crash window between the two commits.
+            raise ValueError(
+                "PostgreSQL K13 registration requires the Experiment repository "
+                "and the evidence store to share one connection"
+            )
         contracts = tuple(output_contracts)
         if not contracts:
             raise ValueError("output_contracts must not be empty")
@@ -272,19 +335,28 @@ class GovernedResultImportService:
         self._validate_run_compatibility(bundle.run_identity, admission)
         self._validate_outputs(bundle)
         self.evidence_store.assert_admissible(bundle)
-        try:
-            run_record = record_trial_attempt(
-                self.experiments,
-                TrialAttemptResult(
-                    bundle.run_identity,
-                    RunState.SUCCEEDED,
-                    artifact_identities=tuple(output.registration.identity for output in bundle.outputs),
-                ),
-                artifact_registrations=tuple(output.registration for output in bundle.outputs),
-            )
-        except Exception as error:
-            raise GovernedResultImportError("Experiment registration failed") from error
-        self.evidence_store.record(bundle)
+        # PostgreSQL: one transaction on one connection, so the Experiment write
+        # and the evidence record are all-or-nothing and an identical
+        # resubmission after any failure converges. SQLite test double: no
+        # shared transaction exists, so the writes remain two commits.
+        boundary = (
+            self.experiments.caller_owned_transaction()
+            if self.evidence_store.is_postgresql else nullcontext()
+        )
+        with boundary:
+            try:
+                run_record = record_trial_attempt(
+                    self.experiments,
+                    TrialAttemptResult(
+                        bundle.run_identity,
+                        RunState.SUCCEEDED,
+                        artifact_identities=tuple(output.registration.identity for output in bundle.outputs),
+                    ),
+                    artifact_registrations=tuple(output.registration for output in bundle.outputs),
+                )
+            except Exception as error:
+                raise GovernedResultImportError("Experiment registration failed") from error
+            self.evidence_store.record(bundle)
         return GovernedResultRegistration(bundle.bundle_digest, run_record)
 
     def _validate_admission(self, bundle: GovernedResultBundleV1) -> AdmittedInputManifestV1:
@@ -366,7 +438,7 @@ def _json_value(value: Any, field: str) -> Any:
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 __all__ = [

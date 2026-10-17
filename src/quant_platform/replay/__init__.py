@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 import hashlib
-import json
 from types import MappingProxyType
 from typing import Any
 
@@ -41,6 +40,7 @@ from ..strategy import (
     TradeHistoryEvidence,
     compose_decision,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 REPLAY_SPEC_IDENTITY_DOMAIN = "replay-spec-v1"
@@ -825,13 +825,7 @@ def _canonical_value(value: Any) -> Any:
 
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
-    return json.dumps(
-        _canonical_value(payload),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
+    return canonical_bytes(_canonical_value(payload), profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:

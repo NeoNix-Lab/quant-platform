@@ -9,13 +9,13 @@ legacy byte-exact JSONL serializer used by the reference executable.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, NamedTuple
 
+from quant_platform.canonical import canonical_bytes
 from quant_platform.data.models import TradeRecord
 from quant_platform.source_adapters.bybit_historical import (
     BybitHistoricalExtractAccumulator,
@@ -117,8 +117,7 @@ def encode_record(record: TradeRecord | Mapping) -> bytes:
     mapping = _record_as_json_mapping(record)
     ordered = {name: mapping[name] for name in CANONICAL_FIELD_ORDER
                if name in mapping}
-    line = json.dumps(ordered, ensure_ascii=True, separators=(",", ":"))
-    return line.encode("utf-8") + b"\n"
+    return canonical_bytes(ordered, profile="ordered-compact-ascii-line-v1", allow_nan=True)
 
 
 # --------------------------------------------------------------------------

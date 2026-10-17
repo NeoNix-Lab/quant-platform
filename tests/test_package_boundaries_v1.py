@@ -22,6 +22,7 @@ TESTS = ROOT / "tests"
 CLIENTS = ROOT / "clients"
 OWNERS = {
     "quant_platform": "shared",
+    "quant_platform.canonical": "shared",
     "quant_platform.ordering": "shared",
     "quant_platform.data": "shared",
     "quant_platform.data.models": "shared",
@@ -93,6 +94,17 @@ OWNERS = {
     "quant_platform.application.composition": "application",
     "quant_platform.application.conformity": "application",
     "quant_platform.application.durable_jobs": "application",
+    "quant_platform.application.job_dispatch": "application",
+    "quant_platform.application.api_host_composition": "application",
+    "quant_platform.application.admitted_input_authority": "application",
+    "quant_platform.application.deck_result_bundle": "application",
+    "quant_platform.application.admitted_input_transport": "application",
+    "quant_platform.application.feature_provider_identity": "application",
+    "quant_platform.application.result_import_transport": "application",
+    "quant_platform.application.result_import_composition": "application",
+    "quant_platform.application.job_transport": "application",
+    "quant_platform.application.job_worker_runtime": "application",
+    "quant_platform.application.runtime_store": "application",
     "quant_platform.application.golden_conformity": "application",
     "quant_platform.application.golden_replay": "application",
     "quant_platform.application.golden_supervised": "application",
@@ -105,8 +117,11 @@ OWNERS = {
     "quant_platform.application.framed_result_transport": "application",
     "quant_platform.application.storage_relocation": "application",
     "quant_platform.application.strategy_consumer": "application",
+    "quant_platform.application.strategy_transport": "application",
+    "quant_platform.application.training_transport": "application",
     "quant_platform.application.training_consumer": "application",
     "quant_platform.application.validation_consumer": "application",
+    "quant_platform.application.validation_transport": "application",
     "quant_platform.application.wave6_golden": "application",
 }
 ALLOWED = {
@@ -184,8 +199,13 @@ TYPE_CHECKING. Star/dynamic imports are refused rather than silently untracked.
                     name for name in packages if target.startswith(name + ".")
                 )
                 graph[module].add(target)
-            elif owner == "shared" and target.split(".")[0] not in SHARED_STDLIB:
+            elif (
+                owner == "shared" and target.split(".")[0] not in SHARED_STDLIB
+                and not (module == "quant_platform.canonical" and target == "rfc8785")
+            ):
                 errors.append(f"{module}:{line}: shared imports non-pure dependency {target}")
+            if target.split(".")[0] == "rfc8785" and module != "quant_platform.canonical":
+                errors.append(f"{module}:{line}: RFC 8785 must use the declared canonical profile")
             if target.split(".")[0] == "importlib" and target != "importlib.metadata":
                 errors.append(f"{module}:{line}: dynamic import machinery is not a declared seam")
             if target.split(".")[0] in {"tools", "tests"}:
@@ -262,6 +282,9 @@ APPLICATION = "quant_platform.application"
 # rule below constrains which *repository* code a tool may reach, not which
 # third-party libraries it links.
 THIRD_PARTY = {"psycopg", "pyarrow", "websockets"}
+# ADR-0068 section 7 / P03: declare long-running hosts individually. CLI and
+# proof scripts remain ordinary tools. P04b declared its single J03 worker here.
+SERVER_HOSTS = {"api_server", "live_ingest_server", "job_worker"}
 
 # ASS-03 is complete when no tools bypass the application seam.
 TOOLS_PENDING_ASS03 = set()
@@ -343,6 +366,15 @@ def client_import_violations(clients):
     return errors
 
 
+def client_location_violations(directories):
+    """Client trees belong at repository-root clients/, never inside a host/runtime."""
+    return [
+        f"client tree inside host/runtime: {Path(directory).as_posix()}"
+        for directory in directories
+        if not Path(directory).is_relative_to(Path("clients"))
+    ]
+
+
 def prohibited_script_edges(scripts, layers):
     """Return the exact tool-to-domain and tool-to-tests edges needing debt."""
     domain_edges = set()
@@ -369,12 +401,14 @@ def script_violations(scripts, layers):
     """Executable orchestration must not bypass the application seam.
 
     tools/ is executable orchestration: it may reach repository code only
-    through ``quant_platform.application`` (plus its own siblings).
+    through ``quant_platform.application`` (plus its own siblings, except
+    declared server hosts, which may not import any repository script).
     tests/ is verification composition: it may compose any runtime owner
     directly, and is bound only by the tools/tests direction rules.
     """
     errors = []
     for module, (layer, source) in sorted(scripts.items()):
+        server_host = layer == "tools" and module in SERVER_HOSTS
         for target, line in imported_targets(source, module):
             root = target.split(".")[0]
             if target.startswith(DYNAMIC_CODE_TARGET) or root == "importlib":
@@ -388,7 +422,7 @@ def script_violations(scripts, layers):
                     continue
                 if target == APPLICATION or target.startswith(APPLICATION + "."):
                     continue
-                if (module, target) in TOOLS_PENDING_ASS03:
+                if not server_host and (module, target) in TOOLS_PENDING_ASS03:
                     continue
                 errors.append(
                     f"{layer}/{module}.py:{line}: executable orchestration bypasses "
@@ -396,6 +430,12 @@ def script_violations(scripts, layers):
                 )
             elif root in layers:
                 target_layer = layers[root]
+                if server_host:
+                    errors.append(
+                        f"tools/{module}.py:{line}: server host imports "
+                        f"repository script -> {target}"
+                    )
+                    continue
                 if layer == "tools" and target_layer == "tests":
                     if (module, root) in TOOLS_TESTS_PENDING_ASS03:
                         continue
@@ -463,6 +503,19 @@ class PackageBoundaryTests(unittest.TestCase):
         self.assertTrue(any("quant_platform.data (shared) -> forbidden" in error for error in errors))
         self.assertIn("quant_platform.data", graph["quant_platform.access.gateway"])
 
+    def test_rfc8785_dependency_is_exactly_the_canonical_module(self):
+        sources, packages = source_inventory()
+        _, errors = dependency_graph(sources, packages)
+        self.assertEqual([], errors)
+        for module in ("quant_platform.data.models", "quant_platform.application.market_data"):
+            with self.subTest(module=module):
+                _, errors = dependency_graph({**sources, module: "import rfc8785"}, packages)
+                self.assertTrue(any("RFC 8785 must use" in error for error in errors))
+        _, errors = dependency_graph(
+            {**sources, "quant_platform.canonical": "import requests"}, packages
+        )
+        self.assertTrue(any("shared imports non-pure" in error for error in errors))
+
     def test_cycle_detector_rejects_a_reverse_owner_edge(self):
         graph = {
             "quant_platform.access.gateway": {"quant_platform.data.models"},
@@ -487,11 +540,81 @@ class PackageBoundaryTests(unittest.TestCase):
     def test_executable_orchestration_respects_the_application_seam(self):
         self.assertEqual([], script_violations(script_inventory(), script_layers()))
 
+    def test_declared_server_hosts_exist_and_respect_their_boundary(self):
+        scripts = script_inventory()
+        self.assertTrue({"api_server", "live_ingest_server", "job_worker"}.issubset(SERVER_HOSTS))
+        for host in SERVER_HOSTS:
+            with self.subTest(host=host):
+                self.assertIn(host, scripts)
+                self.assertEqual("tools", scripts[host][0])
+                self.assertEqual([], script_violations({host: scripts[host]}, script_layers()))
+
+    def test_server_hosts_reject_domain_and_repository_script_imports(self):
+        layers = script_layers()
+        for host in SERVER_HOSTS:
+            other = "live_ingest_server" if host == "api_server" else "api_server"
+            cases = (
+                "from quant_platform.replay import HistoricalReplayRuntime",
+                f"import {other} as sibling",
+                f"from {other} import main",
+                f"from tools import {other}",
+                f"import tools.{other}",
+                f"from .{other} import main",
+                "from workflow import main",
+                "import golden_conformity_support",
+                "from tests import golden_conformity_support",
+                "import tests.golden_conformity_support",
+            )
+            for statement in cases:
+                with self.subTest(host=host, statement=statement):
+                    # Nested imports and aliases must be checked without
+                    # executing a host or starting an external service.
+                    source = f"def startup():\n    {statement}\n"
+                    self.assertTrue(script_violations({host: ("tools", source)}, layers))
+
+    def test_server_hosts_accept_only_declared_runtime_dependencies(self):
+        layers = script_layers()
+        allowed = (
+            "from quant_platform.application import compose",
+            "import quant_platform.application.live_ingest_server as service",
+            "import argparse, asyncio, json, os, signal, sys",
+            "from pathlib import Path",
+            *(f"import {dependency}" for dependency in sorted(THIRD_PARTY)),
+        )
+        for host in SERVER_HOSTS:
+            for source in allowed:
+                with self.subTest(host=host, source=source):
+                    self.assertEqual([], script_violations({host: ("tools", source)}, layers))
+            self.assertTrue(script_violations({host: ("tools", "import requests")}, layers))
+
+        # The per-host rule does not turn finite CLI/proof scripts into hosts.
+        self.assertEqual([], script_violations(
+            {"conformity_e2e": ("tools", "import semantic_validator")}, layers,
+        ))
+
+    def test_clients_remain_outside_hosts_and_runtime(self):
+        self.assertTrue((CLIENTS / "omega").is_dir())
+        directories = [CLIENTS.relative_to(ROOT)]
+        for root in (TOOLS, SOURCE / "quant_platform"):
+            directories.extend(path.relative_to(ROOT) for path in root.rglob("clients") if path.is_dir())
+        self.assertEqual([], client_location_violations(directories))
+        self.assertEqual([], client_location_violations(("clients/omega", "clients/deck")))
+        for misplaced in ("tools/clients/omega", "src/quant_platform/clients/deck"):
+            with self.subTest(misplaced=misplaced):
+                self.assertTrue(client_location_violations((misplaced,)))
+
     def test_remote_clients_do_not_import_quant_platform_runtime(self):
         clients = client_inventory()
         self.assertIn("clients/tui/market_data_tui.py", clients)
         self.assertIn("clients/app_ui/app.js", clients)
+        self.assertIn("clients/deck/deck_handoff_client.py", clients)
         self.assertEqual([], client_import_violations(clients))
+        # The deck client is a separate trust surface (ADR-0069 section 8): the
+        # scan above must really see an import of the platform inside it.
+        injected = {
+            "clients/deck/deck_handoff_client.py": "from quant_platform.application import x\n",
+        }
+        self.assertTrue(client_import_violations(injected))
 
     def test_migration_ledgers_describe_real_unmigrated_modules(self):
         scripts = script_inventory()
@@ -585,6 +708,7 @@ class PackageBoundaryTests(unittest.TestCase):
     def test_shared_imports_do_not_load_access_or_producer_runtimes(self):
         # Fresh isolated processes prevent previous test imports from hiding eager loads.
         for statement in (
+            "from quant_platform.canonical import canonical_bytes",
             "import quant_platform.data.models",
             "from quant_platform.data import Instant, CanonicalContentHashV1",
             "from quant_platform.ordering import OrderingProvider",

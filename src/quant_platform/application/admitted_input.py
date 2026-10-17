@@ -7,13 +7,19 @@ allows a deck delivery attempt to be evidenced against that sealed manifest.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 import hashlib
 import json
 import sqlite3
 from typing import Any
+
+from psycopg import Connection
+
+from quant_platform.canonical import canonical_bytes
+
+from .runtime_store import RuntimeStoreConnection
 
 
 class AdmittedInputError(RuntimeError):
@@ -22,6 +28,10 @@ class AdmittedInputError(RuntimeError):
 
 class AdmittedInputConflict(AdmittedInputError):
     """An immutable admission or delivery transition conflicts."""
+
+
+class AdmittedInputAttemptMismatch(AdmittedInputConflict):
+    """A report names a delivery attempt that is not the admission's current one."""
 
 
 class AdmittedInputExpired(AdmittedInputError):
@@ -139,33 +149,38 @@ class AdmittedInputRecord:
     manifest: AdmittedInputManifestV1
     state: AdmittedInputState
     delivery_failure_reason: str | None
+    # ADR-0064 Amendment 1: 0 while never delivered, +1 on every entry into
+    # DELIVERY_PENDING, never reused. Delivery metadata, not identity.
+    delivery_attempt: int
 
 
 class AdmittedInputStore:
-    """SQLite-backed server evidence store for K12 admission and delivery."""
+    """PostgreSQL K12 evidence storage; SQLite is a hermetic test double."""
 
-    def __init__(self, connection: sqlite3.Connection):
-        if not isinstance(connection, sqlite3.Connection):
-            raise TypeError("connection must be a sqlite3.Connection")
+    def __init__(self, connection: sqlite3.Connection | Connection):
         self.connection = connection
-        with self.connection:
-            self.connection.execute(
+        self._db = RuntimeStoreConnection(connection, 33102)
+        if self._db.postgres:
+            return
+        with self._db.transaction():
+            self._db.execute(
                 "CREATE TABLE IF NOT EXISTS admitted_inputs ("
                 "admission_id TEXT PRIMARY KEY, manifest_payload TEXT NOT NULL, state TEXT NOT NULL, "
-                "delivery_failure_reason TEXT)"
+                "delivery_failure_reason TEXT, "
+                "delivery_attempt INTEGER NOT NULL DEFAULT 0)"
             )
 
     def admit(self, manifest: AdmittedInputManifestV1) -> AdmittedInputRecord:
         if not isinstance(manifest, AdmittedInputManifestV1):
             raise TypeError("manifest must be an AdmittedInputManifestV1")
         payload = manifest.canonical_payload_v1
-        with self.connection:
-            row = self.connection.execute(
+        with self._db.transaction():
+            row = self._db.execute(
                 "SELECT manifest_payload, state FROM admitted_inputs WHERE admission_id = ?",
                 (manifest.admission_id,),
             ).fetchone()
             if row is None:
-                self.connection.execute(
+                self._db.execute(
                     "INSERT INTO admitted_inputs (admission_id, manifest_payload, state) VALUES (?, ?, ?)",
                     (manifest.admission_id, payload, AdmittedInputState.ADMITTED.value),
                 )
@@ -176,8 +191,8 @@ class AdmittedInputStore:
         return self.get(manifest.admission_id)
 
     def get(self, admission_id: str) -> AdmittedInputRecord:
-        row = self.connection.execute(
-            "SELECT admission_id, manifest_payload, state, delivery_failure_reason "
+        row = self._db.execute(
+            "SELECT admission_id, manifest_payload, state, delivery_failure_reason, delivery_attempt "
             "FROM admitted_inputs WHERE admission_id = ?",
             (admission_id,),
         ).fetchone()
@@ -191,65 +206,134 @@ class AdmittedInputStore:
             manifest=manifest,
             state=AdmittedInputState(str(row[2])),
             delivery_failure_reason=row[3],
+            delivery_attempt=int(row[4]),
         )
 
     def seal(self, admission_id: str) -> AdmittedInputRecord:
         return self._transition(admission_id, AdmittedInputState.ADMITTED, AdmittedInputState.SEALED)
 
-    def begin_delivery(self, admission_id: str) -> AdmittedInputRecord:
+    def begin_delivery(
+        self, admission_id: str, *, before_commit: Callable[[AdmittedInputRecord], None] | None = None,
+    ) -> AdmittedInputRecord:
+        """Start a delivery attempt: ``DELIVERY_PENDING`` and ``delivery_attempt + 1``, atomically.
+
+        ``before_commit`` runs inside the same transaction, after the attempt was
+        written and before it commits; if it raises, nothing of the attempt is
+        recorded (the number is not consumed). Every K12 transition serializes on
+        the store's lock, so no other transition can interleave with it: a
+        publication made there is made for an attempt that is still current.
+        """
+
+        with self._db.transaction():
+            current = self.get(admission_id)
+            if current.state == AdmittedInputState.EXPIRED:
+                raise AdmittedInputExpired("expired admission requires a new server admission")
+            if current.state not in {AdmittedInputState.SEALED, AdmittedInputState.DELIVERY_FAILED}:
+                raise AdmittedInputConflict("delivery requires SEALED evidence")
+            cursor = self._db.execute(
+                "UPDATE admitted_inputs SET state = ?, delivery_failure_reason = NULL, "
+                "delivery_attempt = delivery_attempt + 1 "
+                "WHERE admission_id = ? AND state IN (?, ?)",
+                (
+                    AdmittedInputState.DELIVERY_PENDING.value, admission_id,
+                    AdmittedInputState.SEALED.value, AdmittedInputState.DELIVERY_FAILED.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise AdmittedInputConflict("delivery requires SEALED evidence")
+            record = self.get(admission_id)
+            if before_commit is not None:
+                before_commit(record)
+        return record
+
+    def record_delivery(
+        self, admission_id: str, delivered_manifest_digest: str, *, delivery_attempt: int,
+    ) -> AdmittedInputRecord:
+        """Apply the deck's ``delivered`` report for ``delivery_attempt`` and no other."""
+
+        if not isinstance(delivered_manifest_digest, str) or not delivered_manifest_digest.strip():
+            raise ValueError("delivered_manifest_digest must be a non-empty string")
+        with self._db.transaction():
+            current = self._current_attempt(admission_id, delivery_attempt)
+            matched = delivered_manifest_digest == current.manifest.manifest_digest
+            self._end_attempt(
+                admission_id, delivery_attempt,
+                AdmittedInputState.DELIVERED if matched else AdmittedInputState.DELIVERY_FAILED,
+                None if matched else "manifest_digest_mismatch",
+            )
+        return self.get(admission_id)
+
+    def record_delivery_failure(
+        self, admission_id: str, reason: str, *, delivery_attempt: int,
+    ) -> AdmittedInputRecord:
+        """Record that the deck reports ``delivery_attempt`` as failed (ADR-0064 section 2).
+
+        Like a digest mismatch, it ends the attempt as ``DELIVERY_FAILED``; the
+        sealed admission is untouched and may be delivered again. A report for
+        any other attempt changes nothing.
+        """
+
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must be a non-empty string")
+        with self._db.transaction():
+            self._current_attempt(admission_id, delivery_attempt)
+            self._end_attempt(
+                admission_id, delivery_attempt, AdmittedInputState.DELIVERY_FAILED, reason,
+            )
+        return self.get(admission_id)
+
+    def expire(self, admission_id: str, *, delivery_attempt: int) -> AdmittedInputRecord:
+        """Expire the pending ``delivery_attempt``; ``EXPIRED`` is final."""
+
+        with self._db.transaction():
+            self._current_attempt(admission_id, delivery_attempt, operation="expiry")
+            self._end_attempt(admission_id, delivery_attempt, AdmittedInputState.EXPIRED, None)
+        return self.get(admission_id)
+
+    def _current_attempt(
+        self, admission_id: str, delivery_attempt: int, *, operation: str = "delivery result",
+    ) -> AdmittedInputRecord:
+        """The record, if ``delivery_attempt`` is its pending attempt; else a refusal with no write."""
+
+        if type(delivery_attempt) is not int or delivery_attempt < 1:
+            raise ValueError("delivery_attempt must be a positive integer")
         current = self.get(admission_id)
         if current.state == AdmittedInputState.EXPIRED:
             raise AdmittedInputExpired("expired admission requires a new server admission")
-        if current.state not in {AdmittedInputState.SEALED, AdmittedInputState.DELIVERY_FAILED}:
-            raise AdmittedInputConflict("delivery requires SEALED evidence")
-        with self.connection:
-            self.connection.execute(
-                "UPDATE admitted_inputs SET state = ?, delivery_failure_reason = NULL WHERE admission_id = ?",
-                (AdmittedInputState.DELIVERY_PENDING.value, admission_id),
-            )
-        return self.get(admission_id)
-
-    def record_delivery(self, admission_id: str, delivered_manifest_digest: str) -> AdmittedInputRecord:
-        current = self.get(admission_id)
+        if current.delivery_attempt != delivery_attempt:
+            raise AdmittedInputAttemptMismatch("the report is not about the current delivery attempt")
         if current.state != AdmittedInputState.DELIVERY_PENDING:
-            raise AdmittedInputConflict("delivery result requires DELIVERY_PENDING")
-        if not isinstance(delivered_manifest_digest, str) or not delivered_manifest_digest.strip():
-            raise ValueError("delivered_manifest_digest must be a non-empty string")
-        matched = delivered_manifest_digest == current.manifest.manifest_digest
-        with self.connection:
-            self.connection.execute(
-                "UPDATE admitted_inputs SET state = ?, delivery_failure_reason = ? WHERE admission_id = ?",
-                (
-                    AdmittedInputState.DELIVERED.value if matched else AdmittedInputState.DELIVERY_FAILED.value,
-                    None if matched else "manifest_digest_mismatch",
-                    admission_id,
-                ),
-            )
-        return self.get(admission_id)
+            raise AdmittedInputConflict(f"{operation} requires DELIVERY_PENDING")
+        return current
 
-    def expire(self, admission_id: str) -> AdmittedInputRecord:
-        current = self.get(admission_id)
-        if current.state != AdmittedInputState.DELIVERY_PENDING:
-            raise AdmittedInputConflict("expiry requires DELIVERY_PENDING")
-        with self.connection:
-            self.connection.execute(
-                "UPDATE admitted_inputs SET state = ? WHERE admission_id = ?",
-                (AdmittedInputState.EXPIRED.value, admission_id),
-            )
-        return self.get(admission_id)
+    def _end_attempt(
+        self, admission_id: str, delivery_attempt: int, target: AdmittedInputState, reason: str | None,
+    ) -> None:
+        # The comparison is part of the write itself: whatever read preceded it,
+        # an attempt that is no longer the pending one is not touched.
+        cursor = self._db.execute(
+            "UPDATE admitted_inputs SET state = ?, delivery_failure_reason = ? "
+            "WHERE admission_id = ? AND state = ? AND delivery_attempt = ?",
+            (
+                target.value, reason, admission_id,
+                AdmittedInputState.DELIVERY_PENDING.value, delivery_attempt,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise AdmittedInputAttemptMismatch("the report is not about the current delivery attempt")
 
     def _transition(
         self, admission_id: str, expected: AdmittedInputState, target: AdmittedInputState
     ) -> AdmittedInputRecord:
-        current = self.get(admission_id)
-        if current.state == target:
-            return current
-        if current.state == AdmittedInputState.EXPIRED:
-            raise AdmittedInputExpired("expired admission requires a new server admission")
-        if current.state != expected:
-            raise AdmittedInputConflict(f"illegal admission transition {current.state.value} -> {target.value}")
-        with self.connection:
-            self.connection.execute(
+        with self._db.transaction():
+            current = self.get(admission_id)
+            if current.state == target:
+                return current
+            if current.state == AdmittedInputState.EXPIRED:
+                raise AdmittedInputExpired("expired admission requires a new server admission")
+            if current.state != expected:
+                raise AdmittedInputConflict(f"illegal admission transition {current.state.value} -> {target.value}")
+            self._db.execute(
                 "UPDATE admitted_inputs SET state = ? WHERE admission_id = ?", (target.value, admission_id)
             )
         return self.get(admission_id)
@@ -284,10 +368,11 @@ def _optional_identity(value: str | None, field: str) -> None:
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 __all__ = [
+    "AdmittedInputAttemptMismatch",
     "AdmittedInputConflict",
     "AdmittedInputError",
     "AdmittedInputExpired",

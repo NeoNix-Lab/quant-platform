@@ -15,12 +15,12 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from enum import StrEnum
 import hashlib
-import json
 import re
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
 from ..data.models import Instant
+from quant_platform.canonical import canonical_bytes
 
 
 STRATEGY_SPEC_IDENTITY_DOMAIN = "strategy-spec-v1"
@@ -195,13 +195,7 @@ def _canonical_value(value: Any) -> Any:
 
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
-    return json.dumps(
-        _canonical_value(payload),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
+    return canonical_bytes(_canonical_value(payload), profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:

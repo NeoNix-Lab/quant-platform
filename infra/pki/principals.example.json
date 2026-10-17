@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "principals": [
+    {
+      "principal_id": "deck-research",
+      "fingerprint": "REPLACE-WITH-THE-fingerprint=-LINE-OF-issue-client.sh",
+      "scopes": [
+        "j02.strategy.compose",
+        "j02.validation.evaluate",
+        "j02.training.evaluate",
+        "j02.admitted_input.read",
+        "j02.result.submit"
+      ]
+    }
+  ]
+}

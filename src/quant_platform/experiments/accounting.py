@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 import hashlib
-import json
 import math
 from types import MappingProxyType
 from typing import Any
@@ -24,6 +23,7 @@ from .persistence import (
     RunRecord,
     RunState,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 COMPARABLE_TRIAL_POPULATION_IDENTITY_DOMAIN = "comparable-trial-population-v1"
@@ -111,13 +111,7 @@ def _canonical_value(value: Any) -> Any:
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        _canonical_value(payload),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(_canonical_value(payload), profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 

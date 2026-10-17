@@ -7,10 +7,10 @@ policy, job scheduling or artifact payload storage.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
-import json
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from .identities import (
     ArtifactContentIdentity,
@@ -20,6 +20,7 @@ from .identities import (
     StudyIdentity,
     TrialIdentity,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 class ExperimentPersistenceError(RuntimeError):
@@ -78,49 +79,104 @@ class RunRecord:
 
 
 class ExperimentRepository:
-    """Transactional PostgreSQL repository for I02 durable Experiment facts."""
+    """Transactional PostgreSQL repository for I02 durable Experiment facts.
+
+    Default mode: every public mutation commits (or rolls back) its own
+    transaction, which assumes a non-autocommit connection. To make an
+    Experiment write atomic with a write the caller makes on the same
+    connection, use ``caller_owned_transaction()`` on an autocommit connection.
+    """
 
     def __init__(self, connection: Any):
         self.connection = connection
+        # Nesting depth of caller_owned_transaction(); 0 is the default mode in
+        # which every public mutation commits or rolls back on its own.
+        self._caller_owned = 0
+
+    @contextmanager
+    def caller_owned_transaction(self) -> Iterator[None]:
+        """Run repository calls inside one transaction that the caller ends.
+
+        Opt-in and scoped: inside the block no call commits or rolls back by
+        itself, so an Experiment write can commit or roll back together with a
+        write the caller makes on the same connection (K13 evidence, ADR-0068
+        section 4). Leaving the block normally commits; an exception leaving it
+        rolls everything back, including every nested repository call. Outside
+        the block the repository keeps its per-call commit behavior, unchanged.
+
+        The connection must be a psycopg connection in autocommit mode so that
+        ``transaction()`` is the only transaction boundary; any other mode
+        would let a per-call statement commit outside it. Nesting is allowed
+        and joins the outermost transaction.
+        """
+
+        if self._caller_owned:
+            self._caller_owned += 1
+            try:
+                yield
+            finally:
+                self._caller_owned -= 1
+            return
+        transaction = getattr(self.connection, "transaction", None)
+        if not callable(transaction) or getattr(self.connection, "autocommit", None) is not True:
+            raise ExperimentPersistenceError(
+                "caller-owned transactions require an autocommit connection with transaction()"
+            )
+        self._caller_owned = 1
+        try:
+            with transaction():
+                yield
+        finally:
+            self._caller_owned = 0
+
+    def _commit(self) -> None:
+        if not self._caller_owned:
+            self.connection.commit()
+
+    def _rollback(self) -> None:
+        # In caller-owned mode the exception propagates to the caller's
+        # transaction block, which rolls back every statement it contains.
+        if not self._caller_owned:
+            self.connection.rollback()
 
     def register_study(self, study: StudyIdentity) -> str:
         try:
             with self.connection.cursor() as cursor:
                 self._ensure_study(cursor, study)
-            self.connection.commit()
+            self._commit()
             return study.fingerprint
         except Exception:
-            self.connection.rollback()
+            self._rollback()
             raise
 
     def register_trial(self, trial: TrialIdentity) -> str:
         try:
             with self.connection.cursor() as cursor:
                 self._ensure_trial(cursor, trial)
-            self.connection.commit()
+            self._commit()
             return trial.fingerprint
         except Exception:
-            self.connection.rollback()
+            self._rollback()
             raise
 
     def register_run_spec(self, run_spec: RunSpecIdentity) -> str:
         try:
             with self.connection.cursor() as cursor:
                 self._ensure_run_spec(cursor, run_spec)
-            self.connection.commit()
+            self._commit()
             return run_spec.fingerprint
         except Exception:
-            self.connection.rollback()
+            self._rollback()
             raise
 
     def register_artifact_content(self, content: ArtifactContentIdentity) -> str:
         try:
             with self.connection.cursor() as cursor:
                 self._ensure_artifact_content(cursor, content)
-            self.connection.commit()
+            self._commit()
             return content.fingerprint
         except Exception:
-            self.connection.rollback()
+            self._rollback()
             raise
 
     def register_run(self, run: RunIdentity) -> RunRecord:
@@ -129,10 +185,10 @@ class ExperimentRepository:
                 self._ensure_run_spec(cursor, run.run_spec_identity)
                 self._ensure_run_registered(cursor, run)
                 record = self._get_run_locked(cursor, run, lock=False)
-            self.connection.commit()
+            self._commit()
             return record
         except Exception:
-            self.connection.rollback()
+            self._rollback()
             raise
 
     def transition_run(
@@ -151,10 +207,10 @@ class ExperimentRepository:
                     desired,
                     failure_details=failure_details,
                 )
-            self.connection.commit()
+            self._commit()
             return record
         except Exception:
-            self.connection.rollback()
+            self._rollback()
             raise
 
     def succeed_run_with_artifacts(
@@ -173,10 +229,10 @@ class ExperimentRepository:
                     result = self._transition_existing_run(cursor, run, RunState.SUCCEEDED)
                     for artifact in artifacts:
                         self._ensure_artifact(cursor, run, artifact)
-            self.connection.commit()
+            self._commit()
             return result
         except Exception:
-            self.connection.rollback()
+            self._rollback()
             raise
 
     def get_run(self, run: RunIdentity) -> RunRecord:
@@ -474,7 +530,7 @@ def _normalize_failure_details(value: Mapping[str, Any] | None) -> Mapping[str, 
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return canonical_bytes(value, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 def _jsonb(value: Any) -> Any:

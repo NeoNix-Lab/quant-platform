@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from ..data.models import DatasetIdentity, Instant
+from quant_platform.canonical import canonical_bytes
 
 
 LIVE_CHECKPOINT_IDENTITY_DOMAIN = "live-checkpoint-v1"
@@ -363,9 +364,7 @@ def _sha256_hex(value: Any, field_name: str) -> str:
 
 
 def _canonical_json(payload: Any) -> str:
-    return json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False,
-    )
+    return canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False).decode("utf-8")
 
 
 def _canonical_fingerprint(payload: Any) -> str:

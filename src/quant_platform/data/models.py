@@ -13,6 +13,8 @@ import hashlib
 import re
 from typing import Any, Iterable, Literal
 
+from quant_platform.canonical import canonical_bytes
+
 
 class DataGatewayError(Exception):
     """Base class for expected DataGateway domain failures."""
@@ -448,14 +450,7 @@ class L2BookEvent:
 def l2_book_event_identity_v1(event: L2BookEvent) -> str:
     """Hash one normalized L2 event without sorting source level order."""
 
-    import json
-
-    payload = json.dumps(
-        event.stable_dict(),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    payload = canonical_bytes(event.stable_dict(), profile="sorted-compact-utf8-v1", allow_nan=True)
     digest = hashlib.sha256(L2_BOOK_EVENT_HASH_V1_DOMAIN_TAG)
     digest.update(payload)
     return f"{L2_BOOK_EVENT_V1_IDENTITY}:sha256:{digest.hexdigest()}"

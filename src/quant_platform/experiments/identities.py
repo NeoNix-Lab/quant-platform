@@ -10,9 +10,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 import hashlib
-import json
 import math
 from typing import Any, ClassVar
+
+from quant_platform.canonical import canonical_bytes
 
 
 class ExperimentIdentityError(ValueError):
@@ -119,13 +120,7 @@ def _json_value(value: Any) -> Any:
 
 
 def _canonical_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=False)
     return hashlib.sha256(encoded).hexdigest()
 
 

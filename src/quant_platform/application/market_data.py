@@ -30,7 +30,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import hashlib
-import json
 from typing import Any, Mapping
 
 from ..access.models import DataRequest, LifecyclePolicy
@@ -48,6 +47,7 @@ from ..data.models import (
     TradeRecord,
 )
 from ..source_adapters.bybit import BYBIT_TRADE_V1_ORDERING_POLICY
+from quant_platform.canonical import canonical_bytes
 
 
 # Application-owned reference values for trades@1.  The consumer selects the
@@ -288,9 +288,7 @@ class NormalizedMarketDataQuery:
 
     @property
     def request_identity(self) -> str:
-        encoded = json.dumps(
-            self.stable_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        ).encode()
+        encoded = canonical_bytes(self.stable_dict(), profile="sorted-compact-ascii-v1", allow_nan=True)
         return hashlib.sha256(encoded).hexdigest()
 
 

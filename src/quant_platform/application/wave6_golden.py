@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import hashlib
-import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Iterable
@@ -54,6 +53,7 @@ from .retention_deletion import (
     execute_retention_deletion,
 )
 from .storage_relocation import relocate_storage_tier
+from quant_platform.canonical import canonical_bytes
 
 
 WAVE6_GOLDEN_E2E_PROOF_VERSION = "1"
@@ -542,7 +542,7 @@ def _candidate(
 
 
 def _canonical_fingerprint(payload: dict[str, Any]) -> str:
-    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    blob = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=True)
     return hashlib.sha256(blob).hexdigest()
 
 

@@ -20,6 +20,7 @@ from typing import Any
 
 from .materializer import ParquetMaterialization, physical_artifact_sha256
 from .models import DataIntegrityError, DatasetIdentity, Instant, InvalidRequest
+from quant_platform.canonical import canonical_bytes
 
 
 class ManifestValidationError(DataIntegrityError):
@@ -811,9 +812,7 @@ def _persist_manifest(path: str | Path, document: dict[str, Any]) -> ManifestEmi
     target = Path(path)
     if target.suffix.lower() != ".json":
         raise ManifestValidationError("manifest path must have a .json suffix")
-    persisted = json.dumps(
-        document, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("utf-8")
+    persisted = canonical_bytes(document, profile="sorted-compact-ascii-v1", allow_nan=True)
     digest = hashlib.sha256(persisted).hexdigest()
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(

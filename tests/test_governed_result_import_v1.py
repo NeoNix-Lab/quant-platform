@@ -111,8 +111,10 @@ class GovernedResultImportV1Tests(unittest.TestCase):
     def delivered_manifest(self) -> AdmittedInputManifestV1:
         admitted = self.admissions.admit(manifest())
         sealed = self.admissions.seal(admitted.admission_id)
-        self.admissions.begin_delivery(sealed.admission_id)
-        self.admissions.record_delivery(sealed.admission_id, sealed.manifest.manifest_digest)
+        self.admissions.record_delivery(
+            sealed.admission_id, sealed.manifest.manifest_digest,
+            delivery_attempt=self.admissions.begin_delivery(sealed.admission_id).delivery_attempt,
+        )
         return sealed.manifest
 
     def bundle(self, identity: RunIdentity | None = None, *, consumed: AdmittedInputManifestV1 | None = None) -> GovernedResultBundleV1:
@@ -166,8 +168,10 @@ class GovernedResultImportV1Tests(unittest.TestCase):
 
         expiring = self.admissions.admit(manifest(request="request-v1:expiring"))
         sealed = self.admissions.seal(expiring.admission_id)
-        self.admissions.begin_delivery(sealed.admission_id)
-        self.admissions.expire(sealed.admission_id)
+        self.admissions.expire(
+            sealed.admission_id,
+            delivery_attempt=self.admissions.begin_delivery(sealed.admission_id).delivery_attempt,
+        )
         expired_identity = run("expired")
         expired = GovernedResultBundleV1(
             sealed.admission_id, sealed.manifest.manifest_digest, sealed.manifest, sealed.manifest.git_identity or "",
@@ -197,6 +201,30 @@ class GovernedResultImportV1Tests(unittest.TestCase):
         )
         with self.assertRaisesRegex(GovernedResultRefused, "same Run/output role"):
             self.service.import_result(candidate)
+
+    def test_the_pre_check_accepts_an_identical_bundle_and_refuses_a_conflicting_role(self) -> None:
+        # #354: assert_admissible is the pre-check run before any Experiment write.
+        from dataclasses import replace
+
+        bundle = self.bundle()
+        self.evidence.assert_admissible(bundle)  # nothing accepted yet
+        self.evidence.record(bundle)
+        self.evidence.assert_admissible(bundle)  # the identical bundle: idempotent
+        self.evidence.assert_admissible(replace(bundle))
+        conflicting = ResultOutputEvidenceV1(
+            ArtifactRegistration(
+                ArtifactIdentity(
+                    bundle.run_identity, "metrics",
+                    ArtifactContentIdentity("metrics", "metrics-v1", "sha256:" + "b" * 64),
+                )
+            ),
+            "sha256:" + "b" * 64,
+        )
+        other = replace(bundle, outputs=(conflicting,))
+        with self.assertRaisesRegex(GovernedResultRefused, "same Run/output role"):
+            self.evidence.assert_admissible(other)
+        # Same digest, different stored payload: refused as a payload conflict.
+        self.assertEqual(bundle.bundle_digest, replace(bundle).bundle_digest)
 
     def test_refuses_output_checksum_mismatch_before_experiment_mutation(self) -> None:
         bundle = self.bundle(run("checksum-mismatch"))

@@ -39,7 +39,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import json
 import os
 import re
 from pathlib import Path
@@ -57,6 +56,7 @@ from .publication_eligibility_catalog import (
     PublicationEligibilityCatalog,
     PublicationEligibilityRefusal,
 )
+from quant_platform.canonical import canonical_bytes
 
 
 REPAIR_SEMANTICS_VERSION = "quant-platform/a10-repair-v1"
@@ -552,7 +552,7 @@ def write_convergence_provenance(path: Path, provenance: ConvergenceProvenance) 
     transaction, never from this filesystem document.
     """
 
-    payload = json.dumps(provenance.stable_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    payload = canonical_bytes(provenance.stable_dict(), profile="sorted-compact-ascii-v1", allow_nan=True)
     target = Path(path)
     if target.exists():
         existing = target.read_bytes()
@@ -1225,7 +1225,7 @@ def _filesystem_safe(identity: str) -> str:
 
 
 def _canonical_hash(domain: str, payload: Mapping[str, Any]) -> str:
-    document = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    document = canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=True).decode("utf-8")
     digest = hashlib.sha256(f"{domain}\x00{document}".encode("utf-8")).hexdigest()
     return f"{domain}:sha256:{digest}"
 

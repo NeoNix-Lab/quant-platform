@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import sqlite3
 from pathlib import Path
 import sys
@@ -136,6 +137,67 @@ class DurableJobRuntimeV1Tests(unittest.TestCase):
         store.recover_after_restart()
 
         self.assertEqual(JobState.QUEUED, store.retry_or_resume(job.job_id).state)
+
+    def test_free_text_failure_evidence_is_lossless_and_idempotent(self) -> None:
+        vectors = (
+            ("failed\x00detail", None),
+            ("handler_failed", "evidence\x00ref"),
+            ("failed\x00detail", "evidence\x00ref"),
+            (r"failed\u0000detail", r'evidence\x00ref "quoted"'),
+            ("null", '"null"'),
+            ("r" * 511 + "\x00", "日本語\n\x00é"),
+        )
+        for index, (reason, diagnostic) in enumerate(vectors):
+            with self.subTest(reason=reason, diagnostic=diagnostic):
+                store = self.store()
+                self.addCleanup(store.connection.close)
+                job = store.admit(replace(admission(), request_identity=f"failure-evidence:{index}"))
+                self.assertIsNone(job.reason_code)
+                self.assertIsNone(job.diagnostic_reference)
+                store.transition(job.job_id, JobState.QUEUED)
+                store.transition(job.job_id, JobState.RUNNING)
+                self.assertIsNone(store.attempts(job.job_id)[0].failure_code)
+                self.assertIsNone(store.attempts(job.job_id)[0].evidence_reference)
+                failed = store.transition(
+                    job.job_id, JobState.FAILED, reason_code=reason,
+                    diagnostic_reference=diagnostic,
+                )
+                self.assertEqual(JobState.FAILED, failed.state)
+                self.assertEqual((reason, diagnostic), (failed.reason_code, failed.diagnostic_reference))
+                attempt = store.attempts(job.job_id)[0]
+                self.assertEqual(JobState.FAILED, attempt.state)
+                self.assertEqual((reason, diagnostic), (attempt.failure_code, attempt.evidence_reference))
+                self.assertEqual(failed, store.get(job.job_id))
+                self.assertEqual(failed, store.transition(
+                    job.job_id, JobState.FAILED, reason_code=reason,
+                    diagnostic_reference=diagnostic,
+                ))
+                self.assertEqual((attempt,), store.attempts(job.job_id))
+
+    def test_terminal_diagnostic_append_preserves_nul_and_literal_escapes(self) -> None:
+        store = self.store()
+        self.addCleanup(store.connection.close)
+        job = store.admit(admission())
+        store.transition(job.job_id, JobState.QUEUED)
+        store.transition(job.job_id, JobState.RUNNING)
+        reason = "handler_failed"
+        diagnostic = 'evidence\x00ref' + r'\u0000\x00 "quoted"'
+        store.transition(job.job_id, JobState.FAILED, reason_code=reason)
+        attempt_before_append = store.attempts(job.job_id)[0]
+        appended = store.transition(
+            job.job_id, JobState.FAILED, reason_code=reason,
+            diagnostic_reference=diagnostic,
+        )
+        self.assertEqual((reason, diagnostic), (appended.reason_code, appended.diagnostic_reference))
+        self.assertEqual(appended, store.transition(
+            job.job_id, JobState.FAILED, reason_code=reason,
+            diagnostic_reference=diagnostic,
+        ))
+        # Existing terminal append changes only Job evidence, not the closed attempt.
+        self.assertEqual((attempt_before_append,), store.attempts(job.job_id))
+        with self.assertRaises(DurableJobConflict):
+            store.transition(job.job_id, JobState.FAILED, reason_code=reason,
+                             diagnostic_reference="different\x00evidence")
 
 
 if __name__ == "__main__":
