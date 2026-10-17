@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Hermetic tests for the Bybit historical L2 day ingest (A14d, ADR-0070
-Amendment 1)."""
+Amendments 1-2)."""
 
 from __future__ import annotations
 
@@ -178,6 +178,167 @@ class Base(unittest.TestCase):
         return [runtime.run(p.evidence).certification for p in result.partitions]
 
 
+class SourceDayBoundaryTests(Base):
+    """Amendment 2: delivery-file edges do not own the target UTC day."""
+
+    def assert_fold(self, result):
+        coverage = [json.loads(p.coverage_manifest_path.read_text()) for p in result.partitions]
+        coverage += [json.loads(g.coverage_manifest_path.read_text()) for g in result.gaps]
+        partitions = [json.loads(p.partition_manifest_path.read_text()) for p in result.partitions]
+        folded, violations = reconstruct_catalog_coverage(coverage, partitions)
+        self.assertEqual(violations, ())
+        self.assertEqual(
+            {key: (a.isoformat(), b.isoformat()) for key, (a, b) in folded.items()},
+            {(p.partition_key, 1): (p.complete_start, p.complete_end) for p in result.partitions},
+        )
+        self.assertEqual([c.status for c in self.certify(result)], ["pass"] * len(partitions))
+
+    @staticmethod
+    def edge_evidence(result):
+        doc = json.loads(result.partitions[0].coverage_manifest_path.read_text())
+        detail = doc["assertions"][0]["evidence"][0]["detail"]
+        return json.loads(detail.split("|source_file_edges:", 1)[1])
+
+    def seam_messages(self):
+        # Real-shaped seam: the closing snapshot repeats the preceding delta's
+        # seq/u/cts but is a different payload. No real archive data is invented.
+        end = DAY_START + 86_400 * 1_000_000_000
+        return [
+            msg(1, 10, "snapshot", ms=1112, day_base=DAY_START),
+            msg(2, 11, ms=-50, day_base=end),
+            msg(3, 12, ms=14, day_base=end),
+            msg(4, 13, ms=1113, day_base=end),
+            msg(4, 13, "snapshot", ms=1113, day_base=end),
+        ]
+
+    def test_real_shaped_tail_routes_before_duplicate_certification(self):
+        archive = self.archive(self.seam_messages())
+        original = archive.read_bytes()
+        result = self.ingest(archive=archive)
+        self.assertEqual(archive.read_bytes(), original)
+        self.assertEqual((result.source_events, result.excluded_events), (5, 3))
+        (partition,) = result.partitions
+        self.assertEqual(partition.materialization.row_count, 2)
+        self.assertEqual(partition.complete_start, self.iso(DAY_START + 1_112_000_000))
+        self.assertEqual(partition.complete_end, f"{NEXT}T00:00:00Z")
+        rows = [e for batch in ingest_module.scan_l2_book_event_v1_all(partition.artifact_path) for e in batch]
+        self.assertEqual([e.native_sequence for e in rows], ["1", "2"])
+        self.assertFalse((self.root / f"dt={NEXT}").exists())
+        self.assertEqual([(g.start, g.end, g.excluded_events) for g in result.gaps], [
+            (f"{DAY}T00:00:00Z", partition.complete_start, 0),
+        ])
+        tail = self.edge_evidence(result)["tail"]
+        self.assertEqual(tail, {
+            "count": 3,
+            "first": {"native_sequence": "3", "native_update_id": "12",
+                      "exchange_ts": f"{NEXT}T00:00:00.014Z"},
+            "last": {"native_sequence": "4", "native_update_id": "13",
+                     "exchange_ts": f"{NEXT}T00:00:01.113Z"},
+            "last_snapshot_repeats_previous": True,
+        })
+        self.assertIn(result.source_sha256, result.gaps[0].detail)
+        self.assert_fold(result)
+
+    def test_next_file_opening_snapshot_is_an_ordinary_anchor(self):
+        end = DAY_START + 86_400_000_000_000
+        result = self.ingest([
+            msg(4, 13, "snapshot", ms=1113, day_base=end),
+            msg(5, 14, ms=1213, day_base=end),
+        ], day=NEXT)
+        self.assertEqual(result.partitions[0].report.outcome, "eligible")
+        self.assertEqual(result.partitions[0].materialization.row_count, 2)
+        self.assertEqual(result.partitions[0].complete_start, f"{NEXT}T00:00:01.113Z")
+        self.assertEqual(result.gaps[0].start, f"{NEXT}T00:00:00Z")
+        self.assert_fold(result)
+
+    def test_late_snapshot_and_absent_tail_declare_both_gaps(self):
+        result = self.ingest(CLEAN)
+        (partition,) = result.partitions
+        self.assertEqual(partition.complete_start, self.iso(BASE + 1_000_000))
+        self.assertEqual(partition.complete_end, self.iso(BASE + 5_000_000 + 1000))
+        self.assertEqual([(g.start, g.end) for g in result.gaps], [
+            (f"{DAY}T00:00:00Z", partition.complete_start),
+            (partition.complete_end, f"{NEXT}T00:00:00Z"),
+        ])
+        self.assertEqual(result.gaps[0].detail,
+                         f"source_file_head|first_event:{partition.complete_start}"
+                         f"|source_sha256:{result.source_sha256}")
+        self.assertTrue(result.gaps[1].detail.startswith("source_file_tail|last_event:"))
+        self.assertEqual([g.excluded_events for g in result.gaps], [0, 0])
+        self.assert_fold(result)
+
+    def test_source_head_block_cannot_anchor_the_in_day_deltas(self):
+        messages = [msg(0, 5, "snapshot", ms=-1, day_base=DAY_START)] + HEAD
+        result = self.ingest(messages)
+        self.assertEqual((result.source_events, result.excluded_events), (5, 3))
+        self.assertEqual(result.partitions[0].materialization.row_count, 2)
+        self.assertEqual(len(result.gaps), 2)  # one leading gap, not overlapping head assertions
+        self.assertEqual(result.gaps[0].excluded_events, 2)
+        self.assertIn("unanchored_head|excluded_events:2", result.gaps[0].detail)
+        self.assertEqual(self.edge_evidence(result)["head"]["count"], 1)
+        self.assert_fold(result)
+
+    def test_midnight_tail_is_excluded_and_proves_day_end(self):
+        end = DAY_START + 86_400 * 1_000_000_000
+        result = self.ingest([
+            msg(1, 10, "snapshot", ms=0, day_base=DAY_START),
+            msg(2, 11, ms=-1, day_base=end), msg(3, 12, ms=0, day_base=end),
+        ])
+        self.assertEqual(result.excluded_events, 1)
+        self.assertEqual(result.partitions[0].complete_start, f"{DAY}T00:00:00Z")
+        self.assertEqual(result.partitions[0].complete_end, f"{NEXT}T00:00:00Z")
+        self.assertEqual(result.gaps, ())
+        self.assertFalse(self.edge_evidence(result)["tail"]["last_snapshot_repeats_previous"])
+        self.assert_fold(result)
+
+    def test_tail_evidence_does_not_bridge_a_discontinuity(self):
+        end = DAY_START + 86_400 * 1_000_000_000
+        result = self.ingest(OPEN_END + [msg(5, 42, ms=0, day_base=end)])
+        self.assertEqual((result.source_events, result.excluded_events), (5, 3))
+        self.assertEqual(result.partitions[0].complete_end, self.iso(BASE + 2_000_000 + 1000))
+        self.assertEqual(result.gaps[-1].excluded_events, 2)
+        self.assertEqual(result.gaps[-1].end, f"{NEXT}T00:00:00Z")
+        self.assert_fold(result)
+
+    def test_in_day_duplicate_and_time_regression_remain_ineligible(self):
+        duplicate = msg(2, 11, "snapshot")
+        scenarios = [
+            (CLEAN[:2] + [duplicate], "duplicate_sequence"),
+            (CLEAN[:2] + [msg(3, 12, ms=1)], "event_time_regression"),
+        ]
+        for messages, violation in scenarios:
+            with self.subTest(violation=violation):
+                error = self.refusal(messages)
+                self.assertEqual(error.code, "source_day_ineligible")
+                self.assertIn(violation, error.context["violation_counts"])
+                self.assertFalse(self.root.exists())
+
+    def test_interior_out_of_day_and_regressing_edge_blocks_refuse_atomically(self):
+        end = DAY_START + 86_400 * 1_000_000_000
+        head = msg(0, 9, "snapshot", ms=-1, day_base=DAY_START)
+        tail = msg(6, 15, ms=1, day_base=end)
+        scenarios = [
+            CLEAN[:2] + [head] + CLEAN[2:],
+            CLEAN[:2] + [tail] + CLEAN[2:],
+            [head, msg(1, 10, ms=-2, day_base=DAY_START)] + CLEAN,
+            CLEAN + [tail, msg(7, 16, ms=0, day_base=end)],
+        ]
+        for number, messages in enumerate(scenarios):
+            with self.subTest(times=[m["cts"] for m in messages]):
+                case_root = self.tmp / f"refused-{number}"
+                error = self.refusal(messages, root=case_root)
+                self.assertEqual(error.code, "event_outside_day")
+                self.assertFalse(case_root.exists())
+                self.assertEqual(self.leftovers(), [])
+
+    def test_invalid_tail_record_is_not_hidden_by_routing(self):
+        messages = self.seam_messages()
+        del messages[-1]["cts"]
+        error = self.refusal(messages)
+        self.assertEqual(error.code, "archive_record_invalid")
+        self.assertFalse(self.root.exists())
+
+
 class ArchiveReaderTests(Base):
     def test_a_streamed_zip_with_a_data_descriptor_is_read_lazily(self):
         path = self.archive(CLEAN)
@@ -273,12 +434,12 @@ class IngestShapeTests(Base):
         result = self.ingest(CLEAN)
         self.assertFalse(result.already_published)
         self.assertEqual([p.partition_key for p in result.partitions], [f"dt={DAY}/seg=001"])
-        self.assertEqual(result.gaps, ())
+        self.assertEqual(len(result.gaps), 2)
         self.assertEqual(result.excluded_events, 0)
         self.assertEqual(result.source_events, 5)
         partition = result.partitions[0]
-        self.assertEqual(partition.complete_start, f"{DAY}T00:00:00Z")
-        self.assertEqual(partition.complete_end, f"{NEXT}T00:00:00Z")
+        self.assertEqual(partition.complete_start, self.iso(BASE + 1_000_000))
+        self.assertEqual(partition.complete_end, self.iso(BASE + 5_000_000 + 1000))
         self.assertEqual(partition.materialization.row_count, 5)
         self.assertTrue(partition.artifact_path.is_file())
         self.assertEqual(
@@ -303,18 +464,20 @@ class IngestShapeTests(Base):
         first, second = result.partitions
         last1 = BASE + 3_000_000
         first2 = BASE + 6_000_000
-        self.assertEqual(first.complete_start, f"{DAY}T00:00:00Z")
+        self.assertEqual(first.complete_start, self.iso(BASE + 1_000_000))
         self.assertEqual(first.complete_end, self.iso(last1 + 1000))  # ceil_us(last) = +1 us
         self.assertEqual(second.complete_start, self.iso(first2))
-        self.assertEqual(second.complete_end, f"{NEXT}T00:00:00Z")
-        (gap,) = result.gaps
+        self.assertEqual(second.complete_end, self.iso(BASE + 8_000_000 + 1000))
+        head, gap, tail = result.gaps
+        self.assertEqual((head.start, head.end), (f"{DAY}T00:00:00Z", first.complete_start))
+        self.assertEqual((tail.start, tail.end), (second.complete_end, f"{NEXT}T00:00:00Z"))
         self.assertEqual((gap.start, gap.end), (self.iso(last1 + 1000), self.iso(first2)))
         self.assertEqual(gap.excluded_events, 2)
         sha = archive_sha256(self.tmp / archive_file_name(DAY))
         self.assertEqual(
             gap.detail, f"expected_u:13|observed_u:50|excluded_events:2|source_sha256:{sha}"
         )
-        self.assertEqual(gap.gap_key, "gap=001")
+        self.assertEqual(gap.gap_key, "gap=002")
         self.assertTrue(gap.coverage_manifest_path.is_file())
         self.assertEqual([p.materialization.row_count for p in result.partitions], [3, 3])
 
@@ -334,18 +497,20 @@ class IngestShapeTests(Base):
     def test_a_day_that_begins_with_deltas_has_a_head_gap(self):
         result = self.ingest(HEAD)
         self.assertEqual([p.partition_key for p in result.partitions], [f"dt={DAY}/seg=001"])
-        (gap,) = result.gaps
+        gap, tail = result.gaps
         self.assertTrue(gap.detail.startswith("unanchored_head|excluded_events:2|source_sha256:"))
         first_ts = BASE + 3_000_000
         self.assertEqual((gap.start, gap.end), (f"{DAY}T00:00:00Z", self.iso(first_ts)))
         self.assertEqual(result.partitions[0].complete_start, self.iso(first_ts))
-        self.assertEqual(result.partitions[0].complete_end, f"{NEXT}T00:00:00Z")
+        self.assertEqual(result.partitions[0].complete_end, self.iso(BASE + 4_000_000 + 1000))
+        self.assertEqual((tail.start, tail.end), (result.partitions[0].complete_end, f"{NEXT}T00:00:00Z"))
         self.assertEqual(self.certify(result)[0].status, "pass")
 
     def test_a_day_that_ends_inside_a_discontinuity_has_an_open_gap(self):
         result = self.ingest(OPEN_END)
         self.assertEqual(len(result.partitions), 1)
-        (gap,) = result.gaps
+        head, gap = result.gaps
+        self.assertEqual(head.end, result.partitions[0].complete_start)
         last = BASE + 2_000_000
         self.assertEqual((gap.start, gap.end), (self.iso(last + 1000), f"{NEXT}T00:00:00Z"))
         self.assertEqual(gap.excluded_events, 2)
@@ -358,8 +523,8 @@ class IngestShapeTests(Base):
             [p.partition_key for p in result.partitions],
             [f"dt={DAY}/seg=001", f"dt={DAY}/seg=002", f"dt={DAY}/seg=003"],
         )
-        self.assertEqual([g.gap_key for g in result.gaps], ["gap=001", "gap=002"])
-        self.assertEqual([g.excluded_events for g in result.gaps], [1, 2])
+        self.assertEqual([g.gap_key for g in result.gaps], ["gap=001", "gap=002", "gap=003", "gap=004"])
+        self.assertEqual([g.excluded_events for g in result.gaps], [0, 1, 2, 0])
         self.assertEqual([p.materialization.row_count for p in result.partitions], [2, 2, 2])
         # every interval is strictly ordered and non-overlapping
         intervals = []
@@ -390,7 +555,7 @@ class IngestShapeTests(Base):
         self.assertEqual(document["derived_from"][0]["layer"], "raw")
         self.assertEqual(document["transform"], "canonicalize-l2-book-events-v1")
         before = result.dataset_manifest_path.read_bytes()
-        self.ingest(CLEAN, created_at="2030-01-01T00:00:00Z", day=DAY)  # idempotent re-ingest
+        self.ingest(archive=self.tmp / archive_file_name(DAY), created_at="2030-01-01T00:00:00Z")
         self.assertEqual(result.dataset_manifest_path.read_bytes(), before)
 
 
@@ -402,10 +567,10 @@ class RefusalTests(Base):
         self.assertEqual(self.leftovers(), [])
         return error
 
-    def test_an_event_outside_the_utc_day_is_refused(self):
+    def test_an_archive_wholly_outside_the_day_has_no_anchored_run(self):
         day_before = DAY_START - 2_000_000_000
         self.assertRefusal(
-            "event_outside_day",
+            "no_anchored_run",
             [msg(1, 10, "snapshot", day_base=day_before), msg(2, 11, day_base=day_before)],
         )
 
@@ -416,10 +581,12 @@ class RefusalTests(Base):
         self.assertEqual(result.partitions[0].materialization.first_exchange_ts.epoch_ns, DAY_START)
         shutil.rmtree(self.root)
         end = DAY_START + 86_400 * 1_000_000_000
-        self.assertRefusal(
-            "event_outside_day",
+        routed = self.ingest(
             [msg(1, 10, "snapshot", ms=0, day_base=BASE), msg(2, 11, ms=0, day_base=end)],
         )
+        self.assertEqual(routed.partitions[0].materialization.row_count, 1)
+        self.assertEqual(routed.excluded_events, 1)
+        self.assertEqual(routed.partitions[0].complete_end, f"{NEXT}T00:00:00Z")
 
     def test_no_snapshot_or_no_event_is_refused(self):
         self.assertRefusal("no_anchored_run", [msg(1, 10), msg(2, 11)])
@@ -533,6 +700,25 @@ class InternalConsistencyTests(Base):
         self.assertEqual(error.code, "plan_mismatch")
         self.assertEqual(error.context, {"outcome": "degraded"})
 
+    def test_source_edge_evidence_must_agree_across_both_passes(self):
+        end = DAY_START + 86_400_000_000_000
+        messages = CLEAN + [msg(6, 15, ms=0, day_base=end)]
+        real = ingest_module.iter_bybit_l2_archive_events
+        calls = []
+
+        def different_tail(path, day):
+            calls.append(1)
+            for event in real(path, day):
+                if len(calls) == 2 and event.exchange_ts.epoch_ns >= end:
+                    event = dataclasses.replace(event, native_sequence="7")
+                yield event
+
+        with mock.patch.object(ingest_module, "iter_bybit_l2_archive_events", different_tail):
+            error = self.refusal(messages)
+        self.assertEqual(error.code, "plan_mismatch")
+        self.assertFalse((self.root / f"dt={DAY}").exists())
+        self.assertEqual(self.leftovers(), [])
+
 
 class IntervalPlanTests(unittest.TestCase):
     """The representability rule at the exact microsecond boundary."""
@@ -562,22 +748,48 @@ class IntervalPlanTests(unittest.TestCase):
             ingest_module._plan_intervals(empty, [self.cut(10)], start, end)
         self.assertEqual(caught.exception.code, "discontinuity_not_representable")
         usable = self.runs((start + 1_000, t), (t + 2_000, t + 9_000))
-        complete, gaps = ingest_module._plan_intervals(usable, [self.cut(10)], start, end)
-        self.assertEqual(gaps, [(t + 1_000, t + 2_000, 0)])
-        self.assertEqual(complete, [(start, t + 1_000), (t + 2_000, end)])
+        complete, gaps = ingest_module._plan_intervals(usable, [self.cut(10)], start, end, has_tail=True)
+        self.assertEqual(gaps, [(start, start + 1_000, "source_file_head"), (t + 1_000, t + 2_000, 0)])
+        self.assertEqual(complete, [(start + 1_000, t + 1_000), (t + 2_000, end)])
+
+    def test_a_submicrosecond_head_is_refused_not_rounded_back(self):
+        with self.assertRaises(L2DayRefusal) as caught:
+            ingest_module._plan_intervals(self.runs((DAY_START + 1, DAY_START + 1001)), [],
+                                         DAY_START, DAY_START + 86_400_000_000_000)
+        self.assertEqual(caught.exception.code, "discontinuity_not_representable")
+
+    def test_last_microsecond_reaches_midnight_without_an_empty_gap(self):
+        end = DAY_START + 86_400_000_000_000
+        complete, gaps = ingest_module._plan_intervals(
+            self.runs((DAY_START, end - 1000)), [], DAY_START, end
+        )
+        self.assertEqual(complete, [(DAY_START, end)])
+        self.assertEqual(gaps, [])
 
 
 class ReacquisitionAndDeterminismTests(Base):
     def test_an_identical_reacquisition_is_a_no_op(self):
-        first = self.ingest(ONE_GAP)
+        archive = self.archive(ONE_GAP)
+        first = self.ingest(archive=archive)
         before = {p: p.read_bytes() for p in sorted(self.root.rglob("*")) if p.is_file()}
-        second = self.ingest(ONE_GAP)
+        second = self.ingest(archive=archive)
         self.assertTrue(second.already_published)
         self.assertEqual(
             [p.partition_key for p in second.partitions], [p.partition_key for p in first.partitions]
         )
         after = {p: p.read_bytes() for p in sorted(self.root.rglob("*")) if p.is_file()}
         self.assertEqual(before, after)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_equal_rows_cannot_silently_change_published_tail_evidence_or_coverage(self):
+        archive = self.archive(CLEAN)
+        self.ingest(archive=archive)
+        before = {p: p.read_bytes() for p in sorted(self.root.rglob("*")) if p.is_file()}
+        end = DAY_START + 86_400_000_000_000
+        changed = self.archive(CLEAN + [msg(6, 15, ms=0, day_base=end)])
+        error = self.refusal(archive=changed)
+        self.assertEqual(error.code, "day_already_published_differently")
+        self.assertEqual(before, {p: p.read_bytes() for p in sorted(self.root.rglob("*")) if p.is_file()})
         self.assertEqual(self.leftovers(), [])
 
     def test_a_changed_archive_for_a_published_day_is_refused(self):
@@ -593,8 +805,9 @@ class ReacquisitionAndDeterminismTests(Base):
         self.assertEqual(self.leftovers(), [])
 
     def test_two_roots_give_byte_identical_artifacts_and_manifests(self):
-        one = self.ingest(ONE_GAP, root=self.tmp / "a")
-        two = self.ingest(ONE_GAP, root=self.tmp / "b")
+        archive = self.archive(ONE_GAP)
+        one = self.ingest(archive=archive, root=self.tmp / "a")
+        two = self.ingest(archive=archive, root=self.tmp / "b")
 
         def blobs(result):
             files = []

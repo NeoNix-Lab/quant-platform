@@ -51,7 +51,15 @@ def main() -> int:
     profile = BybitL2BookEventV1CertificationProfile("integration-l2-ingest-certifier")
     with tempfile.TemporaryDirectory() as holder:
         root = Path(holder)
-        archive = fixtures.make_archive(root, fixtures.DAY, fixtures.ONE_GAP)
+        # One UTC day delivered with both source-edge blocks. The closing
+        # snapshot repeats the last out-of-day delta's seq/u, as in the real seam.
+        day_end = fixtures.DAY_START + 86_400_000_000_000
+        messages = [fixtures.msg(0, 9, "snapshot", ms=-1, day_base=fixtures.DAY_START)]
+        messages += fixtures.ONE_GAP + [
+            fixtures.msg(9, 4, ms=14, day_base=day_end),
+            fixtures.msg(9, 4, "snapshot", ms=14, day_base=day_end),
+        ]
+        archive = fixtures.make_archive(root, fixtures.DAY, messages)
         dataset_root = root / "canonical" / "l2" / "bybit" / "BTCUSDT" / "l2-book-event-v1"
         params = dict(
             day=fixtures.DAY, dataset_root=dataset_root, created_at="2026-10-17T10:00:00Z",
@@ -62,7 +70,12 @@ def main() -> int:
         assert [p.partition_key for p in result.partitions] == [
             f"dt={fixtures.DAY}/seg=001", f"dt={fixtures.DAY}/seg=002"
         ]
-        assert len(result.gaps) == 1 and result.excluded_events == 2
+        assert len(result.gaps) == 2 and result.excluded_events == 5
+        assert result.source_events == 11
+        assert result.partitions[0].complete_start == fixtures.Base.iso(fixtures.BASE + 1_000_000)
+        assert result.partitions[-1].complete_end == f"{fixtures.NEXT}T00:00:00Z"
+        detail = result.partitions[0].coverage_manifest_path.read_text()
+        assert "source_file_edges" in detail and "last_snapshot_repeats_previous" in detail
 
         with psycopg.connect(dsn) as connection:
             with connection.cursor() as cursor:
@@ -118,7 +131,8 @@ def main() -> int:
                 assert Instant.parse(row[3]) == Instant.parse(partition.complete_start), (row, partition)
                 assert Instant.parse(row[4]) == Instant.parse(partition.complete_end), (row, partition)
             # the gap between the two published intervals is exactly the gap document's
-            gap = result.gaps[0]
+            head, gap = result.gaps
+            assert Instant.parse(rows[0][3]) == Instant.parse(head.end)
             assert Instant.parse(rows[0][4]) == Instant.parse(gap.start)
             assert Instant.parse(rows[1][3]) == Instant.parse(gap.end)
 

@@ -642,11 +642,13 @@ does not justify a global duplicate exception or a reconstructed/synthetic snaps
   ingest-throughput, memory, publish/read-back or full golden acceptance proof; that performance
   evidence remains open. The original Open evidence table's E5 concerns `ob500` projection
   parity and also remains open: this amendment neither renames nor closes it.
-- A separate `A14d` conformance issue implements decisions 1-5 and proves source-head/tail
+- The `A14d` conformance implementation must realize decisions 1-5 and prove source-head/tail
   routing, in-day duplicate refusal, regression/interior out-of-day refusal, head and trailing
   gaps at 1 µs, and a real-shaped post-midnight tail with the closing duplicate snapshot. It
-  then re-runs the real-day golden and records the bounded E2-E4 results. #416 changes no code
-  and claims no successful full real-day ingest, certification, publication or consumer read.
+  then re-run the real-day golden and record the bounded E2-E4 results. The maintainer
+  subsequently [authorized delivering these fixes in the same PR](https://github.com/NeoNix-Lab/quant-platform/pull/417#issuecomment-6231933925).
+  This design decision alone claims no successful real-day ingest, certification, publication
+  or consumer read; those require the implementation's executed evidence.
 - The frozen coverage fold, event and dataset identities, all manifest bytes/fields, catalog
   DDL, `trade-v1` and other ADRs are untouched. Source-edge and gap evidence uses existing
   evidence kinds and `detail` text. Governance status is reconciled separately at the A14
