@@ -13,7 +13,7 @@ authorizes the header's scope before invoking any semantic request decoder.
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import asyncio
 import hashlib
@@ -219,6 +219,10 @@ class RemoteJ02SecurityConfig:
     authorization_policy_version: str
     principals_by_fingerprint: Mapping[str, RemoteJ02Principal]
     evidence_log: RemoteJ02SecurityEvidenceLog
+    # A host that versions the trust anchor by its bytes (issue #395) builds the
+    # context once from exactly those bytes and hands it here; the listener then
+    # serves with that context and never reads the anchor path again.
+    ssl_context: ssl.SSLContext | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for name in (
@@ -239,14 +243,33 @@ class RemoteJ02SecurityConfig:
                 raise TypeError("principals_by_fingerprint values must be RemoteJ02Principal")
         if not isinstance(self.evidence_log, RemoteJ02SecurityEvidenceLog):
             raise TypeError("evidence_log must be RemoteJ02SecurityEvidenceLog")
+        if self.ssl_context is not None and (
+            not isinstance(self.ssl_context, ssl.SSLContext)
+            or self.ssl_context.verify_mode != ssl.CERT_REQUIRED
+            or self.ssl_context.minimum_version < ssl.TLSVersion.TLSv1_3
+        ):
+            raise ValueError("ssl_context must be a TLS 1.3 context that requires a client certificate")
 
-    def build_server_ssl_context(self) -> ssl.SSLContext:
-        """Build strict TLS 1.3 mTLS context before a non-loopback listener starts."""
+    def build_server_ssl_context(
+        self, *, client_trust_anchor_data: str | bytes | None = None,
+    ) -> ssl.SSLContext:
+        """Build strict TLS 1.3 mTLS context before a non-loopback listener starts.
+
+        A configuration that carries a validated ``ssl_context`` returns it. With
+        ``client_trust_anchor_data`` (PEM text or DER bytes) the client trust is
+        loaded from those bytes instead of re-reading ``client_trust_anchor_path``,
+        so a caller that hashed them knows exactly what was trusted.
+        """
+        if self.ssl_context is not None and client_trust_anchor_data is None:
+            return self.ssl_context
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.verify_mode = ssl.CERT_REQUIRED
         context.load_cert_chain(self.server_certificate_path, self.server_private_key_path)
-        context.load_verify_locations(cafile=self.client_trust_anchor_path)
+        if client_trust_anchor_data is None:
+            context.load_verify_locations(cafile=self.client_trust_anchor_path)
+        else:
+            context.load_verify_locations(cadata=client_trust_anchor_data)
         return context
 
 
