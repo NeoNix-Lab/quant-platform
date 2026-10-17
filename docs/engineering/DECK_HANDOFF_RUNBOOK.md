@@ -49,8 +49,10 @@ Run on the server as the operator account. `/opt/market-platform` is the deploye
 python3 -m venv /opt/market-platform/.venv
 /opt/market-platform/.venv/bin/pip install 'pyarrow>=15' 'psycopg[binary]>=3.1' 'rfc8785>=0.1.4' 'websockets>=12'
 # infra/promote-main.sh runs tools/run_tests.py on the candidate with the interpreter first on PATH (see Promotion), so the
-# environment also holds the test dependencies (the `test` extra of pyproject.toml).
-/opt/market-platform/.venv/bin/pip install 'jsonschema>=4.19' 'rfc3339-validator>=0.1.4'
+# environment also holds the test dependencies (the `test` extra of pyproject.toml) and the build backend of pyproject.toml
+# ([build-system].requires): one of those tests builds the package with --no-build-isolation, and a fresh virtual
+# environment of Python 3.12 or later has no setuptools.
+/opt/market-platform/.venv/bin/pip install 'jsonschema>=4.19' 'rfc3339-validator>=0.1.4' 'setuptools>=68'
 
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-api
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-worker
