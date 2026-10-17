@@ -235,6 +235,18 @@ from .storage_relocation import (
     RelocationInterrupted,
     relocate_storage_tier,
 )
+from .source_copy_disposal import (
+    CanonicalPartitionRef,
+    SourceCopyDisposalApplicationError,
+    SourceCopyDisposalOutcome,
+    SourceCopyDisposalResult,
+    SourceCopyLocation,
+    dispose_source_copy,
+    l2_canonical_dataset_identity,
+    l2_raw_dataset_identity,
+    read_catalog_canonical_partitions,
+    recover_source_copy_disposal_result,
+)
 from .retention_deletion import (
     InMemoryRetentionDeletionAuditStore,
     PostgresRetentionDeletionAuditStore,
@@ -255,6 +267,16 @@ from .wave6_golden import (
 )
 
 __all__ = [
+    "CanonicalPartitionRef",
+    "SourceCopyDisposalApplicationError",
+    "SourceCopyDisposalOutcome",
+    "SourceCopyDisposalResult",
+    "SourceCopyLocation",
+    "dispose_source_copy",
+    "l2_canonical_dataset_identity",
+    "l2_raw_dataset_identity",
+    "read_catalog_canonical_partitions",
+    "recover_source_copy_disposal_result",
     "BUCKET_OBSERVATION_IDENTITY_DOMAIN",
     "CANONICAL_BTCUSDT_DATASET",
     "CANONICAL_FIELD_ORDER",
