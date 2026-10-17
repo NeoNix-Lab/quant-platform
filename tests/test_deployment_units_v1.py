@@ -156,13 +156,15 @@ class DeploymentUnitTests(unittest.TestCase):
         ordered = single(unit, "After").split()
         self.assertIn("quant-platform-api.service", ordered)
         self.assertIn("postgresql.service", ordered)
-        # ADR-0072 section 6 asks for ordering and an explicit restart of the pair, not for lifecycle coupling:
-        # a PartOf=/BindsTo=/Requires= between the units would be a decision the ADR does not state.
-        for name, other in self.units.items():
-            for section in other.values():
+        # ADR-0072 section 6 asks for ordering and an explicit restart of the pair, not for lifecycle coupling between
+        # the two: no PartOf=/BindsTo=/Requires=... of one unit may name the other. (Other targets are not constrained.)
+        names = {"api": "quant-platform-api.service", "worker": "quant-platform-worker.service"}
+        for key, other_name in (("api", names["worker"]), ("worker", names["api"])):
+            for section_name, section in self.units[key].items():
                 for directive in ("PartOf", "BindsTo", "Requires", "Requisite", "PropagatesStopTo", "PropagatesReloadTo"):
-                    with self.subTest(unit=name, directive=directive):
-                        self.assertNotIn(directive, section)
+                    with self.subTest(unit=key, section=section_name, directive=directive):
+                        for value in section.get(directive, []):
+                            self.assertNotIn(other_name, value.split())
         api_unit = self.api["Unit"]
         self.assertNotIn("quant-platform-worker.service", single(api_unit, "After").split())
         self.assertNotIn("quant-platform-worker.service", " ".join(sum(api_unit.values(), [])))
@@ -280,6 +282,44 @@ class DeploymentUnitTests(unittest.TestCase):
         live_ingest = (DOCS / "LIVE_INGEST_SERVER_DEPLOYMENT.md").read_text(encoding="utf-8")
         self.assertIn("QP_LIVE_INGEST_CODE_REF=${DEPLOYED_SHA}", live_ingest, "the variable the runbook sets is that one")
 
+    def test_both_runbooks_leave_every_unit_able_to_reach_its_files_in_either_order(self) -> None:
+        # Two supported procedures create /etc/quant-platform: this runbook and the live-ingest one. Whichever runs
+        # last, the directory must let all three service users search it, and the files each procedure installs must
+        # stay unreadable to the others.
+        parent = re.compile(r"^sudo install -d -m (0\d{3}) -o (\w+) -g (\w+) /etc/quant-platform$", re.MULTILINE)
+        live = (DOCS / "LIVE_INGEST_SERVER_DEPLOYMENT.md").read_text(encoding="utf-8")
+        mine = RUNBOOK.read_text(encoding="utf-8")
+        install = mine[mine.index("## Install (once per host)"):mine.index("## Promotion")]
+        steps = {"deck": parent.findall(install), "live": parent.findall(live)}
+        for name, found in steps.items():
+            self.assertEqual(1, len(found), f"{name}: one install of the shared directory")
+        groups = {"mkt-transform": {"marketdata"}, "qp-api": {"qp-api"}, "qp-worker": {"qp-worker"}}
+
+        def can_search(user: str, mode: int, owner: str, group: str) -> bool:
+            return bool(
+                (mode & 0o001) or (mode & 0o010 and group in groups[user]) or (mode & 0o100 and owner == user)
+            )
+
+        for order in (("deck", "live"), ("live", "deck")):
+            final = steps[order[-1]][0]
+            mode, owner, group = int(final[0], 8), final[1], final[2]
+            for user in groups:
+                with self.subTest(order=order, user=user):
+                    self.assertTrue(can_search(user, mode, owner, group), f"{user} cannot reach /etc/quant-platform")
+            self.assertEqual(0, mode & 0o004, "others may search but not list the directory")
+        self.assertEqual(steps["deck"], steps["live"], "both procedures set the same owner and mode")
+        # The files each procedure installs there are not readable by others, whichever group owns them.
+        files = re.compile(r"install -m (0\d{3}) -o root -g ([\w-]+)\s+\S+\s+(/etc/quant-platform/\S+)")
+        installed = []
+        for text in (install, live):
+            installed += files.findall(text.replace("\\\n", " "))
+        self.assertTrue({"/etc/quant-platform/api-server.env", "/etc/quant-platform/worker.env",
+                         "/etc/quant-platform/live-ingest-server.env"} <= {target for _, _, target in installed})
+        for mode, group, target in installed:
+            if target.endswith(".env"):
+                with self.subTest(target=target):
+                    self.assertEqual(0, int(mode, 8) & 0o007, f"{target} readable by others")
+
     def test_the_install_procedure_lets_each_service_user_reach_the_files_it_opens(self) -> None:
         text = RUNBOOK.read_text(encoding="utf-8")
         install = text[text.index("## Install (once per host)"):text.index("## Promotion")]
@@ -287,9 +327,9 @@ class DeploymentUnitTests(unittest.TestCase):
         mode = re.search(r"install -d -m (0\d{3}) -o root -g root /etc/quant-platform\n", install)
         self.assertIsNotNone(mode, "the shared directory is root:root and listed with its mode")
         self.assertTrue(int(mode.group(1), 8) & 0o001, "others can traverse /etc/quant-platform")
-        # The live-ingest runbook sets the same directory to root:marketdata 0750; the warning names that.
-        self.assertIn("install -d", install)
-        self.assertIn("resets the directory's mode", install)
+        # The live-ingest runbook creates the same directory the same way; the procedure says so (and a test below
+        # runs both in either order).
+        self.assertIn("live-ingest runbook creates", install)
         # Everything the API and the worker open, as the right user, and the segregation of secrets.
         api_opens = ("api.pgpass", "principals.json", "tls/server.crt", "tls/server.key", "tls/ca.crt")
         for name in api_opens:

@@ -75,9 +75,9 @@ Then, deployment-local and never in Git:
   It exists for a deployment without `.git`, which this runbook does not cover, and which the deck cannot use (its
   workload module proves a clean tree through Git).
 
-**Check that every unit can read what its configuration opens, before the first start** (and again after any later step
-that touches `/etc/quant-platform`, such as the live-ingest runbook, whose `install -d` resets the directory's mode and
-group):
+**Check that every unit can read what its configuration opens, before the first start** (the live-ingest runbook creates
+the same directory with the same owner and mode, so running it before or after this one leaves the result unchanged;
+repeat the check after any other step that touches `/etc/quant-platform`):
 
 ```bash
 stat -c '%a %U:%G %n' /etc/quant-platform /etc/quant-platform/tls
