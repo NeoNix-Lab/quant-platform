@@ -20,7 +20,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import hashlib
+import os
 from pathlib import Path
+import re
 import subprocess
 from types import MappingProxyType
 from typing import Any
@@ -59,6 +61,7 @@ REPLAY_ROLES_V1: frozenset[str] = frozenset({"replay-result", "replay-summary"})
 LOGICAL_INPUT_REFERENCE_KIND = "admitted-input"
 DEFINITION_REFERENCE_KIND = "definition"
 _GIT_TIMEOUT_SECONDS = 30
+_COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 class DeckResultError(ValueError):
@@ -81,14 +84,19 @@ def inspect_workload_tree(root: str | Path) -> WorkloadTree:
     """The commit and cleanliness of the Git work tree at ``root``; any doubt is a refusal.
 
     Clean means ``git status --porcelain`` prints nothing at all: a modified or untracked file is
-    code the commit does not describe.
+    code the commit does not describe. The answer is about ``root`` itself and one moment: Git runs
+    without the ``GIT_*`` selectors of the environment (which could point it at another repository),
+    ``root`` must be the work tree's top level, and ``HEAD`` must be the same commit before, during
+    and after the status read, so a checkout in between is a refusal, not a mixed answer.
     """
+
+    environment = {name: value for name, value in os.environ.items() if not name.upper().startswith("GIT_")}
 
     def git(*arguments: str) -> str:
         try:
             result = subprocess.run(
-                ["git", *arguments], cwd=root, capture_output=True, text=True, check=False,
-                timeout=_GIT_TIMEOUT_SECONDS,
+                ["git", "--no-optional-locks", *arguments], cwd=root, capture_output=True, text=True,
+                check=False, timeout=_GIT_TIMEOUT_SECONDS, env=environment,
             )
         except (OSError, subprocess.SubprocessError) as error:
             raise DeckResultError("tree_unavailable", "the workload tree could not be inspected") from error
@@ -96,9 +104,20 @@ def inspect_workload_tree(root: str | Path) -> WorkloadTree:
             raise DeckResultError("tree_unavailable", "the workload tree is not a readable Git work tree")
         return result.stdout
 
-    commit = git("rev-parse", "HEAD").strip()
-    status = git("status", "--porcelain", "--untracked-files=normal")
-    return WorkloadTree(commit=commit, is_clean=status == "")
+    try:
+        top_level, before = git("rev-parse", "--show-toplevel", "HEAD").split("\n")[:2]
+        same_root = os.path.samefile(top_level, root)
+    except (ValueError, OSError) as error:
+        raise DeckResultError("tree_unavailable", "the workload tree could not be inspected") from error
+    if not same_root:
+        raise DeckResultError("tree_unavailable", "the workload root is not the top level of a Git work tree")
+    status = git("status", "--porcelain=v2", "--branch", "--untracked-files=normal", "--ignore-submodules=none")
+    after = git("rev-parse", "HEAD").strip()
+    during = next((line[len("# branch.oid "):] for line in status.splitlines() if line.startswith("# branch.oid ")), "")
+    if not (_COMMIT.fullmatch(before) and before == during == after):
+        raise DeckResultError("tree_changed", "the workload tree moved while it was inspected, or has no commit")
+    is_clean = all(line.startswith("# ") for line in status.splitlines())
+    return WorkloadTree(commit=before, is_clean=is_clean)
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,7 +260,35 @@ def build_deck_result(
         metrics_evidence=metrics_evidence,
         failure_evidence=failure_evidence,
     )
-    return DeckResult(bundle, bundle_to_wire(bundle), tuple(uploads))
+    wire = bundle_to_wire(bundle)
+    _require_transportable(wire, "wire")
+    return DeckResult(bundle, wire, tuple(uploads))
+
+
+def _require_transportable(value: Any, path: str) -> None:
+    """Refuse what the ``submit`` surface cannot carry as lossless JSON, naming the field.
+
+    The J02 listener rejects a request whose text holds a number with a fractional part or an exponent,
+    NaN or Infinity, before any decoder runs. A float is not turned into text here: that would change the
+    value an identity or fingerprint is computed over, so the workload must declare it another way.
+    """
+
+    kind = type(value)
+    if value is None or kind in (str, bool, int):
+        return
+    if kind is list:
+        for index, item in enumerate(value):
+            _require_transportable(item, f"{path}[{index}]")
+        return
+    if kind is dict:
+        for key, item in value.items():
+            if type(key) is not str:
+                raise DeckResultError("not_transportable", f"{path}: a key is not text")
+            _require_transportable(item, f"{path}.{key}")
+        return
+    if kind is float:
+        raise DeckResultError("not_transportable", f"{path}: a float has no lossless wire form")
+    raise DeckResultError("not_transportable", f"{path}: a {kind.__name__} has no wire form")
 
 
 def _admitted_manifest(admission: DeckAdmission):

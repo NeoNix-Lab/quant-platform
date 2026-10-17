@@ -13,12 +13,14 @@ from contextlib import contextmanager
 import copy
 import dataclasses
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -37,6 +39,7 @@ from quant_platform.application.deck_result_bundle import (  # noqa: E402
     content_checksum,
     inspect_workload_tree,
 )
+from quant_platform.application.api_transport_server import _parse_message  # noqa: E402
 from quant_platform.application.feature_provider_identity import (  # noqa: E402
     REPLAY_FEATURE_PROVIDER_KEY,
     check_replay_feature_provider,
@@ -158,7 +161,15 @@ class DeckResultBundleV1Tests(unittest.TestCase):
             self.transport.execute("upload_output", self.transport.decode("upload_output", body))
 
     def submit(self, wire) -> dict:
-        return self.transport.execute("submit", self.transport.decode("submit", wire))
+        return self.transport.execute("submit", self.transport.decode("submit", self.listened(wire)))
+
+    @staticmethod
+    def listened(wire) -> dict:
+        """The body the J02 listener hands the decoder: the client's encoding, parsed losslessly or refused."""
+        parsed = _parse_message(json.dumps(wire, sort_keys=True, separators=(",", ":")))
+        if parsed.failed or not parsed.lossless:
+            raise AssertionError("the listener refuses this document before any decoder runs")
+        return parsed.payload
 
     def registered(self, result) -> bool:
         identity = result.bundle.run_identity
@@ -331,6 +342,49 @@ class DeckResultBundleV1Tests(unittest.TestCase):
             configuration={REPLAY_FEATURE_PROVIDER_KEY: {"identity": "x", "payload": {}}},
         )
 
+    # -- what the wire can carry ------------------------------------------------------------
+
+    def test_a_float_anywhere_in_the_document_builds_nothing(self) -> None:
+        cases = {
+            "learning_rate": dict(run=dataclasses.replace(declaration("deck-run-float"), run_configuration={"learning_rate": 0.1})),
+            "sharpe": dict(metrics_evidence={"sharpe": 1.25}),
+            "folds[1]": dict(metrics_evidence={"folds": [1, 2.5]}),
+            "rate": dict(configuration={"nested": {"rate": 1e-3}}),
+            "elapsed": dict(failure_evidence={"elapsed": 2.0}),
+            "scale": dict(seeds={"scale": 0.5}),
+        }
+        for field, override in cases.items():
+            with self.subTest(field):
+                arguments = dict(
+                    run=declaration("deck-run-float"), runtime_environment={"python": "3.13"}, seeds={"seed": 7},
+                )
+                arguments.update(override)
+                with self.assertRaises(DeckResultError) as raised:
+                    build_deck_result(
+                        self.admission(), self.tree, arguments.pop("run"), (DeckOutput("metrics", b"m"),), **arguments,
+                    )
+                self.assertEqual("not_transportable", raised.exception.reason)
+                self.assertIn(field, str(raised.exception))
+
+    def test_a_float_in_a_provider_parameter_builds_nothing(self) -> None:
+        provider = dataclasses.replace(PROVIDER, parameters={"decay": 0.9})
+        self.refused("not_transportable", outputs=(DeckOutput("replay-result", b"r"),), replay_provider=provider)
+
+    def test_values_the_wire_carries_still_register_through_the_listener_parse(self) -> None:
+        run = dataclasses.replace(
+            declaration("deck-run-lossless"),
+            run_configuration={"seed": 7, "flag": True, "none": None, "name": "x", "grid": [1, 2, {"depth": 3}]},
+        )
+        result = build_deck_result(
+            self.admission(), self.tree, run, (DeckOutput("metrics", b"m"),),
+            runtime_environment={"python": "3.13"}, seeds={"seed": 7},
+            metrics_evidence={"count": 3, "labels": ["a", "b"], "empty": None},
+        )
+        for upload in result.uploads:
+            self.stage(upload.payload)
+        self.submit(result.wire)
+        self.assertTrue(self.registered(result))
+
     # -- the work tree --------------------------------------------------------------------
 
     def test_the_tree_of_a_clean_checkout_is_its_head_commit(self) -> None:
@@ -350,6 +404,65 @@ class DeckResultBundleV1Tests(unittest.TestCase):
 
     def test_a_directory_that_is_not_a_git_tree_is_a_refusal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(DeckResultError) as raised:
+                inspect_workload_tree(directory)
+            self.assertEqual("tree_unavailable", raised.exception.reason)
+
+    def test_the_git_environment_cannot_redirect_the_inspection_to_another_repository(self) -> None:
+        with tempfile.TemporaryDirectory(dir=self._scratch.name) as first, \
+                tempfile.TemporaryDirectory(dir=self._scratch.name) as second:
+            clean = make_repository(Path(first))
+            (Path(first) / "other.py").write_text("OTHER = 1\n", encoding="utf-8")
+            git(Path(first), "add", "other.py")
+            git(Path(first), "commit", "-q", "-m", "other")
+            clean = git(Path(first), "rev-parse", "HEAD")
+            dirty_commit = make_repository(Path(second))
+            (Path(second) / "workload.py").write_text("RESULT = 3\n", encoding="utf-8")
+            self.assertNotEqual(clean, dirty_commit)
+            selectors = {
+                "GIT_DIR": str(Path(first) / ".git"), "GIT_WORK_TREE": first,
+                "GIT_COMMON_DIR": str(Path(first) / ".git"), "GIT_INDEX_FILE": str(Path(first) / ".git" / "index"),
+            }
+            with mock.patch.dict(os.environ, selectors):
+                self.assertEqual(WorkloadTree(dirty_commit, False), inspect_workload_tree(second))
+
+    def test_a_checkout_between_the_reads_is_a_refusal_not_the_old_commit_with_the_new_status(self) -> None:
+        for moved_after in (1, 2):
+            with self.subTest(moved_after_git_call=moved_after), \
+                    tempfile.TemporaryDirectory(dir=self._scratch.name) as directory:
+                path = Path(directory)
+                first = make_repository(path)
+                git(path, "checkout", "-q", "-b", "later")
+                (path / "workload.py").write_text("RESULT = 2\n", encoding="utf-8")
+                git(path, "commit", "-qam", "later")
+                git(path, "checkout", "-q", "-")
+                real, calls = subprocess.run, []
+
+                def run_then_move_head(command, *arguments, **options):
+                    outcome = real(command, *arguments, **options)
+                    calls.append(command)
+                    if len(calls) == moved_after:
+                        real(["git", "checkout", "-q", "later"], cwd=path, check=True, capture_output=True)
+                    return outcome
+
+                with mock.patch("quant_platform.application.deck_result_bundle.subprocess.run", run_then_move_head):
+                    with self.assertRaises(DeckResultError) as raised:
+                        inspect_workload_tree(path)
+                self.assertEqual("tree_changed", raised.exception.reason)
+                self.assertNotEqual(first, git(path, "rev-parse", "HEAD"))
+
+    def test_a_subdirectory_of_a_work_tree_is_not_the_workload_root(self) -> None:
+        with tempfile.TemporaryDirectory(dir=self._scratch.name) as directory:
+            path = Path(directory)
+            make_repository(path)
+            (path / "package").mkdir()
+            with self.assertRaises(DeckResultError) as raised:
+                inspect_workload_tree(path / "package")
+            self.assertEqual("tree_unavailable", raised.exception.reason)
+
+    def test_a_repository_without_a_commit_is_a_refusal(self) -> None:
+        with tempfile.TemporaryDirectory(dir=self._scratch.name) as directory:
+            git(Path(directory), "init", "-q")
             with self.assertRaises(DeckResultError) as raised:
                 inspect_workload_tree(directory)
             self.assertEqual("tree_unavailable", raised.exception.reason)
