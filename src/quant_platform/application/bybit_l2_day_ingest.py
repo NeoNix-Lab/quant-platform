@@ -53,6 +53,7 @@ from ..source_adapters.bybit_l2 import (
     bybit_l2_continuity_evidence_detail,
 )
 from ..source_adapters.bybit_l2_archive import (
+    BybitL2ArchiveError,
     archive_file_name,
     archive_sha256,
     check_archive_name,
@@ -263,6 +264,7 @@ def ingest_bybit_l2_day(
     code_ref: str,
     storage_root_id: str = "hot",
     profile: BybitL2BookEventV1CertificationProfile | None = None,
+    cleanup_source: bool = False,
 ) -> L2DayIngestResult:
     """Ingest one pinned ``ob200`` archive day.  See the module docstring."""
 
@@ -329,10 +331,13 @@ def ingest_bybit_l2_day(
             staging, day, runs, complete, gaps, counts, cuts, source_sha,
             created_at, producer, code_ref, intent_start, intent_end, routing,
         )
-        return _install(
+        result = _install(
             staging, dataset_root, day, runs, complete, gap_documents, source_sha,
             routing, counts, storage_root_id, created_at,
         )
+        if cleanup_source:
+            Path(archive_path).unlink(missing_ok=True)
+        return result
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -572,6 +577,7 @@ def _install(staging, dataset_root, day, runs, complete, gap_documents, source_s
 
 
 __all__ = [
+    "BybitL2ArchiveError",
     "L2DayIngestResult",
     "L2DayRefusal",
     "L2GapDocument",

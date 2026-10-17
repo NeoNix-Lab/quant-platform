@@ -15,6 +15,7 @@ import types
 import unittest
 from unittest import mock
 import zipfile
+import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -829,6 +830,176 @@ class ReacquisitionAndDeterminismTests(Base):
         with mock.patch.object(ingest_module, "iter_bybit_l2_archive_events", counting):
             self.ingest(ONE_GAP)
         self.assertEqual(len(opened), 2)
+
+
+class SourceArchiveCleanupTests(Base):
+    """Hermetic unit tests for opt-in source archive cleanup (Issue #415)."""
+
+    def test_default_cleanup_source_false_preserves_archive(self):
+        archive = self.archive(CLEAN)
+        self.assertTrue(archive.exists())
+        result = self.ingest(archive=archive)
+        self.assertTrue(archive.exists())
+        self.assertEqual(len(result.partitions), 1)
+
+    def test_explicit_cleanup_source_false_preserves_archive(self):
+        archive = self.archive(CLEAN)
+        self.assertTrue(archive.exists())
+        result = self.ingest(archive=archive, cleanup_source=False)
+        self.assertTrue(archive.exists())
+        self.assertEqual(len(result.partitions), 1)
+
+    def test_cleanup_source_true_unlinks_archive_on_successful_ingest(self):
+        archive = self.archive(CLEAN)
+        self.assertTrue(archive.exists())
+        result = self.ingest(archive=archive, cleanup_source=True)
+        self.assertFalse(archive.exists())
+        self.assertEqual(result.day, DAY)
+        self.assertEqual(len(result.partitions), 1)
+        self.assertTrue((self.root / f"dt={DAY}" / "seg=001" / "part-001.parquet").exists())
+        self.assertTrue((self.root / "dataset-manifest.json").exists())
+
+    def test_cleanup_source_true_preserves_archive_on_refusal(self):
+        # 1. no_anchored_run refusal
+        unanchored_archive = self.archive([msg(1, 10), msg(2, 11)])
+        caught = self.refusal(archive=unanchored_archive, cleanup_source=True)
+        self.assertEqual(caught.code, "no_anchored_run")
+        self.assertTrue(unanchored_archive.exists())
+
+        # 2. event_outside_day refusal
+        head = msg(1, 10, ms=-1, day_base=DAY_START)
+        out_of_day_archive = self.archive(CLEAN[:2] + [head] + CLEAN[2:])
+        caught = self.refusal(archive=out_of_day_archive, cleanup_source=True)
+        self.assertEqual(caught.code, "event_outside_day")
+        self.assertTrue(out_of_day_archive.exists())
+
+        # 3. day_already_published_differently refusal
+        pub_archive = self.archive(CLEAN)
+        self.ingest(archive=pub_archive, cleanup_source=False)
+        changed_archive = self.archive(
+            CLEAN + [msg(6, 15, ms=0, day_base=DAY_START + 86_400_000_000_000)]
+        )
+        caught = self.refusal(archive=changed_archive, cleanup_source=True)
+        self.assertEqual(caught.code, "day_already_published_differently")
+        self.assertTrue(changed_archive.exists())
+
+    def test_cleanup_source_true_preserves_archive_on_archive_error(self):
+        corrupt_archive = self.tmp / archive_file_name(DAY)
+        corrupt_archive.write_bytes(b"corrupt-non-zip-data")
+        caught = self.refusal(archive=corrupt_archive, cleanup_source=True)
+        self.assertIsInstance(caught, BybitL2ArchiveError)
+        self.assertTrue(corrupt_archive.exists())
+
+    def test_cleanup_source_true_unlinks_archive_on_identical_reacquisition(self):
+        archive = self.archive(CLEAN)
+        res1 = self.ingest(archive=archive, cleanup_source=False)
+        self.assertFalse(res1.already_published)
+        self.assertTrue(archive.exists())
+
+        # Re-ingest exact same archive with cleanup_source=True
+        res2 = self.ingest(archive=archive, cleanup_source=True)
+        self.assertTrue(res2.already_published)
+        self.assertFalse(archive.exists())
+
+    def test_cli_tool_respects_cleanup_source_flag(self):
+        cli_path = str(ROOT / "tools" / "bybit_l2_day_ingest.py")
+
+        # 1. CLI without --cleanup-source: archive is preserved
+        archive1 = self.archive(CLEAN)
+        res = subprocess.run(
+            [
+                sys.executable,
+                cli_path,
+                "--archive",
+                str(archive1),
+                "--day",
+                DAY,
+                "--dataset-root",
+                str(self.root),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["cleaned_source"])
+        self.assertTrue(archive1.exists())
+
+        # 2. CLI with --cleanup-source: archive is unlinked
+        sub_dir = self.tmp / "sub"
+        sub_dir.mkdir()
+        archive2 = make_archive(sub_dir, DAY, CLEAN)
+        root2 = self.tmp / "root2"
+        res = subprocess.run(
+            [
+                sys.executable,
+                cli_path,
+                "--archive",
+                str(archive2),
+                "--day",
+                DAY,
+                "--dataset-root",
+                str(root2),
+                "--cleanup-source",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        payload = json.loads(res.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["cleaned_source"])
+        self.assertFalse(archive2.exists())
+
+    def test_cli_tool_refusal_preserves_archive_and_returns_exit_code_2(self):
+        cli_path = str(ROOT / "tools" / "bybit_l2_day_ingest.py")
+        archive = self.archive([msg(1, 10), msg(2, 11)])  # unanchored
+        res = subprocess.run(
+            [
+                sys.executable,
+                cli_path,
+                "--archive",
+                str(archive),
+                "--day",
+                DAY,
+                "--dataset-root",
+                str(self.root),
+                "--cleanup-source",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 2)
+        payload = json.loads(res.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["refusal"]["code"], "no_anchored_run")
+        self.assertTrue(archive.exists())
+
+    def test_cli_tool_archive_error_preserves_archive_and_returns_exit_code_2(self):
+        cli_path = str(ROOT / "tools" / "bybit_l2_day_ingest.py")
+        archive = self.tmp / archive_file_name(DAY)
+        archive.write_bytes(b"not-a-valid-zip-data")
+        res = subprocess.run(
+            [
+                sys.executable,
+                cli_path,
+                "--archive",
+                str(archive),
+                "--day",
+                DAY,
+                "--dataset-root",
+                str(self.root),
+                "--cleanup-source",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 2)
+        payload = json.loads(res.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["refusal"]["code"], "archive_unreadable")
+        self.assertTrue(archive.exists())
 
 
 if __name__ == "__main__":
