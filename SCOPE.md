@@ -1,6 +1,6 @@
 # Scope: DG-C / A14 — L2 contract, continuity and publication v1
 
-Status: **Part A (design gate) CLOSED — ADR-0070 ACCEPTED (#367, PR #370, 2026-10-15). Part B implementation inventory AUTHORIZED on integration branch `implement/l2` (cut from `implement/dgk`); its implementation issues are not yet opened.**
+Status: **Part A (design gate) CLOSED — ADR-0070 ACCEPTED (#367, PR #370, 2026-10-15). Part B implementation inventory AUTHORIZED on integration branch `implement/l2` (cut from `implement/dgk`); `A14a`-`A14c` are implemented on `implement/l2` (credited at the `A14` closeout); `A14d` and `A14e` are startable and their issues are not yet opened. ADR-0070 Amendment 1 (#402) cuts a source day into per-run partitions.**
 
 Scope kind: this document has two parts. Part A recorded the L2 design gate registered by governance issue #364 and closed by #367. Part B is the implementation inventory that gate makes implementable, reconciled by governance issue #371. No implementation may start until its Part B issue exists and its start gate is met.
 
@@ -45,6 +45,7 @@ Answers to the eight DG-C questions are in ADR-0070 §1-§8, with §9 for the pr
 
 - Provider documentation, a 150 s live capture and archive availability probes (ADR-0070 Appendix).
 - E1 (2026-10-15, first 2 MiB of one `ob200` day, 2025-12-01, and one `ob500` day, 2024-01-15; no full download): JSON lines in the live message shape; `cts` present in 3,647 of 3,647 and 3,638 of 3,638 messages; first record of each day is a `snapshot`; `u` always +1; `seq` strictly increasing and unique; no `cts` regression along `seq`; no delete of an absent level and no crossed book. The zip is a streamed archive with a data descriptor (sizes are `0` in the local header).
+- Amendment 1 (#402, 2026-10-16) replaced the in-partition `known_gap` split, which the frozen coverage fold cannot publish (found by `A14c`), with a cut of the source day into per-run partitions. A prototype on the merged `A14a`-`A14c` code folded with no violation and certified both runs `pass`; no frozen code changed.
 - Not covered by that sample and therefore still open: provider restarts (E2), the rest of the day (E3), mid-day re-snapshots (E4), real-day parity of the 500 -> 200 projection (E5).
 
 ---
@@ -55,12 +56,12 @@ Each atom below has an `ACCEPTED` governing ADR section. Each later receives its
 
 | Atom | Batch | Capability | Governing ADR | Requires | Sequencing note |
 |---|---|---|---|---|---|
-| `A14a` | v1 | Bybit L2 source semantics, ordering provider and certification profile | ADR-0070 §1, §2, §5, §7 | `A14` | Startable. First task: measure E2-E4 on one full pinned `ob200` day (separate maintainer approval for the download) before freezing check-suite parameters. Includes the adapter mapping `exchange_ts` = `cts`, `provider_ts` = `ts` under `bybit-orderbook-l2-v2`. |
-| `A14b` | v1 | Canonical L2 Parquet materializer and scanner | ADR-0070 §3, §4 | `A14a` | Start gate: HOLD until `A14a` is merged. `native_sequence` and `native_update_id` are `uint64` columns with exact string round-trip against the string-typed schema. |
-| `A14c` | v1 | L2 certification, publication and catalog bridge (`kind="l2"`) | ADR-0070 §4, §5 | `A14a`, `A14b`, `A08`, `A09` | Start gate: HOLD until `A14a` and `A14b` are merged. PostgreSQL integration test confirms the catalog needs no DDL change. |
-| `A14d` | v1 | Bybit historical L2 ingest (`ob200` day) with per-day outcome | ADR-0070 §2, §4, §7 | `A14b`, `A14c`, `A07` | Start gate: HOLD until `A14b` and `A14c` are merged. Streamed-zip reader with data descriptor; `ob500` and other depths refused as `source_depth_unsupported`. |
-| `A14e` | v1 | L2 consumer read (`l2_book_events@1`) | ADR-0070 §6 | `A14c`, `B02` | Start gate: HOLD until `A14c` is merged. Independent of `A14d`. Per-partition origin (`source-acquired` or `projected`) is visible in the read; no `u + 1` assumption on projected rows; byte-based `result_too_large` bound. |
-| `A14f` | v2 | Bybit live L2 ingest and resync | ADR-0070 §8 | `A14d`, `A11` | Authorized as scope, **held**: start gate is `A14` closed (v1 golden accepted) and an approved bounded soak plan. Outside the `A14` closure. |
+| `A14a` | v1 | Bybit L2 source semantics, ordering provider and certification profile | ADR-0070 §1, §2, §5, §7 | `A14` | Implemented on `implement/l2` (#374 / PR #375). E2-E4 are still to be measured on one full pinned `ob200` day (separate maintainer approval for the download) before the check-suite parameters are frozen. |
+| `A14b` | v1 | Canonical L2 Parquet materializer and scanner | ADR-0070 §3, §4 | `A14a` | Start gate met; implemented on `implement/l2` (#376 / PR #379). `native_sequence` and `native_update_id` are `uint64` columns with exact string round-trip against the string-typed schema; partition path per Amendment 1. |
+| `A14c` | v1 | L2 certification, publication and catalog bridge (`kind="l2"`) | ADR-0070 §4, §5 | `A14a`, `A14b`, `A08`, `A09` | Start gate met; implemented on `implement/l2` (#399 / PR #401). PostgreSQL proof: the catalog needs no DDL change. An event stream that is not one clean continuity segment fails certification (the guard behind Amendment 1). |
+| `A14d` | v1 | Bybit historical L2 ingest (`ob200` day) with per-day outcome | ADR-0070 §2, §4, §7 | `A14b`, `A14c`, `A07` | Startable (`A14b`, `A14c` merged). Amendment 1: cut the day into runs with the A14a certifier; one partition `dt=YYYY-MM-DD/seg=NNN` per run; one coverage document per run and per gap; excluded events stay in the retained source archive; refusals `discontinuity_not_representable`, `no_anchored_run`, `event_outside_day`, `day_already_published_differently`; streamed-zip reader with data descriptor; `ob500` and other depths refused as `source_depth_unsupported`. |
+| `A14e` | v1 | L2 consumer read (`l2_book_events@1`) | ADR-0070 §6 | `A14c`, `B02` | Startable (`A14c` merged). Independent of `A14d`. Per-partition origin visible; each `known_gap` between partitions reported as a consumer gap and never filled; no `u + 1` assumption on projected rows; byte-based `result_too_large` bound. |
+| `A14f` | v2 | Bybit live L2 ingest and resync | ADR-0070 §8 | `A14d`, `A11` | Authorized as scope, **held**: start gate is `A14` closed (v1 golden accepted) and an approved bounded soak plan. Outside the `A14` closure. The live day roll writes no synthetic snapshot; the predecessor-linked head mechanics are fixed in its own issue (Amendment 1 item 9). |
 | `A14g` | follow-on | Bybit `ob500` raw ingest and top-200 projection | ADR-0070 §9 | `A14b`, `A14c`, `A14d` | Authorized as scope, **held**: start gate is `A14d` merged and the E5 real-day parity test planned. Outside the `A14` closure. Certification check 9 (recomputation). |
 
 ```text
@@ -69,7 +70,7 @@ A14a ─> A14b ─> A14c ─┬─> A14d ─┬─> A14g
                       └─> A14e
 ```
 
-Immediately startable once its issue exists: `A14a`.
+Startable once its issue exists: `A14d`, `A14e`. `A14a`-`A14c` are implemented on `implement/l2`.
 
 ### v1 golden proof (batch closeout, not an atom)
 
@@ -84,8 +85,8 @@ Historical ingest -> materialization -> certification -> catalog publication -> 
 ## Authority
 
 - `AGENTS.md`
-- governance issues #364 and #371; design-gate issue #367
-- ADR-0070 (L2 contract, continuity and publication v1)
+- governance issues #364, #371 and #404; design-gate issues #367 and #402
+- ADR-0070 (L2 contract, continuity and publication v1) and its Amendment 1 (partitioning at continuity discontinuities)
 - ADR-0004, ADR-0018, ADR-0019, ADR-0020, ADR-0022, ADR-0025, ADR-0029, ADR-0030, ADR-0032, ADR-0040 through ADR-0044, ADR-0050, ADR-0054, ADR-0057, ADR-0063, ADR-0066, ADR-0068
 - `docs/product/ROADMAP.md`, `docs/product/CAPABILITY_DAG.md` (`DG-C` section; `A14`-`A14g`), `docs/architecture/OPEN_DECISIONS.md` (`DG-C`)
 
@@ -96,8 +97,8 @@ Accepted ADRs and frozen contracts remain normative. No Part B issue may change 
 ## Baseline and Credited State
 
 ```text
-implement/l2 @ 4f1eb1f (PR #370 merged; cut from implement/dgk @ 9db9637)
-DG-C: ADR-0070 ACCEPTED (#367); A14, A14a-A14g FROZEN / MISSING
+implement/l2 @ 17f77ff (PR #403 merged; cut from implement/dgk @ 9db9637)
+DG-C: ADR-0070 ACCEPTED (#367) + Amendment 1 (#402); A14, A14a-A14g FROZEN; A14a-A14c implemented on the branch (Impl column stays MISSING until the A14 closeout), A14d-A14g MISSING
 ```
 
 Credit, do not reimplement or re-prove absent invalidating evidence: every atom `COMPLETE` in `CAPABILITY_DAG.md`, within the bound its row records; in particular `A07` (one-UTC-day BTCUSDT-linear historical acquisition, ADR-0054), `A08`, `A09`, `A11` and `B02`. The #317 groundwork (`l2-book-event-v1`, `L2BookEvent`, the Bybit normalizer) is credited as input; its `exchange_ts` mapping is corrected by `A14a`.
@@ -106,7 +107,7 @@ Credit, do not reimplement or re-prove absent invalidating evidence: every atom 
 
 ## Explicit non-claims
 
-- `A14` and `A14a`-`A14g` are `FROZEN`/`MISSING`: decided, not built. No implementation issue exists yet.
+- `A14` and `A14a`-`A14g` are `FROZEN`; `Impl` stays `MISSING` until the `A14` closeout. `A14a`-`A14c` are built on `implement/l2`; `A14d`-`A14g` are decided, not built.
 - No L2 data is published or readable until `A14c`/`A14d`/`A14e` are implemented.
 - E2-E5 are not closed; their rules are fail-closed and recorded in ADR-0070 ("Open evidence").
 - The E1 sample covers the first minutes of two days; it does not prove behaviour across restarts or the whole day.
