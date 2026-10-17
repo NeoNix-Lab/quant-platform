@@ -233,3 +233,141 @@ a new unrelated decision to explain an old deletion.
 
 This ADR is the design-gate output for issue #198. Implementation and
 executable proof belong to issue #199.
+
+## Amendment 1 (issue #423) — disposal of one physical copy of a raw source archive
+
+**Date:** 2026-10-17
+**Authority:** the maintainer directed, on 2026-10-17, that a raw-source disposal process must
+exist before the real-day L2 golden is re-run and chose an amendment to this ADR as the vehicle
+(over a K09-gate-only route and over a quarantine tool). The rule below is the narrowest one
+that honours that direction without contradicting §1; it is proposed for review in the PR that
+carries this section. **Amends:** §3 and §5 by adding one candidate kind and one pure policy;
+nothing else. **Does not amend:** the preservation classes and their retention periods, K09's
+refusal of `UNIQUE_SOURCE` and `PROTECTED_EVIDENCE`, the gate of §2 for catalog-admitted
+artifacts, the audit shape of §4, `K05`-`K08`, `ADR-0032`, `ADR-0048`, the catalog DDL, any
+manifest or any other ADR.
+
+### Why and bounded evidence
+
+- Pull request #422 (issue #415) added a `cleanup_source` flag to the L2 day ingest that deletes
+  the provider-native `ob200` archive after a day is installed. Its adversarial review found
+  that this is not covered by this ADR: §1 makes a provider-native archive `UNIQUE_SOURCE`
+  (permanent, "Always refused", no override), and the *Decision* paragraph on non-authoritative
+  detritus names staging and scratch files, not source evidence.
+- This ADR as written is silent on one case: K09 v1 evaluates *catalog-admitted* finalized
+  artifacts. A raw source archive is not a catalog partition, so v1 neither authorizes nor
+  forbids removing **one physical copy** of it while another independent, verified copy exists.
+  `STORAGE_LIFECYCLE.md` §7 asks for exactly that second copy ("an independently recoverable
+  second physical copy"), and its §10 forbids silent deletion ("explicit, policy-based,
+  auditable, and provenance-aware").
+- ADR-0070 Amendment 1 item 1 and Amendment 2 keep events excluded from a canonical day (head
+  gap, discontinuities, the out-of-day tail of an archive file) *only* in the retained source
+  archive, and the tail of file `D` is the only copy of its events until `A14f` closes the file
+  seam. Any disposal rule must therefore not reduce the number of independent copies of such an
+  archive to zero.
+- Reproduced on the head of #422: (a) with the installed `part-001.parquet` overwritten by
+  `b"CORRUPT"` and its manifests intact, a re-ingest with cleanup reported
+  `already_published=True` and deleted the source, because the already-published check
+  compares manifest JSON, never installed bytes; (b) an `unlink` failure after a successful
+  publish raised out of the ingest and lost its result. The requirements below answer both.
+- No evidence exists about the provider's retention of old archive files (ADR-0070 Appendix C
+  probed availability only). That is why this amendment does **not** treat an archive as
+  reacquirable.
+
+### Decision
+
+1. **Vehicle and scope.** An amendment, because it is a narrower, later decision that does not
+   contradict the original: the *logical* source evidence stays `UNIQUE_SOURCE` and keeps its
+   permanent retention; what this amendment authorizes is removing **one physical copy** when at
+   least one other independent verified physical copy of the same bytes remains. It never
+   authorizes removing the last copy.
+2. **Candidate kind.** A *source copy* is one physical file of a provider-native source archive,
+   identified by `(storage_root_id, rel_path, content_sha256, byte_size)` plus the provider's
+   archive name. It is described to the audit shape of §4 as a `DeletionCandidateV1` with
+   `preservation_class = UNIQUE_SOURCE` and no `catalog_partition_id`, `partition_key` or
+   `revision`. Its dataset identity is the `raw` dataset identity of the source (for L2,
+   `L2_RAW_IDENTITY`).
+3. **Pure policy, separate from K09's.** A new pure decision in `quant_platform.operations`,
+   next to (not inside) `retention.py`, evaluates *copy disposal* under its own
+   `policy_definition_identity`. K09's `evaluate` is unchanged and keeps refusing `UNIQUE_SOURCE`
+   candidates; nothing flips a class to a deletable one. The decision identity is derived as §3
+   requires, so it keeps the existing `retention-deletion-decision-v1:sha256:<64 hex>` form and
+   fits `deletion_audit_records` unchanged (the candidate and the decision are `jsonb`).
+4. **Eligibility (all required; any missing, stale, malformed or contradictory item is
+   `REFUSED`).**
+   1. *Independent copy.* The caller supplies evidence of a second physical copy with the same
+      `(content_sha256, byte_size)` in a **different storage root**, whose bytes were freshly
+      re-hashed by the application layer immediately before the decision (a prior record never
+      licenses skipping the re-hash, as in ADR-0048 §5). The copy is not the candidate, is not a
+      path alias of it and is not part of a relocation in flight (§2 item 7).
+   2. *Canonical result verified.* For every canonical partition recorded as fed by this
+      archive, the catalog state is `valid` and the installed bytes were re-read and re-hashed
+      equal to the catalog `content_sha256` at decision time, through the read the consumer
+      uses. Manifest text is never sufficient evidence.
+   3. *Protection posture.* A `K06` `ProtectionAssessment` for the source unit, computed as if
+      the candidate copy were already gone (that is, over the remaining copy only), is
+      `PROTECTED`. `AT_RISK`, `UNAVAILABLE`, `CORRUPT` and `LOST` refuse.
+   4. *Provenance.* The decision names an accountable authority and an explicit decision time
+      (§3); neither has a default.
+   5. *No retention minimum* applies, because no evidence is destroyed: every byte, including
+      the excluded and out-of-day events, remains in the surviving copy. The minima of §1 remain
+      for catalog-admitted candidates.
+5. **Seam rule.** Because item 4.1 leaves a full independent copy, no seam-specific condition
+   is needed: the out-of-day tail of file `D` is still held in the surviving copy for `A14f`.
+   This is also why disposal of the last copy is excluded (item 7).
+6. **Guarded order, as §5.** Evaluate the pure decision from one coherent snapshot of candidate
+   and evidence; persist the `PERMITTED` audit **before** touching bytes; delete only the exact
+   path/hash named by the decision; persist the application result; leave refused candidates
+   untouched. A crash after the audit and before removal leaves the copy in place and
+   re-evaluable; a crash after removal and before the result is recovered by detecting the exact
+   content missing and recording the result against the existing decision. Before the delete the
+   application layer flushes what the verification depends on (the surviving copy and the
+   installed canonical bytes) to durable storage; evidence that cannot be made durable refuses.
+7. **Not decided here (explicit).** Removing the **last** physical copy of a provider-native
+   archive stays refused under §1. A "reacquirable source" disposition would need evidence about
+   provider retention that does not exist, an accountable assertion in the sense of ADR-0032's
+   attributable-evidence principle, and a superseding ADR rather than an amendment. The
+   provider-native trade archive (`.csv.gz`) would follow the same rule, but the tool named by
+   #415 (`tools/sync_symbol.py`) does not exist in any branch, so no trade-side disposal is
+   specified or implemented.
+8. **Implementation seam (decision only).** Ingest is and stays non-destructive: no delete
+   flag on `ingest_bybit_l2_day` or on the golden harness, which reads the archive twice and
+   never disposes. Disposal is one `quant_platform.application` service composing the pure
+   policy, the K09 audit store, the catalog read and the filesystem, plus one operator tool in
+   `tools/` that reaches repository code only through `quant_platform.application.*`. The tool
+   takes the authority, decision time, candidate, surviving copy and `code_ref` as required
+   arguments (no constants) and reports the real outcome per candidate (`removed`,
+   `already_absent`, or `refused` with reasons). It does not guess a second copy: the caller
+   names it.
+
+### Superseded text and precise scope
+
+No sentence of this ADR is superseded. The following clarifications record how existing text is
+to be read from now on.
+
+| Where | Earlier sentence | Reading after this amendment |
+|---|---|---|
+| §1, `UNIQUE_SOURCE` row | "Permanent" retention, deletion "Always refused". | Unchanged for the logical source evidence and for the last physical copy. Decision 1 adds only removal of **one** physical copy while another independent verified copy remains, evaluated by a separate pure policy (Decision 3). |
+| *Decision* preamble, detritus paragraph | "Temporary staging files ... are outside this ADR." | Unchanged. A raw source copy is not detritus and is never treated as such. |
+| Consequences, fourth bullet | "K09 cannot delete unique RAW/source evidence ... under v1." | Unchanged for K09's `evaluate`. Copy disposal is not a K09 deletion of the evidence; it removes a redundant copy under Decision 4. |
+
+### Evidence status and implementation handoff
+
+- No measurement of provider retention, of copy-verification cost or of disposal throughput was
+  taken. The reproductions above come from the head of #422 and are the only executable
+  evidence cited.
+- The implementation issue must prove, with a mutation check, that the delete cannot precede
+  (a) the fresh re-hash of the surviving copy, (b) the re-hash of the installed canonical bytes,
+  (c) the persisted `PERMITTED` audit; and must cover: corrupted installed canonical bytes
+  refuse; a corrupted or missing surviving copy refuses; the candidate named as its own copy
+  refuses; a same-root copy refuses; an unlink failure leaves the audit intact and reports an
+  explicit failed result without raising away a published day; a crash between audit and
+  removal and between removal and result.
+- #415 is closed as superseded and PR #422 is closed unmerged; its tests for the
+  non-destructive default and the CLI exit codes may be reused, its `cleanup_source` flag may
+  not.
+- The real-day golden is re-run only after that implementation is merged, as the maintainer
+  requires, and it keeps reading the archive without disposing of it.
+- `quant_platform.operations` keeps its `{"operations", "shared"}` allowance; the catalog DDL,
+  manifests, identities and the other ADRs are untouched. Governance status is reconciled
+  separately; this amendment edits no planning file.
