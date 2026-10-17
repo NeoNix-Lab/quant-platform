@@ -74,6 +74,7 @@ import test_api_host_composition_v1 as api_host  # noqa: E402
 import test_result_import_composition_v1 as k13_composition  # noqa: E402
 import api_server  # noqa: E402  (tools/api_server.py: the API host's commit record)
 import test_governed_result_import_v1 as k13  # noqa: E402
+import split_topology_proof_v1 as split_proof  # noqa: E402
 
 
 def connect(role: str, *, autocommit: bool = True):
@@ -1524,6 +1525,15 @@ class PostgresSafety(DisposableCase, unittest.TestCase):
         DurableJobStore(auto).admit(j03.admission())
         self.assertFalse(auto.closed)
         self.assertEqual(psycopg.pq.TransactionStatus.IDLE, auto.info.transaction_status)
+
+
+class PostgresSplitTopology(DisposableCase, split_proof.SplitTopologyProofV1):
+    """#397 (ADR-0072 section 7, part 1): the hermetic proof of the split server/deck topology.
+
+    The API and the worker run as separate processes from the units' commands, over TLS 1.3 mutual TLS with
+    credentials issued by infra/pki, a catalog of generated trades on this database and the deck client and
+    workload module in the test process. See tests/split_topology_proof_v1.py.
+    """
 
 
 if __name__ == "__main__":
