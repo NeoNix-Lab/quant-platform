@@ -1,7 +1,8 @@
-"""Opt-in ``j02-admitted-input-v1``: K12 delivery to the deck over J02 (issue #341).
+"""Opt-in ``j02-admitted-input-v2``: K12 delivery to the deck over J02 (issues #341, #357).
 
-ADR-0069 section 5 over ADR-0064 section 2 (unchanged: the manifest fields, the
-digest, the ``admission_id`` rule and the delivery states are K12's). Four
+ADR-0069 section 5 over ADR-0064 section 2 and its Amendment 1 (unchanged: the
+manifest fields, the digest, the ``admission_id`` rule and the delivery states
+are K12's; a delivery *attempt* now has a number). Four
 operations, all under ``j02.admitted_input.read`` and all initiated by the deck:
 
 - ``admit`` takes a *semantic* request (a dataset selector in the Consumer API's
@@ -10,17 +11,22 @@ operations, all under ``j02.admitted_input.read`` and all initiated by the deck:
   resulting :class:`AdmittedInputManifestV1`. Nothing locator-shaped is accepted
   from the deck: an unknown field, a path, a drive letter, a URL or a catalog
   UUID anywhere in the request is ``invalid_request`` before the resolver runs.
-- ``manifest`` returns the sealed manifest of an ``admission_id``.
+- ``manifest`` returns the sealed manifest of an ``admission_id`` and the
+  admission's current ``delivery_attempt`` (so a deck whose ``deliver`` response
+  was lost can end that attempt).
 - ``deliver`` starts a delivery attempt for a ``SEALED`` admission
-  (``DELIVERY_PENDING``). Each manifest member is read by the server's authority,
+  (``DELIVERY_PENDING``) and returns its ``delivery_attempt``. Each manifest member is read by the server's authority,
   verified against the manifest's content hash, and retained as its own J14
   transfer of ``admitted-input-member-v1`` (base64 bytes) with logical identity
   ``admitted-input-member-v1:<admission_id>:<member index>``. The response lists
   the transfers; the frames are fetched with J14 ``resume`` messages, which the
   connection handler answers only for a peer holding this family's scope.
 - ``acknowledge`` records the deck's verified delivery (``DELIVERED``) or its
-  reported failure (``DELIVERY_FAILED``). A later ``deliver`` is a new attempt
-  on the same sealed admission; the manifest never changes.
+  reported failure (``DELIVERY_FAILED``) *for the ``delivery_attempt`` it names*;
+  a report for another attempt, older or unknown, or a repeated one, is refused
+  with no write (``delivery_attempt_mismatch`` / ``acknowledgement_not_expected``).
+  A later ``deliver`` is a new attempt on the same sealed admission; the
+  manifest never changes.
 
 Members. A manifest has no member list of its own (and its logical identities
 are stored sorted, so no positional pairing of identities to hashes can be
@@ -46,21 +52,36 @@ supplies its own, like the ``result_bodies`` resolver of ``j02-job-v1``):
   refused before sealing);
 - ``read_member(manifest, index) -> bytes``: the member's exact bytes.
 
-Known limits, from the independent audit of this family (issue #357 closes
-them; **do not compose this family in a host before it does**):
+Delivery attempts (ADR-0064 Amendment 1, issue #357):
 
-- K12 keeps one state per admission and no attempt identity. An acknowledgement
-  that is late or duplicated for an *older* attempt is applied to the current
-  one, and a delivery that is still running can publish after the admission
-  was ended by another operation. The server never ends an attempt by itself.
-- J14 ``resume`` of a member does not consult the admission: delivered members
-  stay resumable until the J14 retention, also after ``EXPIRED``.
-- A ``ConsumerApiError`` raised by an authority seam reaches the wire as the
-  authority wrote it; the seams are trusted server code and must raise only
-  public, stable messages until the projection of #357 exists.
+- A delivery attempt has a number, ``delivery_attempt``, written with
+  ``DELIVERY_PENDING`` in one K12 transaction. Terminal transitions compare it
+  (and the state) in the write itself; nothing else ends an attempt.
+- The members are published in the *same* K12 transaction that records the
+  attempt, so an attempt is recorded only if its transfers were published, and
+  no other K12 transition (expiry, an acknowledgement, a newer attempt) can
+  interleave between the two. If that transaction is then refused, even at its
+  commit, this delivery stops being a reason to keep what it published (the
+  last delivery still undecided frees the copy; one that succeeded keeps it),
+  and any copy that stays is not recoverable until the admission has recorded
+  the attempt it was published for.
+- J14 ``resume`` of a member consults the admission at the time of the request:
+  after ``EXPIRED`` (or an admission that no longer exists, or cannot be read,
+  or has not recorded the attempt the copy was published for) a member is
+  ``transfer_expired``; after ``DELIVERED`` / ``DELIVERY_FAILED`` it stays
+  recoverable until the J14 retention.
+- A ``ConsumerApiError`` raised by an authority seam reaches the wire only as
+  the public projection: the frozen code, a fixed message for that code, and a
+  stable letters-and-underscore ``reason`` (or the seam's default). Its own
+  message, context and request identity are never forwarded.
 - ``ok`` on ``deliver`` means "published at the time of the response"; a
   ``transfer_expired`` at ``resume`` is a normal outcome (failure acknowledgement,
   then a new ``deliver``).
+- Not one atomic unit: the in-memory transfer store and PostgreSQL. If a response
+  is lost, or the database commit fails after publication, the deck ends the
+  pending attempt with a failure report for the number it observed (``manifest``
+  returns it) and delivers again. The in-memory store is not durable across a
+  restart; that ends in the same path.
 
 The deck supplies neither a locator nor a length, and no seam is reachable by
 name from the wire. Composition is explicit and opt-in
@@ -81,6 +102,7 @@ import re
 from typing import Any
 
 from .admitted_input import (
+    AdmittedInputAttemptMismatch,
     AdmittedInputConflict,
     AdmittedInputExpired,
     AdmittedInputManifestV1,
@@ -98,7 +120,7 @@ from .market_data import (
     RepresentationRef,
 )
 
-J02_ADMITTED_INPUT_FAMILY = "j02-admitted-input-v1"
+J02_ADMITTED_INPUT_FAMILY = "j02-admitted-input-v2"
 J02_ADMITTED_INPUT_REQUEST_VERSION = J02_ADMITTED_INPUT_FAMILY + "-request-v1"
 J02_ADMITTED_INPUT_RESPONSE_VERSION = J02_ADMITTED_INPUT_FAMILY + "-response-v1"
 J02_ADMITTED_INPUT_SCOPE = "j02.admitted_input.read"
@@ -116,6 +138,19 @@ DEFAULT_MAX_TOTAL_BYTES = 4 * 1024 * 1024
 # Upper bound on what one member document adds to its base64 payload (keys,
 # identities, hashes, JSON escaping). The transfer store remains the authority.
 _MEMBER_DOCUMENT_OVERHEAD = 8192
+
+_FIXED_MESSAGES = {
+    ConsumerErrorCode.INVALID_REQUEST: "the request is not valid",
+    ConsumerErrorCode.UNSUPPORTED_REPRESENTATION: "the requested representation is not supported",
+    ConsumerErrorCode.SOURCE_NOT_FOUND: "the requested source is not available",
+    ConsumerErrorCode.NO_COVERAGE: "the requested coverage is not available",
+    ConsumerErrorCode.SCHEMA_INCOMPATIBLE: "the requested schema is not compatible",
+    ConsumerErrorCode.INTEGRITY_FAILURE: "the platform cannot produce a trustworthy result",
+    ConsumerErrorCode.RESULT_TOO_LARGE: "the admitted input exceeds the configured delivery bounds",
+}
+# A public reason is a short token of letters and underscores: it cannot carry a
+# path, a catalog identifier (digits, hyphens, separators) or a sentence.
+_PUBLIC_REASON = re.compile(r"[a-z][a-z_]{0,63}")
 
 FAILURE_REASONS = (
     "content_hash_mismatch",
@@ -359,6 +394,7 @@ def _admission_id(body: Any) -> str:
 @dataclass(frozen=True, slots=True)
 class _Acknowledgement:
     admission_id: str
+    delivery_attempt: int
     delivered: bool
     manifest_digest: str | None
     failure_reason: str | None
@@ -368,22 +404,28 @@ class _Acknowledgement:
 def _acknowledgement(body: Any) -> _Acknowledgement:
     item = _only(
         body,
-        {"admission_id", "outcome", "manifest_digest", "failure_reason", "failed_member_index"},
+        {
+            "admission_id", "delivery_attempt", "outcome", "manifest_digest",
+            "failure_reason", "failed_member_index",
+        },
     )
     admission_id = _admission_id({"admission_id": item["admission_id"]})
+    attempt = item["delivery_attempt"]
+    if type(attempt) is not int or attempt < 1:
+        raise ValueError("delivery_attempt must be a positive integer")
     outcome = item["outcome"]
     digest, reason, index = item["manifest_digest"], item["failure_reason"], item["failed_member_index"]
     if outcome == "delivered":
         if type(digest) is not str or not _DIGEST.fullmatch(digest) or reason is not None or index is not None:
             raise ValueError("a delivered acknowledgement carries only the manifest digest")
-        return _Acknowledgement(admission_id, True, digest, None, None)
+        return _Acknowledgement(admission_id, attempt, True, digest, None, None)
     if outcome == "failed":
         if (
             digest is not None or reason not in FAILURE_REASONS
             or (index is not None and (type(index) is not int or index < 0))
         ):
             raise ValueError("a failed acknowledgement names a reason and optionally a member")
-        return _Acknowledgement(admission_id, False, None, reason, index)
+        return _Acknowledgement(admission_id, attempt, False, None, reason, index)
     raise ValueError("outcome must be delivered or failed")
 
 
@@ -394,7 +436,24 @@ def _record_document(record: AdmittedInputRecord) -> dict[str, Any]:
         "manifest": record.manifest.canonical_fields(),
         "state": record.state.value,
         "delivery_failure_reason": record.delivery_failure_reason,
+        "delivery_attempt": record.delivery_attempt,
     }
+
+
+def _public_error(error: ConsumerApiError, default_reason: str) -> ConsumerApiError:
+    """The verified public form of an authority's Consumer API error.
+
+    Only the frozen code survives, with the fixed message of that code and a
+    stable ``reason`` token. Whatever the seam wrote as message, context or
+    request identity (a path, a catalog identifier, a sentence) is dropped.
+    """
+
+    code = error.code if isinstance(error.code, ConsumerErrorCode) else ConsumerErrorCode.INTEGRITY_FAILURE
+    context = error.context if isinstance(error.context, Mapping) else {}
+    reason = context.get("reason")
+    if type(reason) is not str or not _PUBLIC_REASON.fullmatch(reason):
+        reason = default_reason
+    return ConsumerApiError(code, _FIXED_MESSAGES[code], context={"reason": reason})
 
 
 class AdmittedInputTransport:
@@ -467,8 +526,8 @@ class AdmittedInputTransport:
     def _admit(self, store: AdmittedInputStore, request: AdmittedInputRequest) -> dict[str, Any]:
         try:
             manifest = self._resolve(request)
-        except ConsumerApiError:
-            raise  # the frozen Consumer API vocabulary passes through unchanged
+        except ConsumerApiError as error:
+            raise _public_error(error, "admission_unavailable") from error
         except Exception as error:  # The authority's own text is never forwarded.
             raise _integrity("admission_unavailable") from error
         if not isinstance(manifest, AdmittedInputManifestV1):
@@ -496,8 +555,8 @@ class AdmittedInputTransport:
 
         try:
             declared = self._members(manifest)
-        except ConsumerApiError:
-            raise
+        except ConsumerApiError as error:
+            raise _public_error(error, "members_unavailable") from error
         except Exception as error:  # The authority's own text is never forwarded.
             raise _integrity("members_unavailable") from error
         if type(declared) not in (tuple, list) or not all(
@@ -586,41 +645,51 @@ class AdmittedInputTransport:
         try:
             # Held, not published: capacity is taken, or the whole batch is
             # refused and nothing is held. Nothing is resumable yet.
+            # The attempt this publication is made for, known only once K12 has
+            # written it; until then (and if K12 never records it) nothing the
+            # gate guards is recoverable.
+            published_for: dict[str, int | None] = {"attempt": None}
             reservation = self._transfers.reserve_many(
                 documents, owner=J02_ADMITTED_INPUT_SCOPE,
+                gate=lambda: self._recoverable(admission_id, published_for),
             )
         except FramedResultTransportError as error:
             # ADR-0066 section 3: refuse admission rather than retain without bound.
             raise _too_large("transfer_refused") from error
         try:
-            record = store.begin_delivery(admission_id)
+            # The attempt is recorded and the members are published in one K12
+            # transaction (every K12 transition serializes on its lock): the
+            # attempt number is consumed only if the members were published,
+            # and nothing can end or replace the attempt in between. What the
+            # reservation did not create (an earlier or a concurrent delivery's
+            # transfers) is never ours to withdraw, and release leaves it alone.
+            def publish(attempt_record: AdmittedInputRecord) -> None:
+                published_for["attempt"] = attempt_record.delivery_attempt
+                reservation.commit()
+
+            record = store.begin_delivery(admission_id, before_commit=publish)
+            reservation.confirm()  # K12 committed the attempt: its copies are kept for good
         except AdmittedInputExpired as error:
-            reservation.release()
+            reservation.withdraw()
             raise _refusal("admission_expired") from error
         except AdmittedInputConflict as error:
-            reservation.release()
+            reservation.withdraw()
             raise _refusal("delivery_not_available") from error
-        except BaseException:
-            reservation.release()
-            raise
-        # The attempt is recorded: only now are the members published. What the
-        # reservation did not create (an earlier or a concurrent delivery's
-        # transfers) was never ours to withdraw, and release left it alone.
-        try:
-            reservation.commit()
         except FramedResultTransportError as error:
             # The reservation expired (or a copy was replaced) while the
-            # transition waited: nothing is published and no descriptor is
-            # returned. The attempt is deliberately *not* ended here. K12 keeps
-            # one state per admission and no attempt identity, so a write made
-            # now, after a wait of unknown length, could land on a later attempt
-            # that has since begun and succeeded. Like any lost response, the
-            # pending attempt is ended by the deck's own acknowledgement of a
-            # failure, after which the sealed admission is delivered again.
-            reservation.release()
+            # transition waited: nothing was published, the transaction was
+            # rolled back, so no attempt number was consumed and no descriptor
+            # is returned. The admission stays as it was; the deck may deliver.
+            reservation.withdraw()
             raise _integrity("transfer_expired") from error
         except BaseException:
-            reservation.release()
+            # Includes a K12 commit that was refused *after* the publication
+            # above: the attempt was rolled back, so this delivery stops being a
+            # reason to keep what it published (the last undecided delivery
+            # frees it; one that is still deciding, or succeeded, keeps it) and,
+            # whatever stays, is not recoverable until the admission has
+            # recorded the attempt it was published for.
+            reservation.withdraw()
             raise
         descriptors = [
             {
@@ -639,14 +708,38 @@ class AdmittedInputTransport:
             "admission_id": record.admission_id,
             "manifest_digest": manifest.manifest_digest,
             "state": record.state.value,
+            "delivery_attempt": record.delivery_attempt,
             "members": descriptors,
         }
+
+    def _recoverable(self, admission_id: str, published_for: Mapping[str, int | None]) -> bool:
+        """May the members of this admission still be fetched? Read at resume time.
+
+        Only an admission that exists, is not ``EXPIRED``, and has *recorded*
+        the attempt this publication was made for (ADR-0064 Amendment 1, point
+        6): a copy published by a delivery whose attempt was never recorded (its
+        K12 commit was refused) is not recoverable, whatever the admission's
+        other attempts. Any failure to know is "no": a member is then
+        ``transfer_expired``, which the deck already handles.
+        """
+
+        attempt = published_for.get("attempt")
+        if attempt is None:
+            return False
+        try:
+            with self._provider() as store:
+                record = store.get(admission_id)
+        except Exception:  # noqa: BLE001 - fail closed
+            return False
+        return (
+            record.state is not AdmittedInputState.EXPIRED and record.delivery_attempt >= attempt
+        )
 
     def _member_bytes(self, manifest: AdmittedInputManifestV1, index: int) -> bytes:
         try:
             data = self._read_member(manifest, index)
-        except ConsumerApiError:
-            raise
+        except ConsumerApiError as error:
+            raise _public_error(error, "member_unavailable") from error
         except Exception as error:  # The authority's own text is never forwarded.
             raise _integrity("member_unavailable") from error
         if type(data) is not bytes:
@@ -657,11 +750,18 @@ class AdmittedInputTransport:
         record = self._get(store, request.admission_id)
         if record.state is AdmittedInputState.EXPIRED:
             raise _refusal("admission_expired")
+        if record.delivery_attempt != request.delivery_attempt:
+            # Older, unknown or repeated for another attempt: never applied to
+            # the current one, whatever outcome it asks for.
+            raise _refusal("delivery_attempt_mismatch")
         if record.state is not AdmittedInputState.DELIVERY_PENDING:
             raise _refusal("acknowledgement_not_expected")
         try:
             if request.delivered:
-                record = store.record_delivery(request.admission_id, request.manifest_digest)
+                record = store.record_delivery(
+                    request.admission_id, request.manifest_digest,
+                    delivery_attempt=request.delivery_attempt,
+                )
             else:
                 index = request.failed_member_index
                 if index is not None and index >= len(record.manifest.content_hashes):
@@ -670,7 +770,15 @@ class AdmittedInputTransport:
                     request.failure_reason if index is None
                     else f"{request.failure_reason}:member:{index}"
                 )
-                record = store.record_delivery_failure(request.admission_id, reason)
+                record = store.record_delivery_failure(
+                    request.admission_id, reason, delivery_attempt=request.delivery_attempt,
+                )
+        except AdmittedInputExpired as error:
+            raise _refusal("admission_expired") from error
+        except AdmittedInputAttemptMismatch as error:
+            # The attempt was replaced after the read above: the write itself
+            # compares the number, so nothing was applied.
+            raise _refusal("delivery_attempt_mismatch") from error
         except AdmittedInputConflict as error:
             raise _refusal("acknowledgement_not_expected") from error
         return {
@@ -678,6 +786,7 @@ class AdmittedInputTransport:
             "manifest_digest": record.manifest.manifest_digest,
             "state": record.state.value,
             "delivery_failure_reason": record.delivery_failure_reason,
+            "delivery_attempt": record.delivery_attempt,
         }
 
     @staticmethod

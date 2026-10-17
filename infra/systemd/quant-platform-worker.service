@@ -1,0 +1,40 @@
+[Unit]
+Description=Quant Platform J03 worker v1
+Documentation=https://github.com/NeoNix-Lab/quant-platform/blob/main/docs/engineering/DECK_HANDOFF_RUNBOOK.md
+# After= orders the start only; the units are not coupled and the promotion restarts the pair explicitly.
+# The API records its commit before it listens, so a worker that starts earlier exits 3 and is started
+# again until the pair converges (see the runbook).
+After=network-online.target postgresql.service quant-platform-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qp-worker
+Group=qp-worker
+WorkingDirectory=/opt/market-platform
+EnvironmentFile=/etc/quant-platform/worker.env
+UMask=0027
+# Exit status: 0 clean stop; 2 another worker holds the lock; 3 the commit differs from the one the
+# API recorded (or none is recorded); 4 the lock was lost; 1 any other fatal error.
+# Restart=on-failure restarts on 3 as well; it does not hide it: each refusal is logged and the
+# restart converges as soon as the API of the same commit has recorded its commit.
+ExecStart=/opt/market-platform/.venv/bin/python /opt/market-platform/tools/job_worker.py
+Restart=on-failure
+RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=90s
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=read-only
+# The process-lifetime lock file of the single worker (QP_WORKER_LOCK_DIR).
+ReadWritePaths=/run/lock
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
