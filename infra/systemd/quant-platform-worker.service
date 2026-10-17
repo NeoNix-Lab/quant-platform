@@ -1,12 +1,11 @@
 [Unit]
 Description=Quant Platform J03 worker v1
 Documentation=https://github.com/NeoNix-Lab/quant-platform/blob/main/docs/engineering/DECK_HANDOFF_RUNBOOK.md
-# After= orders the start only: the API records its commit before it listens, so a worker that
-# starts earlier exits 3 and is started again until the pair converges (see the runbook).
+# After= orders the start only; the units are not coupled and the promotion restarts the pair explicitly.
+# The API records its commit before it listens, so a worker that starts earlier exits 3 and is started
+# again until the pair converges (see the runbook).
 After=network-online.target postgresql.service quant-platform-api.service
 Wants=network-online.target
-# A restart or stop of the API restarts or stops the worker with it.
-PartOf=quant-platform-api.service
 
 [Service]
 Type=simple

@@ -154,7 +154,13 @@ class DeploymentUnitTests(unittest.TestCase):
         ordered = single(unit, "After").split()
         self.assertIn("quant-platform-api.service", ordered)
         self.assertIn("postgresql.service", ordered)
-        self.assertEqual("quant-platform-api.service", single(unit, "PartOf"))
+        # ADR-0072 section 6 asks for ordering and an explicit restart of the pair, not for lifecycle coupling:
+        # a PartOf=/BindsTo=/Requires= between the units would be a decision the ADR does not state.
+        for name, other in self.units.items():
+            for section in other.values():
+                for directive in ("PartOf", "BindsTo", "Requires", "Requisite", "PropagatesStopTo", "PropagatesReloadTo"):
+                    with self.subTest(unit=name, directive=directive):
+                        self.assertNotIn(directive, section)
         api_unit = self.api["Unit"]
         self.assertNotIn("quant-platform-worker.service", single(api_unit, "After").split())
         self.assertNotIn("quant-platform-worker.service", " ".join(sum(api_unit.values(), [])))
@@ -258,6 +264,49 @@ class DeploymentUnitTests(unittest.TestCase):
         self.assertIn("The deck checks out the same commit before a run", text)
         self.assertIn("infra/promote-main.sh --inspect-only", text)
 
+    def test_promotion_brings_every_server_unit_to_the_same_declared_commit(self) -> None:
+        # ADR-0068 section 8: ingest, API and worker of one server run the same commit. The live-ingest unit also
+        # declares it (QP_LIVE_INGEST_CODE_REF), so the promotion must update that variable and restart the unit.
+        text = RUNBOOK.read_text(encoding="utf-8")
+        promotion = text[text.index("## Promotion"):text.index("## A run, step by step")]
+        self.assertIn('DEPLOYED_SHA="$(git rev-parse HEAD)"', promotion)
+        self.assertIn("QP_LIVE_INGEST_CODE_REF=${DEPLOYED_SHA}", promotion)
+        self.assertIn("sudo systemctl restart quant-platform-live-ingest.service", promotion)
+        self.assertLess(promotion.index("QP_LIVE_INGEST_CODE_REF=${DEPLOYED_SHA}"),
+                        promotion.index("sudo systemctl restart quant-platform-live-ingest.service"))
+        self.assertIn("ADR-0068 section 8", promotion)
+        live_ingest = (DOCS / "LIVE_INGEST_SERVER_DEPLOYMENT.md").read_text(encoding="utf-8")
+        self.assertIn("QP_LIVE_INGEST_CODE_REF=${DEPLOYED_SHA}", live_ingest, "the variable the runbook sets is that one")
+
+    def test_the_install_procedure_lets_each_service_user_reach_the_files_it_opens(self) -> None:
+        text = RUNBOOK.read_text(encoding="utf-8")
+        install = text[text.index("## Install (once per host)"):text.index("## Promotion")]
+        # The directory is shared by users of different groups: every one needs the search bit on it.
+        mode = re.search(r"install -d -m (0\d{3}) -o root -g root /etc/quant-platform\n", install)
+        self.assertIsNotNone(mode, "the shared directory is root:root and listed with its mode")
+        self.assertTrue(int(mode.group(1), 8) & 0o001, "others can traverse /etc/quant-platform")
+        # The live-ingest runbook sets the same directory to root:marketdata 0750; the warning names that.
+        self.assertIn("install -d", install)
+        self.assertIn("resets the directory's mode", install)
+        # Everything the API and the worker open, as the right user, and the segregation of secrets.
+        api_opens = ("api.pgpass", "principals.json", "tls/server.crt", "tls/server.key", "tls/ca.crt")
+        for name in api_opens:
+            self.assertIn(name, install, name)
+        self.assertIn('sudo -u qp-api test -r "$f"', install)
+        self.assertIn("sudo -u qp-worker test -r /etc/quant-platform/worker.pgpass", install)
+        self.assertIn("sudo -u qp-worker test -r /etc/quant-platform/tls/server.key", install)
+        # The paths the environment examples open are the ones the procedure installs and checks.
+        api_env = parse_environment(API_ENV)
+        for variable in ("QP_API_TLS_CERTIFICATE", "QP_API_TLS_PRIVATE_KEY", "QP_API_CLIENT_TRUST_ANCHOR",
+                         "QP_API_PRINCIPALS_FILE"):
+            self.assertTrue(api_env[variable].startswith("/etc/quant-platform/"), variable)
+            self.assertIn(api_env[variable].removeprefix("/etc/quant-platform/"), install, variable)
+        self.assertIn("/etc/quant-platform/tls", install)
+        self.assertIn("-g qp-api /etc/quant-platform/tls", install)
+        live = parse_unit(MODEL)
+        self.assertEqual("mkt-transform", single(live["Service"], "User"))
+        self.assertIn("sudo -u mkt-transform test -r /etc/quant-platform/live-ingest-server.env", install)
+
     def test_the_runbook_states_the_worker_exit_rule(self) -> None:
         text = RUNBOOK.read_text(encoding="utf-8")
         self.assertIn("**exits `3`**", text)
@@ -301,6 +350,25 @@ class DeploymentUnitTests(unittest.TestCase):
         self.assertIn("**Stale acknowledgement.**", text)
         self.assertIn("`delivery_attempt_mismatch`", text)
         self.assertIn("**it must not be repeated**", text)
+
+    def test_j14_is_described_as_a_transport_not_as_a_configurable_family(self) -> None:
+        from quant_platform.application.api_host_composition import (
+            ApiHostCompositionError, FAMILY_NAMES, parse_families,
+        )
+        text = COMPATIBILITY.read_text(encoding="utf-8")
+        j14 = re.search(r'^J14_FAMILY\s*=\s*"([^"]+)"',
+                        (ROOT / "clients" / "deck" / "deck_handoff_client.py").read_text(encoding="utf-8"),
+                        re.MULTILINE).group(1)
+        with self.assertRaises(ApiHostCompositionError) as refused:
+            parse_families(j14)
+        self.assertTrue(str(refused.exception).startswith("unknown_family"))
+        for family in FAMILY_NAMES:
+            self.assertIn(f"`{family}`", text, family)
+        self.assertIn("is\n**not** a value of `QP_API_FAMILIES`", text)
+        # The J14 store is built where admitted-input is composed, and nowhere else.
+        host = (ROOT / "src" / "quant_platform" / "application" / "api_host_composition.py").read_text(encoding="utf-8")
+        self.assertEqual(1, host.count("FramedResultTransferStore("))
+        self.assertRegex(host, r'if "admitted-input" in families:\n\s+transfers = FramedResultTransferStore')
 
     def test_the_client_methods_the_runbook_names_exist(self) -> None:
         client = (ROOT / "clients" / "deck" / "deck_handoff_client.py").read_text(encoding="utf-8")

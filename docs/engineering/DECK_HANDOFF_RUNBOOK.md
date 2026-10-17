@@ -25,8 +25,8 @@ TLS private key is a file.
 
 Ordering and exit status:
 
-- The worker is `After=` the API and PostgreSQL, and `PartOf=` the API, so stopping or restarting the API stops or
-  restarts the worker.
+- The worker is `After=` the API and PostgreSQL. That orders the start only: the units are not coupled, so stopping or
+  restarting one does not stop or restart the other, and the promotion below restarts them explicitly, together.
 - The API records its deployment commit in PostgreSQL **before it listens** (ADR-0068 section 8). The worker compares its
   own commit with that record and **exits `3`** when they differ or when none is recorded. `Restart=on-failure` restarts
   it on `3`, and that does not mask the refusal: every attempt is refused and logged, and the pair converges as soon as
@@ -49,7 +49,10 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-worker
 # Both units read the commit with `git rev-parse HEAD` in a checkout the operator owns.
 sudo git config --system --add safe.directory /opt/market-platform
 
-sudo install -d -m 0750 -o root -g root /etc/quant-platform
+# The directory is shared by the API, the worker and (when installed) live-ingest, which run as different users, so each of
+# them needs the search bit on it. 0751 gives that and no listing; the files below are protected by their own owner and mode.
+sudo install -d -m 0751 -o root -g root /etc/quant-platform
+sudo install -d -m 0750 -o root -g qp-api /etc/quant-platform/tls
 sudo install -m 0640 -o root -g qp-api    infra/systemd/quant-platform-api.env.example    /etc/quant-platform/api-server.env
 sudo install -m 0640 -o root -g qp-worker infra/systemd/quant-platform-worker.env.example /etc/quant-platform/worker.env
 sudo install -m 0644 -o root -g root infra/systemd/quant-platform-api.service    /etc/systemd/system/
@@ -59,16 +62,39 @@ sudo install -m 0644 -o root -g root infra/systemd/quant-platform-worker.service
 Then, deployment-local and never in Git:
 
 - Database: create the logins with `db/init/005_runtime_roles.sh` (`platform_api`, `platform_worker`); put each password
-  in its passfile (`/etc/quant-platform/api.pgpass`, `worker.pgpass`), mode `0600`, owned by that unit's user. Correct only the
+  in its passfile (`/etc/quant-platform/api.pgpass`, `worker.pgpass`), mode `0600`, owned by that unit's user (`qp-api`,
+  `qp-worker`). Correct only the
   host, port and database name in the two DSNs. Do not add `PGPASSWORD` or a password to a DSN.
 - API: install the server certificate, its key, the CA certificate and the principals file as described in
-  [Deck/server PKI operations](DECK_PKI_OPERATIONS.md) (`server.key` mode `0600`, owned by `qp-api`), and set the paths in
-  `api-server.env`. A non-loopback bind needs **both** a non-loopback `QP_API_HOST` and `QP_API_ALLOW_NON_LOOPBACK=true`,
+  [Deck/server PKI operations](DECK_PKI_OPERATIONS.md), and set the paths in `api-server.env`: `server.crt`, `server.key`
+  and `ca.crt` in `/etc/quant-platform/tls/` (`server.key` mode `0600` owned by `qp-api`, the others `0644`), and
+  `principals.json` in `/etc/quant-platform/` (mode `0640`, `root:qp-api`). A non-loopback bind needs **both** a non-loopback `QP_API_HOST` and `QP_API_ALLOW_NON_LOOPBACK=true`,
   and then refuses to start without complete TLS/mTLS material. `QP_API_FAMILIES` names the families the host serves; the
   deck handoff needs `admitted-input` and `result-import`. Empty (the default) leaves the J02 v1 market-data server.
 - Do not set `QP_GIT_COMMIT` on a host with a Git checkout: it would decouple the recorded commit from the code that runs.
   It exists for a deployment without `.git`, which this runbook does not cover, and which the deck cannot use (its
   workload module proves a clean tree through Git).
+
+**Check that every unit can read what its configuration opens, before the first start** (and again after any later step
+that touches `/etc/quant-platform`, such as the live-ingest runbook, whose `install -d` resets the directory's mode and
+group):
+
+```bash
+stat -c '%a %U:%G %n' /etc/quant-platform /etc/quant-platform/tls
+for f in /etc/quant-platform/api-server.env /etc/quant-platform/api.pgpass /etc/quant-platform/principals.json \
+         /etc/quant-platform/tls/server.crt /etc/quant-platform/tls/server.key /etc/quant-platform/tls/ca.crt; do
+  sudo -u qp-api test -r "$f" || echo "qp-api cannot read $f"
+done
+sudo -u qp-worker test -r /etc/quant-platform/worker.pgpass || echo "qp-worker cannot read worker.pgpass"
+# Segregation: neither user reads the other's secret.
+sudo -u qp-worker test -r /etc/quant-platform/tls/server.key && echo "qp-worker can read server.key (wrong)"
+sudo -u qp-worker test -r /etc/quant-platform/api.pgpass && echo "qp-worker can read api.pgpass (wrong)"
+sudo -u qp-api test -r /etc/quant-platform/worker.pgpass && echo "qp-api can read worker.pgpass (wrong)"
+```
+
+The environment files are read by systemd as root; the checks above are for what the processes themselves open. No line
+may be printed. If live-ingest is installed on the host, `sudo -u mkt-transform test -r /etc/quant-platform/live-ingest-server.env`
+must still succeed as well (the mode `0751` of the directory is what lets all three users reach their own files).
 
 ```bash
 sudo systemctl daemon-reload
@@ -98,17 +124,33 @@ reset, clean, mirror the repository by file copy, or automate any of this.
 cd /opt/market-platform
 infra/promote-main.sh --inspect-only        # read-only: branch, sha, clean or dirty
 infra/promote-main.sh                       # fetch, validate, fast-forward to the validated origin/main
-git rev-parse HEAD                          # the new commit
+DEPLOYED_SHA="$(git rev-parse HEAD)"        # the new commit
+echo "DEPLOYED_SHA=$DEPLOYED_SHA"
 
 sudo systemctl restart quant-platform-api.service quant-platform-worker.service
 sudo journalctl -u quant-platform-api.service -u quant-platform-worker.service -n 60 --no-pager
 ```
 
+**Every unit of the server runs the same commit** (ADR-0068 section 8: ingest, API and worker of one server deployment),
+so a promotion is not finished until all of them do. If live-ingest is installed on this host, bring it to the new commit
+in the same promotion: declare the new commit, then restart it, following its
+[runbook](LIVE_INGEST_SERVER_DEPLOYMENT.md) for the stop, restart and evidence (it reconciles from its durable checkpoint):
+
+```bash
+sudo sed -i "s/^QP_LIVE_INGEST_CODE_REF=.*/QP_LIVE_INGEST_CODE_REF=${DEPLOYED_SHA}/" /etc/quant-platform/live-ingest-server.env
+sudo systemctl restart quant-platform-live-ingest.service
+sudo journalctl -u quant-platform-live-ingest.service -n 40 --no-pager
+```
+
+Do not leave live-ingest running the old process after the checkout has moved, and do not restart it without updating
+`QP_LIVE_INGEST_CODE_REF` first: either leaves the declared provenance different from the code that runs. If live-ingest
+is not installed on the host, there is nothing further to do.
+
 **The API and the worker restart together, always.** The restart ends every client session (ADR-0063 section 3) and
 the in-memory transfer store of the API (see lost response below). A worker that starts before the API has recorded the
 new commit exits `3` and is started again after `RestartSec`; that is expected, and it must be `READY` on the new commit
-before you finish. The live-ingest unit runs the same commit (ADR-0068 section 8) and follows its own
-[runbook](LIVE_INGEST_SERVER_DEPLOYMENT.md).
+before you finish. Finish with one check that all running units name `$DEPLOYED_SHA`: the `deployment_commit=` of the API,
+the `commit=` of the worker, and `QP_LIVE_INGEST_CODE_REF` of live-ingest.
 
 **The deck checks out the same commit before a run.** A deck result is accepted only for the server's commit
 (ADR-0072 section 5). After a promotion, an admission made earlier names the old commit: make a new `admit`.

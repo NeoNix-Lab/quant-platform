@@ -27,19 +27,22 @@ The versions below are the ones in the code at this repository's commit; the cod
 | --- | --- | --- | --- |
 | Admitted input | `j02-admitted-input-v2` | yes | `ADMITTED_INPUT_FAMILY` in `clients/deck/deck_handoff_client.py` |
 | Result import | `j02-result-import-v1` | yes | `RESULT_IMPORT_FAMILY` |
-| Framed results (J14) | `j14-framed-result-v1` | yes | `J14_FAMILY` |
+| Framed results (J14) | `j14-framed-result-v1` | yes (a transport, see below) | `J14_FAMILY` |
 | Strategy | `j02-strategy-v1` | no | `J02_STRATEGY_FAMILY` in `src/quant_platform/application/strategy_transport.py` |
 | Validation | `j02-validation-v1` | no | `J02_VALIDATION_FAMILY` in `validation_transport.py` |
 | Training | `j02-training-v1` | no | `J02_TRAINING_FAMILY` in `training_transport.py` |
 | Job | `j02-job-v1` | no | `J02_JOB_FAMILY` in `job_transport.py` |
 
-A server composes the families named in `QP_API_FAMILIES`; a family it does not compose is unsupported for every deck.
+A server composes the application families named in `QP_API_FAMILIES` (`strategy`, `validation`, `training`, `jobs`,
+`admitted-input`, `result-import`); a family it does not compose is unsupported for every deck. `j14-framed-result-v1` is
+**not** a value of `QP_API_FAMILIES` (it is refused as an unknown family): it is the framed-transfer transport, composed
+implicitly with `admitted-input`, which is what the deck's upload and result delivery use.
 `j02-admitted-input-v1` was withdrawn (ADR-0064 Amendment 1) and is accepted by no server.
 
 ## What an operator checks
 
-- **Before a deck is used against a server:** the families and versions the deck's client speaks are the ones the server's
-  `QP_API_FAMILIES` serves, at the versions above. A mismatch is refused on the first call (the client raises `WireIncompatible` for a reply it cannot accept).
+- **Before a deck is used against a server:** the application families the deck's client speaks (`admitted-input` and
+  `result-import`) are in the server's `QP_API_FAMILIES`, at the versions above; J14 needs no entry of its own, it comes with `admitted-input`. A mismatch is refused on the first call (the client raises `WireIncompatible` for a reply it cannot accept).
 - **Before a run:** the deck's checkout is the server's commit (`git rev-parse HEAD` on both, or the `git_identity` of an
   admission). After a promotion of the server, make a new admission: an earlier one names the old commit.
 - **Not a check:** the package version, the Python version of either side, or the date of the last deployment.
