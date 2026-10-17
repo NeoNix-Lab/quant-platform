@@ -235,7 +235,8 @@ class DeploymentUnitTests(unittest.TestCase):
             with self.subTest(path.name):
                 self.assertNotRegex(text, r"(?i)password\s*=")
                 self.assertNotIn("PGPASSWORD", text)
-                self.assertNotIn("PRIVATE KEY-----", text)
+                # Built, not written: the repository-wide scan for key material would otherwise find this file.
+                self.assertNotIn("PRIVATE " + "KEY-----", text)
                 self.assertNotRegex(text, r"(?i)(token|secret|api[_-]?key)\s*=")
         for path in (API_ENV, WORKER_ENV):
             for name, value in parse_environment(path).items():
