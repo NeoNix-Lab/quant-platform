@@ -10,10 +10,12 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 import re
+import sys
 import unittest
 
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
 SYSTEMD = ROOT / "infra" / "systemd"
 DOCS = ROOT / "docs" / "engineering"
 
