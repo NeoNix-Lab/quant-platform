@@ -1,159 +1,263 @@
 # Scope: DG-C / A14 — L2 contract, continuity and publication v1
 
-Status: **Part A (design gate) CLOSED — ADR-0070 ACCEPTED (#367, PR #370, 2026-10-15). Part B implementation inventory AUTHORIZED on integration branch `implement/l2` (cut from `implement/dgk`); `A14a`-`A14c` are implemented on `implement/l2` (credited at the `A14` closeout); `A14d` and `A14e` are startable and their issues are not yet opened. ADR-0070 Amendment 1 (#402) cuts a source day into per-run partitions.**
+Status: **CLOSED — governance closeout #442 (2026-10-18). Part A closed by #367 / PR #370
+(ADR-0070 ACCEPTED). Part B: A14a-A14e implemented and merged into `implement/l2`,
+with the v1 golden accepted at `1cdd78f` (11/11 claims, PR #413/#430).
+A14 and A14a-A14e are credited COMPLETE on this integration line. A14f/A14g remain
+held and outside the closure. Promotion to `main` is a separate wave closeout PR.**
 
-Scope kind: this document has two parts. Part A recorded the L2 design gate registered by governance issue #364 and closed by #367. Part B is the implementation inventory that gate makes implementable, reconciled by governance issue #371. No implementation may start until its Part B issue exists and its start gate is met.
-
----
+Scope kind: governance-only reconciliation explicitly authorized by issue #442 and
+`AGENTS.md`. No runtime, accepted ADR, frozen contract, schema or fixture changes.
+No new implementation issue is opened or authorized by this closeout.
 
 ## Historical scope archive
 
-This file previously recorded **DG-K — Process Topology v1** (Part A closed via ADR-0068/ADR-0069; Part B implemented on `implement/dgk`), and earlier **Wave 8 — Full Platform API & Remote Service Topology v1** (closed #327/PR #328). Both are preserved in git history (`git log -- SCOPE.md`). `SCOPE.md` is rewritten in place on each integration line; the DG-K scope remains authoritative on `implement/dgk` until its closeout, and the two versions are reconciled by hand at promotion to `main` (see "Promotion").
+The repository convention rewrites `SCOPE.md` in place and preserves earlier versions
+in `git log -- SCOPE.md` (DG-K precedent: governance #381). This CLOSED document is
+the v1 archive on `implement/l2`; no new active cycle is opened. The earlier DG-C
+design gate (#364/#367/#371), Amendment 1 reconciliation (#404), DG-K and Wave 8
+scopes remain in Git history. DG-K and L2 scope reconciliation at promotion remains
+accepted maintainer debt; no published branch is rebased by this issue.
 
----
+## Objective
 
-## Why this scope exists
-
-1. PR #317 / issue #316 added L2 groundwork only: `schemas/l2-book-event-v1.json`, `L2BookEvent` / `L2LevelChange` (`quant_platform.data.models`) and `normalize_bybit_l2_message` (`quant_platform.source_adapters.l2`).
-2. `A14` was nevertheless `OPEN_BLOCKING` / `MISSING`: no accepted ADR resolved snapshot/delta reconciliation, ordering, continuity, materialization, publication or reading for L2, and `CAPABILITY_DAG.md` required the L2 branch decision to ratify the #317 schema by ADR or supersede it.
-3. The maintainer selected L2 on 2026-10-14. #364 turned that selection into a design gate; #367 produced ADR-0070.
-
----
-
-## Owner decisions (inputs the design gate honored)
-
-Taken on 2026-10-14 and recorded by #364:
-
-1. **Aggregated price levels only.** No order-level, queue-position or L3/MBO semantics; no synthetic book from trades.
-2. **`A13` (L1) is not a prerequisite of `A14`.** "L1 does not activate L2" is unchanged.
-3. **Two batches.** `v1` is historical ingest; `v2` is live ingest.
-4. **Consumer read is in scope of `v1`.** An L2 that can be written but not read does not close `A14`.
-5. **`implement/l2` stays cut from `implement/dgk`**; promotion to `main` follows DG-K closeout. The by-hand `SCOPE.md` reconciliation toward `main` is accepted maintainer debt.
-6. **Venue: Bybit only.** No second venue.
-
----
-
-## Part A — Design gate outcome, CLOSED
-
-| Gate | Issue | ADR | Disposition | One-line resolution |
-|---|---|---|---|---|
-| **DG-C / A14** L2 | #367 | ADR-0070 | ACCEPTED | Order by numeric `seq` alone (`exchange_ts` = `cts` is a certified monotone property, `u` is the continuity signal); `u + 1` segments with `known_gap` / `degraded` and no synthetic snapshot; canonical layer stores source events, one effective depth (200); `canonical/l2/bybit/BTCUSDT/l2-book-event-v1` with existing manifests and `l2` kind (no manifest evolution); sibling L2 modules with certification checks 1-9; additive `l2_book_events@1` representation with a byte-based result bound; `l2-book-event-v1` ratified unchanged; `ob500` history only by declared top-200 projection (`A14g`); live supervision rules for `v2`. |
-
-Answers to the eight DG-C questions are in ADR-0070 §1-§8, with §9 for the projection. `OPEN_DECISIONS.md` (DG-C) records them in summary. ADR-0070 amends no accepted ADR and changes no existing identity, manifest vocabulary, J02 v1 or `trade-v1` code path.
-
-### Evidence recorded for the gate
-
-- Provider documentation, a 150 s live capture and archive availability probes (ADR-0070 Appendix).
-- E1 (2026-10-15, first 2 MiB of one `ob200` day, 2025-12-01, and one `ob500` day, 2024-01-15; no full download): JSON lines in the live message shape; `cts` present in 3,647 of 3,647 and 3,638 of 3,638 messages; first record of each day is a `snapshot`; `u` always +1; `seq` strictly increasing and unique; no `cts` regression along `seq`; no delete of an absent level and no crossed book. The zip is a streamed archive with a data descriptor (sizes are `0` in the local header).
-- Amendment 1 (#402, 2026-10-16) replaced the in-partition `known_gap` split, which the frozen coverage fold cannot publish (found by `A14c`), with a cut of the source day into per-run partitions. A prototype on the merged `A14a`-`A14c` code folded with no violation and certified both runs `pass`; no frozen code changed.
-- Not covered by that sample and therefore still open: provider restarts (E2), the rest of the day (E3), mid-day re-snapshots (E4), real-day parity of the 500 -> 200 projection (E5).
-
----
-
-## Part B — Authorized L2 implementation inventory
-
-Each atom below has an `ACCEPTED` governing ADR section. Each later receives its own implementation issue; **this reconciliation opens none**.
-
-| Atom | Batch | Capability | Governing ADR | Requires | Sequencing note |
-|---|---|---|---|---|---|
-| `A14a` | v1 | Bybit L2 source semantics, ordering provider and certification profile | ADR-0070 §1, §2, §5, §7 | `A14` | Implemented on `implement/l2` (#374 / PR #375). E2-E4 are still to be measured on one full pinned `ob200` day (separate maintainer approval for the download) before the check-suite parameters are frozen. |
-| `A14b` | v1 | Canonical L2 Parquet materializer and scanner | ADR-0070 §3, §4 | `A14a` | Start gate met; implemented on `implement/l2` (#376 / PR #379). `native_sequence` and `native_update_id` are `uint64` columns with exact string round-trip against the string-typed schema; partition path per Amendment 1. |
-| `A14c` | v1 | L2 certification, publication and catalog bridge (`kind="l2"`) | ADR-0070 §4, §5 | `A14a`, `A14b`, `A08`, `A09` | Start gate met; implemented on `implement/l2` (#399 / PR #401). PostgreSQL proof: the catalog needs no DDL change. An event stream that is not one clean continuity segment fails certification (the guard behind Amendment 1). |
-| `A14d` | v1 | Bybit historical L2 ingest (`ob200` day) with per-day outcome | ADR-0070 §2, §4, §7 | `A14b`, `A14c`, `A07` | Startable (`A14b`, `A14c` merged). Amendment 1: cut the day into runs with the A14a certifier; one partition `dt=YYYY-MM-DD/seg=NNN` per run; one coverage document per run and per gap; excluded events stay in the retained source archive; refusals `discontinuity_not_representable`, `no_anchored_run`, `event_outside_day`, `day_already_published_differently`; streamed-zip reader with data descriptor; `ob500` and other depths refused as `source_depth_unsupported`. |
-| `A14e` | v1 | L2 consumer read (`l2_book_events@1`) | ADR-0070 §6 | `A14c`, `B02` | Startable (`A14c` merged). Independent of `A14d`. Per-partition origin visible; each `known_gap` between partitions reported as a consumer gap and never filled; no `u + 1` assumption on projected rows; byte-based `result_too_large` bound. |
-| `A14f` | v2 | Bybit live L2 ingest and resync | ADR-0070 §8 | `A14d`, `A11` | Authorized as scope, **held**: start gate is `A14` closed (v1 golden accepted) and an approved bounded soak plan. Outside the `A14` closure. The live day roll writes no synthetic snapshot; the predecessor-linked head mechanics are fixed in its own issue (Amendment 1 item 9). |
-| `A14g` | follow-on | Bybit `ob500` raw ingest and top-200 projection | ADR-0070 §9 | `A14b`, `A14c`, `A14d` | Authorized as scope, **held**: start gate is `A14d` merged and the E5 real-day parity test planned. Outside the `A14` closure. Certification check 9 (recomputation). |
-
-```text
-A14a ─> A14b ─> A14c ─┬─> A14d ─┬─> A14g
-                      │         └─> A14f   (also requires A11)
-                      └─> A14e
-```
-
-Startable once its issue exists: `A14d`, `A14e`. `A14a`-`A14c` are implemented on `implement/l2`.
-
-### v1 golden proof (batch closeout, not an atom)
-
-Historical ingest -> materialization -> certification -> catalog publication -> consumer read of one pinned UTC day of the `ob200` archive. Fixtures: a pinned `ob200` day whose archive SHA-256 is recorded; a committed excerpt limited to snapshot, delta, delete and one discontinuity, under the repository's no-bulk-data rule. Hermetic proof exercises every check and outcome; one full real day is run by the maintainer and recorded in the closeout. Acceptance and refusals are stated in ADR-0070 ("v1 golden proof").
-
-### Integration branch
-
-`implement/l2` already exists (cut from `implement/dgk` @ `9db9637`). Atomic slices use `agent/issue-<N>-<slug>` from it and target it (`AGENTS.md`, Branching). Promotion to `main` follows DG-K closeout (see "Promotion").
-
----
+Reconcile DG-C / A14 v1 to the strongest propositions proven by merged evidence,
+with script-derived counts, explicit limits and named reopening conditions.
 
 ## Authority
 
-- `AGENTS.md`
-- governance issues #364, #371 and #404; design-gate issues #367 and #402
-- ADR-0070 (L2 contract, continuity and publication v1) and its Amendment 1 (partitioning at continuity discontinuities)
-- ADR-0004, ADR-0018, ADR-0019, ADR-0020, ADR-0022, ADR-0025, ADR-0029, ADR-0030, ADR-0032, ADR-0040 through ADR-0044, ADR-0050, ADR-0054, ADR-0057, ADR-0063, ADR-0066, ADR-0068
-- `docs/product/ROADMAP.md`, `docs/product/CAPABILITY_DAG.md` (`DG-C` section; `A14`-`A14g`), `docs/architecture/OPEN_DECISIONS.md` (`DG-C`)
+- Governance: `AGENTS.md`; #364, #371, #404 and #442.
+- [ADR-0070](docs/decisions/ADR-0070-l2-contract-continuity-and-publication-v1.md),
+  accepted #367 / PR #370; Amendment 1 (#402 / PR #403, per-run partitions);
+  Amendment 2 (#416 / PR #417, source-file boundaries and UTC-day ownership).
+- [ADR-0049 Amendment 1](docs/decisions/ADR-0049-retention-deletion-authority-v1.md)
+  (#423 / PR #424, redundant source-copy disposal, never the last copy).
+- Existing ADR-0018/0019/0020/0022/0023/0025/0029/0032/0040/0043/0044/0050/0054/0066
+  contract, identity, coverage, provenance, publication, runtime and transport bounds.
+- [Capability DAG](docs/product/CAPABILITY_DAG.md),
+  [Capability Map](docs/product/CAPABILITY_MAP.md), [Roadmap](docs/product/ROADMAP.md),
+  [Open Decisions](docs/architecture/OPEN_DECISIONS.md#dg-c--market-data-depth).
 
-Accepted ADRs and frozen contracts remain normative. No Part B issue may change `trade-v1`, `candle-v1`, `dataset-manifest-v1`, `partition-manifest-v1`, J02 v1, an existing representation contract or an existing identity, nor modify the `trade-v1` materializer, scanner, certification or gateway paths (ADR-0070 §4).
+## Owner decisions
 
----
+1. Aggregated price levels only; no order-level, queue-position or L3/MBO semantics,
+   no synthetic book from trades. A13 is not a prerequisite of A14.
+2. Bybit only, effective depth 200; v1 historical ingest includes consumer read;
+   v2 live ingest and ob500 projection remain separate held follow-ons.
+3. Numeric `seq` orders events; `exchange_ts = cts` is a certified monotone property,
+   `provider_ts = ts`, `u` signals continuity; regressions fail closed.
+4. Amendment 1: one anchored continuity run per partition `dt=YYYY-MM-DD/seg=NNN`,
+   one coverage document per complete run and per known gap. `degraded` is a
+   producer cut signal, never a published L2 lifecycle state in v1.
+5. Amendment 2: UTC day owns events by `exchange_ts`, strictly congruent with
+   `trade-v1`. Contiguous source-head/tail exclusions stay attributable in the
+   retained archive; they are not automatic publication into an adjacent day.
+   Head/tail gaps are explicit at 1 µs resolution. Only A14f may close the measured
+   file seam using predecessor-bound continuation and the adjacent source tail.
+6. ADR-0049 Amendment 1: one redundant physical copy may be removed only after all
+   independent-copy, canonical-byte, protection, audit and durability guards pass.
+   Logical source evidence retains UNIQUE_SOURCE permanent retention; the last
+   physical copy is never removable. A second copy is supplied by the operator.
+7. `implement/l2` remains cut from `implement/dgk` (original branch point `9db9637`);
+   promotion follows DG-K closeout and reconciles `SCOPE.md` by hand. Issue #442
+   applies the DG-K credit-at-integration-closeout precedent: COMPLETE here does
+   not assert promotion to `main`.
 
-## Baseline and Credited State
+## Part A — Design gate, CLOSED
 
-```text
-implement/l2 @ 17f77ff (PR #403 merged; cut from implement/dgk @ 9db9637)
-DG-C: ADR-0070 ACCEPTED (#367) + Amendment 1 (#402); A14, A14a-A14g FROZEN; A14a-A14c implemented on the branch (Impl column stays MISSING until the A14 closeout), A14d-A14g MISSING
+ADR-0070 #367 / PR #370 resolves the eight DG-C questions and ratifies
+`l2-book-event-v1` unchanged. Amendments 1 and 2 are operative over the superseded
+boundary/publication text. No accepted ADR is rewritten by this reconciliation.
+
+## Part B — Implementation inventory and unchanged held gates
+
+| Atom | Batch | State on implement/l2 | Governing authority and merged evidence | Bound / gate |
+|---|---|---|---|---|
+| A14a | v1 | COMPLETE | ADR-0070 §1, §2, §5, §7; #374 / PR #375 | Bybit ordering/certification profile; bounded E2-E4 measurements in #430. |
+| A14b | v1 | COMPLETE | ADR-0070 §3, §4, Amendment 1; #376 / PR #379 | Parquet materializer/scanner, uint64 exact round-trip, per-run paths. |
+| A14c | v1 | COMPLETE | ADR-0070 §4, §5, Amendment 1; #399 / PR #401 | Certification/publication/catalog bridge; PostgreSQL proof without DDL change. |
+| A14d | v1 | COMPLETE | ADR-0070 §2, §4, §7, Amendments 1-2; #410 / PR #411; conformed by #416 / PR #417 | Historical ob200; source-edge routing/evidence, UTC-day ownership, head/tail known_gap, byte-identical re-acquisition. |
+| A14e | v1 | COMPLETE | ADR-0070 §6; #407 / PR #408 | l2_book_events@1 read; per-partition origin, gaps never filled, byte bound. |
+| A14f | v2 | FROZEN / MISSING — held | ADR-0070 §8, Amendment 1 item 9 and Amendment 2 decision 6; requires A14d,A11 | Original start gate unchanged: A14 closed (v1 golden accepted) **and an approved bounded soak plan**. No soak plan approved here. Outside A14 closure; predecessor/certifier/catalog mechanics require its own issue. |
+| A14g | follow-on | FROZEN / MISSING — held | ADR-0070 §9; requires A14b,A14c,A14d | Original start gate unchanged: A14d merged **and the E5 real-day parity test planned**. No parity plan approved here. Outside A14 closure. |
+
+## Closeout result (issue #442)
+
+All implementation PRs and amendments above are merged ancestors of the captured
+`origin/implement/l2` baseline `1cdd78f47c5054dc02bc44bb637e26104b067c83`.
+The golden harness is #412 / PR #413; #429 / PR #430 fixes source-event accounting.
+The accepted [clean real-day result on PR #430](https://github.com/NeoNix-Lab/quant-platform/pull/430#issuecomment-6241364632)
+is the closeout evidence, not the earlier 10/11 run or the intermediate database failure.
+
+- Archive: `2025-12-01_BTCUSDT_ob200.data.zip`, SHA-256
+  `27b6cdc5f2976e7f8a9c2f02fe03eb57b170efe3a861748fafc53ae72d2816d3`.
+- 11/11 golden claims pass. Source accounting: **863,929 = 863,916 stored + 13
+  excluded post-midnight events**. Those 13 remain raw source evidence.
+- One eligible/certified-pass/published-valid partition `dt=2025-12-01/seg=001`;
+  read count 863,916 equals stored count; no event outside its partition range.
+  Read hash equals partition hash:
+  `canonical-content-hash-v1:sha256:e36b3baee239694497a87a3135487934b5f67b8a62d3849611b718a4d7b9f232`.
+- One file-head `known_gap` `[2025-12-01T00:00:00Z, 2025-12-01T00:00:01.112Z)`;
+  complete run starts at 00:00:01.112Z and ends at 2025-12-02T00:00:00Z.
+  Read gaps equal the gap documents; the read starts anchored; consumer window
+  equals scan, 600 = 600; **5 files reproduce byte-identically**.
+- E2-E4: one day, no provider restart, mid-day re-snapshot, u gap, absent-level
+  delete or crossed state; one adjacent-file seam measured, next file prefix only.
+  The full-file certifier flags the closing out-of-day snapshot as duplicate_sequence:1;
+  its event count is 863,928, while source_events counts all 863,929 records. The
+  in-day canonical input excludes the tail; there is no in-day duplicate exemption.
+- E5 cost: **4,310.6 s** wall, including **279.4 s** measurement; peak working set
+  **9,080 MB**, peak pagefile **9,935 MB**, one run on one Windows host. No bound
+  follows. Original E5 ob500 projection parity remains open for A14g.
+- Environment: disposable PostgreSQL, injected path resolver for a placeholder
+  storage root on Windows (catalog abs_path is absolute POSIX). An earlier rerun
+  failed at PostgreSQL after the cluster stopped uncleanly, cause unestablished;
+  the successful clean run restarted from the beginning and supplies all credits.
+- Disposal #425 / PR #426: credited as an **operational tool**, outside A14 atoms
+  and without new K09 credit. A scratch copy was removed with PERMITTED audit and
+  K06 PROTECTED while original and independent physical copy remained hash-identical.
+  No real copy was disposed. Its PostgreSQL proof is not wired into CI.
+
+## Reopening triggers — none authorized
+
+The [eight named conditions T1-T8](docs/architecture/OPEN_DECISIONS.md#l2-v1-reopening-triggers-442)
+record provider restart, a differing second seam, the file-head gap/A14f, ingest
+cost/backfill or host memory budget, unknown provider retention, disposal-tool
+registration/CI, missing trade-side disposal and a production-like POSIX proof.
+Every condition is NOT AUTHORIZED by #442. No follow-on scope or issue is opened.
+
+## Not claimed
+
+- No live L2 (A14f), no ob500 or other effective depth (A14g), no second venue.
+- No population-level continuity, discontinuity-rate or provider-restart guarantee.
+- No gap-free L2 across UTC midnight; the approximately 1.1 s observed gap remains
+  explicit, its duration is not a fixed tolerance or a promise about other days.
+- The independent second archive copy is an operator action, not a platform guarantee.
+  Provider retention is unknown; the last source copy is never removable.
+- Disposal tooling is not part of the A14 closure and adds no atom or K09 credit;
+  no trade-archive disposal (`tools/sync_symbol.py` does not exist).
+- No production-like POSIX/topology proof, multi-day backfill or memory/throughput bound.
+- No promotion to main, runtime/deployment change, new implementation authorization,
+  synthetic snapshot, order-level/L3/MBO or quantitative client logic.
+
+## Exit criteria and verification
+
+Issue #442 reconciles the earlier Part B promotion wording to the DG-K precedent:
+A14a-A14e are implemented and merged into implement/l2, the v1 golden is accepted,
+and this governance closeout credits COMPLETE here. Promotion to main remains the
+separate final wave closeout PR; A14f/A14g are outside the v1 closure.
+
+The governance change is restricted to SCOPE.md and the four planning files. Counts
+are recomputed from DAG table rows by script and cross-checked with expanded Map
+rows and all four published inventory blocks. Only six implementation states change
+(A14 plus A14a-A14e); the held DAG rows for A14f/A14g are byte-identical to baseline.
+No ADR, contract, runtime, tool, test or fixture is modified.
+
+Required commands from repository root:
+
+```powershell
+python -c "from pathlib import Path; s=Path('SCOPE.md').read_text(encoding='utf-8'); exec(s.split('```python\n',1)[1].split('```',1)[0])"
+python tools/check_markdown_links.py
+python tools/workflow.py preflight --base implement/l2
+git diff --check
 ```
 
-Credit, do not reimplement or re-prove absent invalidating evidence: every atom `COMPLETE` in `CAPABILITY_DAG.md`, within the bound its row records; in particular `A07` (one-UTC-day BTCUSDT-linear historical acquisition, ADR-0054), `A08`, `A09`, `A11` and `B02`. The #317 groundwork (`l2-book-event-v1`, `L2BookEvent`, the Bybit normalizer) is credited as input; its `exchange_ts` mapping is corrected by `A14a`.
+### Executable governance verification
 
----
+The following verifier is documentation-local, not a new runtime/tool or atom.
+It derives each metric from the tables, then checks the four printed checkpoints
+and the six permitted credit changes against the captured authoritative baseline.
 
-## Explicit non-claims
+```python
+from collections import Counter
+from pathlib import Path
+import re
+import subprocess
 
-- `A14` and `A14a`-`A14g` are `FROZEN`; `Impl` stays `MISSING` until the `A14` closeout. `A14a`-`A14c` are built on `implement/l2`; `A14d`-`A14g` are decided, not built.
-- No L2 data is published or readable until `A14c`/`A14d`/`A14e` are implemented.
-- E2-E5 are not closed; their rules are fail-closed and recorded in ADR-0070 ("Open evidence").
-- The E1 sample covers the first minutes of two days; it does not prove behaviour across restarts or the whole day.
-- Live L2 (`A14f`) and `ob500` history (`A14g`) are not part of the `A14` closure.
-- A second effective depth or a second venue needs an identity dimension (ADR-0018 evolution) and is not authorized.
+baseline = "1cdd78f47c5054dc02bc44bb637e26104b067c83"
+dag_path = "docs/product/CAPABILITY_DAG.md"
+map_path = "docs/product/CAPABILITY_MAP.md"
+files = [dag_path, map_path, "docs/product/ROADMAP.md",
+         "docs/architecture/OPEN_DECISIONS.md"]
 
----
+def rows(text):
+    result = {}
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) == 8 and re.fullmatch(r"[A-Z]\d{2}[a-z]?", cells[0]):
+            assert cells[0] not in result, cells[0]
+            result[cells[0]] = cells
+    return result
 
-## Mutation policy
+dag = rows(Path(dag_path).read_text(encoding="utf-8"))
+before = rows(subprocess.check_output(
+    ["git", "show", f"{baseline}:{dag_path}"], encoding="utf-8"))
+assert dag.keys() == before.keys()
+changed = {a for a in dag if dag[a][6] != before[a][6]}
+assert changed == {"A14", "A14a", "A14b", "A14c", "A14d", "A14e"}
+for atom in dag:
+    assert dag[atom][:6] == before[atom][:6], atom
+    assert dag[atom][6] in {"COMPLETE", "PARTIAL", "MISSING"}
+    if atom in changed:
+        assert dag[atom][6] == "COMPLETE"
+for atom in ("A14f", "A14g"):
+    assert dag[atom] == before[atom], atom
 
-- Each Part B implementation issue produces code and tests for exactly one atom.
-- Branch `agent/issue-<N>-<slug>` (or `codex/issue-<N>-<slug>`) from `implement/l2` and target it, not `main`.
-- Do not mutate `SCOPE.md`, `ROADMAP.md`, `CAPABILITY_MAP.md`, `CAPABILITY_DAG.md` or `OPEN_DECISIONS.md` as part of implementation work (`AGENTS.md` Governance boundary). Governance PRs use a `governance/` or `admin/` head branch.
-- Start gates in the Part B table are binding: `A14b` after `A14a`; `A14c` after `A14a`+`A14b`; `A14d` after `A14b`+`A14c`; `A14e` after `A14c`; `A14f` and `A14g` as stated.
+mapped = {}
+mapped_decisions = {}
+for line in Path(map_path).read_text(encoding="utf-8").splitlines():
+    cells = [c.strip() for c in line.strip("|").split("|")]
+    if len(cells) == 7 and re.fullmatch(r"[A-Z]\d{2}[a-z]?(,[A-Z]\d{2}[a-z]?)*", cells[5]):
+        for atom in cells[5].split(","):
+            assert atom not in mapped, atom
+            mapped[atom] = cells[3]
+            mapped_decisions[atom] = cells[2]
+assert mapped == {a: row[6] for a, row in dag.items()}
 
----
+n = len(dag)
+decision = Counter(row[5] for row in dag.values())
+impl = Counter(row[6] for row in dag.values())
+f = decision["FROZEN"] + decision["RESOLVED"]
+b, d = decision["OPEN_BLOCKING"], decision["OPEN_DEFERABLE"]
+assert set(decision) <= {"FROZEN", "RESOLVED", "OPEN_BLOCKING", "OPEN_DEFERABLE"}
+map_decision = Counter(mapped_decisions.values())
+assert set(map_decision) <= set(decision)
+assert map_decision["FROZEN"] + map_decision["RESOLVED"] == f
+assert map_decision["OPEN_BLOCKING"] == b
+assert map_decision["OPEN_DEFERABLE"] == d
+expected = {
+    "TOTAL_ATOMS": str(n), "CLASSIFIED_ATOMS": str(f+b+d),
+    "UNCLASSIFIED_GAPS": str(n-f-b-d),
+    "SEMANTIC_FROZEN_OR_RESOLVED": f"{f} / {n} = {f/n:.1%}",
+    "OPEN_BLOCKING": str(b), "OPEN_DEFERABLE": str(d),
+    "ROADMAP_DEFINED": f"{f} + {b} + {d} = {f+b+d}",
+    "ROADMAP_PLANNING_COMPLETENESS": f"{f+b+d} / {n} = {(f+b+d)/n:.0%}",
+    "IMPLEMENTATION_COMPLETE": f"{impl['COMPLETE']} / {n} = {impl['COMPLETE']/n:.1%}",
+}
+for file in files:
+    text = Path(file).read_text(encoding="utf-8")
+    for key, value in expected.items():
+        matches = re.findall(rf"^{key}\s*=\s*(.+)$", text, re.M)
+        assert matches == [value], (file, key, matches, value)
+    print(file, "inventory PASS")
+for atom, prs in {"A14a": [375], "A14b": [379], "A14c": [401],
+                  "A14d": [411, 417], "A14e": [408]}.items():
+    assert all(f"#{pr}" in dag[atom][7] for pr in prs), atom
+opened = Path(files[-1]).read_text(encoding="utf-8")
+triggers = [line for line in opened.splitlines() if re.match(r"\| T[1-8] —", line)]
+assert len(triggers) == 8 and all("NOT AUTHORIZED" in line for line in triggers)
+allowed = set(files) | {"SCOPE.md"}
+changed_files = set(subprocess.check_output(
+    ["git", "diff", "--name-only", baseline], encoding="utf-8").splitlines())
+assert changed_files == allowed, changed_files
+print("TOTAL", n, "DECIDED", f, "BLOCKING", b, "DEFERABLE", d,
+      "COMPLETE", impl["COMPLETE"], "PARTIAL", impl["PARTIAL"],
+      "MISSING", impl["MISSING"], "TRIGGERS", len(triggers))
+```
 
-## Promotion
+## Stop conditions
 
-Each integration line rewrites `SCOPE.md` in place. DG-K promotes first; the L2 line then rebases and reconciles `SCOPE.md` by hand at its own merge. The order is recorded in `ROADMAP.md` and is not decided by an implementation issue. The by-hand reconciliation is accepted maintainer debt, paid at the L2 merge.
-
----
-
-## Exit criteria for this scope
-
-- Part A: **met** — ADR-0070 `ACCEPTED` (#367), reconciled here.
-- Part B (`A14` closure): `A14a`-`A14e` implemented, merged into `implement/l2` and promoted to `main`, the `v1` golden proof accepted, followed by a governance closeout. `A14f` and `A14g` are separate follow-on scopes.
-
----
-
-## Out of Scope
-
-- order-level, queue-position, MBO or L3 semantics; synthetic books from trades;
-- L1 (`A13`), a second venue, execution or trading on L2 data;
-- any change to frozen `trade-v1` / `candle-v1` / manifest / J02 v1 contracts or to existing identities;
-- a second effective book depth in one dataset;
-- DG-K work (`P01`-`P06`) and the FEI feature-provider line;
-- bulk market data, databases, experiment artifacts or secrets in Git.
-
----
-
-## Stop / Escalation Conditions
-
-Stop and report rather than implement or decide unilaterally if:
-
-- an implementation issue cannot satisfy its ADR-0070 section without weakening an accepted ADR or changing a frozen contract or identity;
-- a Part B issue starts before its start gate is met;
-- measured evidence (E2-E5, or a full-day inspection) contradicts a premise of ADR-0070 (for example a `cts` regression along `seq` that would make whole days ineligible): record the finding and request an ADR amendment instead of relaxing a rule in code;
-- implementing an atom would require answering a design question ADR-0070 leaves open.
+Stop and report if reconciliation would claim an unproven capability COMPLETE,
+contradict an accepted ADR beyond transcription, or produce inventory counts that
+disagree across the four files. A differing later seam is the ADR-0070 Amendment 2
+stop condition, never permission to merge source records or relax certification.

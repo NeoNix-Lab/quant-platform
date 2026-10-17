@@ -2,6 +2,30 @@
 
 This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
+## Inventory checkpoint — DG-C / A14 v1 closeout (#442)
+
+Recomputed from the atomic rows in `CAPABILITY_DAG.md`, cross-checked against the
+expanded `CAPABILITY_MAP.md` atom rows. The executable check is in
+[SCOPE.md](../../SCOPE.md#executable-governance-verification). This snapshot credits
+only `A14` and `A14a`-`A14e` on `implement/l2`; it adds no atom or follow-on authority.
+
+This is the L2 integration-line inventory. Non-L2 rows retain the inherited branch
+checkpoint; DG-K references to its SCOPE.md Part B describe that historical
+scope and grant no authorization from the CLOSED L2 scope. Cross-line
+reconciliation belongs to the separate promotion.
+
+```text
+TOTAL_ATOMS                     = 111
+CLASSIFIED_ATOMS                = 111
+UNCLASSIFIED_GAPS               = 0
+SEMANTIC_FROZEN_OR_RESOLVED     = 100 / 111 = 90.1%
+OPEN_BLOCKING                   = 3
+OPEN_DEFERABLE                  = 8
+ROADMAP_DEFINED                 = 100 + 3 + 8 = 111
+ROADMAP_PLANNING_COMPLETENESS   = 111 / 111 = 100%
+IMPLEMENTATION_COMPLETE         = 84 / 111 = 75.7%
+```
+
 ## Resolved foundation — reference only
 
 The following are no longer open and must not be re-litigated without contradictory current authority:
@@ -273,7 +297,7 @@ non-complete evidence until a future attributable repair path proves it.
 
 ## DG-C — Market-data depth
 
-**Status:** the L2 branch is **RESOLVED** by ADR-0070 (#367, accepted 2026-10-15; reconciled by #371). The L1 branch (`A13`) stays `OPEN_BLOCKING`.
+**Status:** L2 batch v1 is **CLOSED / COMPLETE on `implement/l2`** (#442, 2026-10-18), under ADR-0070 (#367) and Amendments 1 (#402 / PR #403) and 2 (#416 / PR #417). `A14` and `A14a`-`A14e` are COMPLETE; `A14f`/`A14g` remain held, FROZEN/MISSING. Promotion to `main` is a separate wave closeout PR after DG-K. The L1 branch (`A13`) stays `OPEN_BLOCKING`.
 
 ### L1 branch (`A13`)
 
@@ -289,8 +313,11 @@ Exact L3/MBO semantics remain separately deferable until a real L3 feed exists.
 
 PR #317 / issue #316 (operator-requested emergency slice, merged during Wave 8)
 added an `l2-book-event-v1` schema, an `L2BookEvent` identity and pure venue
-adapters. ADR-0070 ratifies the schema unchanged; that code is groundwork, and
-`A14` is `FROZEN`/`MISSING` until its atoms are implemented.
+adapters. ADR-0070 ratifies the schema unchanged. Governance #442 now credits
+`A14a` (#374 / PR #375), `A14b` (#376 / PR #379), `A14c` (#399 / PR #401),
+`A14d` (#410 / PR #411, conformed by #416 / PR #417) and `A14e` (#407 / PR #408).
+The real-day golden (#412 / PR #413, accounting fix #429 / PR #430) is accepted,
+11/11 claims at `1cdd78f`; this closes A14 v1 within [the recorded bounds](../../SCOPE.md#closeout-result-issue-442).
 
 **Owner decisions taken (2026-10-14, #364) — fixed inputs of the design gate:**
 
@@ -305,6 +332,16 @@ adapters. ADR-0070 ratifies the schema unchanged; that code is groundwork, and
 7. (2026-10-16, #402) A source day with a `u` discontinuity is cut into per-run partitions
    `dt=YYYY-MM-DD/seg=NNN` (one coverage document per run and per gap), not split inside one partition:
    the frozen coverage fold cannot publish an internal `known_gap`.
+8. (2026-10-17, #416 / PR #417, ADR-0070 Amendment 2) The UTC day owns each event by
+   `exchange_ts` (`cts`), strictly congruent with `trade-v1`; source filenames are provenance.
+   Contiguous out-of-day head/tail blocks are retained and evidenced, not published into the
+   adjacent day automatically. Head/tail `known_gap` assertions stay explicit; only `A14f` may
+   close an adjacent-file seam via predecessor-bound continuation; its held gate is unchanged.
+9. (2026-10-17, #423 / PR #424, ADR-0049 Amendment 1) One redundant physical source copy
+   may be disposed only while an independent verified full copy remains and all policy
+   guards pass. The logical source stays UNIQUE_SOURCE with permanent retention; the last
+   copy is never removable. #425 / PR #426 is recorded as an operational tool, outside the
+   A14 atom list and without new K09 credit; the second copy is supplied by the operator.
 
 **Proposals of PR #360, now settled by ADR-0070:** the ordering key `(exchange_ts, native_sequence,
 native_update_id)` and provider `bybit-l2-exchange-ts-seq-v1` are **rejected** (order is numeric `seq`
@@ -333,14 +370,16 @@ are fixed in ADR-0070 §5.
 
 1. Q1: order by numeric `seq` alone within one stream; `exchange_ts` = `cts` is a certified non-decreasing
    property, `provider_ts` = `ts`; `u` is the continuity signal because a snapshot resets it (§1).
-2. Q2: `u + 1` segments; a discontinuity is a `known_gap` and the partition `degraded`; a `seq` or
-   `exchange_ts` regression makes it ineligible; no synthetic snapshot; continuity across the day boundary
-   is evidence, not carried state (§2).
+2. Q2 (as amended): `u + 1` runs, one eligible partition per anchored run; gaps are separate
+   `known_gap` documents, never a published `degraded` L2 partition. A `seq` or `exchange_ts`
+   regression makes it ineligible; no synthetic snapshot; cross-day continuity is evidence, not
+   carried state. Amendment 2 assigns by UTC `exchange_ts` and evidences source-edge exclusions.
 3. Q3: the canonical layer stores source events, not a book; one derived exception, the declared top-N
    projection of §9 (§3).
 4. Q4: `canonical/l2/bybit/BTCUSDT/l2-book-event-v1`, existing manifests and `l2` kind, no manifest
    evolution; one effective depth (200); sibling L2 modules (§4).
-5. Q5: profile and checks 1-9; `degraded` is eligible with explicit gaps (§5).
+5. Q5 (as amended): profile and checks 1-9; in-day anchored runs are certified `eligible` and
+   published `valid`; `degraded` is only the producer-side signal locating cuts (Amendment 1).
 6. Q6: additive `l2_book_events@1` representation, byte-based result bound, J02 v1 unchanged, no accepted-ADR
    amendment (§6).
 7. Q7: `l2-book-event-v1` ratified unchanged; depth 200 is the only effective depth; `ob500` history enters
@@ -348,13 +387,16 @@ are fixed in ADR-0070 §5.
 8. Q8 (`v2`): reuse the live-ingest host, one `orderbook.200` subscription, resync waits for the in-band
    snapshot, no repair path (§8).
 
-**Open evidence (rules already fail-closed):** E1 was measured on 2026-10-15 on the first 2 MiB of one
-`ob200` and one `ob500` day (`cts` present in 100% of 7,285 messages; first record a snapshot; `u` +1;
-`seq` strictly increasing; no `cts` regression, no delete of an absent level, no crossed book). Still open:
-E2 (`seq` across a provider restart), E3 (delete-of-absent rate over a full day), E4 (mid-day
-re-snapshots), E5 (real-day parity of the 500 -> 200 projection). A measured `cts` regression along `seq`
-would make whole days ineligible under ADR-0070 §5 check 4 and must be brought back as an ADR amendment,
-not relaxed in code.
+**Measured evidence, bounded:** E1's original two 2 MiB prefixes remain historical evidence. The
+accepted golden (#430) measured one full `2025-12-01` `ob200` file: 863,929 source
+events = 863,916 stored + 13 excluded post-midnight events; one published valid partition,
+5 byte-identical files, consumer read 863,916 and bounded window 600 = 600. The file head
+declares `[2025-12-01T00:00:00Z, 2025-12-01T00:00:01.112Z)` a `known_gap`.
+E2-E4: no provider restart, mid-day re-snapshot, absent-level delete or crossed state on this
+one day; no restart-survival or population guarantee follows. One adjacent-file seam was
+observed, using only the first 3 MiB of the next file. E5 ingest-cost observations are in
+trigger 4 below; the original ADR-0070 E5 (`ob500` projection parity) remains open for A14g.
+A `cts` regression along `seq` still fails closed; no threshold is relaxed.
 
 **Amendment 1 (ADR-0070, #402, 2026-10-16):** supersedes the §2/§4/§5 in-partition `known_gap` split and the
 `degraded` publication state. A run is a maximal sequence from an in-band snapshot to the delta that opens a
@@ -362,9 +404,47 @@ discontinuity; each run is one partition `dt=YYYY-MM-DD/seg=NNN` certified `elig
 interval or before the first snapshot are excluded from the canonical layer, kept in the retained source archive
 and counted in the gap evidence; coverage is one document per run (`complete`) and per gap (`known_gap`), 1 µs
 unit; refusals `discontinuity_not_representable`, `no_anchored_run`, `event_outside_day`,
-`day_already_published_differently`. The live day-roll head mechanics are deferred to the `A14f` issue.
+`day_already_published_differently`. Read those original boundary/refusal descriptions through
+Amendment 2 below. The live day-roll head mechanics remain deferred to the held `A14f` issue.
 
-**Requirements carried to implementers (not decisions):** `A14b` maps `uint64` columns to the
+**Amendment 2 (ADR-0070, #416 / PR #417, 2026-10-17):** UTC-day ownership is exactly
+`[D 00:00:00Z, D+1 00:00:00Z)` by `exchange_ts`, congruent with `trade-v1`. Only
+contiguous file-head/tail out-of-day blocks are excluded and evidenced; regression or
+interior out-of-day placement still refuses. The first anchored timestamp starts complete
+coverage, with a leading `known_gap`; a clean final run reaches midnight only with valid
+tail evidence, otherwise strict `ceil_us(last event)` ends it and a trailing gap remains.
+Coverage resolution stays 1 µs; no in-day duplicate exception. The approximately 1.1 s
+measured head gap closes only through A14f's separately scoped adjacent-tail continuation,
+never by interpolation or a synthetic snapshot. A different second seam is a stop condition.
+
+**ADR-0049 Amendment 1 (#423 / PR #424):** pure source-copy disposal is separate from
+K09 retention evaluation. Fresh survivor/canonical-byte verification, K06 PROTECTED,
+attributable authority/time, durable evidence and a persisted PERMITTED audit precede
+removal. The last source copy is never removable; unknown provider retention is no
+reacquisition guarantee. PR #426 is credited as an operational tool only (T6).
+
+### L2 v1 reopening triggers (#442)
+
+Each condition below is **NOT AUTHORIZED** by #442. A trigger identifies evidence or a
+separate scoped decision; recording it does not open an issue, relax a gate or start work.
+
+| ID | Proposition still bounded/open | Named reopening condition | Authorization |
+|---|---|---|---|
+| T1 — E2 provider restart | Survival of `seq` across a provider restart is unproven; `sequence_regression` stays fail-closed. | A measured day with a `u = 1` snapshot or a `seq` regression, or any population-level discontinuity-rate claim; return to the ADR-0070 decision owner. | NOT AUTHORIZED |
+| T2 — More days/seams | One full day and one rolling-file seam (`2025-12-01` -> `2025-12-02`, first 3 MiB of the next file); closing/opening snapshots equal in `seq`, `u`, `cts`, `ts` and all levels. No all-seams claim. | A second seam with different closing/opening snapshots: stop and report to the ADR-0070 owner per #416, without merging the records. | NOT AUTHORIZED |
+| T3 — File-head gap | The measured head gap is 1.112 s (next-file prefix 1.113 s), not a fixed tolerance or a promise about every day. Gap-free L2 across UTC midnight is unavailable. | A14f start gate, or a consumer needing a gap-free midnight read: only A14f's separately scoped predecessor-linked continuation using the adjacent file tail may close it. | NOT AUTHORIZED |
+| T4 — E5 ingest cost | One run on one Windows host: 4,310.6 s wall (279.4 s measurement), peak working set 9,080 MB, peak pagefile 9,935 MB. Observations, no memory/throughput bound. Original E5 projection parity stays open under A14g. | A multi-day backfill plan or a host memory budget requires a separately approved measurement/capacity plan; projection parity requires A14g's own gate. | NOT AUTHORIZED |
+| T5 — Provider retention | Bybit historical `ob200` retention is unknown; ADR-0049 Amendment 1 never permits removing the last full source copy. | Provider-retention evidence plus an accountable assertion and a superseding ADR before a reacquirable-source disposition. | NOT AUTHORIZED |
+| T6 — Disposal tooling registration | #425 / PR #426 is credited here as an **operational tool**, not an A14 atom or new K09 credit. `operations.source_copy_disposal`, the application service and `tools/dispose_source_copy.py` implement ADR-0049 Amendment 1; its PostgreSQL proof is not wired into CI. | A request to add an atom, give additional K09 credit or wire that proof into CI needs its own governance/implementation mandate. | NOT AUTHORIZED |
+| T7 — Trade-side disposal | `tools/sync_symbol.py`, named by closed #415, does not exist; no trade-archive disposal is specified or implemented. | A concrete trade-side disposal request requires its own scoped design/implementation issue; the L2 tool proves no trade-side capability. | NOT AUTHORIZED |
+| T8 — Proof environment | Disposable PostgreSQL on Windows with a placeholder storage root resolved by an injected path resolver; the catalog requires POSIX absolute `abs_path`. No production-topology proof. | A production-like run on a POSIX host, under a separately scoped operator plan, before claiming that environment proven. | NOT AUTHORIZED |
+
+**Not claimed:** no live L2 (A14f), no `ob500` or other depth (A14g), no population-level
+continuity or provider-restart guarantee, no gap-free UTC-midnight L2. The independent
+second archive copy is an operator action, not a platform guarantee. Disposal tooling is
+outside the A14 closure. No new runtime or promotion is authorized by #442.
+
+**Requirements carried by the completed v1 implementations (not new decisions):** `A14b` maps `uint64` columns to the
 string-typed schema with an exact round-trip; `A14e` exposes per-partition origin and must not assume
 `u + 1` on projected rows; `A14d` reads a streamed zip with a data descriptor.
 
