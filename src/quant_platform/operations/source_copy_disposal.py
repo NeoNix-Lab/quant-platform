@@ -16,12 +16,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-import hashlib
 import re
 from typing import Any
 
 from ..data.models import Instant
-from quant_platform.canonical import canonical_bytes
 from .protection import (
     ArtifactReadOutcome,
     ProtectionAssessment,
@@ -34,6 +32,7 @@ from .retention import (
     PreservationClass,
     RelocationEvidenceRef,
     RetentionDeletionDecision,
+    _canonical_fingerprint,  # one fingerprint for every K09-form decision identity
 )
 
 
@@ -106,7 +105,7 @@ class SourceCopyDisposalPolicyV1:
 
     @property
     def definition_identity(self) -> str:
-        return f"{SOURCE_COPY_DISPOSAL_POLICY_IDENTITY_DOMAIN}:sha256:{_digest_of(self.canonical_payload())}"
+        return f"{SOURCE_COPY_DISPOSAL_POLICY_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(self.canonical_payload())}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,7 +261,7 @@ class SourceCopyDisposalDecisionV1:
 
     @property
     def decision_identity(self) -> str:
-        return f"{RETENTION_DELETION_DECISION_IDENTITY_DOMAIN}:sha256:{_digest_of(self.stable_dict(include_identity=False))}"
+        return f"{RETENTION_DELETION_DECISION_IDENTITY_DOMAIN}:sha256:{_canonical_fingerprint(self.stable_dict(include_identity=False))}"
 
     @property
     def identity(self) -> str:
@@ -432,12 +431,6 @@ def _is_stale(decision: SourceCopyDisposalDecisionV1, verified_at: Instant) -> b
     # hashed are two clock readings of one short action.
     skew_ns = abs(decision.decision_time.epoch_ns - verified_at.epoch_ns)
     return skew_ns > decision.policy.max_evidence_age_seconds * _SECOND_NS
-
-
-def _digest_of(payload: dict[str, Any]) -> str:
-    return hashlib.sha256(
-        canonical_bytes(payload, profile="sorted-compact-ascii-v1", allow_nan=True)
-    ).hexdigest()
 
 
 def _sha256_hex(value: str, field_name: str) -> str:
