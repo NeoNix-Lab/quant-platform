@@ -69,7 +69,7 @@ canonical trades dataset, and removes what it created.
 | 4. worker on another commit | `test_a_worker_on_another_commit_exits_3_and_touches_no_job` | exit `3`, the running job and its attempts unchanged |
 | 5. security | `test_a_certificate_of_another_ca_an_unmapped_fingerprint_and_a_missing_scope_are_denied` | another CA: no handshake; unmapped fingerprint: denied; a principal with `admitted-input` only cannot use `result-import`; a principal with deck scopes only is closed `1008` on the strategy family |
 | 5. rotation drill | `test_rotation_adds_the_new_fingerprint_then_removes_the_old_one` | new fingerprint added and the API restarted: both accepted; old one removed and the API restarted: the old is denied, the new works |
-| 6. peak memory | `test_the_peak_memory_of_the_api_during_a_maximum_size_delivery_is_recorded` | see the evidence below |
+| 6. peak memory | `test_the_peak_memory_of_the_api_during_a_large_delivery_is_recorded` | see the evidence below |
 
 **Mutation checks.** Each property was weakened in the product code (not in the test) and the test named above had to
 fail. Twelve weakenings were killed: the worker ignores a commit mismatch; the API does not record its commit; a stale
@@ -86,7 +86,7 @@ Recorded by the run of 2026-10-17 on Linux 6.6.87.2 (WSL2), Python 3.12.3, Postg
 runs the same class on PostgreSQL 17 and Python 3.11 and prints the same record (`SPLIT_TOPOLOGY_EVIDENCE`).
 
 Peak memory of the API process (VmHWM) for one delivery of two members of 27.4 MiB and 28.1 MiB (55.5 MiB, below the
-32 MiB member and 64 MiB total bounds of ADR-0072 section 1):
+32 MiB member and 64 MiB total bounds that ADR-0072 section 1 had when this was recorded):
 
 | | bytes | MiB |
 | --- | ---: | ---: |
@@ -96,8 +96,8 @@ Peak memory of the API process (VmHWM) for one delivery of two members of 27.4 M
 
 The peak is about five times the bytes delivered. The cause was not investigated (a member read into memory, encoded
 into a base64 document and framed would account for several copies). It is evidence, not a limit: nothing in ADR-0072
-bounds it. An operator sizing the API host should not assume less than this ratio applied to the total bound (64 MiB)
-plus the process baseline, until a measurement says otherwise.
+bounds it. Deliveries at the bounds that ADR-0072 Amendment 1 later set (up to 1 GiB) were measured by hand and are recorded in the
+amendment; they confirm the ratio (about 3.9 to 5 times).
 
 ### What this does not show
 
@@ -143,7 +143,7 @@ the server by the author of this page. Nothing here requires market data to ente
 | Registration (`bundle_digest`) | `833e700b554fe903bdc8b09652b060d9d8566232eec27c504557c81673e5cbeb` |
 | Observed in PostgreSQL afterwards | the run and its 2 artifacts in `experiment`, the bundle and its 2 outputs in `runtime.governed_result_*` |
 
-| Bound (ADR-0072 section 1) | Value | Smallest real partition (3 122 B) | Largest real partition (265 067 553 B, 252.8 MiB) |
+| Bound (ADR-0072 section 1, as of the run; raised by Amendment 1) | Value | Smallest real partition (3 122 B) | Largest real partition (265 067 553 B, 252.8 MiB) |
 | --- | ---: | --- | --- |
 | Member | 32 MiB | within | **exceeds** |
 | Total of one admission | 64 MiB | within | **exceeds** |
@@ -158,10 +158,12 @@ A real partition above a bound is a **recorded configuration finding about the b
    bounds was **not exercised** by either part (part 1 stays within them; the refusal at `admit` is covered only by the
    unit tests of S01), so what the real API answers for such a selection has not been observed. Until a bound is changed by an ADR amendment, the deck can receive only selections whose
    partitions are each at most 32 MiB and together at most 64 MiB. The sizes of the other real partitions were not
-   reported: only the smallest and the largest are known.
+   reported with the run. **Addressed afterwards** by ADR-0072 Amendment 1 (#431), which records the whole distribution
+   (719 of 2 116 days exceeded 32 MiB) and raises the bounds to 512 MiB per file and 1 GiB per admission; the largest real
+   day has still to be delivered on the real server.
 2. **Install gap.** The server's virtual environment lacked the dependency `rfc8785` (declared in `pyproject.toml`), and it
-   was installed by hand. The [handoff runbook](DECK_HANDOFF_RUNBOOK.md) says nothing about creating the environment or
-   installing the platform's dependencies.
+   was installed by hand. The [handoff runbook](DECK_HANDOFF_RUNBOOK.md) said nothing about creating the environment or
+   installing the platform's dependencies; it now does (#431), and a test keeps the list in step with `pyproject.toml`.
 3. **Departures from the runbook, to be reviewed by the operator of the host:** the server checkout was moved to the
    pull-request commit with `git checkout` instead of `infra/promote-main.sh` (so it did not run a commit of `main`);
    `src/quant_platform.egg-info` was deleted to make the tree clean; and `chmod -R g+rX` followed by

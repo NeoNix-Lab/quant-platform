@@ -9,6 +9,7 @@ checks, through ``AdmittedInputTransport`` with a SQLite admission store.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import dataclasses
 import hashlib
 from pathlib import Path
 import sqlite3
@@ -452,15 +453,19 @@ class AdmittedInputAuthorityV1Tests(unittest.TestCase):
 
     def test_the_bounds_are_the_adr_values_and_compose_with_the_transport(self) -> None:
         self.assertEqual(
-            (16, 32 * MIB, 64 * MIB),
+            (16, 512 * MIB, 1024 * MIB),
             (ADMITTED_INPUT_BOUNDS_V1.max_members, ADMITTED_INPUT_BOUNDS_V1.max_member_bytes, ADMITTED_INPUT_BOUNDS_V1.max_total_bytes),
         )
         config = ADMITTED_INPUT_TRANSFER_CONFIG_V1
-        self.assertEqual((300, 96 * MIB, 32), (config.retention_seconds, config.max_retained_payload_bytes, config.max_in_flight_transfers))
+        self.assertEqual((600, 1536 * MIB, 32), (config.retention_seconds, config.max_retained_payload_bytes, config.max_in_flight_transfers))
         # The transport refuses bounds the transfer store cannot hold: this constructs.
         self.transport(transfers=FramedResultTransferStore(config))
         with self.assertRaises(ValueError):
             self.transport(transfers=FramedResultTransferStore(FramedResultConfig()))  # the shipped 8 MiB store
+        # The rule is 4 * ceil(total / 3) plus 8 KiB per member: 1 GiB of members needs about 1.37 GiB retained.
+        with self.assertRaises(ValueError):
+            self.transport(transfers=FramedResultTransferStore(dataclasses.replace(config, max_retained_payload_bytes=1280 * MIB)))
+        self.transport(transfers=FramedResultTransferStore(dataclasses.replace(config, max_retained_payload_bytes=1400 * MIB)))
 
     def transport(self, *, transfers=None, bounds=ADMITTED_INPUT_BOUNDS_V1, authority=None):
         authority = authority or self.authority
