@@ -105,7 +105,15 @@ class CanonicalV1Tests(unittest.TestCase):
             "ordinal": 1, "scope": "_bytes",
             "argument_ast": ast.dump(ast.parse("value", mode="eval").body, include_attributes=False),
             "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }, {
+            "path": "src/quant_platform/application/l2_market_data.py",
+            "ordinal": 1, "scope": "_event_bytes",
+            "argument_ast": ast.dump(ast.parse("event.stable_dict()", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
         }]  # #338: existing J12 canonical identities, unchanged byte profile.
+        # A14e: the l2_book_events@1 result-size estimate. It is a byte count of the
+        # compact sorted ASCII encoding of one event, not an identity; it declares its
+        # use here instead of weakening the inventory.
         self.assertEqual(sorted(expected + additional, key=lambda site: (site["path"], site["ordinal"])), sites)
         expected_raw = [[path, ast.dump(ast.parse(expression, mode="eval").body,
                                        include_attributes=False)]

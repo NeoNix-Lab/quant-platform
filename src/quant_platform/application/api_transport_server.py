@@ -41,6 +41,7 @@ from .market_data import (
     RepresentationRef,
 )
 from quant_platform.canonical import canonical_bytes
+from quant_platform.data.models import L2BookEvent
 
 from .framed_result_transport import (
     J14_MESSAGE_FAMILY,
@@ -345,7 +346,7 @@ def encode_consumer_result(result: ConsumerMarketDataResult) -> dict[str, Any]:
             "kind": result.representation.kind,
             "version": result.representation.version,
         },
-        "data": [_trade_record_dict(record) for record in result.data],
+        "data": [_record_dict(record) for record in result.data],
         "requested_interval": result.requested_interval.stable_dict(),
         "returned_temporal_bounds": (
             result.returned_temporal_bounds.stable_dict()
@@ -1275,6 +1276,14 @@ def _is_loopback_bind_host(host: str) -> bool:
         return ipaddress.ip_address(text).is_loopback
     except ValueError:
         return False
+
+
+def _record_dict(record: Any) -> dict[str, Any]:
+    """One record on the wire: an L2 event as its stable form, a trade as before."""
+
+    if isinstance(record, L2BookEvent):
+        return record.stable_dict()
+    return _trade_record_dict(record)
 
 
 def _trade_record_dict(record: Any) -> dict[str, Any]:

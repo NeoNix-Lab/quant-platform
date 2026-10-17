@@ -6,7 +6,14 @@ from dataclasses import dataclass
 
 from ..access.catalog import Catalog
 from ..access.gateway import DataGateway
+from ..access.l2_gateway import L2DataGateway
 from ..source_adapters.bybit import BYBIT_ORDERING_PROVIDER
+from ..source_adapters.bybit_l2 import BYBIT_L2_ORDERING_PROVIDER
+from .l2_market_data import (
+    DEFAULT_L2_MAX_RESULT_BYTES,
+    L2_BOOK_EVENTS_KIND,
+    execute_l2_book_events_query,
+)
 from .market_data import (
     DEFAULT_MAX_RESULT_ROWS,
     ConsumerMarketDataQuery,
@@ -50,6 +57,18 @@ class MarketDataApplication:
     config: MarketDataApplicationConfig
 
     def execute(self, query: ConsumerMarketDataQuery) -> ConsumerMarketDataResult:
+        if getattr(getattr(query, "representation", None), "kind", None) == L2_BOOK_EVENTS_KIND:
+            return execute_l2_book_events_query(
+                query,
+                gateway=L2DataGateway(
+                    Catalog(dsn=self.config.catalog_dsn),
+                    ordering_providers=(BYBIT_L2_ORDERING_PROVIDER,),
+                ),
+                batch_size=self.config.batch_size,
+                # The L2 byte bound is the documented default (it is tied to J02's
+                # fixed 16 MiB ceiling); the trades config stays capability-specific.
+                max_result_bytes=DEFAULT_L2_MAX_RESULT_BYTES,
+            )
         gateway = DataGateway(
             Catalog(dsn=self.config.catalog_dsn),
             ordering_providers=(BYBIT_ORDERING_PROVIDER,),
