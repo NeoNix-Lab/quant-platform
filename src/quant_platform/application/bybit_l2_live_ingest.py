@@ -19,7 +19,7 @@ This module coordinates:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -32,7 +32,6 @@ from ..canonical import canonical_bytes
 from ..data.l2_materializer import materialize_l2_book_event_v1
 from ..data.l2_publication import L2PublicationCertification
 from ..data.manifests import (
-    DATASET_MANIFEST_V2,
     emit_coverage_manifest,
     emit_dataset_manifest,
     emit_partition_manifest,
@@ -44,15 +43,11 @@ from ..data.models import (
     L2BookEvent,
 )
 from ..data.publication import (
-    CertificationResult,
-    SealedCatalogPartition,
     SealedPartitionEvidence,
 )
 from ..data.publication_catalog import CatalogPublicationWriter
 from ..source_adapters.bybit_l2 import (
     BYBIT_L2_ORDERING_PROVIDER,
-    L2CertificationParameters,
-    bybit_l2_book_event_v1_ordering_key,
     bybit_l2_continuity_evidence_detail,
 )
 from ..source_adapters.bybit_l2_live import (
@@ -62,10 +57,7 @@ from ..source_adapters.bybit_l2_live import (
     BybitL2LiveBookEventV1CertificationProfile,
     BybitL2LiveIntegrityError,
     BybitL2LiveResyncStateMachine,
-    BybitL2LiveSourceError,
-    L2LiveGapEvent,
     L2ResyncState,
-    build_l2_live_coverage_document,
 )
 
 LIVE_L2_CHECKPOINT_IDENTITY_DOMAIN = "quant-platform/live-l2-checkpoint-v1"

@@ -24,10 +24,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-import hashlib
 from typing import Any
 
-from ..canonical import canonical_bytes
 from ..data.models import (
     DataIntegrityError,
     DatasetIdentity,
@@ -45,7 +43,6 @@ from .bybit_l2 import (
     certify_bybit_l2_book_events,
 )
 from .l2 import (
-    BYBIT_L2_SOURCE_SEMANTICS_V2,
     L2SourceError,
     normalize_bybit_l2_message,
 )
