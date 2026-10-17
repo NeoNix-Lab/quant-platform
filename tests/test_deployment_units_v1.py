@@ -336,7 +336,9 @@ class DeploymentUnitTests(unittest.TestCase):
     def test_the_promotion_runs_on_main_with_the_environment_that_has_the_test_dependencies(self) -> None:
         import tomllib
 
-        extra = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["optional-dependencies"]["test"]
+        document = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        # The promotion's validation runs the whole suite; one test builds the package without build isolation.
+        extra = document["project"]["optional-dependencies"]["test"] + document["build-system"]["requires"]
         text = RUNBOOK.read_text(encoding="utf-8")
         install = text[text.index("## Install (once per host)"):text.index("## What a delivery costs")]
         for requirement in extra:
