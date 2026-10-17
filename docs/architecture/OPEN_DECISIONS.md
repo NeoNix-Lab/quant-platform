@@ -667,7 +667,13 @@ this gate: L2 acquisition semantics (`A13`-`A15`), `J11`, `D05` bar-input
 replay, and Omega remote use of `P05`/`P06` (needs its own ADR-0067
 amendment).
 
-## DG-K2 — Server/deck deployment composition v1 — RESOLVED (ADR-0072 ACCEPTED)
+## DG-K2 — Server/deck deployment composition v1 — RESOLVED (ADR-0072 ACCEPTED), CLOSED (#409)
+
+**Closed by operator closeout #409 (2026-10-17).** `S01`-`S07` are implemented and merged into `implement/dgk2` within the bounds
+recorded in `CAPABILITY_DAG.md`. ADR-0072 Amendment 1 (issue #431) raised the delivery bounds to 512 MiB per file, 1 GiB
+and 16 files per admission after the real catalog showed that 719 of 2 116 daily partitions exceeded the original 32 MiB
+member bound; the bounds quoted under "Decisions taken" below are the ones as accepted, before that amendment. Recorded
+triggers (none authorized by the closeout) are in `SCOPE.md` under "Triggers recorded at closeout".
 
 **Resolved 2026-10-16.** The design gate #383 produced ADR-0072, `ACCEPTED` by the maintainer with the clarification
 of its section 11 (issue #387, PR #388). Governance issue #389 authorizes `S01`-`S07` in `CAPABILITY_DAG.md` (`FROZEN`,

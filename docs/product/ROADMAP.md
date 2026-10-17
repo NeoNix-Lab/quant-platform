@@ -78,7 +78,8 @@ Topology v1 (PR #322, #326)                         J10/J12/J13 in-process only;
 DG-K Process Topology v1                         COMPLETE within recorded bounds (operator closeout #381; ADR-0068,
                                                     ADR-0069; P01-P06 on implement/dgk; not composed in a host,
                                                     no Golden proof claimed)
-DG-K2 Server/deck deployment composition        DESIGN GATE CLOSED (ADR-0072 ACCEPTED); S01-S07 authorized (#389), none implemented; S08 not authorized
+DG-K2 Server/deck deployment composition        COMPLETE within recorded bounds (operator closeout #409; ADR-0072 and Amendment 1;
+                                                    S01-S07 on implement/dgk2; supervised proof: one happy path; S08 not authorized)
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
@@ -109,10 +110,13 @@ OPEN_BLOCKING                   4
 OPEN_DEFERABLE                  9
 ROADMAP_DEFINED                 99 + 4 + 9 = 112
 ROADMAP_PLANNING_COMPLETENESS   112 / 112 = 100%
-IMPLEMENTATION_COMPLETE         86 / 112 = 76.8%
+IMPLEMENTATION_COMPLETE         93 / 112 = 83.0%
 ```
 
-DG-K2 reconciliation (#389): ADR-0072 is `ACCEPTED`; `S01`-`S07` move from `OPEN_BLOCKING` to `FROZEN` (semantic 82.1% -> 88.4%;
+DG-K2 closeout (#409): `S01`-`S07` move from `MISSING` to `COMPLETE` (86 -> 93 of 112), each within the bound recorded in its row;
+no decision state changes (semantic stays 88.4%).
+
+Earlier, DG-K2 reconciliation (#389): ADR-0072 is `ACCEPTED`; `S01`-`S07` move from `OPEN_BLOCKING` to `FROZEN` (semantic 82.1% -> 88.4%;
 `OPEN_BLOCKING` 11 -> 4); their implementation state stays `MISSING` (86 / 112 = 76.8% unchanged).
 
 Earlier, DG-K2 registration (#382): eight candidate atoms `S01`-`S08` (`OPEN_BLOCKING` except the deferable `S08`) are added,
@@ -161,7 +165,7 @@ DG-H  Operational safety
 DG-I  API transport / client convergence        RESOLVED / IMPLEMENTED
 DG-J  Remote Service Topology (Wave 8)           RESOLVED / IMPLEMENTED
 DG-K  Process Topology v1                        RESOLVED / IMPLEMENTED within recorded bounds (ADR-0068, ADR-0069; closeout #381)
-DG-K2 Server/deck deployment composition         DESIGN GATE RESOLVED (ADR-0072 ACCEPTED); S01-S07 authorized, not implemented
+DG-K2 Server/deck deployment composition         RESOLVED / IMPLEMENTED within recorded bounds (ADR-0072, Amendment 1; closeout #409)
 ```
 
 Important current boundaries:
@@ -179,7 +183,7 @@ Explicit deferables — second-provider resolution, exact L3/MBO semantics, Data
 
 - DG-J: all six gates resolved (ADR-0062 through ADR-0067); see `docs/architecture/OPEN_DECISIONS.md` for the full G1-G6 disposition text. `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` are frozen and implemented (Wave 8 closeout #327, within recorded bounds); `J11` remains `OPEN_DEFERABLE`.
 - DG-K: Process Topology v1 is resolved (#318 registration, #319 design gate: ADR-0068 process topology v1, ADR-0069 J02 carriage of consumer seams and deck handoff v1). `P01`-`P06` are `FROZEN`/`COMPLETE` within recorded bounds (operator closeout #381), merged into `implement/dgk`, not composed in any executable and without a Golden proof; owner inputs fix identity-preserving canonical profiles, hosts in `tools/`, one J03 worker, a free server with data-local J03 handlers only, heavy compute on the deck on its own initiative, and `J11` not planned. See `OPEN_DECISIONS.md` (DG-K).
-- DG-K2: registered by #382 after the DG-K closeout; its design gate #383 produced ADR-0072, accepted on 2026-10-16, and #389 authorizes `S01`-`S07` (K12 authority, K13 composition, API host with TLS/mTLS, credential and trust operations, deck workload module, deployment units, two-part topology proof) on the integration branch `implement/dgk2` (name proposed, to be confirmed by the maintainer). None is implemented and the split is not deployable until `S07` is proven; Omega adoption is out of scope. Default proposed placement: before Wave 9, because the split is the precondition for any remote consumer; the order remains the maintainer's.
+- DG-K2: registered by #382 after the DG-K closeout; its design gate #383 produced ADR-0072, accepted on 2026-10-16, and #389 authorizes `S01`-`S07` (K12 authority, K13 composition, API host with TLS/mTLS, credential and trust operations, deck workload module, deployment units, two-part topology proof) on the integration branch `implement/dgk2` (name proposed, to be confirmed by the maintainer). Closed by operator closeout #409: all seven are implemented on `implement/dgk2` within the bounds recorded in `CAPABILITY_DAG.md`; the split is deployable only within the bounds of ADR-0072 Amendment 1; Omega adoption is out of scope. Default proposed placement: before Wave 9, because the split is the precondition for any remote consumer; the order remains the maintainer's.
 
 ## Operational dependency direction
 
@@ -235,7 +239,7 @@ implemented on `implement/dgk` within the bounds recorded in `CAPABILITY_DAG.md`
 Promotion into `main` is the operator's separate PR. No executable composes the
 new families, no data-local J03 handler ships and nothing is proven on the real
 topology; the follow-on scope that does so, DG-K2, was registered by governance issue #382,
-its design gate (#383) closed with ADR-0072 `ACCEPTED`, and governance issue #389 authorizes `S01`-`S07` (none implemented).
+its design gate (#383) closed with ADR-0072 `ACCEPTED`, and governance issue #389 authorized `S01`-`S07`, now closed by operator closeout #409 (promotion of `implement/dgk2` into `main` is the operator's separate PR).
 
 No new runtime/product frontier is authorized by this closeout, the Wave 8
 closeout or the stabilization line. H06, I06-I07, J07/J08, RL, live broker execution, second
@@ -262,7 +266,7 @@ Wave 8  Full Platform API & Remote Service Topology v1    COMPLETE (J03,J09,J10,
                                                            deferred; no Golden proof claimed; operator closeout
                                                            #327). J02 carriage of J10/J12/J13 moves to DG-K P05.
 DG-K    Process Topology v1 (design-gate line, not a wave) COMPLETE within recorded bounds (operator closeout #381); before Wave 9
-DG-K2   Server/deck deployment composition              DESIGN GATE CLOSED (ADR-0072); S01-S07 authorized (#389), none implemented
+DG-K2   Server/deck deployment composition              COMPLETE within recorded bounds (operator closeout #409); deployable only within ADR-0072 Amendment 1 bounds
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL; harvest-audit
                                                            evidence sources: ml_core (already the Wave 5 legacy
                                                            baseline), JJJerome/mbt_gym, sadighian/crypto-rl
