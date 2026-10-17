@@ -93,7 +93,7 @@ def main() -> int:
         assert claims["read_event_count"]["detail"] == {"read": 6, "stored": 6}
         assert [r["state"] for r in evidence["catalog"]["partitions"]] == ["valid", "valid"]
         assert [r["row_count"] for r in evidence["catalog"]["partitions"]] == [3, 3]
-        assert len(evidence["catalog"]["read"]["gaps"]) == 1
+        assert len(evidence["catalog"]["read"]["gaps"]) == 3
 
         # a tampered artifact must not read back as the published day
         artifact = next(dataset_root.rglob("*.parquet"))

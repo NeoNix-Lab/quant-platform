@@ -171,13 +171,13 @@ class GoldenChainTests(Base):
             {"event_accounting", "partitions_eligible", "reproducible_byte_identical"},
         )
         self.assertEqual(claims["event_accounting"]["detail"], {"measured": 8, "stored": 6, "excluded": 2})
-        # two runs x (artifact, partition manifest, coverage) + one gap document + the dataset manifest
-        self.assertEqual(claims["reproducible_byte_identical"]["detail"], 8)
+        # two runs x (artifact, partition manifest, coverage) + three gap documents + the dataset manifest
+        self.assertEqual(claims["reproducible_byte_identical"]["detail"], 10)
         self.assertIsNone(evidence["catalog"])
         ingest = evidence["ingest"]
         self.assertEqual([p["partition_key"] for p in ingest["partitions"]],
                          [f"dt={DAY}/seg=001", f"dt={DAY}/seg=002"])
-        self.assertEqual(len(ingest["gaps"]), 1)
+        self.assertEqual(len(ingest["gaps"]), 3)
         self.assertEqual(ingest["excluded_events"], 2)
         self.assertFalse(ingest["already_published"])
         self.assertEqual(evidence["measurement"]["outcome"], "degraded")
