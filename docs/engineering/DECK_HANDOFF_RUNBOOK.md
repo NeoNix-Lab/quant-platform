@@ -50,6 +50,8 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-worker
 # canonical/ and every subdirectory to mkt-transform:marketdata, mode 2750: the group reads and traverses, others have nothing,
 # and its read-only actors are members of that group. The API is one of them. Run the provisioning first (it creates the group);
 # the group gives no write, and the unit has no ReadWritePaths=. Do not make the data world-readable.
+# The group reads the whole marketdata tree (raw/, imports/, staging/live, features/, ...), not only canonical/. The maintainer
+# accepted this for v1 (the deck will also need the features); narrowing the API to ACLs on canonical/ is possible later.
 sudo usermod -aG marketdata qp-api
 
 # Both units read the commit with `git rev-parse HEAD` in a checkout the operator owns.
