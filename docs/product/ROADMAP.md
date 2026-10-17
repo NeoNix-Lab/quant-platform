@@ -77,9 +77,9 @@ Wave 8 Full Platform API & Remote Service       COMPLETE (J03,J09,J10,J12-J15,K1
 Topology v1 (PR #322, #326)                         J10/J12/J13 in-process only; no Golden proof claimed)
 DG-K Process Topology v1 design gate             RESOLVED (#318/#319; ADR-0068, ADR-0069; P01-P06 FROZEN,
                                                     authorized in SCOPE.md Part B, issues not yet opened)
-DG-C L2 market depth line (implement/l2, #364)   RESOLVED (#367; ADR-0070 ACCEPTED; A14, A14a-A14g FROZEN,
-                                                    authorized in SCOPE.md Part B; A14a-A14c implemented on the branch, A14d/A14e startable;
-                                                    v1 historical ingest + consumer read, v2 live; A13 not a prerequisite)
+DG-C L2 historical v1 (implement/l2, #442)       COMPLETE (A14,A14a-A14e; PR #375/#379/#401/#411/#417/#408;
+                                                    golden #413/#430, 11/11 at 1cdd78f; explicit gaps);
+                                                    A14f/A14g held MISSING; promotion to main is separate
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
@@ -101,21 +101,31 @@ Completed checkpoints are credited and must not be re-proved absent a concrete i
 
 ## Roadmap vNext planning state
 
+This is the L2 integration-line inventory. Non-L2 rows retain the inherited branch
+checkpoint; DG-K references to its SCOPE.md Part B describe that historical
+scope and grant no authorization from the CLOSED L2 scope. Cross-line
+reconciliation belongs to the separate promotion.
+
 ```text
-TOTAL_ATOMS                     111
-CLASSIFIED_ATOMS                111
-UNCLASSIFIED_GAPS               0
-SEMANTIC_FROZEN_OR_RESOLVED     100 / 111 = 90.1%
-OPEN_BLOCKING                   3
-OPEN_DEFERABLE                  8
-ROADMAP_DEFINED                 100 + 3 + 8 = 111
-ROADMAP_PLANNING_COMPLETENESS   111 / 111 = 100%
-IMPLEMENTATION_COMPLETE         78 / 111 = 70.3%
+TOTAL_ATOMS                     = 111
+CLASSIFIED_ATOMS                = 111
+UNCLASSIFIED_GAPS               = 0
+SEMANTIC_FROZEN_OR_RESOLVED     = 100 / 111 = 90.1%
+OPEN_BLOCKING                   = 3
+OPEN_DEFERABLE                  = 8
+ROADMAP_DEFINED                 = 100 + 3 + 8 = 111
+ROADMAP_PLANNING_COMPLETENESS   = 111 / 111 = 100%
+IMPLEMENTATION_COMPLETE         = 84 / 111 = 75.7%
 ```
 
-DG-C / A14 design-gate reconciliation (#371): ADR-0070 is accepted, so `A14` and `A14a`-`A14f` move from
+DG-C / A14 v1 closeout (#442): `A14` and `A14a`-`A14e` move to COMPLETE
+on `implement/l2` (78 -> 84); the inventory and decision states do not change.
+Golden #413/#430 adds no atom. The executable recount is in
+[SCOPE.md](../../SCOPE.md#executable-governance-verification).
+
+Earlier, DG-C / A14 design-gate reconciliation (#371): ADR-0070 is accepted, so `A14` and `A14a`-`A14f` move from
 `OPEN_BLOCKING` to `FROZEN` and the follow-on atom `A14g` is registered `FROZEN`/`MISSING` (110 -> 111
-atoms; 92 -> 100 decided); implementation stays `MISSING`.
+atoms; 92 -> 100 decided); implementation stayed `MISSING` at that reconciliation.
 
 Earlier, DG-C / A14 registration (issue #364) added six candidate atoms (`A14a`-`A14f`) as
 `OPEN_BLOCKING`/`MISSING`; `A14` no longer requires `A13`.
@@ -165,7 +175,7 @@ Important current boundaries:
 - DG-A: `D05`'s semantics are frozen under ADR-0059 (implementation still `MISSING`); it remains independent from completed H01.
 - DG-B: A10/B04 historical repair is complete; A11 is frozen and implemented; B06 consumer-live cursor is frozen and implemented by Wave 6.
 - DG-B long-gap remediation remains blocking only for claiming an unreconciled interruption filled/lossless. ADR-0044 closes the selected production-readiness path by retaining explicit-gap-only behavior until a future authoritative repair source/path is proven.
-- DG-C: L1 does not activate L2; L3 waits for real feed evidence. L2 is selected (owner, 2026-10-14, #364) and does not require `A13`: batch v1 is historical ingest plus consumer read, batch v2 is live ingest; resolved by `ADR-0070` (#367).
+- DG-C: L1 does not activate L2; L3 waits for real feed evidence. L2 v1 historical ingest plus consumer read is COMPLETE on `implement/l2` (#442), independent of `A13`, under ADR-0070 and Amendments 1 (#403) and 2 (#417). UTC-day ownership is by `exchange_ts`, congruent with `trade-v1`; explicit head/tail gaps remain. ADR-0049 Amendment 1 (#424) allows disposal of one redundant physical copy, never the last. #425/#426 is credited as an operational tool outside A14 and adds no K09/atom credit. [Eight triggers, none authorized](../architecture/OPEN_DECISIONS.md#l2-v1-reopening-triggers-442); `A14f`/`A14g` remain held.
 - DG-E: complete through F08.
 - DG-F: G04 session/cooldown semantics are frozen by ADR-0045; H03 execution-conflict semantics are frozen by ADR-0046; G01-G04/H01-H05 are implementation-complete on `implement/wave-4`.
 - DG-G: the supervised branch I03/I04/I05 is implementation-complete and Golden-proven by Wave 5; J03's job-runtime decision is frozen under ADR-0062 and its durable record is implemented (Wave 8; dispatch/worker belong to DG-K); remaining unresolved branches are I06 strategic RL and I07 execution RL.
@@ -225,20 +235,21 @@ and `K13` are implemented and promoted to `main` (PR #322, #326). `J10`/`J12`/
 remote scope carries them yet. No Wave 8 Golden E2E proof artifact is claimed.
 Owner-accepted extras #313/#314 are on `main` through `implement/wave-8.1`.
 
-The current scope is DG-K Process Topology v1. Its design gate is closed
+The inherited DG-K scope checkpoint is Process Topology v1. Its design gate is closed
 (ADR-0068, ADR-0069, #319) and `SCOPE.md` Part B authorizes `P01`-`P06`;
 implementation issues are not opened yet. Startable first: `P01`, `P02`, `P03`,
 `P05a`.
 
 The L2 market-depth line (governance #364) runs in parallel on `implement/l2`, cut from `implement/dgk`:
-ADR-0070 is accepted (#367) with Amendment 1 (#402) and `SCOPE.md` Part B authorizes `A14a`-`A14g` with start
-gates (`A14a`-`A14c` are implemented on the branch; `A14d` and `A14e` are startable, issues not yet opened). It shares no code
-with DG-K; promotion order is DG-K first, then L2, with `SCOPE.md` reconciled by hand at the second merge
-(accepted maintainer debt, not a blocker).
+ADR-0070 and Amendments 1-2 govern the batch v1 closeout (#442). `A14` and `A14a`-`A14e`
+are COMPLETE with golden #413/#430 accepted (11/11); `A14f` and `A14g` remain held under
+the unchanged `SCOPE.md` Part B start gates. No live L2, `ob500`, population guarantee or
+gap-free UTC-midnight read is claimed. Promotion order is DG-K first, then a separate L2 wave
+closeout PR, with `SCOPE.md` reconciled by hand at the second merge (accepted maintainer debt).
 
 No new runtime/product frontier is authorized by this closeout, the Wave 8
 closeout or the stabilization line. H06, I06-I07, J07/J08, RL, live broker execution, second
-venue and L1/L2/L3 market depth remain outside all of them. J07 remains
+venue, L1/L3 and L2 beyond the bounded historical v1 credit remain outside all of them. J07 remains
 `MISSING`.
 
 Roadmap state is still **not concurrent authorization**.
@@ -261,8 +272,8 @@ Wave 8  Full Platform API & Remote Service Topology v1    COMPLETE (J03,J09,J10,
                                                            deferred; no Golden proof claimed; operator closeout
                                                            #327). J02 carriage of J10/J12/J13 moves to DG-K P05.
 DG-K    Process Topology v1 (design-gate line, not a wave) ADRs ACCEPTED (#319); P01-P06 authorized, MISSING; before Wave 9
-DG-C/L2 L2 market depth v1 (design-gate line, #364)       ADR-0070 ACCEPTED (#367); A14, A14a-A14g FROZEN, MISSING; implement/l2,
-                                                           cut from implement/dgk; promoted after DG-K closeout
+DG-C/L2 L2 historical v1 (#442)                         COMPLETE on implement/l2: A14,A14a-A14e; golden #413/#430 11/11;
+                                                           A14f/A14g held MISSING; separate promotion after DG-K closeout
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL; harvest-audit
                                                            evidence sources: ml_core (already the Wave 5 legacy
                                                            baseline), JJJerome/mbt_gym, sadighian/crypto-rl
