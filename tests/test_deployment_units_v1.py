@@ -333,6 +333,33 @@ class DeploymentUnitTests(unittest.TestCase):
         # An editable install would dirty the checkout the promotion requires clean.
         self.assertNotIn("pip install -e", install.replace("Do NOT `pip install -e .`", ""))
 
+    def test_the_promotion_runs_on_main_with_the_environment_that_has_the_test_dependencies(self) -> None:
+        import tomllib
+
+        extra = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["optional-dependencies"]["test"]
+        text = RUNBOOK.read_text(encoding="utf-8")
+        install = text[text.index("## Install (once per host)"):text.index("## What a delivery costs")]
+        for requirement in extra:
+            self.assertIn(f"'{requirement}'", install, requirement)
+        promotion = text[text.index("## Promotion"):text.index("## A run, step by step")]
+        switch = "git switch main || git switch --track -c main origin/main"
+        promote = 'PATH="/opt/market-platform/.venv/bin:$PATH" infra/promote-main.sh'
+        self.assertIn(switch, promotion)
+        self.assertIn(promote, promotion)
+        self.assertLess(promotion.index(switch), promotion.index(promote), "back on main before the promotion")
+        script = (ROOT / "infra" / "promote-main.sh").read_text(encoding="utf-8")
+        self.assertIn('[[ "$branch" == "main" ]]', script, "the runbook's main requirement is the script's")
+        self.assertIn("tools/run_tests.py", script, "the runbook's test dependencies are what the script runs")
+
+    def test_the_live_ingest_runbook_moves_no_branch_and_takes_the_commit_the_promotion_left(self) -> None:
+        live = (DOCS / "LIVE_INGEST_SERVER_DEPLOYMENT.md").read_text(encoding="utf-8")
+        section = live[live.index("## Install Or Update"):live.index("## Start, Stop, Restart And Status")]
+        for forbidden in ("git switch", "git merge", "git fetch", "git checkout", "codex/issue-135", "git pull"):
+            self.assertNotIn(forbidden, section, forbidden)
+        self.assertIn('test "$(git symbolic-ref --short -q HEAD)" = main', section)
+        self.assertIn('DEPLOYED_SHA="$(git rev-parse HEAD)"', section)
+        self.assertIn("DECK_HANDOFF_RUNBOOK.md", section)
+
     def test_the_install_procedure_lets_each_service_user_reach_the_files_it_opens(self) -> None:
         text = RUNBOOK.read_text(encoding="utf-8")
         install = text[text.index("## Install (once per host)"):text.index("## Promotion")]

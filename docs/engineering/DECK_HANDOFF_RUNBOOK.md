@@ -43,11 +43,14 @@ Ordering and exit status:
 Run on the server as the operator account. `/opt/market-platform` is the deployed checkout.
 
 ```bash
-# The units run /opt/market-platform/.venv/bin/python. The environment holds the runtime dependencies only (pyproject.toml
-# is the authority; a test keeps this list in step with it). Do NOT `pip install -e .`: it writes src/quant_platform.egg-info
-# into the checkout, and the promotion needs a clean work tree.
+# The units run /opt/market-platform/.venv/bin/python. The environment holds the runtime dependencies of the package
+# (pyproject.toml is the authority; a test keeps these lists in step with it). Do NOT `pip install -e .`: it writes
+# src/quant_platform.egg-info into the checkout, and the promotion needs a clean work tree.
 python3 -m venv /opt/market-platform/.venv
 /opt/market-platform/.venv/bin/pip install 'pyarrow>=15' 'psycopg[binary]>=3.1' 'rfc8785>=0.1.4' 'websockets>=12'
+# infra/promote-main.sh runs tools/run_tests.py on the candidate with the interpreter first on PATH (see Promotion), so the
+# environment also holds the test dependencies (the `test` extra of pyproject.toml).
+/opt/market-platform/.venv/bin/pip install 'jsonschema>=4.19' 'rfc3339-validator>=0.1.4'
 
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-api
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin qp-worker
@@ -158,10 +161,18 @@ Server code moves through Git history only: `infra/promote-main.sh` is clean-tre
 candidate in an isolated worktree before the operational checkout moves, and does not restart anything. Do not stash,
 reset, clean, mirror the repository by file copy, or automate any of this.
 
+`promote-main.sh` refuses any checkout that is not on the branch `main`, and a dirty one. If `--inspect-only` prints
+`branch=DETACHED` (for example after a manual `git checkout <commit>`), return to `main` first, on a clean tree; the script
+then fast-forwards it. It validates the candidate by running `tools/run_tests.py` with the first `python3` on `PATH`, so it
+is run with the environment of *Install* in front: the system interpreter has none of the dependencies and the promotion
+would fail before the checkout moves.
+
 ```bash
 cd /opt/market-platform
 infra/promote-main.sh --inspect-only        # read-only: branch, sha, clean or dirty
-infra/promote-main.sh                       # fetch, validate, fast-forward to the validated origin/main
+git fetch origin
+git switch main || git switch --track -c main origin/main    # only when the branch is not main already
+PATH="/opt/market-platform/.venv/bin:$PATH" infra/promote-main.sh   # fetch, validate, fast-forward to the validated origin/main
 DEPLOYED_SHA="$(git rev-parse HEAD)"        # the new commit
 echo "DEPLOYED_SHA=$DEPLOYED_SHA"
 
