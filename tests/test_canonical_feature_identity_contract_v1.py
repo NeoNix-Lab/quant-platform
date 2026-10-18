@@ -210,6 +210,32 @@ class CanonicalFeatureIdentityContractV1Tests(unittest.TestCase):
         ):
             self.assertIn(required_text, text)
 
+    def test_amendment_1_adds_one_bar_duration_per_admission(self) -> None:
+        text = adr_text()
+        amendment = text[text.index("## Amendment 1 (issue #469)"):]
+        for required_text in (
+            "## Amendment 1 (issue #469) — one bar duration per admission",
+            "every entry of `definitions` that carries a `bar_duration` carries the same",
+            "`definition_bar_duration_mixed`",
+            "The refusal reasons of section 5 are therefore **eight**",
+            "`definition_interval_misaligned`, `definition_bar_duration_mixed`, `definition_duplicate`, `definition_input_unavailable`",
+            "holds **at most one** `bar-flow-definition-v1` identity",
+            "changes no E02, F02 or H01 behaviour",
+            "one admission, hence one delivery of the trades, per duration",
+            "`M02` and `M05` are unchanged",
+        ):
+            self.assertIn(required_text, amendment)
+        # The original prose above the amendment is not rewritten: the seven reasons of section 5 are still listed there.
+        original = text[:text.index("## Amendment 1 (issue #469)")]
+        for reason in (
+            "definitions_exceed_bound", "definition_unknown", "definition_parameters_invalid",
+            "definition_bar_duration_invalid", "definition_interval_misaligned", "definition_duplicate",
+            "definition_input_unavailable",
+        ):
+            self.assertIn(f"`{reason}`", original)
+        self.assertNotIn("definition_bar_duration_mixed", original)
+        self.assertEqual(1, text.count("## Amendment 1 (issue #469)"))
+
     def test_k13_is_unchanged_and_the_builder_rule_is_stated(self) -> None:
         text = adr_text()
         for required_text in (
