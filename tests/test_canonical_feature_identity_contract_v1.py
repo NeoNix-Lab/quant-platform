@@ -5,18 +5,20 @@ from decimal import Decimal
 from pathlib import Path
 import random
 import re
+import sys
 import unittest
 
-from quant_platform.application.admitted_input import AdmittedInputManifestV1
-from quant_platform.features.h01_imbalance import (
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from quant_platform.application.admitted_input import AdmittedInputManifestV1  # noqa: E402
+from quant_platform.features.h01_imbalance import (  # noqa: E402
     diagonal_imbalance_definition,
     stacked_imbalance_definition,
 )
-from quant_platform.representation.candles import CandleDefinitionV1
-from quant_platform.representation.footprints import FootprintDefinitionV1
+from quant_platform.representation.candles import CandleDefinitionV1  # noqa: E402
+from quant_platform.representation.footprints import FootprintDefinitionV1  # noqa: E402
 
-
-ROOT = Path(__file__).resolve().parents[1]
 ADR = ROOT / "docs/decisions/ADR-0073-canonical-feature-identity-for-deck-results-v1.md"
 
 PINNED_IDENTITIES = {
