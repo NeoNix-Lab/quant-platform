@@ -320,3 +320,48 @@ Per atom, in its own issue: `M01` the pinned identities unchanged and `taker_buy
 `M02` golden vectors for both signs, the exclusivity, `H == L`, the exact boundary cases (`D == i*T`, wick `== w*range`), and the
 parameter-domain refusals; `M04` a pre-change manifest digest unchanged, every refusal reason (including a misaligned interval), and the sorted/deduplicated
 population; `M05` the four facts of section 8 on the real topology, with the omission case refused and zero writes asserted.
+
+## Amendment 1 (issue #469) — one bar duration per admission
+
+**Date:** 2026-10-18. The original Decision, Context and Consequences above are not rewritten; this section adds one rule and one
+refusal reason to section 5.
+
+### Why
+
+The independent review of the M02 implementation (PR #468, finding R1) showed that two FINAL observations of
+`order_flow.failed_aggression@1` from bars of different durations that start at the same instant have the same observation
+identity. The cause is the conjunction of three accepted rules, none of which this amendment changes:
+
+- ADR-0026 requires a support identity that identifies the observed support unambiguously;
+- F02 reads the event time from a support coordinate that must be exactly `bar:<RFC3339>` or `bucket:<RFC3339>`, so the duration
+  cannot be part of the observation identity;
+- section 1 and section 2 above place the duration in the `bar-flow-v1` representation, not in the feature definition.
+
+H01 (ADR-0035) has the same property. Binding the duration inside `SupportIdentity`, or extending the F02 coordinate grammar, would
+reinterpret a frozen E02 field or amend F02; the maintainer chose neither (2026-10-18, option A).
+
+### Decision
+
+1. **One duration per admission.** In an `admit` request, every entry of `definitions` that carries a `bar_duration` carries the same
+   duration, compared by its nanosecond value (`"1m"` and `"60s"` are equal). Entries with the same duration and different parameters
+   are valid: their definition identities differ, so their observations do.
+2. **A new stable refusal.** `definition_bar_duration_mixed` is a reason of `invalid_request` with nothing sealed: two entries with a
+   `bar_duration` of different values. It is evaluated after each entry has passed its own validation (including
+   `definition_bar_duration_invalid` and `definition_interval_misaligned`). The refusal reasons of section 5 are therefore **eight**:
+   `definitions_exceed_bound`, `definition_unknown`, `definition_parameters_invalid`, `definition_bar_duration_invalid`,
+   `definition_interval_misaligned`, `definition_bar_duration_mixed`, `definition_duplicate`, `definition_input_unavailable`.
+3. **Effect on the manifest.** `definition_identities` holds **at most one** `bar-flow-definition-v1` identity, together with the
+   feature identities that need it. The observations of a result are bound to the bar-flow definition of its admission through that
+   manifest (a bundle names one admission, ADR-0072 §11). An observation stream is not to be merged with the stream of another
+   admission on the support coordinate alone.
+4. **What this does not do.** It changes no E02, F02 or H01 behaviour and no function of the library. Two separate library calls over
+   bars of different durations that start at the same instant still produce the same observation identity; that is a documented limit
+   of the library functions, held at the admission level by this rule, not repaired in the observation identity.
+5. **Cost accepted.** A study over several timeframes uses one admission, hence one delivery of the trades, per duration. A binding of
+   the duration into the observation identity, which would remove that cost, needs its own decision on E02/F02.
+
+### Consequences for the atoms
+
+`M04` implements the rule and the eighth reason and proves that a request whose entries share a duration is sealed and one whose
+entries differ is refused with nothing sealed; its start gate is unchanged. `M02` and `M05` are unchanged. The wording of the `M04`
+acceptance in `SCOPE.md` is aligned by a governance follow-up (issue #470); this amendment edits no governance file.
