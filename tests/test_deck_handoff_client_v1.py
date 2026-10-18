@@ -824,5 +824,113 @@ class VerificationTests(unittest.TestCase):
         self.assertIn("inconsistent", str(caught.exception))
 
 
+class AdmitDefinitionsTests(unittest.IsolatedAsyncioTestCase):
+    """``admit`` carries the optional ``definitions`` of ADR-0073 section 5 (issue #477)."""
+
+    OPERATION = "strategy-compose-v1"
+    PROFILE = "profile-v1:default"
+    SELECTOR = {"instrument": "BTCUSDT"}
+    DEFINITIONS = [{
+        "feature_key": "order_flow.failed_aggression", "semantic_version": "1", "bar_duration": "1m",
+        "parameters": {"imbalance_threshold": "0.3", "wick_ratio": "0.5"},
+    }]
+    IDENTITIES = (
+        "bar-flow-definition-v1:sha256:" + "a" * 64,
+        "feature-definition-v1:sha256:" + "b" * 64,
+    )
+
+    @staticmethod
+    def document(identities):
+        fields = AdmittedInputManifestV1(
+            logical_input_identities=("dataset-v1:BTCUSDT",), natural_partition_identities=("partition-v1:1",),
+            schema_identity="trades@1", schema_version="1", schema_hash="schema-sha256:abc",
+            manifest_hashes=("manifest-sha256:abc",), content_hashes=(hashlib.sha256(b"m").hexdigest(),),
+            declared_coverage={"start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z"},
+            request_identity="request-v1:alpha", result_identity=None, definition_identities=tuple(identities),
+            implementation_identity=None, git_identity="git:abc123", operation_identity="strategy-compose-v1",
+            profile_identity="profile-v1:default",
+        ).canonical_fields()
+        digest = deck.manifest_digest(fields)
+        return {
+            "admission_id": f"admitted-input-v1:{digest}", "manifest_digest": digest, "manifest": fields,
+            "state": "SEALED", "delivery_failure_reason": None, "delivery_attempt": 0,
+        }
+
+    async def admit(self, identities, **extra):
+        script = Script(lambda request: ok(request, self.document(identities)))
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            try:
+                admission = await client.admit(
+                    dataset=dict(self.SELECTOR), operation_identity=self.OPERATION, profile_identity=self.PROFILE,
+                    **extra,
+                )
+            except Exception as error:  # the caller asserts on the type
+                return script, error
+        return script, admission
+
+    async def test_without_definitions_the_message_is_exactly_what_it_always_was(self) -> None:
+        recorded = {
+            "dataset": self.SELECTOR, "artifact_identities": [],
+            "operation_identity": self.OPERATION, "profile_identity": self.PROFILE,
+        }
+        for extra in ({}, {"definitions": ()}, {"definitions": []}):
+            script, admission = await self.admit((), **extra)
+            self.assertNotIsInstance(admission, Exception, extra)
+            (message,) = script.sent
+            self.assertEqual(recorded, message["request"], extra)
+            self.assertEqual("admit", message["operation"])
+
+    async def test_definitions_are_sent_verbatim_and_nothing_else_in_the_body_changes(self) -> None:
+        script, admission = await self.admit(self.IDENTITIES, definitions=self.DEFINITIONS)
+        self.assertNotIsInstance(admission, Exception)
+        (message,) = script.sent
+        self.assertEqual(
+            {
+                "dataset": self.SELECTOR, "artifact_identities": [], "operation_identity": self.OPERATION,
+                "profile_identity": self.PROFILE, "definitions": self.DEFINITIONS,
+            },
+            message["request"],
+        )
+        # What the deck wrote is what is sent: the client does not canonicalize or complete it, even an entry
+        # the server would refuse (the refusal is the server's).
+        odd = [{"feature_key": "x", "semantic_version": "9", "parameters": {"b": "2", "a": "1"}}]
+        script, _ = await self.admit(self.IDENTITIES, definitions=odd)
+        self.assertEqual(odd, script.sent[0]["request"]["definitions"])
+
+    async def test_a_servers_refusal_reaches_the_caller_with_its_reason_and_is_not_retried(self) -> None:
+        def reply(request):
+            return failure(request, {
+                "code": "invalid_request", "message": "the request is not valid",
+                "context": {"reason": "definition_bar_duration_mixed"}, "request_identity": None,
+            })
+
+        script = Script(reply)
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            with self.assertRaises(deck.RemoteConsumerApiError) as caught:
+                await client.admit(
+                    dataset=dict(self.SELECTOR), operation_identity=self.OPERATION, definitions=self.DEFINITIONS,
+                )
+        self.assertEqual("definition_bar_duration_mixed", caught.exception.context["reason"])
+        self.assertEqual((1, 1), (script.connections, len(script.sent)))
+
+    async def test_a_sealed_admission_without_identities_is_not_the_answer_to_requested_definitions(self) -> None:
+        _, outcome = await self.admit((), definitions=self.DEFINITIONS)
+        self.assertIsInstance(outcome, deck.DeliveryIntegrityFailure)
+        _, outcome = await self.admit(self.IDENTITIES, definitions=self.DEFINITIONS)
+        self.assertEqual(sorted(self.IDENTITIES), list(outcome.manifest["definition_identities"]))
+        # A request that named none is not subject to the check, whatever the manifest holds.
+        for identities in ((), self.IDENTITIES):
+            _, outcome = await self.admit(identities)
+            self.assertNotIsInstance(outcome, Exception)
+
+    async def test_definitions_is_a_sequence_of_entries_and_nothing_is_sent_otherwise(self) -> None:
+        script = Script(lambda request: ok(request, self.document(self.IDENTITIES)))
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            for bad in ("feature", b"feature", dict(self.DEFINITIONS[0])):
+                with self.assertRaises(TypeError, msg=repr(bad)):
+                    await client.admit(dataset=dict(self.SELECTOR), operation_identity=self.OPERATION, definitions=bad)
+        self.assertEqual([], script.sent)
+
+
 if __name__ == "__main__":
     unittest.main()

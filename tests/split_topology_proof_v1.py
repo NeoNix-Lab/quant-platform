@@ -688,12 +688,10 @@ class SplitTopologyProofV1(unittest.IsolatedAsyncioTestCase):
     }]
 
     async def admit_with_definitions(self, client: deck.DeckHandoffClient, definitions=None):
-        """``admit`` naming definitions. The protocol client has no such parameter yet, so the call is made directly."""
-        result = await client._call(deck.ADMITTED_INPUT_FAMILY, "admit", {
-            "dataset": dict(SELECTOR), "artifact_identities": [], "operation_identity": OPERATION,
-            "profile_identity": None, "definitions": definitions or self.DEFINITIONS,
-        })
-        return client._admission(result)
+        """``admit`` naming definitions, through the protocol client (issue #477)."""
+        return await client.admit(
+            operation_identity=OPERATION, dataset=dict(SELECTOR), definitions=definitions or self.DEFINITIONS,
+        )
 
     @staticmethod
     def library_identities() -> tuple[str, str]:
