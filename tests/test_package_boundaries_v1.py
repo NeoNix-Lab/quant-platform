@@ -51,6 +51,7 @@ OWNERS = {
     "quant_platform.features": "feature",
     "quant_platform.features.artifacts": "feature",
     "quant_platform.features.definitions": "feature",
+    "quant_platform.features.failed_aggression": "feature",
     "quant_platform.features.h01_imbalance": "feature",
     "quant_platform.features.imbalance": "feature",
     "quant_platform.operations": "operations",
