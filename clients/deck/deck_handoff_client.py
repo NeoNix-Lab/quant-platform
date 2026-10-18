@@ -515,15 +515,28 @@ class DeckHandoffClient:
     async def admit(
         self, *, operation_identity: str, profile_identity: str | None = None,
         dataset: Mapping[str, Any] | None = None, artifact_identities: Sequence[str] = (),
+        definitions: Sequence[Mapping[str, Any]] = (),
     ) -> Admission:
-        """Ask for a semantic input (a dataset selector or accepted artifact identities)."""
+        """Ask for a semantic input (a dataset selector or accepted artifact identities).
 
-        result = await self._call(ADMITTED_INPUT_FAMILY, "admit", {
+        ``definitions`` names feature definitions of the server's registry (ADR-0073 section 5;
+        ``feature_key``, ``semantic_version``, ``bar_duration``, ``parameters``). They are sent as given:
+        this client neither validates nor interprets them, and every refusal is the server's. Without
+        them the request is exactly what it always was. A server that predates the field refuses it.
+        """
+
+        if isinstance(definitions, (str, bytes, Mapping)):
+            raise TypeError("definitions is a sequence of entries")
+        request: dict[str, Any] = {
             "dataset": None if dataset is None else dict(dataset),
             "artifact_identities": list(artifact_identities),
             "operation_identity": operation_identity,
             "profile_identity": profile_identity,
-        })
+        }
+        sent_definitions = [dict(entry) for entry in definitions]  # a snapshot: the caller's list may change while we wait
+        if sent_definitions:
+            request["definitions"] = sent_definitions
+        result = await self._call(ADMITTED_INPUT_FAMILY, "admit", request)
         admission = self._admission(result)
         manifest = admission.manifest
         if (
@@ -535,6 +548,13 @@ class DeckHandoffClient:
             raise DeliveryIntegrityFailure(
                 "transfer_integrity_failure", None,
                 "the admission is not for the requested operation and profile",
+            )
+        if sent_definitions and not manifest.get("definition_identities"):
+            # The client cannot compute an identity, but a sealed admission that names none is not the
+            # answer to a request that named definitions.
+            raise DeliveryIntegrityFailure(
+                "transfer_integrity_failure", None,
+                "the admission carries no definition identity for the requested definitions",
             )
         return admission
 

@@ -18,6 +18,10 @@ per message family.
    outside S06, which this page does not assume.
 3. **The package version decides nothing.** `pyproject.toml`'s version, a tag name or a release label is not evidence of
    compatibility in either direction.
+4. **Optional request fields.** `admit` may carry `definitions` (ADR-0073 section 5, issue #477). It is an optional field of
+   the same family version (ADR-0066 section 1), so a deck that sends it needs a server at atom `M04` or later: an older
+   server refuses the unknown field as `invalid_request` and seals nothing, which is the intended fail-closed outcome. A deck
+   that does not send it works against either server.
 
 Rule 1 is checked by the wire: a family or version the server does not compose is refused. Rule 2 is checked twice, both times against the admission's manifest: by the
 deck's workload module before any work (it refuses a tree that is dirty or not at the manifest's commit) and by the server's
