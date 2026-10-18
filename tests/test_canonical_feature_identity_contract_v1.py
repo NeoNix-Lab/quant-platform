@@ -77,12 +77,12 @@ def ratio_signal(o: Fraction, h: Fraction, low: Fraction, c: Fraction, buy: Frac
 
 
 class CanonicalFeatureIdentityContractV1Tests(unittest.TestCase):
-    def test_the_adr_is_proposed_and_names_its_amendments(self) -> None:
+    def test_the_adr_is_accepted_and_names_its_amendments(self) -> None:
         text = adr_text()
         for required_text in (
             "# ADR-0073 - Canonical feature identity for deck results v1 (DG-M)",
-            "**Status:** PROPOSED",
-            "Governance issues #453, #454.",
+            "**Status:** ACCEPTED",
+            "Governance issues #453, #454; acceptance #457.",
             "Amends ADR-0072 and ADR-0069 only where section 10 says so",
             "### 10. Amendments to accepted ADRs (effective only on acceptance of this ADR)",
             "dated, append-only amendments",

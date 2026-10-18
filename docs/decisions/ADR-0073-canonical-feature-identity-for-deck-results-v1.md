@@ -1,9 +1,9 @@
 # ADR-0073 - Canonical feature identity for deck results v1 (DG-M)
 
-**Status:** PROPOSED (design gate #454; acceptance is a separate maintainer step)
+**Status:** ACCEPTED (design gate #454, PR #456; accepted by the maintainer 2026-10-18, issue #457)
 **Date:** 2026-10-18
 
-Governance issues #453, #454. Amends ADR-0072 and ADR-0069 only where section 10 says so, and only when this ADR is
+Governance issues #453, #454; acceptance #457. Amends ADR-0072 and ADR-0069 only where section 10 says so, and only when this ADR is
 `ACCEPTED`.
 
 ## Context
