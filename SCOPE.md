@@ -20,6 +20,7 @@ This file previously recorded **this same DG-M scope** while it was registered (
 | `M02` | PR #468 (issue #462) | `features/failed_aggression.py`: `order_flow.failed_aggression@1`, canonical constructor, exact division-free evaluator, golden vectors, reference `EventSpec` test. Review findings R1-R3 were fixed; R1 (observation identity across durations) is held at admission level by Amendment 1. |
 | `M04` | PR #473 (issue #463) | `application/admitted_input_definitions.py` (closed registry, one entry), the optional `definitions` field of `admit` (at most 8), populated `definition_identities`, the eight refusal reasons, a transport check that the manifest carries exactly the requested identities. A request without `definitions` seals the pre-change digest (`eb2a55f5…3e1c`). Review finding R1 (a 40-digit wire ceiling) was fixed. |
 | `M05` | PR #474 (issue #464) | `application/deck_result_bundle.py`: `definition_not_declared`, reference kinds `feature-definition` / `representation-definition`, data coverage unchanged, K13 unchanged. The four facts of ADR-0073 §8 on `PostgresSplitTopology` (CI; also run by the implementer, 18 of 18, in WSL on PostgreSQL 16). |
+| Follow-on | PR #478 (issue #477) | `clients/deck/deck_handoff_client.py`: `admit(..., definitions=())` sends the entries as given (the body is unchanged without them), refuses a sealed admission without definition identities when definitions were requested, snapshots the entries so the check is about what was sent; runbook and compatibility rule updated; the split topology proof uses the client method. Closes trigger 3. Not an atom. |
 | Amendments | ADR-0073 Amendment 1 (issue #469, PR #471); ADR-0072 Amendment 2 (`M04` §1, `M05` §5 item 2); ADR-0069 Amendment 3 (`M04`, §5 `admit`; its Amendment 2 is J13's) | One bar duration per admission and the eighth refusal reason; the manifest field and the builder rule; the optional `definitions` field. Corrections and alignments: #465 / PR #467, #470 / PR #472. |
 
 Note: the body of issue #463 still says seven refusal reasons and "Amendment 2" for ADR-0069; this file governed and was followed.
@@ -30,7 +31,6 @@ Note: the body of issue #463 still says seven refusal reasons and "Amendment 2" 
 - Nothing shows the feature is correct on real data beyond the golden vectors, or profitable: Hypothesis 001's empirical results are research evidence.
 - The server attests the admitted *name* of a definition, not the deck's computation.
 - Observation identity does not include the bar duration: observations from bars of different durations that start at the same instant, produced by separate library calls, have the same identity. Amendment 1 holds this at the admission level, not in the library (H01 has the same property).
-- The protocol client `clients/deck/deck_handoff_client.py` does not carry `definitions`; the proof calls the family directly.
 - The kind of a declared definition reference is not enforced by the builder or by K13.
 - The registry has one entry; the H01 definitions are not in it; there is no family identity across parameterizations.
 - The throughput of bar-flow construction over the full delivered history and the cost of a full-history feature run on the deck are not measured; the defaults, the duration range and the bound of 8 are maintainer-accepted, not measured.
@@ -39,14 +39,14 @@ Note: the body of issue #463 still says seven refusal reasons and "Amendment 2" 
 
 ## Triggers recorded at closeout (each names a condition that reopens a decision; none is authorized by this closeout)
 
-The eight triggers, with their conditions, are in [`OPEN_DECISIONS.md`](docs/architecture/OPEN_DECISIONS.md#dg-m-v1-reopening-triggers-475): the real-host run; observation identity across durations; the protocol client carrying `definitions`; the reference kind; more registry entries and a family identity; naming versus computing; unmeasured values and costs; the proof environment.
+The eight triggers recorded, with their conditions, are in [`OPEN_DECISIONS.md`](docs/architecture/OPEN_DECISIONS.md#dg-m-v1-reopening-triggers-475); trigger 3 (the protocol client carrying `definitions`) was exercised and closed by #477 / PR #478 (governance #479), so seven remain: the real-host run; observation identity across durations; the reference kind; more registry entries and a family identity; naming versus computing; unmeasured values and costs; the proof environment.
 
 ---
 
 ## Authority
 
 - `AGENTS.md`
-- governance issues #381, #409, #453, #458, #465, #470, #475; design-gate issues #454, #457; amendment issue #469; the DG-K2 closeout trigger 1
+- governance issues #381, #409, #453, #458, #465, #470, #475, #479; implementation follow-on #477; design-gate issues #454, #457; amendment issue #469; the DG-K2 closeout trigger 1
 - `docs/decisions/ADR-0073-canonical-feature-identity-for-deck-results-v1.md` (`ACCEPTED`, with Amendment 1)
 - `docs/product/ROADMAP.md`, `docs/product/CAPABILITY_DAG.md` (`M` atoms), `docs/architecture/OPEN_DECISIONS.md` (DG-M)
 - ADR-0016, ADR-0026, ADR-0027, ADR-0034, ADR-0035, ADR-0057, ADR-0064, ADR-0066, ADR-0069 (with Amendment 3), ADR-0072 (with Amendments 1 and 2)

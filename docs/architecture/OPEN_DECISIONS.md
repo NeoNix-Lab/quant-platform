@@ -910,7 +910,7 @@ re-derivation of the feature (a claim stronger than naming it) is a different de
 
 ### DG-M v1 reopening triggers (#475)
 
-Each is a named condition that reopens a decision. None is authorized by the closeout.
+Each is a named condition that reopens a decision. None is authorized by the closeout; trigger 3 was later exercised (#477).
 
 1. **Real-host run.** No deck has computed the feature over real delivered trades and registered the result on the real server.
    That run is operator evidence (ADR-0073 §8); correctness on real data and profitability are not claimed. Trigger: the operator
@@ -921,8 +921,9 @@ Each is a named condition that reopens a decision. None is authorized by the clo
    the cost of one admission and one delivery per timeframe. Trigger: a study that needs several timeframes under one admission,
    or a consumer that merges observation streams of several admissions on the support coordinate alone; it needs its own decision
    on E02/F02.
-3. **Protocol client.** `clients/deck/deck_handoff_client.py` `admit` has no `definitions` parameter; the proof calls the family
-   directly. Trigger: the first workload that must name a definition through the client (a client slice, not authorized).
+3. **Protocol client — EXERCISED and CLOSED (#477 / PR #478, governance #479).** `DeckHandoffClient.admit` now carries the optional
+   `definitions` as given and refuses a sealed admission without definition identities when they were requested; the split topology
+   proof uses it. Remaining limit: the client neither validates nor interprets the entries (every refusal is the server's).
 4. **Reference kind.** The builder and K13 do not enforce the kind of a declared definition reference (ADR-0073 §6). Trigger: a
    reader or tool that must rely on it.
 5. **More registry entries.** One entry; the H01 definitions are not in it. Adding one is a code change at the deck-pinned commit.
