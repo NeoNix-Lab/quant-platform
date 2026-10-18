@@ -677,9 +677,11 @@ class FrozenContractsAreNotMutatedInPlace(unittest.TestCase):
     def test_frozen_schemas_are_not_touched_by_this_pass(self):
         # sha256 stability is already covered by their own contract test
         # suites; this only guards that this pass did not add a stray schema
-        # version file outside the explicitly authorized manifest-v2 evolution.
+        # version file outside the authorized manifest-v2, ADR-0070 L2 and
+        # ADR-0073 additive bar-flow evolution. Existing schemas stay frozen.
         schemas_dir = ROOT / "schemas"
         expected = {
+            "bar-flow-v1.json",
             "candle-v1.json",
             "coverage-manifest-v1.json",
             "dataset-manifest-v1.json",
