@@ -653,3 +653,171 @@ does not justify a global duplicate exception or a reconstructed/synthetic snaps
   DDL, `trade-v1` and other ADRs are untouched. Source-edge and gap evidence uses existing
   evidence kinds and `detail` text. Governance status is reconciled separately at the A14
   closeout; this amendment does not edit planning files or credit an atom as complete.
+
+## Amendment 3 (issue #450) — live run partitioning, intake journal and continuation
+
+**Date:** 2026-10-18
+**Authority:** the maintainer authorized the A14f chain (#419 implementation, #420 bounded soak),
+recorded by [#448](https://github.com/NeoNix-Lab/quant-platform/issues/448). This amendment is the
+design-gate deliverable of [#450](https://github.com/NeoNix-Lab/quant-platform/issues/450); it is
+accepted by the merge of its pull request.
+**Amends:** §8 (what "durable publication before checkpoint advance" means for a run that lasts
+longer than a batch), Amendment 1 items 3, 4 and 9 as they apply to live ingest (`v2`), and
+Amendment 2 decision 5 for the live tail. **Does not amend:** the ordering key, event identities,
+schemas, manifest fields, catalog DDL, the coverage fold, `l2_parquet.py`, the frozen
+`publication*.py`, `trade-v1`, ADR-0044, any other ADR, or the A14f start gate (released by #448).
+Earlier text stays historical; the table below names the operative replacements.
+
+### Why and bounded evidence
+
+- Review of PR #447 (fixes `74f389d`) found live micro-batch partitions: `seg` was a batch ordinal.
+  Amendment 1 item 3 makes `seg` the ordinal of a **run**, and item 5 says a partition that is not
+  one clean anchored continuity segment never exists in the canonical layer.
+- A delta-headed partition is `unanchored_head` under `certify_bybit_l2_book_events` (checked on
+  the merged code, and reproduced under `L2PublicationCertification`); replay sanity (§5 check 6)
+  needs a book, and §2 says no book state is carried in a partition. So a continuation partition
+  cannot be certified by the frozen certifier alone; Amendment 1 item 9 deferred exactly this
+  mechanic (a certifier parameter and a catalog lookup) to A14f.
+- §8 says books have no REST history and no repair path exists. ADR-0042's "replay is expected
+  after a crash" therefore has no source for L2: an open run that is only in memory is lost.
+- Scale (Appendix B, and the v1 golden day: 863,929 lines): about 10 messages/s, 0.87 M events per
+  UTC day. One day-piece is the size of the day the v1 golden published and read back, so no new
+  partition size class is introduced. The v1 golden figures (4,310.6 s wall, 9,080 MB peak working
+  set, one Windows host, one run) are a v1 ingest observation, **not** a live bound.
+
+### Decision
+
+1. **Partition unit.** Live ingest uses Amendment 1's unit unchanged: one partition per *run
+   piece*, the part of a run inside one UTC day of `exchange_ts` (Amendment 2 decision 1), key
+   `dt=YYYY-MM-DD/seg=NNN` with `NNN` the 1-based ordinal of the day's pieces in order of first
+   event, revision 1, sealed once and never revised. No count-, size- or time-triggered partition
+   exists, and the live path uses the same materializer and manifests as `A14d`.
+2. **Seal triggers.** A piece is sealed (a) when a gap opens (Decision 8); (b) when the run
+   continues into the next UTC day (Decision 5), at the first event of that day; (c) at orderly
+   shutdown. Nothing else seals a piece. Sealing never blocks acceptance: frames keep being
+   journaled while a piece is materialized, certified and published.
+3. **Intake journal.** Between receipt and seal, events are held in a journal: runtime state of
+   the live-ingest identity (ADR-0041 §3, "bounded ingest state"), not a canonical dataset, not a
+   source archive and never read by consumers. Every data frame is appended, in arrival order,
+   **before** the resync machine applies it; frames are stored as received, so replay
+   re-normalizes through the same function. Appends are flushed and `fsync`ed in groups. This
+   amendment fixes the rule, not the group size: after a crash, frames after the last `fsync` and
+   an incomplete trailing frame are lost, and that loss is the restart gap of Decision 4. The group
+   size is a #420 tuning parameter. A piece is built by streaming the journal into the
+   materializer, not by holding the piece in memory.
+4. **Recovery and idempotent re-seal.** On start: (i) load the checkpoint (Decision 9); (ii) replay
+   any unsealed journal through the resync machine and seal what it rebuilds, as in trigger (c);
+   (iii) open the new connection as an open `process_restart` gap whose start is `ceil_us` of the
+   last replayed event (the checkpoint's last event if there is no journal) and which only an
+   authentic snapshot closes, dropping and counting deltas before it. A journal file is deleted
+   only after its piece is published and the checkpoint has advanced. Replay may seal a piece the
+   catalog already holds: the same key and revision with the same `canonical_content_hash_v1`,
+   row count and size is done (advance the checkpoint); any difference is refused
+   `piece_already_published_differently` and the ingest stops (Amendment 1 item 8). The window
+   "published, checkpoint not advanced" is thus safe.
+5. **Continuation across midnight.** Let `E` be the first event with `exchange_ts >= D+1
+   00:00:00Z` (it belongs to `D+1`). The run *continues* iff no gap is open and `E` has
+   `seq` greater than the last accepted `seq` and `u` equal to the last accepted `u + 1`, whether
+   `E` is a delta or a snapshot (a snapshot without a `u` gap loses nothing, Amendment 1 item 1).
+   If it does not, the run ended before midnight and Decision 8 applies. If it does, the piece of
+   `D` is sealed and `E` opens `dt=D+1/seg=001`. A piece whose first event is a delta is a
+   **continuation piece**; it exists only by this rule. No synthetic snapshot is ever written.
+6. **Certification of a continuation piece.** The single mechanics deferral of Amendment 1 item 9
+   is fixed as follows.
+   - *Certifier parameter.* `certify_bybit_l2_book_events` gains one optional parameter,
+     `continuation`, a value holding the predecessor partition (key, revision) and the events of
+     the predecessor chain from the nearest snapshot-headed ancestor through the predecessor's last
+     event. The certifier replays the chain and the piece as one stream (checks 3-6 find a violation
+     anywhere in it) and reports only the piece's own events. The piece's `unanchored_head` is
+     false iff the chain is non-empty, its last event is the declared anchor and the piece's first
+     event is a delta with `u = anchor u + 1`, `seq > anchor seq` and `exchange_ts >= anchor ts`.
+     Without the parameter every output stays **byte-identical** to today's; no threshold changes.
+   - *Catalog lookup.* Before certification the application, using the existing catalog reader and
+     the Parquet scanner (not the frozen publication code), verifies every chain partition: its
+     catalog row is `valid` and the live revision, its installed artifact re-hashed equals the row's
+     size and SHA-256, and consecutive partitions satisfy the link rule above. A failed lookup
+     refuses the piece `continuation_anchor_unverifiable`: nothing is published, the journal is
+     kept and the ingest stops. It never falls back to a snapshot it did not receive.
+   - *Linking evidence* uses existing kinds and `detail` text only. The piece's `complete`
+     assertion carries `sequence_continuity` (item 6, unchanged: `bybit_l2_continuity_evidence_detail`
+     of its own events) and `connection_continuity` whose detail is `live_stream` for an ordinary
+     piece and
+     `continues:dt=D/seg=NNN@R|sha256:<hex>|last_seq:<n>|last_u:<n>|last_ts:<iso>` for a
+     continuation piece. The sealed predecessor's `connection_continuity` detail ends with
+     `|continued_by:first_seq:<n>;first_u:<n>;first_ts:<iso>`.
+7. **Coverage at piece boundaries** (1 µs, as Amendment 1 item 4). A piece starts at
+   `D 00:00:00Z` when the run continued into it across midnight (a continuation piece, or a
+   continuing snapshot) and at `floor_us(first event)` when the run begins at its snapshot. It ends at `D+1 00:00:00Z` when the run continues across midnight (the
+   `continued_by` evidence is the valid tail evidence of Amendment 2 decision 5) and otherwise at
+   `ceil_us(last event)`. Pieces of a continuing run touch and never overlap. Before the first
+   snapshot ever acquired nothing is asserted: absence of coverage is neither completeness nor a gap.
+8. **Gaps in live.** One coverage document per closed gap, `known_gap`, no partition reference,
+   interval `[ceil_us(last event of the previous piece), floor_us(first event of the next
+   piece))`, path `dt=<day of the interval start>/gap=NNN/coverage-manifest.json`; an interval
+   that crosses midnight belongs to the day of its start. Evidence `detail` is
+   `<reason>|last_u:<n>|resync_u:<n>|last_seq:<n>|resync_seq:<n>|dropped_deltas:<n>`:
+   - kind `sequence_discontinuity`, reason `sequence_discontinuity` or `out_of_order_sequence`:
+     a delta whose `u` is not `u + 1`, a delta regression, or a venue snapshot whose `u` jumps;
+   - kind `transport_interruption`, reason `connection_loss`, `heartbeat_timeout` or
+     `process_restart`.
+
+   A snapshot whose `seq` does not exceed the last accepted `seq` is not a gap: it is the
+   fail-closed `sequence_regression` of §2, and the ingest stops with the journal preserved
+   (trigger T1). A gap whose interval is empty at 1 µs refuses `discontinuity_not_representable`
+   the same way: the ingest stops, nothing is widened and no event is dropped. Deltas dropped while
+   the book is unknown are counted in the evidence; unlike item 2 no source archive hash exists
+   for them.
+9. **Checkpoint and provenance.** The checkpoint (ADR-0042) is the last sealed partition: key,
+   revision, manifest SHA-256, last `exchange_ts`, `native_sequence`, `native_update_id` and a
+   generation. It advances only after the piece is durably published and never moves backwards.
+   The journal is replay input, not checkpoint authority; losing it turns the interval after the
+   checkpoint into a `process_restart` gap. `code_ref` is the commit of the running build supplied
+   by the host configuration and `producer` identifies the live L2 ingest and its runtime
+   version; neither is a semantics label.
+10. **Not decided here (open evidence, all for #420 or a later amendment).**
+    - *E6, continuation verification cost.* The chain replay is O(run age) per midnight: day `k` of
+      an uninterrupted run verifies `k` pieces. Only #420 measures it. If it exceeds a budget, a
+      **new amendment** chooses a mitigation (a planned re-subscribe, which creates a deliberate
+      gap per §8, or a hash-bound terminal-book artifact); neither is chosen here.
+    - *E7, journal and seal.* The `fsync` group size, journal disk growth, and the memory and time
+      of streaming one day-piece into the materializer.
+    - *E8, visibility.* A piece is visible to consumers only at its seal, up to one UTC day after
+      its first event. A real-time L2 read surface is not part of this amendment.
+    - *Journal retention* beyond recovery belongs to the ADR-0049 owner; the journal is not evidence.
+
+### Superseded text
+
+| Where | Earlier text | Operative replacement |
+|---|---|---|
+| §8, first bullet | "durable publication before checkpoint advance, restart from the last durable checkpoint" | Decisions 3, 4 and 9: the open piece is durable in the journal; publication and the checkpoint advance happen at seal; restart replays the journal, then opens a `process_restart` gap. |
+| Amendment 1 item 9 | "The mechanics (a certifier parameter and the catalog lookup) are fixed in the `A14f` issue" | Decision 6. |
+| Amendment 1 item 9 | "the continuation partition (`dt=<next day>/seg=001`) starts with a delta" | Decision 5: it starts with a delta only for a continuing delta; a continuing snapshot is an ordinary head. |
+| Amendment 2 decision 5, live tail | intent end needs valid tail evidence | Decision 7: for live, the `continued_by` evidence of Decision 6 is that evidence. |
+| Amendment 1 item 4, gap `detail` | `expected_u:<n>\|observed_u:<n>\|excluded_events:<n>\|source_sha256:<hex>` | Decision 8 for live gaps only (no source archive); the v1 form is unchanged. |
+
+### Consequences
+
+- The frozen coverage fold, manifests, catalog DDL, `l2_parquet.py`, `publication*.py` and
+  `trade-v1` are unchanged. The only code-contract change is one additive, optional certifier
+  parameter, absent in every existing call.
+- An uninterrupted stream yields one partition per UTC day; the number of partitions is bounded
+  by the number of gaps (E4), not by throughput.
+- The live-ingest deployment gains one runtime path for the journal under ADR-0041 §3; ADR-0043's
+  composition is otherwise unchanged.
+- The micro-batch flush and `max_batch_size` of PR #447 are not an accepted design; the gap,
+  restart and day-roll corrections of `74f389d` agree with Decisions 2, 4, 5 and 8 and stay.
+
+### Evidence status and implementation handoff
+
+- This amendment is a design decision. It claims nothing implemented, certified, published, read
+  back or measured; E6-E8 are open.
+- The implementation follows in #419 after acceptance. Its tests must prove, at least: no
+  partition spans a gap; seal only on the three triggers; a continuation piece certifies with a
+  valid chain and refuses a tampered, missing or non-`valid` predecessor; existing certifier
+  outputs byte-identical without the parameter; crash windows (before publish, after publish
+  before checkpoint, torn journal tail) all recover without loss beyond the declared restart gap
+  and without rewriting a published partition; `sequence_regression` and
+  `discontinuity_not_representable` stop the ingest with the journal intact; a two-day
+  continuation against real PostgreSQL. The soak #420 reports E6-E8.
+- Governance closes design point D1 in a separate governance issue after the implementation is
+  merged; this amendment edits no planning file and credits no atom.
