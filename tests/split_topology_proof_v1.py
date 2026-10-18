@@ -33,6 +33,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
@@ -48,6 +49,7 @@ import deck_handoff_client as deck  # noqa: E402
 from quant_platform.application import strategy_transport as strategy_codec  # noqa: E402
 from quant_platform.application import training_transport as training_codec  # noqa: E402
 from quant_platform.application import validation_transport as validation_codec  # noqa: E402
+from quant_platform.application import deck_result_bundle  # noqa: E402
 from quant_platform.application.admitted_input import AdmittedInputState, AdmittedInputStore  # noqa: E402
 from quant_platform.application.admitted_input_authority import ADMITTED_INPUT_BOUNDS_V1  # noqa: E402
 from quant_platform.application.deck_result_bundle import (  # noqa: E402
@@ -56,7 +58,9 @@ from quant_platform.application.deck_result_bundle import (  # noqa: E402
     DeckRunDeclaration,
     FeatureProviderSource,
     WorkloadTree,
+    DeckResultError,
     build_deck_result,
+    definition_reference,
     inspect_workload_tree,
 )
 from quant_platform.application.durable_jobs import DurableJobStore, JobState  # noqa: E402
@@ -562,21 +566,30 @@ class SplitTopologyProofV1(unittest.IsolatedAsyncioTestCase):
     def deck_admission(self, admission: deck.Admission) -> DeckAdmission:
         return DeckAdmission(admission.admission_id, admission.manifest_digest, admission.manifest)
 
-    def declaration(self, execution_id: str) -> DeckRunDeclaration:
+    def declaration(self, execution_id: str, features: tuple[str, ...] = ()) -> DeckRunDeclaration:
         study = StudyIdentity(
             "split-topology-proof-v1",
             IdentityReference("research", "research-v1:split-topology"),
             IdentityReference("objective", "objective-v1:split-topology"),
             ComparisonProtocolIdentity(IdentityReference("protocol", "protocol-v1:split-topology")),
         )
-        return DeckRunDeclaration(study=study, execution_id=execution_id, run_configuration={"proof": "s07"})
+        return DeckRunDeclaration(
+            study=study, execution_id=execution_id, run_configuration={"proof": "s07"},
+            feature_identities=tuple(definition_reference(identity) for identity in features),
+        )
 
     async def deliver(self, client: deck.DeckHandoffClient, selector=None):
         admission = await client.admit(operation_identity=OPERATION, dataset=dict(selector or SELECTOR))
         return admission, await client.fetch_inputs(admission)
 
-    def workload_results(self, delivered: deck.AdmittedInput, admission: deck.Admission, tag: str):
-        """Run the replay and the training over the delivered bytes; the two results to upload and submit."""
+    def workload_results(
+        self, delivered: deck.AdmittedInput, admission: deck.Admission, tag: str, features: tuple[str, ...] = (),
+    ):
+        """Run the replay and the training over the delivered bytes; the two results to upload and submit.
+
+        ``features`` are the definition identities the workload declares (ADR-0073 section 6); an admission
+        that carries definitions needs them.
+        """
         directory = Path(tempfile.mkdtemp(dir=self.scratch))
         gateway = DeliveredGateway(delivered.members, directory)
         replay = run_replay(gateway)
@@ -588,14 +601,14 @@ class SplitTopologyProofV1(unittest.IsolatedAsyncioTestCase):
             source_sha256=hashlib.sha256(b"split-topology-proof").hexdigest(), parameters={"lookback": 20},
         )
         replay_result = build_deck_result(
-            self.deck_admission(admission), tree, self.declaration(f"replay-{tag}"),
+            self.deck_admission(admission), tree, self.declaration(f"replay-{tag}", features),
             [DeckOutput("replay-result", canonical_document(replay.stable_dict())),
              DeckOutput("replay-summary", canonical_document(replay.summary.stable_dict()))],
             runtime_environment={"python": platform.python_version()}, replay_provider=provider,
         )
         first = training.first
         training_result = build_deck_result(
-            self.deck_admission(admission), tree, self.declaration(f"training-{tag}"),
+            self.deck_admission(admission), tree, self.declaration(f"training-{tag}", features),
             [DeckOutput("normalizer", canonical_document(first.normalizer.stable_dict())),
              DeckOutput("model", canonical_document(first.model.stable_dict())),
              DeckOutput("predictions", canonical_document([item.stable_dict() for item in first.predictions])),
@@ -666,6 +679,103 @@ class SplitTopologyProofV1(unittest.IsolatedAsyncioTestCase):
         async with self.client() as fresh:
             self.assertEqual(registered, await fresh.submit(replay_result.wire))
         self.assertEqual((2, 6), self.evidence_counts())
+
+    # -- ADR-0073 section 8: the server passes feature identity ---------------------------------------------
+
+    DEFINITIONS = [{
+        "feature_key": "order_flow.failed_aggression", "semantic_version": "1", "bar_duration": "1m",
+        "parameters": {"imbalance_threshold": "0.3", "wick_ratio": "0.5"},
+    }]
+
+    async def admit_with_definitions(self, client: deck.DeckHandoffClient, definitions=None):
+        """``admit`` naming definitions. The protocol client has no such parameter yet, so the call is made directly."""
+        result = await client._call(deck.ADMITTED_INPUT_FAMILY, "admit", {
+            "dataset": dict(SELECTOR), "artifact_identities": [], "operation_identity": OPERATION,
+            "profile_identity": None, "definitions": definitions or self.DEFINITIONS,
+        })
+        return client._admission(result)
+
+    @staticmethod
+    def library_identities() -> tuple[str, str]:
+        from quant_platform.features.failed_aggression import failed_aggression_definition
+        from quant_platform.representation.bar_flow import BarFlowDefinitionV1
+
+        return BarFlowDefinitionV1("1m").definition_identity, failed_aggression_definition().identity
+
+    def registered_feature_identities(self, execution_id: str) -> list[str]:
+        with connect("ADMIN") as admin:
+            (payload,) = admin.execute(
+                "SELECT s.payload FROM experiment.run_specs s JOIN experiment.runs r USING (run_spec_fingerprint) "
+                "WHERE r.execution_id = %s", (execution_id,),
+            ).fetchone()
+        return [item["identity"] for item in payload["feature_identities"]]
+
+    async def test_the_server_seals_the_identities_and_a_declared_bundle_registers_a_run_that_carries_them(self) -> None:
+        bar_flow, feature = self.library_identities()
+        async with self.client() as client:
+            admission = await self.admit_with_definitions(client)
+            # Fact 1: the sealed manifest holds the identities the library computes, and `manifest` re-serves them.
+            self.assertEqual(sorted((bar_flow, feature)), list(admission.manifest["definition_identities"]))
+            served = await client.manifest(admission.admission_id)
+            self.assertEqual(admission.manifest, served.manifest)
+            # Fact 2: deliver and acknowledge are those of any admission.
+            delivered = await client.fetch_inputs(admission)
+            self.assertEqual(2, len(delivered.members))
+            self.assertEqual(AdmittedInputState.DELIVERED, self.admission_state(admission.admission_id).state)
+            # Fact 3: the declared bundle registers.
+            _, replay_result, training_result = self.workload_results(delivered, admission, "declared", (feature, bar_flow))
+            registered = await self.upload_and_submit(client, replay_result)
+            self.assertEqual({"replay-result", "replay-summary"}, {item["artifact_role"] for item in registered.outputs})
+            await self.upload_and_submit(client, training_result)
+            self.assertEqual((2, 6), self.evidence_counts())
+            # Fact 4: the registered run carries the identities, read back from the experiment store.
+            for execution_id in ("replay-declared", "training-declared"):
+                self.assertEqual(sorted((bar_flow, feature)), sorted(self.registered_feature_identities(execution_id)))
+
+    async def test_a_bundle_that_omits_an_admitted_definition_is_refused_with_zero_writes(self) -> None:
+        bar_flow, feature = self.library_identities()
+        async with self.client() as client:
+            admission = await self.admit_with_definitions(client)
+            delivered = await client.fetch_inputs(admission)
+            before = (self.experiment_counts(), self.evidence_counts())
+            # The deck-side build fails first, before anything is uploaded or sent.
+            for features in ((), (feature,), (bar_flow,)):
+                with self.assertRaises(DeckResultError, msg=repr(features)) as raised:
+                    self.workload_results(delivered, admission, "omitted", features)
+                self.assertEqual("definition_not_declared", raised.exception.reason)
+            self.assertEqual(before, (self.experiment_counts(), self.evidence_counts()))
+            # A hand-built bundle that omits them (the builder's rule bypassed) is refused by K13 itself.
+            with mock.patch.object(deck_result_bundle, "_declared", lambda declared, required: tuple(declared)):
+                _, replay_result, _ = self.workload_results(delivered, admission, "handbuilt")
+            for upload in replay_result.uploads:
+                await client.upload_output(upload.payload)
+            with self.assertRaises(deck.RemoteConsumerApiError):
+                await client.submit(replay_result.wire)
+            self.assertEqual(before, (self.experiment_counts(), self.evidence_counts()))
+
+    async def test_a_manifest_and_a_run_without_definitions_behave_as_before(self) -> None:
+        async with self.client() as client:
+            admission, delivered = await self.deliver(client)
+            self.assertEqual([], list(admission.manifest["definition_identities"]))
+            _, replay_result, _ = self.workload_results(delivered, admission, "plain")
+            self.assertEqual((), replay_result.bundle.run_identity.run_spec_identity.feature_identities)
+            registered = await self.upload_and_submit(client, replay_result)
+            self.assertEqual({"replay-result", "replay-summary"}, {item["artifact_role"] for item in registered.outputs})
+            self.assertEqual([], self.registered_feature_identities("replay-plain"))
+
+    async def test_a_refused_definition_request_is_invalid_and_seals_nothing(self) -> None:
+        mixed = self.DEFINITIONS + [dict(self.DEFINITIONS[0], bar_duration="5m", parameters={"wick_ratio": "0.4"})]
+        async with self.client() as client:
+            for definitions, reason in (
+                ([dict(self.DEFINITIONS[0], semantic_version="2")], "definition_unknown"),
+                (mixed, "definition_bar_duration_mixed"),
+            ):
+                with self.assertRaises(deck.RemoteConsumerApiError) as raised:
+                    await self.admit_with_definitions(client, definitions)
+                self.assertEqual("invalid_request", raised.exception.code)
+                self.assertEqual(reason, raised.exception.context.get("reason"))
+        with connect("ADMIN") as admin:
+            self.assertEqual(0, admin.execute("SELECT count(*) FROM runtime.admitted_inputs").fetchone()[0])
 
     # -- acceptance 2: J10, J12, J13 over the same listener ---------------------------------------------------
 

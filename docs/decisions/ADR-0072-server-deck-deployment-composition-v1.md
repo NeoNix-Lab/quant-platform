@@ -392,3 +392,19 @@ amended by atom `M05`, which appends to this amendment.
 
 A request without `definitions` seals a manifest byte-identical to the one section 1 describes, hence the same `manifest_digest` and
 `admission_id`; the test of `M04` proves it against a manifest computed before the change.
+
+### Section 5 item 2 (atom `M05`, issue #464) — the workload declares the definitions it evaluated
+
+Authority: ADR-0073 §6 (`ACCEPTED`). Item 2 of section 5 says the builder "covers `definition_identities`". It no longer does:
+
+| Item | Section 5 | Amendment 2 |
+| --- | --- | --- |
+| 2, data identities | covers `logical_input_identities` in its data identities | unchanged |
+| 2, definition identities | covers `definition_identities` | **requires** the workload to declare each manifest definition identity in `feature_identities`; a manifest definition the run does not name is a `DeckResultError` with reason `definition_not_declared`, and nothing is added |
+
+The reference kind of a declared definition is `feature-definition` for a `feature-definition-v1` identity and
+`representation-definition` for a `bar-flow-definition-v1` identity (`definition_reference` builds it). `K13`
+(`_validate_run_compatibility`) is unchanged: it compares identity strings and not kinds, so a hand-built bundle that omits an
+admitted definition is refused there, and a run that declares more definitions than the admission carried is not refused (coverage,
+not exclusivity; only the admitted ones are server-attested). A manifest with no definitions and a run that declares none behave
+exactly as before.
