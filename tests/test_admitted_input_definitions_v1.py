@@ -152,6 +152,20 @@ class AdmittedInputDefinitionsV1Tests(unittest.TestCase):
         ):
             self.assertEqual("definition_parameters_invalid", self.reason(entry(parameters=parameters)), parameters)
 
+    def test_the_wire_spelling_has_no_digit_ceiling_of_its_own(self) -> None:
+        from quant_platform.features.failed_aggression import failed_aggression_definition
+
+        # Equivalent spellings of an exactly held decimal are admitted and are the constructor's identity.
+        for spelling in ("0.3" + "0" * 40, "0.3" + "0" * 100_000, "0000.3", "0." + "0" * 40 + "1", "0." + "0" * 1000 + "1"):
+            expected = failed_aggression_definition(imbalance_threshold=spelling).identity
+            (definition,) = self.decoded(entry(parameters={"imbalance_threshold": spelling})).definitions
+            self.assertEqual(expected, definition.feature_definition().identity)
+        (default,) = self.decoded(entry(parameters={"imbalance_threshold": "0.3" + "0" * 40})).definitions
+        self.assertEqual(FEATURE_DEFAULT, default.feature_definition().identity)
+        # What the constructor cannot hold exactly, or the domain excludes, is still refused (not by spelling length).
+        for spelling in ("0." + "1" * 40, "9" * 5000, "0." + "0" * 2_000_000 + "1" * 30, "1" + "0" * 40):
+            self.assertEqual("definition_parameters_invalid", self.reason(entry(parameters={"imbalance_threshold": spelling})), spelling[:12])
+
     def test_the_domain_ends_the_constructor_enforces_are_enforced(self) -> None:
         (edge,) = self.decoded(entry(parameters={"imbalance_threshold": "1", "wick_ratio": "0"})).definitions
         self.assertEqual((("imbalance_threshold", "1"), ("wick_ratio", "0")), edge.parameters)

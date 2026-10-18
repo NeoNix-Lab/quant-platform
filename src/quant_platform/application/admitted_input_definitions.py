@@ -50,8 +50,9 @@ DEFINITION_REFUSAL_REASONS = (
     REASON_MISALIGNED, REASON_DURATION_MIXED, REASON_DUPLICATE, REASON_INPUT_UNAVAILABLE,
 )
 
-# A wire decimal is plain digits: no sign, exponent, whitespace, NaN or Infinity.
-_DECIMAL = re.compile(r"[0-9]{1,40}(?:\.[0-9]{1,40})?")
+# A wire decimal is plain digits: no sign, exponent, whitespace, NaN or Infinity. Its length is
+# the message bound's; the precision and the domain are the canonical constructor's to refuse.
+_DECIMAL = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 
 
 class DefinitionRefusal(ValueError):
