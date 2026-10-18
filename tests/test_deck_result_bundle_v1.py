@@ -33,12 +33,16 @@ from quant_platform.application.deck_result_bundle import (  # noqa: E402
     DeckOutput,
     DeckResultError,
     DeckRunDeclaration,
+    FEATURE_DEFINITION_REFERENCE_KIND,
     FeatureProviderSource,
+    REPRESENTATION_DEFINITION_REFERENCE_KIND,
     WorkloadTree,
     build_deck_result,
     content_checksum,
+    definition_reference,
     inspect_workload_tree,
 )
+from quant_platform.application import deck_result_bundle  # noqa: E402
 from quant_platform.application.api_transport_server import _parse_message  # noqa: E402
 from quant_platform.application.feature_provider_identity import (  # noqa: E402
     REPLAY_FEATURE_PROVIDER_KEY,
@@ -60,6 +64,8 @@ from quant_platform.application.result_import_transport import (  # noqa: E402
     upload_chunks,
 )
 from quant_platform.experiments import ExperimentRepository, RunState  # noqa: E402
+from quant_platform.features.failed_aggression import failed_aggression_definition  # noqa: E402
+from quant_platform.representation.bar_flow import BarFlowDefinitionV1  # noqa: E402
 from quant_platform.experiments.identities import (  # noqa: E402
     ComparisonProtocolIdentity,
     IdentityReference,
@@ -70,6 +76,8 @@ from test_governed_result_import_v1 import manifest  # noqa: E402
 
 DECK_DIRECTORY = ROOT / "clients" / "deck"
 MODULE = ROOT / "src" / "quant_platform" / "application" / "deck_result_bundle.py"
+BAR_FLOW_IDENTITY = BarFlowDefinitionV1("1m").definition_identity
+FEATURE_IDENTITY = failed_aggression_definition().identity
 PROVIDER = FeatureProviderSource(
     repository="NeoNix-Lab/quant-platform", qualified_name="deck_features_probe_394:build",
     source_sha256="cd" * 32, parameters={"window": 20},
@@ -128,13 +136,18 @@ class DeckResultBundleV1Tests(unittest.TestCase):
             )
         self.transport = ResultImportTransport(session, self.staging)
         self.tree = WorkloadTree(self.commit, True)
-        self._admission = None
+        self._admissions = {}
 
     # -- helpers -----------------------------------------------------------------
 
     def admission(self, **replace) -> DeckAdmission:
-        """A delivered, sealed admission at the workload's commit, as the client hands it over."""
-        if self._admission is None:
+        """A delivered, sealed admission at the workload's commit, as the client hands it over.
+
+        By default its manifest names no definition: the flow that existed before ADR-0073.
+        """
+        replace = {"definition_identities": (), **replace}
+        key = tuple(sorted(replace.items()))
+        if key not in self._admissions:
             sealed_manifest = dataclasses.replace(manifest(), git_identity=self.commit, **replace)
             admitted = self.admissions.admit(sealed_manifest)
             sealed = self.admissions.seal(admitted.admission_id)
@@ -142,16 +155,16 @@ class DeckResultBundleV1Tests(unittest.TestCase):
                 sealed.admission_id, sealed.manifest.manifest_digest,
                 delivery_attempt=self.admissions.begin_delivery(sealed.admission_id).delivery_attempt,
             )
-            self._admission = DeckAdmission(
+            self._admissions[key] = DeckAdmission(
                 sealed.admission_id, sealed.manifest.manifest_digest, sealed.manifest.canonical_fields(),
             )
-        return self._admission
+        return self._admissions[key]
 
-    def build(self, role="metrics", execution_id="deck-run-394", data=None, **extra):
+    def build(self, role="metrics", execution_id="deck-run-394", data=None, *, admission=None, run=None, **extra):
         data = data if data is not None else f"{role}-bytes-{execution_id}".encode()
         replay = role.startswith("replay-")
         return build_deck_result(
-            self.admission(), self.tree, declaration(execution_id), (DeckOutput(role, data),),
+            admission or self.admission(), self.tree, run or declaration(execution_id), (DeckOutput(role, data),),
             runtime_environment={"python": "3.13"}, seeds={"seed": 7},
             replay_provider=PROVIDER if replay else None, **extra,
         )
@@ -240,9 +253,118 @@ class DeckResultBundleV1Tests(unittest.TestCase):
         self.assertTrue(
             set(admission.manifest["logical_input_identities"]) <= {r.identity for r in spec.data_identities}
         )
-        self.assertTrue(
-            set(admission.manifest["definition_identities"]) <= {r.identity for r in spec.feature_identities}
+        # A manifest without definitions adds none: the builder never invents a feature reference.
+        self.assertEqual([], admission.manifest["definition_identities"])
+        self.assertEqual((), spec.feature_identities)
+
+    # -- ADR-0073 section 6: the workload declares the definitions it evaluated -----------------------
+
+    def definitions_admission(self) -> DeckAdmission:
+        """An admission whose manifest carries what the server seals for a failed-aggression request."""
+        return self.admission(definition_identities=(BAR_FLOW_IDENTITY, FEATURE_IDENTITY))
+
+    def declared(self, execution_id: str, *identities: str) -> DeckRunDeclaration:
+        return declaration(execution_id, feature_identities=tuple(definition_reference(item) for item in identities))
+
+    def test_a_declared_definition_set_builds_registers_and_the_run_carries_the_identities(self) -> None:
+        admission = self.definitions_admission()
+        result = self.build(
+            admission=admission, run=self.declared("deck-run-declared", FEATURE_IDENTITY, BAR_FLOW_IDENTITY),
         )
+        spec = result.bundle.run_identity.run_spec_identity
+        self.assertEqual({BAR_FLOW_IDENTITY, FEATURE_IDENTITY}, {item.identity for item in spec.feature_identities})
+        self.assertEqual(
+            {(FEATURE_DEFINITION_REFERENCE_KIND, FEATURE_IDENTITY), (REPRESENTATION_DEFINITION_REFERENCE_KIND, BAR_FLOW_IDENTITY)},
+            {(item.identity_kind, item.identity) for item in spec.feature_identities},
+        )
+        for upload in result.uploads:
+            self.stage(upload.payload)
+        self.submit(result.wire)
+        self.assertTrue(self.registered(result))
+        # The registered record is the run of the spec that names them: the fingerprint covers the identities.
+        (record,) = [
+            item for item in self.experiments.list_runs_for_run_spec(spec) if item.execution_id == "deck-run-declared"
+        ]
+        self.assertEqual(spec.fingerprint, record.run_spec_fingerprint)
+        self.assertIn(
+            {"identity_kind": "feature-definition", "identity": FEATURE_IDENTITY}, spec.fingerprint_payload()["feature_identities"],
+        )
+
+    def test_a_definition_the_workload_did_not_declare_is_refused_and_never_added(self) -> None:
+        admission = self.definitions_admission()
+        for run in (
+            declaration("deck-run-none"),
+            self.declared("deck-run-feature-only", FEATURE_IDENTITY),
+            self.declared("deck-run-bar-flow-only", BAR_FLOW_IDENTITY),
+            declaration("deck-run-other", feature_identities=(IdentityReference("feature-definition", "definition-v1:own"),)),
+        ):
+            with self.assertRaises(DeckResultError, msg=run.execution_id) as raised:
+                self.build(admission=admission, run=run)
+            self.assertEqual("definition_not_declared", raised.exception.reason)
+        missing = self.declared("deck-run-bar-flow-only", BAR_FLOW_IDENTITY)
+        with self.assertRaises(DeckResultError) as raised:
+            self.build(admission=admission, run=missing)
+        self.assertIn(FEATURE_IDENTITY, str(raised.exception))
+        self.assertNotIn(BAR_FLOW_IDENTITY, str(raised.exception))
+        self.assertEqual({}, {item.identity: 1 for item in self.experiments.list_runs_for_run_spec(
+            self.build(admission=self.admission(), run=missing).bundle.run_identity.run_spec_identity,
+        )})  # nothing was registered by any of the refusals
+
+    def test_a_hand_built_bundle_that_omits_the_definitions_is_refused_by_k13_and_nothing_is_written(self) -> None:
+        admission = self.definitions_admission()
+        # The builder's rule removed (the old auto-cover is gone too): the omission reaches K13, which stays as it was.
+        with mock.patch.object(deck_result_bundle, "_declared", lambda declared, required: tuple(declared)):
+            result = self.build(admission=admission, run=declaration("deck-run-omitted"))
+        self.assertEqual((), result.bundle.run_identity.run_spec_identity.feature_identities)
+        for upload in result.uploads:
+            self.stage(upload.payload)
+        before = self.experiments.list_runs_for_run_spec(result.bundle.run_identity.run_spec_identity)
+        with self.assertRaises(ConsumerApiError):
+            self.submit(result.wire)
+        self.assertFalse(self.registered(result))
+        self.assertEqual(before, self.experiments.list_runs_for_run_spec(result.bundle.run_identity.run_spec_identity))
+        # The evidence ledger holds no bundle either.
+        self.assertEqual(0, self.evidence.connection.execute("SELECT count(*) FROM governed_result_bundles").fetchone()[0])
+
+    def test_a_run_may_declare_more_definitions_than_the_admission_carried(self) -> None:
+        extra = definition_reference(failed_aggression_definition(imbalance_threshold="0.4").identity)
+        run = declaration("deck-run-extra", feature_identities=(
+            definition_reference(FEATURE_IDENTITY), definition_reference(BAR_FLOW_IDENTITY), extra,
+        ))
+        result = self.build(admission=self.definitions_admission(), run=run)
+        for upload in result.uploads:
+            self.stage(upload.payload)
+        self.submit(result.wire)  # K13 verifies coverage, not exclusivity (ADR-0073 section 6)
+        self.assertTrue(self.registered(result))
+
+    def test_the_reference_kind_is_the_workloads_and_k13_does_not_compare_it(self) -> None:
+        run = declaration("deck-run-kind", feature_identities=(
+            IdentityReference("anything", FEATURE_IDENTITY), IdentityReference("anything", BAR_FLOW_IDENTITY),
+        ))
+        result = self.build(admission=self.definitions_admission(), run=run)
+        for upload in result.uploads:
+            self.stage(upload.payload)
+        self.submit(result.wire)
+        self.assertTrue(self.registered(result))
+
+    def test_definition_reference_names_the_kind_of_each_definition_identity(self) -> None:
+        self.assertEqual(IdentityReference("feature-definition", FEATURE_IDENTITY), definition_reference(FEATURE_IDENTITY))
+        self.assertEqual(
+            IdentityReference("representation-definition", BAR_FLOW_IDENTITY), definition_reference(BAR_FLOW_IDENTITY),
+        )
+        for identity in ("definition-v1:trades", "candle-definition-v1:sha256:" + "a" * 64, "", None, 3):
+            with self.assertRaises(DeckResultError, msg=repr(identity)) as raised:
+                definition_reference(identity)
+            self.assertEqual("definition_kind_unknown", raised.exception.reason)
+
+    def test_the_data_identities_keep_their_automatic_coverage(self) -> None:
+        admission = self.definitions_admission()
+        result = self.build(admission=admission, run=self.declared("deck-run-data", FEATURE_IDENTITY, BAR_FLOW_IDENTITY))
+        spec = result.bundle.run_identity.run_spec_identity
+        self.assertEqual(
+            list(admission.manifest["logical_input_identities"]), [item.identity for item in spec.data_identities],
+        )
+        self.assertEqual({"admitted-input"}, {item.identity_kind for item in spec.data_identities})
 
     def test_a_workload_that_already_names_an_identity_is_not_given_a_second_reference(self) -> None:
         admission = self.admission()
