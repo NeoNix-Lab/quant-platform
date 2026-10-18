@@ -11,6 +11,11 @@ operations, all under ``j02.admitted_input.read`` and all initiated by the deck:
   resulting :class:`AdmittedInputManifestV1`. Nothing locator-shaped is accepted
   from the deck: an unknown field, a path, a drive letter, a URL or a catalog
   UUID anywhere in the request is ``invalid_request`` before the resolver runs.
+  An optional ``definitions`` array (ADR-0073 section 5, at most 8 entries) names
+  feature definitions from the server's closed registry
+  (:mod:`.admitted_input_definitions`); the manifest the resolver returns must
+  carry exactly their identities in ``definition_identities``, or nothing is
+  sealed. A request without it is handled exactly as before.
 - ``manifest`` returns the sealed manifest of an ``admission_id`` and the
   admission's current ``delivery_attempt`` (so a deck whose ``deliver`` response
   was lost can end that attempt).
@@ -111,6 +116,14 @@ from .admitted_input import (
     AdmittedInputState,
     AdmittedInputStore,
 )
+from .admitted_input_definitions import (
+    MAX_DEFINITIONS,
+    REASON_EXCEED_BOUND,
+    DefinitionRefusal,
+    DefinitionRequest,
+    canonicalize_definitions,
+    definition_identities,
+)
 from .api_transport_server import J02FamilyHandler
 from .framed_result_transport import FramedResultTransferStore, FramedResultTransportError
 from .market_data import (
@@ -190,12 +203,15 @@ class AdmittedInputRequest:
 
     Exactly one of ``dataset`` (the Consumer API's own selector: venue,
     instrument, interval and representation) and ``artifact_identities``.
+    ``definitions`` are the registry entries the deck named, already
+    canonicalized by the transport (ADR-0073 section 5); empty is "none".
     """
 
     dataset: ConsumerMarketDataQuery | None
     artifact_identities: tuple[str, ...]
     operation_identity: str
     profile_identity: str | None
+    definitions: tuple[DefinitionRequest, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,8 +380,45 @@ def _query(value: Any) -> ConsumerMarketDataQuery:
     )
 
 
+def _definition_entries(value: Any) -> list[dict[str, Any]]:
+    """The shape of ``definitions``: closed fields, no locator, nothing interpreted.
+
+    Whether an entry is a registry entry, and whether its parameters and bar
+    duration are valid, is the registry's to say with a stable reason.
+    """
+
+    if type(value) is not list:
+        raise ValueError("definitions must be an array")
+    if len(value) > MAX_DEFINITIONS:
+        raise DefinitionRefusal(REASON_EXCEED_BOUND)
+    entries: list[dict[str, Any]] = []
+    for raw in value:
+        item = _only(raw, {"feature_key", "semantic_version"}, {"bar_duration", "parameters"})
+        duration, parameters = item.get("bar_duration"), item.get("parameters")
+        if type(duration) is str:
+            try:
+                _text(duration)
+            except _LocatorRejected:
+                raise
+            except ValueError:
+                pass  # an unparsable duration is the registry's refusal, not a shape error
+        if isinstance(parameters, Mapping) and any(_is_locator_name(name) for name in parameters):
+            raise _LocatorRejected("a locator field is not accepted")
+        entries.append({
+            "feature_key": _text(item["feature_key"]),
+            "semantic_version": _text(item["semantic_version"]),
+            "bar_duration": duration,
+            "parameters": parameters,
+        })
+    return entries
+
+
 def _admit_request(body: Any) -> AdmittedInputRequest:
-    item = _only(body, {"dataset", "artifact_identities", "operation_identity", "profile_identity"})
+    item = _only(
+        body,
+        {"dataset", "artifact_identities", "operation_identity", "profile_identity"},
+        {"definitions"},
+    )
     artifacts = item["artifact_identities"]
     if type(artifacts) is not list or len(artifacts) > MAX_ARTIFACT_IDENTITIES:
         raise ValueError("artifact_identities must be a bounded array")
@@ -376,11 +429,16 @@ def _admit_request(body: Any) -> AdmittedInputRequest:
     if (dataset is None) == (not identities):
         raise ValueError("exactly one of dataset and artifact_identities is required")
     profile = item["profile_identity"]
+    query = None if dataset is None else _query(dataset)
+    definitions = ()
+    if "definitions" in item:
+        definitions = canonicalize_definitions(_definition_entries(item["definitions"]), query)
     return AdmittedInputRequest(
-        dataset=None if dataset is None else _query(dataset),
+        dataset=query,
         artifact_identities=identities,
         operation_identity=_text(item["operation_identity"]),
         profile_identity=None if profile is None else _text(profile),
+        definitions=definitions,
     )
 
 
@@ -507,6 +565,8 @@ class AdmittedInputTransport:
                 return _acknowledgement(body)
         except _LocatorRejected as error:
             raise _refusal("locator_not_accepted") from error
+        except DefinitionRefusal as error:
+            raise _refusal(error.reason) from error
         except (ValueError, TypeError, KeyError, ArithmeticError, RecursionError) as error:
             raise _refusal("invalid_request_shape") from error
         raise _refusal("unsupported_operation")  # pragma: no cover - routes are fixed
@@ -532,6 +592,15 @@ class AdmittedInputTransport:
             raise _integrity("admission_unavailable") from error
         if not isinstance(manifest, AdmittedInputManifestV1):
             raise _integrity("admission_unavailable")
+        if request.definitions:
+            # The server attests the definitions it was asked to admit, exactly:
+            # an authority that drops, adds or alters one cannot seal.
+            try:
+                expected = definition_identities(request.definitions)
+            except DefinitionRefusal as error:
+                raise _refusal(error.reason) from error
+            if tuple(sorted(manifest.definition_identities)) != expected:
+                raise _integrity("definition_identities_mismatch")
         members = self._declared_members(manifest)
         # Refused before sealing: nothing oversized becomes an admission.
         self._check_bounds(tuple(member.byte_length for member in members))

@@ -379,3 +379,16 @@ loopback; at that speed the 600 s retention covers about 9 GiB, and at 5 MiB/s a
 
 **Not measured.** A delivery of the largest real day (252.8 MiB) on the real server with these bounds; the supervised
 re-measurement belongs to the first deployment after this amendment.
+
+## Amendment 2 (issue #463, atom `M04` of DG-M) — `definition_identities` is populated when `admit` names definitions
+
+**Date:** 2026-10-18. Authority: ADR-0073 §5 and §10 (`ACCEPTED`) and its Amendment 1. Section 1's table row is replaced; no other
+row, no bound, no framing and no other section changes. Section 5 item 2 (the deck builder "covers `definition_identities`") is
+amended by atom `M05`, which appends to this amendment.
+
+| Manifest field | Section 1 | Amendment 2 |
+| --- | --- | --- |
+| `definition_identities` | empty (raw trades have no representation definition) | empty unless the `admit` request names `definitions` (ADR-0073 §5); then the sorted, deduplicated identity strings of the canonicalized `bar-flow-definition-v1` and `feature-definition-v1` definitions, at most one bar-flow identity (ADR-0073 Amendment 1) |
+
+A request without `definitions` seals a manifest byte-identical to the one section 1 describes, hence the same `manifest_digest` and
+`admission_id`; the test of `M04` proves it against a manifest computed before the change.

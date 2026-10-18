@@ -17,6 +17,12 @@ translated by the same functions it uses; nothing is sealed on a refusal. An
 ``admit`` that names accepted artifacts is ``invalid_request`` with the reason
 ``artifact_inputs_unavailable``: no accepted-artifact store exists.
 
+Definitions. The request's ``definitions`` were canonicalized by the transport
+against the closed registry (:mod:`.admitted_input_definitions`, ADR-0073
+section 5); the manifest's ``definition_identities`` are their sorted,
+deduplicated identities, empty when the request names none (ADR-0072 section 1
+as amended). Nothing else in the manifest depends on them.
+
 ``members`` and ``read_member``. Member *i* is partition *i*. The manifest alone
 (it is all those seams receive) names the dataset (its one logical input
 identity), the requested interval (its declared coverage) and the partitions;
@@ -55,6 +61,7 @@ from ..access.models import CatalogPartition, DataRequest
 from ..data.models import DataGatewayError, DatasetIdentity, NaturalPartitionIdentity
 from ..data.parquet import resolve_partition_path
 from .admitted_input import AdmittedInputManifestV1
+from .admitted_input_definitions import DefinitionRefusal, definition_identities
 from .admitted_input_transport import (
     AdmittedInputBounds,
     AdmittedInputMember,
@@ -229,6 +236,10 @@ class DatasetAdmittedInputAuthority:
                 ConsumerErrorCode.NO_COVERAGE, "the requested coverage is not available",
                 context={"requested_interval": metadata.requested_interval.stable_dict()},
             )
+        try:
+            definitions = definition_identities(request.definitions)
+        except DefinitionRefusal as error:
+            raise _refusal(error.reason) from error
         commit = self._commit()
         if type(commit) is not str or not commit.strip():
             raise _integrity("deployment_commit_unrecorded")
@@ -252,7 +263,7 @@ class DatasetAdmittedInputAuthority:
                 declared_coverage=metadata.requested_interval.stable_dict(),
                 request_identity=metadata.request_identity,
                 result_identity=None,
-                definition_identities=(),
+                definition_identities=definitions,
                 implementation_identity=None,
                 git_identity=commit,
                 operation_identity=request.operation_identity,
