@@ -2,7 +2,8 @@
 
 Status: **CANONICAL — reconciled by #444. DG-C / A14 historical v1 is CLOSED on
 `implement/l2` (#442 / PR #443): A14 and A14a-A14e COMPLETE, golden #413/#430
-accepted 11/11 under ADR-0070 Amendments 1-2. A14f/A14g remain held. DG-K P01-P06
+accepted 11/11 under ADR-0070 Amendments 1-2. A14g remains held; A14f's start gate was released
+by #448 and it stays MISSING. DG-K P01-P06
 (#381) and DG-K2 S01-S07 (#409) are COMPLETE within their row bounds and already
 on main (#434/#437). DG-K2 supplies the later executable composition and one
 supervised happy-path proof on the smallest real partition; deployability carries
@@ -166,7 +167,7 @@ The implemented ownership direction remains governed by ADR-0024 and architectur
 | A14c | L2 publication and catalog bridge v1 | Producer | A14a,A14b,A08,A09 | A14d,A14e | FROZEN | COMPLETE | ADR-0070 §4, §5 and Amendment 1; #399 / PR #401. L2 certification, publication and catalog bridge, `kind="l2"`; one clean anchored run per eligible partition, published `valid`, continuity evidence bound to bytes; PostgreSQL proof requires no catalog DDL change |
 | A14d | Bybit historical L2 ingest v1 | Source/Producer | A14b,A14c,A07 | A14f,A14g | FROZEN | COMPLETE | ADR-0070 §2, §4, §7 and Amendments 1-2; #410 / PR #411, conformed by #416 / PR #417. Historical `ob200` ingest cuts discontinuities into `dt=.../seg=NNN` runs. UTC day owns events by `exchange_ts`, strictly congruent with `trade-v1`; contiguous source-head/tail blocks are retained and evidenced, never published into the adjacent day automatically. Explicit head/tail `known_gap`; no blanket refusal for a valid post-midnight tail, but interior out-of-day placement/regression still refuses. Byte-identical re-acquisition; no `ob500` |
 | A14e | L2 consumer read v1 | Data Access | A14c,B02 | A14 closure | FROZEN | COMPLETE | ADR-0070 §6; #407 / PR #408. `l2_book_events@1` under `j02.market_data.read`; numeric sequence order, coverage/gaps/anchored flag, per-partition source-acquired/projected origin; gaps never filled, no projected-row `u + 1` assumption, byte-based `result_too_large` bound. Frozen J02 v1 and trade path unchanged |
-| A14f | Bybit live L2 ingest v1 | Data Plane | A14d,A11 | — | FROZEN | MISSING | ADR-0070 §8 and Amendment 1 item 9. Websocket `orderbook.200` ingest on the live-ingest host; a reconnect or re-snapshot opens a new run; no repair path (ADR-0044); the day roll writes no synthetic snapshot and the continuation head is anchored by predecessor-linked evidence whose mechanics are fixed in its own issue; held behind the `SCOPE.md` Part B start gate (batch v2; outside `A14` closure) |
+| A14f | Bybit live L2 ingest v1 | Data Plane | A14d,A11 | — | FROZEN | MISSING | ADR-0070 §8 and Amendment 1 item 9. Websocket `orderbook.200` ingest on the live-ingest host; a reconnect or re-snapshot opens a new run; no repair path (ADR-0044); the day roll writes no synthetic snapshot and the continuation head is anchored by predecessor-linked evidence whose mechanics are fixed in its own issue; start gate released by #448 (maintainer decision 2026-10-18; soak plan = #420), integration line `implement/l2-live`; MISSING until merged evidence (#419; PR #447 open, uncredited) and the soak report (#420); partition model, live host, proof and seam semantics D1-D4 open in `OPEN_DECISIONS.md` (batch v2; outside `A14` closure) |
 | A14g | Bybit `ob500` raw ingest and top-200 projection v1 | Source/Producer | A14b,A14c,A14d | — | FROZEN | MISSING | ADR-0070 §9. Registered by #371. Raw `ob500` is kept lossless; a deterministic top-200 event projection with per-partition lineage (`derived_from`, `transform`) is certified by recomputation (check 9); outside the `A14` closure; held behind the `SCOPE.md` Part B start gate |
 | A15 | L3/MBO contract | Data Plane | real L3 feed | advanced research | OPEN_DEFERABLE | MISSING | Map real feed without semantic invention |
 | A16 | General quality lifecycle | Data Plane | A04,A08 | A10,A11 | RESOLVED | COMPLETE | Deterministic lifecycle for first vertical + A10 reuse; lifecycle beyond first vertical remains open |
@@ -394,7 +395,8 @@ The L2 branch was registered by #364 as atoms `A14a`-`A14f` in two batches: `v1`
 consumer read) and `v2` (live ingest), and resolved by ADR-0070 (#367), which also registers the follow-on
 `A14g` (`ob500` projection). Governance #442 closes batch v1 on `implement/l2`: `A14` and
 `A14a`-`A14e` are COMPLETE, golden #413/#430 accepted (11/11 at `1cdd78f`).
-`A14f`/`A14g` stay held under the unchanged `SCOPE.md` Part B gates. The L2 line remains cut
+`A14g` stays held under the unchanged `SCOPE.md` Part B gate; `A14f`'s start gate was released by #448
+(still MISSING). The L2 line remains cut
 from `implement/dgk`; promotion to `main` is a separate wave closeout PR.
 
 PR #317 / issue #316 (operator-requested emergency slice on `implement/wave-8`)
@@ -558,7 +560,8 @@ the real host. The empty handler registry and held S08 remain unchanged.
 L2 v1 is CLOSED on implement/l2 (#442/#443): A14 and A14a-A14e COMPLETE,
 golden #413/#430 accepted 11/11 with explicit gaps, under ADR-0070 Amendments 1-2.
 Reconciliation #444 combines the two histories before the separate final L2
-promotion. A14f/A14g remain held; no live L2, ob500, population guarantee or
+promotion. A14g remains held and A14f's gate was released by #448 (MISSING); no live L2, ob500,
+population guarantee or
 gap-free UTC-midnight L2 is claimed. All eight reopening triggers remain
 NOT AUTHORIZED; SCOPE.md preserves both closeouts and their limits.
 
@@ -649,7 +652,7 @@ DG-K   Process Topology v1                               COMPLETE within recorde
                                                            not composed in a host, no Golden proof claimed; before Wave 9
 DG-K2  Server/deck deployment composition              COMPLETE within recorded bounds (operator closeout #409); S01-S07; deployable only within ADR-0072 Amendment 1 bounds; S08 not authorized
 DG-C/L2 L2 historical v1 (#442)                         COMPLETE on implement/l2: A14,A14a-A14e; golden #413/#430 11/11;
-                                                       A14f/A14g held MISSING; separate L2 promotion to main
+                                                       A14f MISSING (gate released #448), A14g held MISSING; separate L2 promotion to main
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```
