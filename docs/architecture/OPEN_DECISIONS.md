@@ -2,7 +2,7 @@
 
 This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
-## Inventory checkpoint — L2/main reconciliation (#444)
+## Inventory checkpoint — DG-M registration (#453)
 
 Recomputed from the union of the actual DAG rows and checked against expanded
 Capability Map rows, preserving both parents' accepted credits. No new atom,
@@ -11,15 +11,15 @@ capability or follow-on authorization is created. DG-K/DG-K2 are already on main
 The [scope verifier](../../SCOPE.md#executable-governance-verification) captures both OIDs.
 
 ```text
-TOTAL_ATOMS                     = 119
-CLASSIFIED_ATOMS                = 119
+TOTAL_ATOMS                     = 124
+CLASSIFIED_ATOMS                = 124
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 107 / 119 = 89.9%
-OPEN_BLOCKING                   = 3
+SEMANTIC_FROZEN_OR_RESOLVED     = 107 / 124 = 86.3%
+OPEN_BLOCKING                   = 8
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 107 + 3 + 9 = 119
-ROADMAP_PLANNING_COMPLETENESS   = 119 / 119 = 100%
-IMPLEMENTATION_COMPLETE         = 99 / 119 = 83.2%
+ROADMAP_DEFINED                 = 107 + 8 + 9 = 124
+ROADMAP_PLANNING_COMPLETENESS   = 124 / 124 = 100%
+IMPLEMENTATION_COMPLETE         = 99 / 124 = 79.8%
 ```
 
 ## Resolved foundation — reference only
@@ -890,6 +890,42 @@ reports if it would require a credential service, a host outside `tools/`, a bin
 that bypasses a sealed manifest, a canonical storage mount on the deck or a way for the server to push work to the
 deck, or weaken ADR-0057, ADR-0063, ADR-0064, ADR-0068 or ADR-0069. Out of this gate: Omega adoption, more than one
 J03 worker, a durable J14 transfer store, `J11`, L2 acquisition and Wave 9/10.
+
+## DG-M — Canonical feature identity for deck results v1 — OPEN (design gate #454)
+
+Registered by governance issue #453 (2026-10-18) after the DG-K2 closeout (#409). The single design-gate issue is #454 (one
+ADR, ADR-0073: `0070` is the L2 gate and `0071` is reserved by FEI; verify the next free number at authoring time). It gates the
+candidate atoms `M01`-`M05` in `CAPABILITY_DAG.md`. The scope id `DG-M`, the atom names and the branch `implement/fid` are the
+maintainer's confirmed choices.
+
+Why: the DG-K2 closeout recorded as trigger 1 that the server passes the deck no feature identity, and that the gate to
+change it opens when the maintainer names feature traceability as a requirement; that was done on 2026-10-18, with failed
+aggression (Hypothesis 001 of `alpha-research`) as the first canonical definition. Verified against `main`: the manifest is
+built with `definition_identities=()`; `GovernedResultImportService._validate_run_compatibility` requires the run to cover the
+manifest's definitions and so has nothing to check; `CandleRecord` has no taker volumes while `trade-v1` has `aggressor_side`.
+
+Fixed inputs (not reopened): ADR-0057 and ADR-0064 (the server is the sole data authority), ADR-0066 §1 (a required-field change
+needs a new family version), ADR-0069 and ADR-0072 with its Amendment 1 (deck handoff, deck pinned to the server's commit),
+ADR-0026 and ADR-0035 (availability, definitions separate from sets and artifacts); no existing identity bytes change. Out of
+scope: the generic provider extension `E07` and the FEI line, precomputed feature artifacts as deck inputs, Omega, `J11`.
+
+Question set (valid closes: an `ACCEPTED` ADR with every closed set, name, bound and default stated, or a recorded deferral with
+an evidence trigger):
+
+1. Decomposition: failed aggression as a feature, an event or both; what bears identity and what is a study parameter.
+2. Input: a new additive bar representation with taker volumes, a composition of existing candles and footprints, or a
+   derivation from `trade-v1`, without changing existing identity bytes.
+3. Availability: final bars only, causal floor, coverage and warm-up.
+4. Numerics: exact arithmetic and rounding for the ratio and the retracement test.
+5. Server carriage: how `admit` names definitions; the closed set the server knows and where it lives (code or catalog
+   `feature_set_definitions`); the manifest's `definition_identities`, its effect on the manifest digest and the admission
+   identity; the family version.
+6. K13: the coverage rule, the refusal and its reason, runs that name no definition.
+7. Research alignment: how `alpha-research` consumes the canonical definition and what stays research-local.
+8. Proof: what shows the server passing feature identity end to end, hermetic and real topology.
+
+Stop conditions: the design would change existing identity bytes, give the deck a storage mount, require the generic provider
+framework, or need a decision the issue cannot supply.
 
 ## Explicitly deferable decisions
 

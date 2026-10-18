@@ -80,6 +80,7 @@ DG-K Process Topology v1                         COMPLETE within recorded bounds
                                                     later composition credited by DG-K2, no Golden proof claimed)
 DG-K2 Server/deck deployment composition        COMPLETE within recorded bounds (operator closeout #409; ADR-0072 and Amendment 1;
                                                     S01-S07 on implement/dgk2; supervised proof: one happy path; S08 not authorized)
+DG-M Canonical feature identity (implement/fid)  REGISTERED (#453, design gate #454); M01-M05 candidates, none authorized
 DG-C L2 historical v1 (implement/l2, #442)       COMPLETE (A14,A14a-A14e; PR #375/#379/#401/#411/#417/#408;
                                                     golden #413/#430, 11/11 at 1cdd78f; explicit gaps);
                                                     A14f/A14g held MISSING; promotion to main is separate
@@ -105,16 +106,19 @@ Completed checkpoints are credited and must not be re-proved absent a concrete i
 ## Roadmap vNext planning state
 
 ```text
-TOTAL_ATOMS                     = 119
-CLASSIFIED_ATOMS                = 119
+TOTAL_ATOMS                     = 124
+CLASSIFIED_ATOMS                = 124
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 107 / 119 = 89.9%
-OPEN_BLOCKING                   = 3
+SEMANTIC_FROZEN_OR_RESOLVED     = 107 / 124 = 86.3%
+OPEN_BLOCKING                   = 8
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 107 + 3 + 9 = 119
-ROADMAP_PLANNING_COMPLETENESS   = 119 / 119 = 100%
-IMPLEMENTATION_COMPLETE         = 99 / 119 = 83.2%
+ROADMAP_DEFINED                 = 107 + 8 + 9 = 124
+ROADMAP_PLANNING_COMPLETENESS   = 124 / 124 = 100%
+IMPLEMENTATION_COMPLETE         = 99 / 124 = 79.8%
 ```
+
+DG-M registration (#453): `M01`-`M05` are added as `OPEN_BLOCKING`/`MISSING` (119 -> 124 atoms; semantic 89.9% -> 86.3%;
+implementation 83.2% -> 79.8%); nothing is authorized.
 
 Reconciliation #444 imports main at `693d765` into the L2 closeout line,
 preserving both inventories and credits. The union is 119 atoms / 99 COMPLETE;
@@ -175,6 +179,7 @@ DG-I  API transport / client convergence        RESOLVED / IMPLEMENTED
 DG-J  Remote Service Topology (Wave 8)           RESOLVED / IMPLEMENTED
 DG-K  Process Topology v1                        RESOLVED / IMPLEMENTED within recorded bounds (ADR-0068, ADR-0069; closeout #381)
 DG-K2 Server/deck deployment composition         RESOLVED / IMPLEMENTED within recorded bounds (ADR-0072, Amendment 1; closeout #409)
+DG-M  Canonical feature identity for deck results   REGISTERED (#453); design gate #454 open
 ```
 
 Important current boundaries:
@@ -193,6 +198,7 @@ Explicit deferables — second-provider resolution, exact L3/MBO semantics, Data
 - DG-J: all six gates resolved (ADR-0062 through ADR-0067); see `docs/architecture/OPEN_DECISIONS.md` for the full G1-G6 disposition text. `J03`, `J09`, `J10`, `J12`-`J15`, `K12`, `K13` are frozen and implemented (Wave 8 closeout #327, within recorded bounds); `J11` remains `OPEN_DEFERABLE`.
 - DG-K: Process Topology v1 is resolved (#318 registration, #319 design gate: ADR-0068 process topology v1, ADR-0069 J02 carriage of consumer seams and deck handoff v1). `P01`-`P06` are `FROZEN`/`COMPLETE` within recorded bounds (operator closeout #381), merged into `implement/dgk`, not composed in any executable and without a Golden proof; owner inputs fix identity-preserving canonical profiles, hosts in `tools/`, one J03 worker, a free server with data-local J03 handlers only, heavy compute on the deck on its own initiative, and `J11` not planned. See `OPEN_DECISIONS.md` (DG-K).
 - DG-K2: registered by #382 after the DG-K closeout; its design gate #383 produced ADR-0072, accepted on 2026-10-16, and #389 authorizes `S01`-`S07` (K12 authority, K13 composition, API host with TLS/mTLS, credential and trust operations, deck workload module, deployment units, two-part topology proof) on the integration branch `implement/dgk2` (name proposed, to be confirmed by the maintainer). Closed by operator closeout #409: all seven are implemented on `implement/dgk2` within the bounds recorded in `CAPABILITY_DAG.md`; the split is deployable only within the bounds of ADR-0072 Amendment 1; Omega adoption is out of scope. Default proposed placement: before Wave 9, because the split is the precondition for any remote consumer; the order remains the maintainer's.
+- DG-M: registered by #453 after the DG-K2 closeout; the maintainer named feature traceability as a requirement on 2026-10-18. Its design gate #454 (ADR-0073) decides how failed aggression becomes a canonical definition and how the server passes feature identity to the deck. Candidates `M01`-`M05`, none authorized; integration branch `implement/fid`; independent of the FEI line. Default proposed placement: after DG-K2 and before Wave 9; the order remains the maintainer's.
 
 ## Operational dependency direction
 
