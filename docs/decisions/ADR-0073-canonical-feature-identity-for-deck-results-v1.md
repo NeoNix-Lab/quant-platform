@@ -275,7 +275,7 @@ Under the ADR README's amendment policy these are **dated, append-only amendment
 | --- | --- | --- |
 | ADR-0072 §1 table (Amendment 2) | `definition_identities` — "empty (raw trades have no representation definition)" | empty unless the `admit` request names definitions (ADR-0073 §5); then the sorted identities of the canonicalized representation and feature definitions |
 | ADR-0072 §5 item 2 (Amendment 2) | the builder "covers `definition_identities`" | the builder requires the workload to *declare* each manifest definition and refuses with `definition_not_declared` (ADR-0073 §6); data identities are unchanged |
-| ADR-0069 §5 `admit` (Amendment 2) | a semantic input request: a dataset selector, or accepted artifact identities, plus the operation/profile identity | additionally an optional `definitions` array (ADR-0073 §5), additive under ADR-0066 §1 |
+| ADR-0069 §5 `admit` (Amendment 3; its Amendment 2 is J13's, issue #339) | a semantic input request: a dataset selector, or accepted artifact identities, plus the operation/profile identity | additionally an optional `definitions` array (ADR-0073 §5), additive under ADR-0066 §1 |
 
 Each amendment section is appended by the implementation issue that changes the behaviour (M04 for the request and the manifest
 row, M05 for the builder), not by the acceptance of this ADR, so that no accepted text is amended ahead of its code. Until then the
