@@ -98,7 +98,7 @@ class CanonicalV1Tests(unittest.TestCase):
                             | {"argument_ast": ast.dump(argument, include_attributes=False),
                                "parameters": parameters})
         # P01's pre-migration fixture is immutable historical evidence. New
-        # application codecs declare their additional usage explicitly rather
+        # domain/application codecs declare additional usage explicitly rather
         # than weakening the complete source inventory or altering that fixture.
         additional = [{
             "path": "src/quant_platform/application/l2_market_data.py",
@@ -130,7 +130,19 @@ class CanonicalV1Tests(unittest.TestCase):
             "ordinal": 1, "scope": "partition_identity_text",
             "argument_ast": ast.dump(ast.parse("identity.stable_dict()", mode="eval").body, include_attributes=False),
             "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }, {
+            "path": "src/quant_platform/representation/bar_flow.py",
+            "ordinal": 1, "scope": "BarFlowDefinitionV1.canonical_utf8_serialization",
+            "argument_ast": ast.dump(ast.parse("self.canonical_payload", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-utf8-v1", "allow_nan": False},
+        }, {
+            "path": "src/quant_platform/representation/bar_flow.py",
+            "ordinal": 2, "scope": "HistoricalBarFlowResult.result_identity",
+            "argument_ast": ast.dump(ast.parse("payload", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
         }]  # #338: existing J12 canonical identities, unchanged byte profile; #339: the J13 wire message; #391: the natural partition identity text.
+        # #461 / ADR-0073: additive bar-flow definition and result domains;
+        # all historical sites and the pre-migration fixture remain unchanged.
         # #342: the feature-provider identity (ADR-0069 s7, the ADR-0068
         # sorted-compact-ascii-v1 profile) and the size bound of a bundle's JSON
         # documents; each is one declared call site, no new profile.

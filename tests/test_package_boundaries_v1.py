@@ -45,6 +45,7 @@ OWNERS = {
     "quant_platform.access.gateway": "access",
     "quant_platform.access.l2_gateway": "access",
     "quant_platform.representation": "representation",
+    "quant_platform.representation.bar_flow": "representation",
     "quant_platform.representation.candles": "representation",
     "quant_platform.representation.footprints": "representation",
     "quant_platform.features": "feature",
