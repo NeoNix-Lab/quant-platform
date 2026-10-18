@@ -923,6 +923,38 @@ class AdmitDefinitionsTests(unittest.IsolatedAsyncioTestCase):
             _, outcome = await self.admit(identities)
             self.assertNotIsInstance(outcome, Exception)
 
+    async def test_the_check_is_about_what_was_sent_even_if_the_callers_list_changes_while_waiting(self) -> None:
+        for mutate in (lambda items: items.clear(), lambda items: items.__delitem__(0)):
+            definitions = [dict(entry) for entry in self.DEFINITIONS]
+
+            def reply(request, definitions=definitions, mutate=mutate):
+                mutate(definitions)  # the caller empties its own list during the round trip
+                return ok(request, self.document(()))
+
+            script = Script(reply)
+            async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+                with self.assertRaises(deck.DeliveryIntegrityFailure):
+                    await client.admit(
+                        dataset=dict(self.SELECTOR), operation_identity=self.OPERATION, profile_identity=self.PROFILE,
+                        definitions=definitions,
+                    )
+            self.assertEqual(self.DEFINITIONS, script.sent[0]["request"]["definitions"])
+        # The same holds the other way: a list that grows while waiting does not make the request one that named definitions.
+        grown: list = []
+
+        def grows(request):
+            grown.extend(self.DEFINITIONS)
+            return ok(request, self.document(()))
+
+        script = Script(grows)
+        async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:
+            admission = await client.admit(
+                dataset=dict(self.SELECTOR), operation_identity=self.OPERATION, profile_identity=self.PROFILE,
+                definitions=grown,
+            )
+        self.assertNotIn("definitions", script.sent[0]["request"])
+        self.assertEqual([], admission.manifest["definition_identities"])
+
     async def test_definitions_is_a_sequence_of_entries_and_nothing_is_sent_otherwise(self) -> None:
         script = Script(lambda request: ok(request, self.document(self.IDENTITIES)))
         async with deck.DeckHandoffClient("wss://x", ssl_context=strict_context(), connect=script) as client:

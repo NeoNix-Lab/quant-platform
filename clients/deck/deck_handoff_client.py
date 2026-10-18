@@ -533,8 +533,9 @@ class DeckHandoffClient:
             "operation_identity": operation_identity,
             "profile_identity": profile_identity,
         }
-        if definitions:
-            request["definitions"] = [dict(entry) for entry in definitions]
+        sent_definitions = [dict(entry) for entry in definitions]  # a snapshot: the caller's list may change while we wait
+        if sent_definitions:
+            request["definitions"] = sent_definitions
         result = await self._call(ADMITTED_INPUT_FAMILY, "admit", request)
         admission = self._admission(result)
         manifest = admission.manifest
@@ -548,7 +549,7 @@ class DeckHandoffClient:
                 "transfer_integrity_failure", None,
                 "the admission is not for the requested operation and profile",
             )
-        if definitions and not manifest.get("definition_identities"):
+        if sent_definitions and not manifest.get("definition_identities"):
             # The client cannot compute an identity, but a sealed admission that names none is not the
             # answer to a request that named definitions.
             raise DeliveryIntegrityFailure(
