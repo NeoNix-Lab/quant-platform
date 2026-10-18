@@ -3,8 +3,9 @@
 Status: **CLOSED — governance closeout #442 (2026-10-18). Part A closed by #367 / PR #370
 (ADR-0070 ACCEPTED). Part B: A14a-A14e implemented and merged into `implement/l2`,
 with the v1 golden accepted at `1cdd78f` (11/11 claims, PR #413/#430).
-A14 and A14a-A14e are credited COMPLETE on this integration line. A14f/A14g remain
-held and outside the closure. Promotion to `main` is a separate wave closeout PR.**
+A14 and A14a-A14e are credited COMPLETE on this integration line. A14g remains held
+and A14f is outside the closure: its start gate was released by #448 (2026-10-18)
+and it stays MISSING. Promotion to `main` is a separate wave closeout PR.**
 
 Scope kind: governance-only closeout #442, followed by the integration and
 governance-reconciliation mandate #444 under `AGENTS.md`. No new runtime semantics,
@@ -144,7 +145,7 @@ boundary/publication text. No accepted ADR is rewritten by this reconciliation.
 | A14c | v1 | COMPLETE | ADR-0070 §4, §5, Amendment 1; #399 / PR #401 | Certification/publication/catalog bridge; PostgreSQL proof without DDL change. |
 | A14d | v1 | COMPLETE | ADR-0070 §2, §4, §7, Amendments 1-2; #410 / PR #411; conformed by #416 / PR #417 | Historical ob200; source-edge routing/evidence, UTC-day ownership, head/tail known_gap, byte-identical re-acquisition. |
 | A14e | v1 | COMPLETE | ADR-0070 §6; #407 / PR #408 | l2_book_events@1 read; per-partition origin, gaps never filled, byte bound. |
-| A14f | v2 | FROZEN / MISSING — held | ADR-0070 §8, Amendment 1 item 9 and Amendment 2 decision 6; requires A14d,A11 | Original start gate unchanged: A14 closed (v1 golden accepted) **and an approved bounded soak plan**. No soak plan approved here. Outside A14 closure; predecessor/certifier/catalog mechanics require its own issue. |
+| A14f | v2 | FROZEN / MISSING — start gate released (#448) | ADR-0070 §8, Amendment 1 item 9 and Amendment 2 decision 6; requires A14d,A11 | Start gate released by maintainer decision 2026-10-18: A14 closed (#442) **and** the bounded soak plan approved (issue #420). Integration line `implement/l2-live`. Completion still needs merged implementation evidence (#419; PR #447 is open and not credited), the soak report (#420) and the open design points D1-D4 ([OPEN_DECISIONS](docs/architecture/OPEN_DECISIONS.md#a14f-design-points-448)), none authorized. Outside A14 closure; predecessor/certifier/catalog mechanics need an ADR-0070 amendment through a design gate. |
 | A14g | follow-on | FROZEN / MISSING — held | ADR-0070 §9; requires A14b,A14c,A14d | Original start gate unchanged: A14d merged **and the E5 real-day parity test planned**. No parity plan approved here. Outside A14 closure. |
 
 ## Closeout result (issue #442)
@@ -184,6 +185,21 @@ is the closeout evidence, not the earlier 10/11 run or the intermediate database
   K06 PROTECTED while original and independent physical copy remained hash-identical.
   No real copy was disposed. Its PostgreSQL proof is not wired into CI.
 
+## A14f start-gate release (#448, 2026-10-18)
+
+The maintainer authorized the A14f chain: implementation #419 and the bounded soak #420. Issue #420 is
+the bounded soak plan the original gate required (at least 24 h of live capture, one observed UTC
+midnight, RSS/CPU/throughput/disk growth and re-subscription latency, no change to contracts,
+instruments or DDL), so the gate — A14 closed **and** an approved soak plan — is released for
+implementation. The integration line is `implement/l2-live`, cut from `main` at `ef14279` after the
+L2 wave promotion (#446).
+
+This releases the start only. A14f stays FROZEN / MISSING: no A14f evidence is merged (PR #447 is
+open and uncredited), the soak report (#420) is not delivered, and four design points are open and
+blocking (partition model, live host, proof, seam semantics), none authorized. Wherever this file's
+earlier text says A14f is held, this section supersedes it for A14f; A14g remains held. The closed v1
+result and its Not-claimed list are unchanged.
+
 ## Reopening triggers — none authorized
 
 The [eight named conditions T1-T8](docs/architecture/OPEN_DECISIONS.md#l2-v1-reopening-triggers-442)
@@ -194,7 +210,8 @@ Every condition is NOT AUTHORIZED by #442. No follow-on scope or issue is opened
 
 ## Not claimed
 
-- No live L2 (A14f), no ob500 or other effective depth (A14g), no second venue.
+- No live L2 (A14f), no ob500 or other effective depth (A14g), no second venue. The A14f
+  start-gate release (#448) is a decision, not evidence: no A14f capability is credited.
 - No population-level continuity, discontinuity-rate or provider-restart guarantee.
 - No gap-free L2 across UTC midnight; the approximately 1.1 s observed gap remains
   explicit, its duration is not a fixed tolerance or a promise about other days.
@@ -239,6 +256,8 @@ The following verifier is documentation-local, not a new runtime/tool or atom.
 It derives the inventory from both captured parents, preserves all accepted credits
 and held rows, then checks the expanded Map and all four printed checkpoints.
 It also checks the six-file manual-resolution allowlist against the automatic merge tree.
+The verifier is bound to the two #444 parent commits it names; since #448 the `A14f` row differs from
+the L2 parent by design (gate text only, status unchanged), so it is a record of #444, not a live check.
 
 ```python
 from collections import Counter

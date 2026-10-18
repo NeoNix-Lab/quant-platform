@@ -82,7 +82,8 @@ DG-K2 Server/deck deployment composition        COMPLETE within recorded bounds 
                                                     S01-S07 on implement/dgk2; supervised proof: one happy path; S08 not authorized)
 DG-C L2 historical v1 (implement/l2, #442)       COMPLETE (A14,A14a-A14e; PR #375/#379/#401/#411/#417/#408;
                                                     golden #413/#430, 11/11 at 1cdd78f; explicit gaps);
-                                                    A14f/A14g held MISSING; promotion to main is separate
+                                                    A14f MISSING (gate released #448), A14g held MISSING;
+                                                    promotion to main is separate
 Wave 1 implementation batch                         CONCLUDED
 Wave 2 implementation batch                         COMPLETE
 Wave 3 implementation batch                         COMPLETE
@@ -120,7 +121,8 @@ Reconciliation #444 imports main at `693d765` into the L2 closeout line,
 preserving both inventories and credits. The union is 119 atoms / 99 COMPLETE;
 [the executable verifier](../../SCOPE.md#executable-governance-verification)
 checks both parents and all four current inventory blocks. L2 v1 (#442/#443)
-credits A14 and A14a-A14e with golden #413/#430 (11/11); A14f/A14g stay held.
+credits A14 and A14a-A14e with golden #413/#430 (11/11); A14g stays held and A14f's start gate was
+released by #448 (MISSING).
 
 Earlier, DG-K2 closeout (#409): `S01`-`S07` move from `MISSING` to `COMPLETE` (86 -> 93 of 112), each within the bound recorded in its row;
 no decision state changes (semantic stays 88.4%).
@@ -251,7 +253,8 @@ Amendment 1 bounds and the recorded findings. S08 is not authorized.
 
 L2 v1 is CLOSED on implement/l2 (#442/#443), A14 and A14a-A14e COMPLETE,
 golden #413/#430 accepted 11/11. Reconciliation #444 combines both histories
-before a separate final L2 wave promotion. A14f/A14g stay held. The
+before a separate final L2 wave promotion. A14g stays held; A14f's start gate was released by #448
+(MISSING, line `implement/l2-live`). The
 [recorded limits](../../SCOPE.md#not-claimed) and eight
 [unauthorized triggers](../architecture/OPEN_DECISIONS.md#l2-v1-reopening-triggers-442)
 remain: no live L2, ob500, population guarantee or gap-free UTC-midnight read.
@@ -283,7 +286,8 @@ Wave 8  Full Platform API & Remote Service Topology v1    COMPLETE (J03,J09,J10,
 DG-K    Process Topology v1 (design-gate line, not a wave) COMPLETE within recorded bounds (operator closeout #381); before Wave 9
 DG-K2   Server/deck deployment composition              COMPLETE within recorded bounds (operator closeout #409); deployable only within ADR-0072 Amendment 1 bounds
 DG-C/L2 L2 historical v1 (#442)                         COMPLETE on implement/l2: A14,A14a-A14e; golden #413/#430 11/11;
-                                                           A14f/A14g held MISSING; separate L2 promotion to main
+                                                           A14f MISSING (gate released #448), A14g held MISSING;
+                                                           separate L2 promotion to main
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL; harvest-audit
                                                            evidence sources: ml_core (already the Wave 5 legacy
                                                            baseline), JJJerome/mbt_gym, sadighian/crypto-rl

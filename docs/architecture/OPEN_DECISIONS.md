@@ -293,7 +293,7 @@ non-complete evidence until a future attributable repair path proves it.
 
 ## DG-C — Market-data depth
 
-**Status:** L2 batch v1 is **CLOSED / COMPLETE on `implement/l2`** (#442, 2026-10-18), under ADR-0070 (#367) and Amendments 1 (#402 / PR #403) and 2 (#416 / PR #417). `A14` and `A14a`-`A14e` are COMPLETE; `A14f`/`A14g` remain held, FROZEN/MISSING. Promotion to `main` is a separate wave closeout PR after DG-K. The L1 branch (`A13`) stays `OPEN_BLOCKING`.
+**Status:** L2 batch v1 is **CLOSED / COMPLETE on `implement/l2`** (#442, 2026-10-18), under ADR-0070 (#367) and Amendments 1 (#402 / PR #403) and 2 (#416 / PR #417). `A14` and `A14a`-`A14e` are COMPLETE; `A14g` remains held and `A14f`'s start gate was released by #448 (2026-10-18), both FROZEN/MISSING. Promotion to `main` is a separate wave closeout PR after DG-K. The L1 branch (`A13`) stays `OPEN_BLOCKING`.
 
 ### L1 branch (`A13`)
 
@@ -439,6 +439,22 @@ separate scoped decision; recording it does not open an issue, relax a gate or s
 continuity or provider-restart guarantee, no gap-free UTC-midnight L2. The independent
 second archive copy is an operator action, not a platform guarantee. Disposal tooling is
 outside the A14 closure. No new runtime or promotion is authorized by #442.
+
+### A14f design points (#448)
+
+Recorded when the A14f start gate was released (maintainer decision 2026-10-18: chain #419 and bounded soak
+#420; line `implement/l2-live`). They supersede, for A14f only, the earlier "its held gate is unchanged"
+wording above. Each point is **blocking for A14f COMPLETE** and **NOT AUTHORIZED**: recording it opens no
+issue, relaxes no gate and starts no work. No A14f evidence is merged; PR #447 is open and uncredited.
+
+| ID | Open point | Closes when | Authorization |
+|---|---|---|---|
+| D1 — Partition model | ADR-0070 Amendment 1 makes a run one partition `dt=.../seg=NNN`; a continuous live run needs durable intermediate publication. Open: one partition per run, or micro-batch partitions with a certifier continuation mode and catalog lookup (Amendment 1 item 9 defers both to A14f). A delta-headed partition fails `unanchored_head` today. | An ADR-0070 amendment, through a design-gate issue, fixes the model and its certifier/catalog mechanics. | NOT AUTHORIZED |
+| D2 — Live host | WebSocket client, re-subscribe, heartbeat and supervisor wiring under ADR-0041/0042/0043 are not implemented. | Merged implementation evidence on `implement/l2-live`. | NOT AUTHORIZED |
+| D3 — Proof | PostgreSQL integration of live-ingested runs and the day roll, and the bounded soak (#420: 24 h or more, one observed UTC midnight), are not delivered. | A merged integration proof and the #420 report attached to that issue. | NOT AUTHORIZED |
+| D4 — Seam semantics | Midnight coverage end with continuation evidence (Amendment 2 decision 5), closure of the ~1.1 s file-head gap (T3) through the adjacent-file tail, and provenance `code_ref` from a real commit. | The D1 amendment states them and an implementation proves them. | NOT AUTHORIZED |
+
+**Not claimed by #448:** no live L2 capability, no soak evidence, no gap-free UTC-midnight L2, no `A14g`.
 
 **Requirements carried by the completed v1 implementations (not new decisions):** `A14b` maps `uint64` columns to the
 string-typed schema with an exact round-trip; `A14e` exposes per-partition origin and must not assume
