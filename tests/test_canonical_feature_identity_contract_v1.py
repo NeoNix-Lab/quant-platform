@@ -189,7 +189,9 @@ class CanonicalFeatureIdentityContractV1Tests(unittest.TestCase):
         with self.assertRaises(ValueError):
             manifest((bars, bars))
         authority = (ROOT / "src/quant_platform/application/admitted_input_authority.py").read_text(encoding="utf-8")
-        self.assertIn("definition_identities=()", authority)
+        # M04 (#463) filled the seam the ADR found empty: the authority takes the identities from the request.
+        self.assertNotIn("definition_identities=()", authority)
+        self.assertIn("definition_identities=definitions", authority)
         transport = (ROOT / "src/quant_platform/application/admitted_input_transport.py").read_text(encoding="utf-8")
         self.assertIn(
             'def _only(body: Any, required: set[str], optional: set[str] = frozenset())', transport,

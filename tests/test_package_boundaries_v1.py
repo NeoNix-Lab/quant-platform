@@ -106,6 +106,7 @@ OWNERS = {
     "quant_platform.application.job_dispatch": "application",
     "quant_platform.application.api_host_composition": "application",
     "quant_platform.application.admitted_input_authority": "application",
+    "quant_platform.application.admitted_input_definitions": "application",
     "quant_platform.application.deck_result_bundle": "application",
     "quant_platform.application.admitted_input_transport": "application",
     "quant_platform.application.feature_provider_identity": "application",
