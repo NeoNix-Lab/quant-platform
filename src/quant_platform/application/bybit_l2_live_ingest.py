@@ -19,7 +19,7 @@ This module coordinates:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -57,7 +57,11 @@ from ..source_adapters.bybit_l2_live import (
     BybitL2LiveBookEventV1CertificationProfile,
     BybitL2LiveIntegrityError,
     BybitL2LiveResyncStateMachine,
+    L2GapReason,
+    L2LiveGapEvent,
     L2ResyncState,
+    canonicalize_bybit_l2_live_message,
+    is_bybit_l2_data_frame,
 )
 
 LIVE_L2_CHECKPOINT_IDENTITY_DOMAIN = "quant-platform/live-l2-checkpoint-v1"
@@ -184,7 +188,7 @@ class L2CheckpointStore:
         try:
             raw = self._path.read_text(encoding="utf-8")
             data = json.loads(raw)
-            return LiveL2CheckpointV1(
+            checkpoint = LiveL2CheckpointV1(
                 dataset_identity=DatasetIdentity(**data["dataset_identity"]),
                 source_semantics_id=data["source_semantics_id"],
                 last_canonical_exchange_ts=Instant.parse(data["last_canonical_exchange_ts"]),
@@ -198,6 +202,9 @@ class L2CheckpointStore:
                 generation=int(data["generation"]),
                 created_at=Instant.parse(data["created_at"]),
             )
+            if data.get("checkpoint_identity") != checkpoint.checkpoint_identity:
+                raise ValueError("checkpoint_identity does not match the stored payload")
+            return checkpoint
         except Exception as exc:
             raise L2CheckpointCorruptError(f"Failed to load checkpoint from {self._path}: {exc}") from exc
 
@@ -210,8 +217,19 @@ class L2CheckpointStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._path.with_name(f"{self._path.name}.tmp-{os.getpid()}")
         raw_bytes = canonical_bytes(doc, profile="sorted-compact-ascii-v1", allow_nan=False)
-        tmp_path.write_bytes(raw_bytes)
+        with open(tmp_path, "wb") as handle:
+            handle.write(raw_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())  # durable before the rename makes it the checkpoint
         os.replace(tmp_path, self._path)
+        try:  # make the rename itself durable where the platform allows it (POSIX)
+            directory = os.open(self._path.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +281,19 @@ def validate_continuation_anchor(
         )
 
 
+def _utc_now() -> Instant:
+    return Instant.parse(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+
+
+def _ceil_us(ns: int) -> int:
+    """Least microsecond-aligned instant strictly greater than ``ns``."""
+    return (ns // 1000 + 1) * 1000
+
+
+def _floor_us(ns: int) -> int:
+    return ns // 1000 * 1000
+
+
 @dataclass(frozen=True, slots=True)
 class LivePartitionResult:
     """Published live partition summary and evidence."""
@@ -287,6 +318,7 @@ class BybitL2LiveIngestService:
         max_batch_size: int = 500,
         cut_sequence: int | None = None,
         storage_root_id: str = "default",
+        clock: Callable[[], Instant] | None = None,
     ) -> None:
         self._storage_root = Path(storage_root)
         self._storage_root_id = storage_root_id
@@ -297,6 +329,7 @@ class BybitL2LiveIngestService:
         )
         self._max_batch_size = max_batch_size
         self._cut_sequence = cut_sequence
+        self._clock = clock or _utc_now
 
         self._state_machine = BybitL2LiveResyncStateMachine()
         self._current_checkpoint: LiveL2CheckpointV1 | None = None
@@ -316,11 +349,21 @@ class BybitL2LiveIngestService:
             if len(parts) >= 2 and parts[0].startswith("dt=") and parts[1].startswith("seg="):
                 self._current_day = parts[0].split("=")[1]
                 self._current_seg_index = int(parts[1].split("=")[1])
+            # The published partition is final (it is never rewritten): the next run is the next
+            # ordinal. Whatever arrived after the last durable checkpoint is unknown, so the
+            # process restarts as an open gap and re-anchors only on an authentic venue snapshot.
+            self._current_seg_index += 1
             self._state_machine = BybitL2LiveResyncStateMachine(
-                initial_state=L2ResyncState.STREAMING,
+                initial_state=L2ResyncState.AWAITING_RESYNC_SNAPSHOT,
                 anchor_sequence=checkpoint.last_canonical_sequence,
                 anchor_update_id=checkpoint.last_canonical_update_id,
                 anchor_exchange_ts=checkpoint.last_canonical_exchange_ts,
+                initial_gap=L2LiveGapEvent(
+                    reason=L2GapReason.PROCESS_RESTART.value,
+                    gap_start=checkpoint.last_canonical_exchange_ts,
+                    last_good_sequence=checkpoint.last_canonical_sequence,
+                    last_good_update_id=checkpoint.last_canonical_update_id,
+                ),
             )
 
     @property
@@ -331,63 +374,133 @@ class BybitL2LiveIngestService:
     def current_checkpoint(self) -> LiveL2CheckpointV1 | None:
         return self._current_checkpoint
 
-    def feed_event(self, raw_or_event: Mapping[str, Any] | L2BookEvent) -> list[SealedPartitionEvidence]:
+    def on_disconnected(self) -> list[LivePartitionResult]:
+        """Transport lost: the run ends here, so publish it before the gap is open."""
+        self._state_machine.on_disconnected()
+        return self._seal_run()
+
+    def on_heartbeat_timeout(self) -> list[LivePartitionResult]:
+        self._state_machine.on_heartbeat_timeout()
+        return self._seal_run()
+
+    def on_connected(self) -> None:
+        self._state_machine.on_connected()
+
+    def _seal_run(self) -> list[LivePartitionResult]:
+        sealed = self.flush()
+        return [] if sealed is None else [sealed]
+
+    def feed_event(self, raw_or_event: Mapping[str, Any] | L2BookEvent) -> list[LivePartitionResult]:
         """Feed a live message or normalized event into the ingest service.
 
         Handles:
-        - Cutover enforcement (ignoring events <= cut_sequence).
-        - Resync state machine processing.
+        - Cutover enforcement (events <= cut_sequence belong to the historical side and never
+          reach the resync machine, so the first retained event is what anchors the stream).
+        - Resync state machine processing; a run never spans a gap: the buffered run is
+          published before the gap opens and the closed gap is declared as ``known_gap``.
         - Day roll detection and predecessor anchoring.
         - Micro-batch flushing and publication.
         """
-        accepted, closed_gap, resub_needed = self._state_machine.process_message(raw_or_event)
+        if isinstance(raw_or_event, L2BookEvent):
+            event = raw_or_event
+        elif is_bybit_l2_data_frame(raw_or_event):
+            event = canonicalize_bybit_l2_live_message(raw_or_event)
+        else:
+            return []  # subscribe ack, pong, other control frames
+        if self._cut_sequence is not None and int(event.native_sequence) <= self._cut_sequence:
+            return []  # historical authority (ADR-0070 section 8)
+
+        accepted, closed_gap, resub_needed = self._state_machine.process_message(event)
+        published: list[LivePartitionResult] = []
+        if resub_needed or closed_gap is not None:
+            published.extend(self._seal_run())  # the run before the gap, never merged with the next
         if accepted is None:
-            return []
+            return published
 
-        seq = int(accepted.native_sequence)  # type: ignore[arg-type]
-        if self._cut_sequence is not None and seq <= self._cut_sequence:
-            # Pre-cutover event dropped
-            return []
-
-        published_partitions: list[LivePartitionResult] = []
         event_day = accepted.exchange_ts.isoformat()[:10]
-
-        # UTC Midnight Day Roll
         if self._current_day is not None and event_day != self._current_day:
-            # 1. Flush any pending events for current_day
-            if self._buffer:
-                sealed = self.flush()
-                if sealed is not None:
-                    published_partitions.append(sealed)
-
-            # 2. Advance day and reset segment index
+            published.extend(self._seal_run())
             self._current_day = event_day
             self._current_seg_index = 1
-
-            # 3. Validate continuation anchor if we have predecessor info
-            if self._predecessor_anchor is not None:
+            # A delta that continues the run across midnight must link its predecessor; a
+            # snapshot (after a gap or from the venue) anchors itself.
+            if (
+                self._predecessor_anchor is not None
+                and closed_gap is None
+                and accepted.event_type == "delta"
+            ):
                 validate_continuation_anchor(self._predecessor_anchor, accepted)
-
         if self._current_day is None:
             self._current_day = event_day
-            self._current_seg_index = 1
-
         self._buffer.append(accepted)
 
-        if len(self._buffer) >= self._max_batch_size:
-            sealed = self.flush()
-            if sealed is not None:
-                published_partitions.append(sealed)
+        if closed_gap is not None:
+            self._write_gap_document(closed_gap)
 
-        return published_partitions
+        if len(self._buffer) >= self._max_batch_size:
+            published.extend(self._seal_run())
+        return published
+
+    def _write_gap_document(self, gap: L2LiveGapEvent) -> Path:
+        """Declare a closed gap as ``known_gap`` coverage (ADR-0070 Amendment 1 item 4)."""
+        if gap.gap_end is None or gap.resync_update_id is None:
+            raise BybitL2LiveIntegrityError("a gap document needs a closed gap")
+        start_ns = _ceil_us(gap.gap_start.epoch_ns)
+        end_ns = _floor_us(gap.gap_end.epoch_ns)
+        if end_ns <= start_ns:
+            raise BybitL2LiveIntegrityError(
+                "discontinuity_not_representable: the gap "
+                f"[{gap.gap_start.isoformat()}, {gap.gap_end.isoformat()}) has no whole microsecond"
+            )
+        day = gap.gap_start.isoformat()[:10]
+        dataset_root = self._storage_root / self._dataset_rel_root()
+        number = len(sorted((dataset_root / f"dt={day}").glob("gap=*"))) + 1
+        path = dataset_root / f"dt={day}" / f"gap={number:03d}" / "coverage-manifest.json"
+        detail = (
+            f"{gap.reason}|last_u:{gap.last_good_update_id}|resync_u:{gap.resync_update_id}"
+            f"|last_seq:{gap.last_good_sequence}|resync_seq:{gap.resync_sequence}"
+            f"|dropped_deltas:{gap.dropped_deltas_count}"
+        )
+        emit_coverage_manifest(
+            path,
+            dataset_identity=self._dataset_identity,
+            source_dataset_identity=self._dataset_identity,
+            coverage_id=f"l2-live-{day}-gap-{number:03d}",
+            supersedes=None,
+            created_at=gap.gap_end,
+            acquisition={
+                "basis": "live_stream",
+                "source_semantics": BYBIT_L2_LIVE_SOURCE_SEMANTICS_V1,
+                "mapping": BYBIT_L2_LIVE_MAPPING_V1,
+                "intent_start": Instant(start_ns).isoformat(),
+                "intent_end": Instant(end_ns).isoformat(),
+            },
+            assertions=[{
+                "assertion_id": f"gap-{number:03d}",
+                "start": Instant(start_ns).isoformat(),
+                "end": Instant(end_ns).isoformat(),
+                "status": "known_gap",
+                "partitions": [],
+                "evidence": [{"kind": "sequence_discontinuity", "detail": detail}],
+            }],
+            producer=BYBIT_L2_LIVE_SOURCE_SEMANTICS_V1,
+            code_ref=BYBIT_L2_LIVE_SOURCE_SEMANTICS_V1,
+        )
+        return path
+
+    def _dataset_rel_root(self) -> str:
+        identity = self._dataset_identity
+        return (
+            f"{identity.layer}/{identity.dataset_kind}/{identity.venue}/"
+            f"{identity.instrument}/{identity.record_schema_id}"
+        )
 
     def flush(self) -> LivePartitionResult | None:
         """Seal, materialize, certify, publish, and checkpoint current buffer."""
         if not self._buffer or self._current_day is None:
             return None
 
-        events = tuple(self._buffer)
-        self._buffer = []
+        events = tuple(self._buffer)  # kept in the buffer until the partition is durable
 
         partition_key = f"dt={self._current_day}/seg={self._current_seg_index:03d}"
         rel_path = (
@@ -429,8 +542,8 @@ class BybitL2LiveIngestService:
         part_doc = json.loads(part_manifest_file.read_text(encoding="utf-8"))
         part_manifest_sha = hashlib.sha256(part_manifest_file.read_bytes()).hexdigest()
 
-        start_ns = first_event.exchange_ts.epoch_ns
-        end_ns = max(last_event.exchange_ts.epoch_ns + 1_000, (last_event.exchange_ts.epoch_ns // 1000 + 1) * 1000)
+        start_ns = _floor_us(first_event.exchange_ts.epoch_ns)
+        end_ns = _ceil_us(last_event.exchange_ts.epoch_ns)
         cov_start = Instant(start_ns)
         cov_end = Instant(end_ns)
 
@@ -522,9 +635,7 @@ class BybitL2LiveIngestService:
         final_seq = int(last_event.native_sequence)  # type: ignore[arg-type]
         final_u = int(last_event.native_update_id)  # type: ignore[arg-type]
         gen = (self._current_checkpoint.generation + 1) if self._current_checkpoint else 1
-        now_instant = Instant.parse(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
-
-        new_checkpoint = LiveL2CheckpointV1(
+        candidate = LiveL2CheckpointV1(
             dataset_identity=self._dataset_identity,
             source_semantics_id=BYBIT_L2_LIVE_SOURCE_SEMANTICS_V1,
             last_canonical_exchange_ts=last_event.exchange_ts,
@@ -536,10 +647,12 @@ class BybitL2LiveIngestService:
             partition_manifest_sha256=part_manifest_sha,
             coverage_segment_id=coverage_id,
             generation=gen,
-            created_at=now_instant,
+            created_at=self._clock(),
         )
+        new_checkpoint = advance_l2_checkpoint(self._current_checkpoint, candidate)
         self._checkpoint_store.save(new_checkpoint)
         self._current_checkpoint = new_checkpoint
+        self._buffer = []
 
         # Record predecessor anchor for day roll
         self._predecessor_anchor = PredecessorAnchorInfo(

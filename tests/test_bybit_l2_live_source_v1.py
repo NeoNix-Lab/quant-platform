@@ -11,7 +11,7 @@ Tests:
   - Update discontinuity detection, re-subscribe signaling, and gap assertions.
   - Never fabricates synthetic snapshots.
 - Historical/live cutover convergence and conflict resolution.
-- Coverage manifest generation.
+- Exact topic, control frames and snapshot handling in a running stream.
 """
 
 from __future__ import annotations
@@ -23,18 +23,17 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant_platform.data.models import DatasetIdentity, Instant, L2BookEvent  # noqa: E402
+from quant_platform.data.models import Instant  # noqa: E402
 from quant_platform.source_adapters.bybit_l2 import (  # noqa: E402
     BybitL2SequenceConflict,
 )
 from quant_platform.source_adapters.bybit_l2_live import (  # noqa: E402
-    BYBIT_L2_LIVE_SOURCE_SEMANTICS_V1,
     BybitL2LiveIntegrityError,
     BybitL2LiveResyncStateMachine,
     BybitL2LiveSourceError,
     L2GapReason,
     L2ResyncState,
-    build_l2_live_coverage_document,
+    is_bybit_l2_data_frame,
     canonicalize_bybit_l2_live_message,
     converge_historical_live_l2,
 )
@@ -223,24 +222,75 @@ class BybitL2LiveSourceTests(unittest.TestCase):
         with self.assertRaises(BybitL2SequenceConflict):
             converge_historical_live_l2([h1], [l1])
 
-    def test_build_l2_live_coverage_document(self):
-        identity = DatasetIdentity("canonical", "l2", "bybit", "BTCUSDT", "l2-book-event-v1")
-        start = millis(1705276800000)
-        end = millis(1705276810000)
-        doc = build_l2_live_coverage_document(
-            dataset_identity=identity,
-            partition_key="dt=2024-01-15/seg=001",
-            start=start,
-            end=end,
-            status="complete",
-            events_count=50,
-        )
+    def test_other_instrument_or_depth_is_refused_not_normalized(self):
+        for topic in ("orderbook.50.ETHUSDT", "orderbook.50.BTCUSDT", "orderbook.200.ETHUSDT"):
+            msg = sample_message(topic=topic)
+            with self.assertRaises(BybitL2LiveSourceError) as ctx:
+                canonicalize_bybit_l2_live_message(msg)
+            self.assertEqual(ctx.exception.reason, "unsupported_topic", topic)
 
-        self.assertEqual(doc["schema_version"], "coverage-manifest-v1")
-        self.assertEqual(doc["coverage_status"], "complete")
-        self.assertEqual(doc["evidence"]["kind"], "connection_continuity")
-        self.assertEqual(doc["evidence"]["source_semantics"], BYBIT_L2_LIVE_SOURCE_SEMANTICS_V1)
-        self.assertEqual(doc["evidence"]["events_count"], 50)
+    def test_control_frames_are_not_data_and_do_not_move_the_machine(self):
+        sm = BybitL2LiveResyncStateMachine()
+        for frame in ({"op": "pong", "success": True}, {"success": True, "op": "subscribe"}):
+            self.assertFalse(is_bybit_l2_data_frame(frame))
+            self.assertEqual(sm.process_message(frame), (None, None, False))
+        self.assertEqual(sm.state, L2ResyncState.AWAITING_INITIAL_SNAPSHOT)
+        self.assertTrue(is_bybit_l2_data_frame(sample_message()))
+
+    def test_a_data_frame_without_cts_still_fails_closed_in_the_machine(self):
+        sm = BybitL2LiveResyncStateMachine()
+        with self.assertRaises(BybitL2LiveSourceError):
+            sm.process_message(sample_message(msg_type="snapshot", cts=None))
+
+    def test_duplicate_snapshot_in_a_running_stream_is_idempotent(self):
+        sm = BybitL2LiveResyncStateMachine()
+        sm.process_message(sample_message(msg_type="snapshot", u=100, seq=200))
+        sm.process_message(sample_message(msg_type="delta", u=101, seq=201))
+        accepted, gap, resub = sm.process_message(sample_message(msg_type="snapshot", u=101, seq=201))
+        self.assertEqual((accepted, gap, resub), (None, None, False))
+        self.assertEqual(sm.state, L2ResyncState.STREAMING)
+
+    def test_snapshot_with_a_u_jump_closes_a_gap_it_cannot_hide(self):
+        sm = BybitL2LiveResyncStateMachine()
+        sm.process_message(sample_message(msg_type="snapshot", u=100, seq=200, cts=1705276800000))
+        sm.process_message(sample_message(msg_type="delta", u=101, seq=201, cts=1705276801000))
+        accepted, gap, resub = sm.process_message(
+            sample_message(msg_type="snapshot", u=900, seq=999, cts=1705276830000)
+        )
+        self.assertIsNotNone(accepted)
+        self.assertFalse(resub)
+        self.assertEqual(gap.reason, L2GapReason.SEQUENCE_DISCONTINUITY.value)
+        self.assertEqual((gap.last_good_update_id, gap.resync_update_id), (101, 900))
+        self.assertEqual(gap.gap_start, millis(1705276801000))
+        self.assertEqual(gap.gap_end, millis(1705276830000))
+        self.assertEqual(sm.closed_gaps, (gap,))
+
+    def test_snapshot_with_a_continuous_u_is_not_a_gap(self):
+        sm = BybitL2LiveResyncStateMachine()
+        sm.process_message(sample_message(msg_type="snapshot", u=100, seq=200))
+        sm.process_message(sample_message(msg_type="delta", u=101, seq=201))
+        accepted, gap, _ = sm.process_message(sample_message(msg_type="snapshot", u=102, seq=202))
+        self.assertIsNotNone(accepted)
+        self.assertIsNone(gap)
+
+    def test_snapshot_regression_is_refused_in_a_stream_and_in_resync(self):
+        sm = BybitL2LiveResyncStateMachine()
+        sm.process_message(sample_message(msg_type="snapshot", u=100, seq=200))
+        sm.process_message(sample_message(msg_type="delta", u=101, seq=201))
+        with self.assertRaises(BybitL2LiveIntegrityError) as ctx:
+            sm.process_message(sample_message(msg_type="snapshot", u=1, seq=5))  # provider restart shape
+        self.assertIn("sequence_regression", str(ctx.exception))
+
+        sm.on_disconnected()
+        sm.on_connected()
+        with self.assertRaises(BybitL2LiveIntegrityError):
+            sm.process_message(sample_message(msg_type="snapshot", u=1, seq=5))
+
+    def test_heartbeat_timeout_before_any_anchor_opens_no_gap(self):
+        sm = BybitL2LiveResyncStateMachine()
+        self.assertIsNone(sm.on_heartbeat_timeout())
+        self.assertIsNone(sm.active_gap)
+        self.assertEqual(sm.state, L2ResyncState.AWAITING_INITIAL_SNAPSHOT)
 
 
 if __name__ == "__main__":

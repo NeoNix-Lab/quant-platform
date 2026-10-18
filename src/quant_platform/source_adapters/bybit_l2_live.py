@@ -66,6 +66,14 @@ class BybitL2LiveIntegrityError(DataIntegrityError):
     """A data integrity violation during live L2 acquisition or convergence."""
 
 
+def is_bybit_l2_data_frame(message: Any) -> bool:
+    """True for an order book data frame; subscribe acks, pongs and other ops are not data."""
+    if not isinstance(message, Mapping):
+        return False
+    topic = message.get("topic")
+    return isinstance(topic, str) and topic.startswith("orderbook.") and "data" in message
+
+
 def canonicalize_bybit_l2_live_message(
     message: Mapping[str, Any],
     *,
@@ -76,7 +84,8 @@ def canonicalize_bybit_l2_live_message(
     """Normalize a Bybit live L2 WebSocket message.
 
     Enforces:
-    - Valid topic (``orderbook.200.BTCUSDT`` by default).
+    - Exactly the topic ``orderbook.200.BTCUSDT``; any other topic is refused, so no other
+      instrument or depth can enter this dataset.
     - Matching-engine timestamp ``cts`` is required; messages missing ``cts``
       are refused with reason ``missing_engine_time``.
     - Normalization via :func:`normalize_bybit_l2_message` with ``acquisition_mode="live_websocket"``.
@@ -84,20 +93,20 @@ def canonicalize_bybit_l2_live_message(
     if not isinstance(message, Mapping):
         raise BybitL2LiveSourceError("Bybit live L2 message must be a mapping", field="message")
 
+    topic = message.get("topic")
+    if topic != SUPPORTED_CHANNEL:
+        raise BybitL2LiveSourceError(
+            f"Unsupported topic {topic!r}: this dataset accepts only {SUPPORTED_CHANNEL!r}",
+            field="topic",
+            reason="unsupported_topic",
+        )
+
     cts = message.get("cts")
     if cts is None:
         raise BybitL2LiveSourceError(
             "Bybit live L2 message missing engine time (cts)",
             field="cts",
             reason="missing_engine_time",
-        )
-
-    topic = message.get("topic")
-    if topic is not None and not str(topic).startswith("orderbook."):
-        raise BybitL2LiveSourceError(
-            f"Unsupported topic {topic!r} for live L2 order book",
-            field="topic",
-            reason="unsupported_topic",
         )
 
     try:
@@ -124,6 +133,8 @@ class L2GapReason(str, Enum):
     HEARTBEAT_TIMEOUT = "heartbeat_timeout"
     OUT_OF_ORDER_SEQUENCE = "out_of_order_sequence"
     UNANCHORED_HEAD = "unanchored_head"
+    PROCESS_RESTART = "process_restart"
+    SEQUENCE_REGRESSION = "sequence_regression"
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,12 +197,13 @@ class BybitL2LiveResyncStateMachine:
         anchor_sequence: int | None = None,
         anchor_update_id: int | None = None,
         anchor_exchange_ts: Instant | None = None,
+        initial_gap: L2LiveGapEvent | None = None,
     ) -> None:
         self._state = initial_state
         self._last_sequence = anchor_sequence
         self._last_update_id = anchor_update_id
         self._last_exchange_ts = anchor_exchange_ts
-        self._active_gap: L2LiveGapEvent | None = None
+        self._active_gap: L2LiveGapEvent | None = initial_gap
         self._closed_gaps: list[L2LiveGapEvent] = []
 
     @property
@@ -246,8 +258,10 @@ class BybitL2LiveResyncStateMachine:
     def on_heartbeat_timeout(
         self,
         at: Instant | None = None,
-    ) -> L2LiveGapEvent:
-        """Called when heartbeat timeout is detected."""
+    ) -> L2LiveGapEvent | None:
+        """Called when heartbeat timeout is detected (no gap exists before the first anchor)."""
+        if self._state == L2ResyncState.AWAITING_INITIAL_SNAPSHOT:
+            return None
         start_ts = at or self._last_exchange_ts or Instant(0)
         if self._active_gap is None:
             self._active_gap = L2LiveGapEvent(
@@ -258,6 +272,14 @@ class BybitL2LiveResyncStateMachine:
             )
         self._state = L2ResyncState.AWAITING_RESYNC_SNAPSHOT
         return self._active_gap
+
+    def _refuse_regression(self, seq: int, u: int) -> None:
+        """A snapshot never moves ``native_sequence`` backwards (fail-closed, ADR-0070 E2)."""
+        if self._last_sequence is not None and seq <= self._last_sequence:
+            raise BybitL2LiveIntegrityError(
+                f"sequence_regression: snapshot native_sequence {seq} (u={u}) does not exceed "
+                f"the last accepted native_sequence {self._last_sequence}"
+            )
 
     def process_message(
         self,
@@ -273,6 +295,8 @@ class BybitL2LiveResyncStateMachine:
             - resubscribe_required: True if an unrecoverable discontinuity requires
               triggering re-subscription.
         """
+        if not isinstance(message, L2BookEvent) and not is_bybit_l2_data_frame(message):
+            return None, None, False  # subscribe ack, pong, other control frames
         event = (
             message
             if isinstance(message, L2BookEvent)
@@ -309,6 +333,7 @@ class BybitL2LiveResyncStateMachine:
                 return None, None, False
 
             # In-band venue snapshot arrives! Closes the gap
+            self._refuse_regression(seq, u)
             closed_gap = None
             if self._active_gap is not None:
                 closed_gap = self._active_gap.close(
@@ -328,11 +353,25 @@ class BybitL2LiveResyncStateMachine:
         # State 3: Streaming (steady state)
         if self._state == L2ResyncState.STREAMING:
             if event.event_type == "snapshot":
-                # In-band re-snapshot from venue cleanly starts a new segment
+                prev_seq = self._last_sequence
+                prev_u = self._last_update_id
+                if prev_seq is not None and seq == prev_seq and prev_u == u:
+                    return None, None, False  # idempotent duplicate snapshot
+                self._refuse_regression(seq, u)
+                closed_gap = None
+                if prev_u is not None and u != prev_u + 1:
+                    # The venue re-snapshotted across lost updates: the interval is unknown.
+                    closed_gap = L2LiveGapEvent(
+                        reason=L2GapReason.SEQUENCE_DISCONTINUITY.value,
+                        gap_start=self._last_exchange_ts or event.exchange_ts,
+                        last_good_sequence=prev_seq,
+                        last_good_update_id=prev_u,
+                    ).close(gap_end=event.exchange_ts, resync_sequence=seq, resync_update_id=u)
+                    self._closed_gaps.append(closed_gap)
                 self._last_sequence = seq
                 self._last_update_id = u
                 self._last_exchange_ts = event.exchange_ts
-                return event, None, False
+                return event, closed_gap, False
 
             # Event is delta: verify sequence order and update id continuity
             prev_seq = self._last_sequence
@@ -438,66 +477,6 @@ def converge_historical_live_l2(
         key=bybit_l2_book_event_v1_ordering_key,
     )
     return tuple(sorted_events)
-
-
-def build_l2_live_coverage_document(
-    *,
-    dataset_identity: DatasetIdentity,
-    partition_key: str,
-    start: Instant,
-    end: Instant,
-    status: str = "complete",
-    gaps: Sequence[Mapping[str, Any]] = (),
-    events_count: int = 0,
-    run_id: str = "run-001",
-) -> dict[str, Any]:
-    """Emit a coverage manifest document for a live L2 partition.
-
-    Follows ADR-0070 §4-§5 and ADR-0022 coverage manifest format.
-    """
-    dataset_id = (
-        f"{dataset_identity.layer}/{dataset_identity.dataset_kind}/"
-        f"{dataset_identity.venue}/{dataset_identity.instrument}/"
-        f"{dataset_identity.record_schema_id}"
-    )
-    coverage_id = (
-        f"{dataset_id}#{partition_key}#live#{run_id}"
-    )
-    document: dict[str, Any] = {
-        "schema_version": "coverage-manifest-v1",
-        "coverage_id": coverage_id,
-        "dataset_identity": dataset_identity.stable_dict(),
-        "partition_key": partition_key,
-        "interval": {
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-        },
-        "coverage_status": status,
-        "evidence": {
-            "kind": BYBIT_L2_LIVE_COVERAGE_EVIDENCE_KIND,
-            "basis": "live_stream",
-            "source_semantics": BYBIT_L2_LIVE_SOURCE_SEMANTICS_V1,
-            "events_count": events_count,
-        },
-        "assertions": [],
-    }
-
-    if gaps:
-        for idx, gap in enumerate(gaps, 1):
-            document["assertions"].append({
-                "assertion_id": f"gap-{idx:03d}",
-                "interval": {
-                    "start": gap["start"],
-                    "end": gap["end"],
-                },
-                "status": "known_gap",
-                "evidence": {
-                    "kind": gap.get("reason", BYBIT_L2_LIVE_DISCONTINUITY_EVIDENCE_KIND),
-                    "detail": gap.get("detail", "live stream sequence discontinuity or disconnect"),
-                },
-            })
-
-    return document
 
 
 BYBIT_L2_LIVE_BOOK_EVENT_V1_CERTIFICATION_PROFILE = "bybit-l2-live-certification-profile-v1"
@@ -612,7 +591,7 @@ __all__ = [
     "L2GapReason",
     "L2LiveGapEvent",
     "L2ResyncState",
-    "build_l2_live_coverage_document",
     "canonicalize_bybit_l2_live_message",
+    "is_bybit_l2_data_frame",
     "converge_historical_live_l2",
 ]
