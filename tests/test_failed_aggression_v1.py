@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 from decimal import Decimal, localcontext
 from fractions import Fraction
 from pathlib import Path
@@ -29,7 +30,7 @@ from quant_platform.features.failed_aggression import (  # noqa: E402
     failed_aggression_definition,
 )
 from quant_platform.features.h01_imbalance import diagonal_imbalance_definition  # noqa: E402
-from quant_platform.representation.bar_flow import BarFlowDefinitionV1, aggregate_historical_bar_flow  # noqa: E402
+from quant_platform.representation.bar_flow import BarFlowDefinitionV1, BarFlowRecord, aggregate_historical_bar_flow  # noqa: E402
 from quant_platform.research.events import (  # noqa: E402
     ComparisonOperator,
     EventSpec,
@@ -187,14 +188,16 @@ class FailedAggressionRuleTests(unittest.TestCase):
     def test_the_rule_has_no_float_and_no_division(self) -> None:
         source = (ROOT / "src/quant_platform/features/failed_aggression.py").read_text(encoding="utf-8")
         body = source[source.index("def _signal("):source.index("def evaluate_failed_aggression(")]
-        for forbidden in ("float(", " / ", "//", "ctx.divide", ".quantize(", "round("):
+        for forbidden in ("float(", " / ", "//", "Decimal", "Context", "localcontext", ".quantize(", "round("):
             self.assertNotIn(forbidden, body)
 
     def test_a_mutated_wick_comparison_is_detected_by_the_boundary_vectors(self) -> None:
         def mutant(b, threshold, wick):  # ">" relaxed to ">=" in the wick test
-            buy, sell = Decimal(b.taker_buy_volume), Decimal(b.taker_sell_volume)
-            high, low, open_, close = (Decimal(b.high), Decimal(b.low), Decimal(b.open), Decimal(b.close))
-            if buy - sell >= threshold * (buy + sell) and high - max(open_, close) >= wick * (high - low) and close < open_:
+            parse = module._Exact.parse
+            buy, sell = parse(b.taker_buy_volume), parse(b.taker_sell_volume)
+            high, low, open_, close = parse(b.high), parse(b.low), parse(b.open), parse(b.close)
+            larger = open_ if open_ > close else close
+            if buy - sell >= threshold * (buy + sell) and high - larger >= wick * (high - low) and close < open_:
                 return 1
             return 0
 
@@ -344,6 +347,77 @@ class FailedAggressionOnBarFlowTests(unittest.TestCase):
         self.assertEqual([1, 0], [item.value for item in observations])
         self.assertEqual("7", records[0].taker_buy_volume)
         self.assertEqual("3.5", records[0].taker_sell_volume)
+
+
+class FailedAggressionAdversarialRegressionTests(unittest.TestCase):
+    """Findings of the independent review of PR #468 (R1-R3)."""
+
+    def test_r2_a_valid_m01_record_beyond_one_thousand_digits_is_evaluated_exactly(self) -> None:
+        tiny = "0." + "0" * 1000 + "1"
+        record = BarFlowRecord(START, END, "108", "120", "100", "105", "1." + "0" * 1000 + "1", "2", "1", tiny)
+        converted = FailedAggressionBarInput(
+            record.bucket_start, record.bucket_end, record.open, record.high, record.low, record.close,
+            record.taker_buy_volume, record.taker_sell_volume,
+        )
+        expected = int(Fraction(1) - Fraction(tiny) >= Fraction("0.3") * (Fraction(1) + Fraction(tiny)))
+        self.assertEqual(1, expected)
+        self.assertEqual(expected, evaluate_failed_aggression(failed_aggression_definition(), converted).value)
+        # Prices and volumes of 3000 digits on both sides of a boundary are still exact.
+        long_digits = "9" * 3000
+        boundary_low = bar(buy="6." + "5" + "0" * 2998 + "1", sell="3." + "4" + "9" * 2998 + "9")
+        boundary_high = bar(buy="6." + "4" + "9" * 2998 + "9", sell="3." + "5" + "0" * 2998 + "1")
+        d = failed_aggression_definition()
+        self.assertEqual(1, evaluate_failed_aggression(d, boundary_low).value)
+        self.assertEqual(0, evaluate_failed_aggression(d, boundary_high).value)
+        self.assertEqual(1, evaluate_failed_aggression(d, bar(buy=long_digits + ".5", sell="0")).value)
+
+    def test_r3_a_canonical_definition_is_valid_under_any_caller_decimal_context(self) -> None:
+        definition = failed_aggression_definition(imbalance_threshold="0.3001")
+        expected = evaluate_failed_aggression(definition, bar(buy="6.5006", sell="3.4994"))
+        self.assertEqual(1, expected.value)
+        hostile = (
+            dict(prec=3),
+            dict(prec=1, rounding="ROUND_DOWN"),
+            dict(prec=3, traps=[decimal.Inexact, decimal.Rounded, decimal.InvalidOperation]),
+        )
+        for settings in hostile:
+            with self.subTest(settings=settings), localcontext() as ctx:
+                for name, setting in settings.items():
+                    if name == "traps":
+                        ctx.traps[decimal.Inexact] = ctx.traps[decimal.Rounded] = True
+                    else:
+                        setattr(ctx, name, setting)
+                again = evaluate_failed_aggression(definition, bar(buy="6.5006", sell="3.4994"))
+                self.assertEqual(expected.identity, again.identity)
+                self.assertEqual(expected.value, again.value)
+                self.assertEqual(
+                    definition.identity, failed_aggression_definition(imbalance_threshold="0.3001").identity,
+                    "the identity is built in a fixed context",
+                )
+                self.assertEqual(DEFAULT_IDENTITY, failed_aggression_definition().identity)
+                self.assertEqual(1, len(evaluate_failed_aggression_bars(definition, (bar(),))))
+
+    def test_r3_a_parameter_the_identity_cannot_hold_exactly_is_refused_not_rounded(self) -> None:
+        failed_aggression_definition(imbalance_threshold="0." + "3" * 27)
+        failed_aggression_definition(imbalance_threshold="0." + "0" * 30 + "1")  # one significant digit: exact
+        with self.assertRaises(FeatureDefinitionError):
+            failed_aggression_definition(imbalance_threshold="0." + "3" * 40)
+        with self.assertRaises(FeatureDefinitionError):
+            failed_aggression_definition(wick_ratio="0." + "7" * 29)
+
+    def test_r1_a_stream_cannot_mix_durations_and_a_bar_has_a_bar_flow_duration(self) -> None:
+        d = failed_aggression_definition()
+        five = bar(start=START, end="2024-01-15T00:05:00Z")
+        with self.assertRaises(FeatureDefinitionError):
+            evaluate_failed_aggression_bars(d, (bars_at(0), bar(start="2024-01-15T00:05:00Z", end="2024-01-15T00:10:00Z")))
+        self.assertEqual(1, len(evaluate_failed_aggression_bars(d, (five,))))
+        self.assertEqual(60_000_000_000, bar().duration_ns)
+        self.assertEqual(300_000_000_000, five.duration_ns)
+        for start, end in (("2024-01-15T00:00:00Z", "2024-01-15T00:00:00.5Z"), ("2024-01-15T00:00:00Z", "2024-01-16T00:00:00.000000001Z")):
+            with self.subTest(end=end), self.assertRaises(FeatureDefinitionError):
+                bar(start=start, end=end)
+        bar(start="2024-01-15T00:00:00Z", end="2024-01-15T00:00:01Z")
+        bar(start="2024-01-15T00:00:00Z", end="2024-01-16T00:00:00Z")
 
 
 if __name__ == "__main__":
