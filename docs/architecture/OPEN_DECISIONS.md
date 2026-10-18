@@ -2,7 +2,7 @@
 
 This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
-## Inventory checkpoint — DG-M reconciliation (#458)
+## Inventory checkpoint — DG-M closeout (#475)
 
 Recomputed from the union of the actual DAG rows and checked against expanded
 Capability Map rows, preserving both parents' accepted credits. No new atom,
@@ -19,7 +19,7 @@ OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
 ROADMAP_DEFINED                 = 111 + 3 + 9 = 123
 ROADMAP_PLANNING_COMPLETENESS   = 123 / 123 = 100%
-IMPLEMENTATION_COMPLETE         = 99 / 123 = 80.5%
+IMPLEMENTATION_COMPLETE         = 103 / 123 = 83.7%
 ```
 
 ## Resolved foundation — reference only
@@ -891,7 +891,7 @@ that bypasses a sealed manifest, a canonical storage mount on the deck or a way 
 deck, or weaken ADR-0057, ADR-0063, ADR-0064, ADR-0068 or ADR-0069. Out of this gate: Omega adoption, more than one
 J03 worker, a durable J14 transfer store, `J11`, L2 acquisition and Wave 9/10.
 
-## DG-M — Canonical feature identity for deck results v1 — RESOLVED (ADR-0073 `ACCEPTED`, #457)
+## DG-M — Canonical feature identity for deck results v1 — RESOLVED (ADR-0073 `ACCEPTED`, #457), CLOSED (#475)
 
 Registered by #453, designed by #454 (ADR-0073), accepted on 2026-10-18 and reconciled by #458. All eight questions are answered
 in the ADR: one canonical feature (`order_flow.failed_aggression@1`) and no server-known event (§1); a new additive `bar-flow-v1`
@@ -899,13 +899,42 @@ representation, with the candle, footprint and H01 identities pinned (§2); FINA
 (§3); an exact, division-free rule with defaults 0.3 and 0.5 (§4); a closed in-code registry, an optional `definitions` field of
 `admit` and the sealed `definition_identities` (§5); K13 unchanged and a deck builder that must declare the definitions (§6);
 `alpha-research` consumes the canonical definitions and keeps hypotheses, event bindings and outcomes local (§7); the four facts
-that show the server passing feature identity (§8). Implementation of `M01`, `M02`, `M04`, `M05` is authorized and not started
-(`SCOPE.md` Part B); `M03` is superseded.
+that show the server passing feature identity (§8). Implementation of `M01`, `M02`, `M04`, `M05` was authorized by #458 and is
+merged into `implement/fid` (PR #466, #468, #473, #474; closeout #475); `M03` is superseded. ADR-0073 Amendment 1 (#469 / PR #471)
+adds one bar duration per admission.
 
 Live follow-ups, none authorized: the maintainer-accepted values that were not measured (thresholds, the 1 second to 1 day
 duration range, at most 8 definitions per `admit`) are revisited only on evidence from a real-host run; a family identity across
 parameterizations has the trigger "a study that needs to relate many parameterizations under one name"; server-side execution or
 re-derivation of the feature (a claim stronger than naming it) is a different design gate.
+
+### DG-M v1 reopening triggers (#475)
+
+Each is a named condition that reopens a decision. None is authorized by the closeout.
+
+1. **Real-host run.** No deck has computed the feature over real delivered trades and registered the result on the real server.
+   That run is operator evidence (ADR-0073 §8); correctness on real data and profitability are not claimed. Trigger: the operator
+   performs it and records the result.
+2. **Observation identity across durations.** Two FINAL observations from bars of different durations that start at the same
+   instant have the same observation identity when produced by separate library calls (ADR-0026, F02's `bar:<RFC3339>`
+   coordinate; H01 has the same property). ADR-0073 Amendment 1 holds it at the admission level (one duration per admission), at
+   the cost of one admission and one delivery per timeframe. Trigger: a study that needs several timeframes under one admission,
+   or a consumer that merges observation streams of several admissions on the support coordinate alone; it needs its own decision
+   on E02/F02.
+3. **Protocol client.** `clients/deck/deck_handoff_client.py` `admit` has no `definitions` parameter; the proof calls the family
+   directly. Trigger: the first workload that must name a definition through the client (a client slice, not authorized).
+4. **Reference kind.** The builder and K13 do not enforce the kind of a declared definition reference (ADR-0073 §6). Trigger: a
+   reader or tool that must rely on it.
+5. **More registry entries.** One entry; the H01 definitions are not in it. Adding one is a code change at the deck-pinned commit.
+   A family identity across parameterizations keeps the ADR-0073 trigger "a study that needs to relate many parameterizations
+   under one name".
+6. **Naming versus computing.** The server attests that it admitted a request that named the definitions, not that the deck computed
+   the feature; server-side execution or re-derivation is a different design gate.
+7. **Unmeasured values and costs.** The defaults 0.3 and 0.5, the 1 second to 1 day duration range and at most 8 definitions per
+   `admit` are maintainer-accepted, not measured; the throughput of bar-flow construction over the full delivered history and the
+   cost of a full-history feature run on the deck are not measured. Trigger: evidence from a real-host run.
+8. **Proof environment.** `PostgresSplitTopology` runs on the CI's PostgreSQL 17 and cannot run on Windows (the catalog requires an
+   absolute POSIX `abs_path`). Trigger: a production-like run on a POSIX host.
 
 ## Explicitly deferable decisions
 
