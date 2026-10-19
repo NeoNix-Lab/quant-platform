@@ -354,7 +354,7 @@ Registered by governance issue #382 after the DG-K closeout (#381); the design g
 
 ### M — Feature identity for deck results (DG-M)
 
-Registered by governance issue #453 after the DG-K2 closeout (#409); the design gate #454 produced ADR-0073, `ACCEPTED` on 2026-10-18 (#457), and governance issue #458 authorizes `M01`, `M02`, `M04` and `M05` for implementation on the integration branch `implement/fid`. The maintainer named the requirement on 2026-10-18: a deck result must be attributable to a server-known, canonical feature definition, the first being failed aggression. `SCOPE.md` (archived at the closeout #475) recorded the start gate and the acceptance of each atom. `M03` is superseded and not counted. `M01`, `M02`, `M04` and `M05` are `COMPLETE` on `implement/fid` within the bounds of their rows.
+Registered by governance issue #453 after the DG-K2 closeout (#409); the design gate #454 produced ADR-0073, `ACCEPTED` on 2026-10-18 (#457), and governance issue #458 authorizes `M01`, `M02`, `M04` and `M05` for implementation on the integration branch `implement/fid`. The maintainer named the requirement on 2026-10-18: a deck result must be attributable to a server-known, canonical feature definition, the first being failed aggression. `SCOPE.md` (archived at the closeout #475) recorded the start gate and the acceptance of each atom. `M03` is superseded and not counted. `M01`, `M02`, `M04` and `M05` are `COMPLETE` on `implement/fid` within the bounds of their rows. Follow-on, not an atom: #477 / PR #478 lets the deck protocol client carry `definitions` (governance #479).
 
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
