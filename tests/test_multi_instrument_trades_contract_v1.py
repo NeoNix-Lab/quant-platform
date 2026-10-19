@@ -1,6 +1,6 @@
 """Regression guard for the multi-instrument Bybit trades design contract (ADR-0074, design gate #377).
 
-The ADR is PROPOSED. This test pins, on today's baseline, the facts it rests on (the BTCUSDT-only places in the code), pins the
+The ADR is ACCEPTED (#377). This test pins, on today's baseline, the facts it rests on (the BTCUSDT-only places in the code), pins the
 BTCUSDT identities that must not change, and states the target properties as ``expectedFailure`` tests: they fail on the
 current baseline and turn into an "unexpected success" (a failing run) the day an implementation slice makes them true, so the
 marker is then removed on purpose.
@@ -61,7 +61,7 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
     def test_the_adr_states_the_six_decisions_and_what_it_amends(self) -> None:
         text = ADR.read_text(encoding="utf-8")
         for required in (
-            "**Status:** PROPOSED",
+            "**Status:** ACCEPTED (design gate #377",
             "BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 = (\"BTCUSDT\", \"ETHUSDT\", \"SOLUSDT\", \"XRPUSDT\", \"DOGEUSDT\")",
             "### 1. A closed allow-list of instruments",
             "### 2. Identity",
@@ -75,7 +75,8 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
             "**365 days**",
             "one hour of real provider traffic for\n`ETHUSDT`",
             "any other symbol (for example `ADAUSDT`) are not admitted.",
-            "## Open items to answer before `ACCEPTED`",
+            "## Acceptance record",
+            "accepted **without** the Phase A numbers",
         ):
             self.assertIn(required, text)
 

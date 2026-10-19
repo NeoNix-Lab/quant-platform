@@ -1,6 +1,6 @@
 # ADR-0074 - Multi-instrument Bybit linear trades: read, delivery and live ingest v1
 
-**Status:** PROPOSED (design gate #377; evidence input #378)
+**Status:** ACCEPTED (design gate #377, PR #481; accepted by the maintainer 2026-10-19, recorded in issue #377)
 **Date:** 2026-10-19
 
 Design gate #377; evidence issue #378. Amends ADR-0040, ADR-0043 and the applicability of the Bybit `trade-v1` ordering and
@@ -142,10 +142,16 @@ ADR-0044's disposition, ADR-0042 and the single-venue limit (second venue, `A12`
 - A deployment: enabling the units on the server is a manual, separate operator step.
 - That concurrent live processes against one catalog and storage root are safe (to be proved by slice 2).
 
-## Open items to answer before `ACCEPTED`
+## Acceptance record
 
-1. The allow-list members (proposed: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `DOGEUSDT`).
-2. The capacity rule's threshold (proposed: 365 days to the critical-pressure threshold) and whether the ADR is accepted before or
-   after the Phase A numbers of #378.
-3. The location and registration state of the maintainer's existing Parquet (section 5).
-4. The historical source for the new instruments (slice 4).
+Accepted by the maintainer on 2026-10-19 (merge of the proposal, PR #481, and the instruction to implement). The four open items of
+the proposal were resolved as follows:
+
+1. **Allow-list.** `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `DOGEUSDT`, as stated in section 1.
+2. **Capacity.** The rule of section 6 (at least 365 days to the critical-pressure threshold at the measured rate) is accepted as
+   written. The ADR is accepted **without** the Phase A numbers of #378 because the rule gates the *production enabling* of live
+   ingest beyond `BTCUSDT`, not the implementation: nothing beyond the bounded `ETHUSDT` proof is enabled before the measurement
+   exists, so the numbers are an input to that enabling decision, not to this contract.
+3. **Existing Parquet.** Their location and registration state remain an open fact. Section 5 makes the contract independent of it;
+   slice 1 begins with the read-only catalog check and registers what is missing through the producer path.
+4. **Historical source.** Stated by the issue of slice 4 with its own evidence; this ADR does not choose it.
