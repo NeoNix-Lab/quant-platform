@@ -22,12 +22,17 @@ class BybitTradeV1EligibilityError(ValueError):
     """Raised when schema-valid trade-v1 cannot enter the Bybit valid profile."""
 
 
+# ADR-0074 section 1: the Bybit linear USDT-settled perpetuals the platform admits for canonical
+# ``trades`` / ``trade-v1``. A closed constant, not a free string; a new member is an ADR amendment.
+BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT")
+
+
 def bybit_trade_v1_applies_to(identity: DatasetIdentity) -> bool:
     return (
         identity.layer == "canonical"
         and identity.venue == "bybit"
         and identity.dataset_kind == "trades"
-        and identity.instrument == "BTCUSDT"
+        and identity.instrument in BYBIT_LINEAR_TRADE_INSTRUMENTS_V1
         and identity.record_schema_id == "trade-v1"
     )
 
@@ -220,6 +225,7 @@ def build_bybit_trade_v1_source_extract_coverage(
 
 
 __all__ = [
+    "BYBIT_LINEAR_TRADE_INSTRUMENTS_V1",
     "BYBIT_ORDERING_PROVIDER",
     "BYBIT_TRADE_V1_CERTIFICATION_PROFILE",
     "BYBIT_TRADE_V1_CHECK_SUITE",

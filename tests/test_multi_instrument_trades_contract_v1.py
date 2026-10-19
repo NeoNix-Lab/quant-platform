@@ -1,9 +1,9 @@
 """Regression guard for the multi-instrument Bybit trades design contract (ADR-0074, design gate #377).
 
-The ADR is ACCEPTED (#377). This test pins, on today's baseline, the facts it rests on (the BTCUSDT-only places in the code), pins the
-BTCUSDT identities that must not change, and states the target properties as ``expectedFailure`` tests: they fail on the
-current baseline and turn into an "unexpected success" (a failing run) the day an implementation slice makes them true, so the
-marker is then removed on purpose.
+The ADR is ACCEPTED (#377). This test pins the allow-list and the applicability (slice T01), the facts the remaining slices rest on
+(the BTCUSDT-only places that T02, T03 and T04 change), the BTCUSDT identities that must not change, and states the properties
+still to come as ``expectedFailure`` tests: they fail on the current baseline and turn into an "unexpected success" (a failing run)
+the day a slice makes them true, so the marker is then removed on purpose.
 """
 
 from __future__ import annotations
@@ -82,20 +82,31 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
 
     # -- the baseline facts the ADR rests on (true today) --------------------------------------------------
 
-    def test_today_the_ordering_applicability_is_btcusdt_only(self) -> None:
-        self.assertTrue(bybit_trade_v1_applies_to(identity("BTCUSDT")))
-        for instrument in ("ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"):
+    def test_the_ordering_applicability_follows_the_closed_allow_list(self) -> None:
+        self.assertEqual(ALLOW_LIST, tuple(bybit.BYBIT_LINEAR_TRADE_INSTRUMENTS_V1))
+        for instrument in ALLOW_LIST:
+            self.assertTrue(bybit_trade_v1_applies_to(identity(instrument)), instrument)
+        for instrument in ("ADAUSDT", "BTCUSD", "BTCUSDC", "btcusdt"):
             self.assertFalse(bybit_trade_v1_applies_to(identity(instrument)), instrument)
-        self.assertIn('identity.instrument == "BTCUSDT"', read("src/quant_platform/source_adapters/bybit.py"))
+        # Only the canonical Bybit trades / trade-v1 identity of an admitted instrument.
+        for other in (
+            DatasetIdentity("raw", "trades", "bybit", "ETHUSDT", "trade-v1"),
+            DatasetIdentity("canonical", "l2", "bybit", "ETHUSDT", "l2-book-event-v1"),
+            DatasetIdentity("canonical", "trades", "binance", "ETHUSDT", "trade-v1"),
+        ):
+            self.assertFalse(bybit_trade_v1_applies_to(other), other)
+        self.assertIn(
+            "identity.instrument in BYBIT_LINEAR_TRADE_INSTRUMENTS_V1", read("src/quant_platform/source_adapters/bybit.py"),
+        )
 
-    def test_today_the_gateway_refuses_a_non_btc_dataset_before_the_catalog(self) -> None:
-        with self.assertRaises(AssertionError) as reached:
-            scan("BTCUSDT")
-        self.assertEqual("the catalog was reached", str(reached.exception))
-        for instrument in ("ETHUSDT", "SOLUSDT"):
-            with self.assertRaises(Exception) as refused:
+    def test_the_gateway_reaches_the_catalog_for_every_allow_list_instrument_and_refuses_the_rest(self) -> None:
+        for instrument in ALLOW_LIST:
+            with self.assertRaises(AssertionError, msg=instrument) as reached:
                 scan(instrument)
-            self.assertEqual("UnsupportedDatasetKind", type(refused.exception).__name__, instrument)
+            self.assertEqual("the catalog was reached", str(reached.exception), instrument)
+        with self.assertRaises(Exception) as refused:
+            scan("ADAUSDT")
+        self.assertEqual("UnsupportedDatasetKind", type(refused.exception).__name__)
 
     def test_today_the_other_places_are_bound_to_btcusdt(self) -> None:
         live = read("src/quant_platform/source_adapters/bybit_live.py")
@@ -122,23 +133,6 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
         self.assertEqual((stamp, "t-1"), bybit_trade_v1_ordering_key(record))
 
     # -- the target properties: they fail on the baseline (expectedFailure) ----------------------------------
-
-    @unittest.expectedFailure
-    def test_target_the_allow_list_is_one_closed_constant(self) -> None:
-        self.assertEqual(ALLOW_LIST, tuple(bybit.BYBIT_LINEAR_TRADE_INSTRUMENTS_V1))
-
-    @unittest.expectedFailure
-    def test_target_the_applicability_follows_the_allow_list_and_nothing_else(self) -> None:
-        for instrument in ALLOW_LIST:
-            self.assertTrue(bybit_trade_v1_applies_to(identity(instrument)), instrument)
-        for instrument in ("ADAUSDT", "BTCUSD", "BTCUSDC", ""):
-            self.assertFalse(bybit_trade_v1_applies_to(identity(instrument)), instrument)
-
-    @unittest.expectedFailure
-    def test_target_a_non_btc_dataset_reaches_the_catalog(self) -> None:
-        with self.assertRaises(AssertionError) as reached:
-            scan("ETHUSDT")
-        self.assertEqual("the catalog was reached", str(reached.exception))
 
     @unittest.expectedFailure
     def test_target_the_live_subject_and_checkpoint_are_per_instrument(self) -> None:
