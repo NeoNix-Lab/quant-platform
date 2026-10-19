@@ -31,7 +31,7 @@ from quant_platform.source_adapters.bybit import (  # noqa: E402
 )
 
 ADR = ROOT / "docs/decisions/ADR-0074-multi-instrument-bybit-linear-trades-v1.md"
-ALLOW_LIST = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+ALLOW_LIST = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT")
 
 
 def identity(instrument: str) -> DatasetIdentity:
@@ -62,7 +62,7 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
         text = ADR.read_text(encoding="utf-8")
         for required in (
             "**Status:** PROPOSED",
-            "BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 = (\"BTCUSDT\", \"ETHUSDT\", \"SOLUSDT\")",
+            "BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 = (\"BTCUSDT\", \"ETHUSDT\", \"SOLUSDT\", \"XRPUSDT\", \"DOGEUSDT\")",
             "### 1. A closed allow-list of instruments",
             "### 2. Identity",
             "### 3. Process model: one process per instrument",
@@ -74,7 +74,7 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
             "ADR-0044 stands",
             "**365 days**",
             "one hour of real provider traffic for\n`ETHUSDT`",
-            "`XRPUSDT` and `DOGEUSDT` were named as candidates and are\n**not** admitted",
+            "any other symbol (for example `ADAUSDT`) are not admitted.",
             "## Open items to answer before `ACCEPTED`",
         ):
             self.assertIn(required, text)
@@ -83,7 +83,7 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
 
     def test_today_the_ordering_applicability_is_btcusdt_only(self) -> None:
         self.assertTrue(bybit_trade_v1_applies_to(identity("BTCUSDT")))
-        for instrument in ("ETHUSDT", "SOLUSDT", "XRPUSDT"):
+        for instrument in ("ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"):
             self.assertFalse(bybit_trade_v1_applies_to(identity(instrument)), instrument)
         self.assertIn('identity.instrument == "BTCUSDT"', read("src/quant_platform/source_adapters/bybit.py"))
 
@@ -130,7 +130,7 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
     def test_target_the_applicability_follows_the_allow_list_and_nothing_else(self) -> None:
         for instrument in ALLOW_LIST:
             self.assertTrue(bybit_trade_v1_applies_to(identity(instrument)), instrument)
-        for instrument in ("XRPUSDT", "DOGEUSDT", "BTCUSD", ""):
+        for instrument in ("ADAUSDT", "BTCUSD", "BTCUSDC", ""):
             self.assertFalse(bybit_trade_v1_applies_to(identity(instrument)), instrument)
 
     @unittest.expectedFailure

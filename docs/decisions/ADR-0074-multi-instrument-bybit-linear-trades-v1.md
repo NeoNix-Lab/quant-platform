@@ -10,7 +10,7 @@ ADR-0044 as they are.
 ## Context
 
 The platform ingests, publishes, serves and delivers Bybit linear trades for one instrument, `BTCUSDT`. The maintainer holds
-Parquet `trade-v1` files for other Bybit linear USDT instruments (ETHUSDT, SOLUSDT and others) and wants to read them through the
+Parquet `trade-v1` files for other Bybit linear USDT instruments (ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT and others) and wants to read them through the
 platform, deliver them to the deck and ingest the same instruments live. #377 asks whether that is possible "without weakening the
 existing fail-closed identity guarantees". Verified against `implement/fid` @ `ca7c3f3`:
 
@@ -48,12 +48,11 @@ The venue is `bybit`, the market is the **linear USDT-settled perpetual** catego
 `trade-v1`. The admitted instruments are a **closed constant in code**, not a free string:
 
 ```text
-BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT")
 ```
 
 One definition is used by the ordering provider's applicability, the eligibility profile, the historical import and the live
-adapter. Spot, inverse, other venues and other symbols are not admitted. `XRPUSDT` and `DOGEUSDT` were named as candidates and are
-**not** admitted by this ADR. A new instrument is admitted by an amendment appended to this ADR, a change of the constant and the
+adapter. Spot, inverse, other venues and any other symbol (for example `ADAUSDT`) are not admitted. A new instrument is admitted by an amendment appended to this ADR, a change of the constant and the
 capacity rule of section 6. L2 is not covered: its ordering policy is keyed by `(venue, instrument)` and stays as ADR-0070 has it.
 
 ### 2. Identity
@@ -98,7 +97,7 @@ bytes per trade, trades per second, CPU and RSS of the existing service). The ru
 for the hot storage root to reach the **critical-pressure threshold** of the live-ingest unit at the measured rate of all enabled
 instruments must be at least **365 days** (a maintainer-accepted value, to be confirmed at acceptance). Until the measurement
 exists nothing beyond a bounded proof is enabled. The proof the maintainer asked for is **one hour of real provider traffic for
-`ETHUSDT`** (handshake, deduplication of `trade_id`, healthy signals, durable checkpoint), executed once; `SOLUSDT` is validated by
+`ETHUSDT`** (handshake, deduplication of `trade_id`, healthy signals, durable checkpoint), executed once; `SOLUSDT`, `XRPUSDT` and `DOGEUSDT` are validated by
 the same contract tests and enabled only under the capacity rule.
 
 ### 7. Fees and execution
@@ -145,7 +144,7 @@ ADR-0044's disposition, ADR-0042 and the single-venue limit (second venue, `A12`
 
 ## Open items to answer before `ACCEPTED`
 
-1. The allow-list members (proposed: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`).
+1. The allow-list members (proposed: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `DOGEUSDT`).
 2. The capacity rule's threshold (proposed: 365 days to the critical-pressure threshold) and whether the ADR is accepted before or
    after the Phase A numbers of #378.
 3. The location and registration state of the maintainer's existing Parquet (section 5).
