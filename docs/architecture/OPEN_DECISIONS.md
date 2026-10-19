@@ -2,7 +2,7 @@
 
 This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
-## Inventory checkpoint — DG-M closeout (#475)
+## Inventory checkpoint — DG-N registration (#483)
 
 Recomputed from the union of the actual DAG rows and checked against expanded
 Capability Map rows, preserving both parents' accepted credits. No new atom,
@@ -11,15 +11,15 @@ capability or follow-on authorization is created. DG-K/DG-K2 are already on main
 The [scope verifier](../../SCOPE.md#executable-governance-verification) captures both OIDs.
 
 ```text
-TOTAL_ATOMS                     = 123
-CLASSIFIED_ATOMS                = 123
+TOTAL_ATOMS                     = 127
+CLASSIFIED_ATOMS                = 127
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 111 / 123 = 90.2%
+SEMANTIC_FROZEN_OR_RESOLVED     = 115 / 127 = 90.6%
 OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 111 + 3 + 9 = 123
-ROADMAP_PLANNING_COMPLETENESS   = 123 / 123 = 100%
-IMPLEMENTATION_COMPLETE         = 103 / 123 = 83.7%
+ROADMAP_DEFINED                 = 115 + 3 + 9 = 127
+ROADMAP_PLANNING_COMPLETENESS   = 127 / 127 = 100%
+IMPLEMENTATION_COMPLETE         = 103 / 127 = 81.1%
 ```
 
 ## Resolved foundation — reference only
@@ -936,6 +936,20 @@ Each is a named condition that reopens a decision. None is authorized by the clo
    cost of a full-history feature run on the deck are not measured. Trigger: evidence from a real-host run.
 8. **Proof environment.** `PostgresSplitTopology` runs on the CI's PostgreSQL 17 and cannot run on Windows (the catalog requires an
    absolute POSIX `abs_path`). Trigger: a production-like run on a POSIX host.
+
+## DG-N — Multi-instrument Bybit linear trades v1 — RESOLVED (ADR-0074 `ACCEPTED`, #377)
+
+Designed by #377 (ADR-0074, PR #481), accepted on 2026-10-19 (PR #482) and reconciled by #483. Decided: a closed allow-list of five Bybit
+linear USDT instruments (BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT) in one constant; per-instrument dataset, subject and checkpoint
+identity with every BTCUSDT identity unchanged; one live process per instrument; ADR-0044 unchanged (explicit gaps, no repair source);
+existing Parquet enters only through the producer path; a capacity rule (at least 365 days to the critical-pressure threshold) that gates
+production enabling and waits for the #378 measurements; explicit fees per instrument. Implementation of `T01`, `T04`, `T03`, `T02` is
+authorized and not started (`SCOPE.md` Part B).
+
+Live follow-ups, none authorized: the Phase A measurements of #378 (they gate enabling live ingest beyond BTCUSDT in production); the
+location and registration state of the maintainer's existing Parquet (checked by `T01`); the historical source for the new instruments
+(stated by `T04`); L2 for other instruments (its ordering policy is keyed by `(venue, instrument)` and is not covered); a second venue
+(`A12`); a new instrument beyond the allow-list needs an ADR-0074 amendment.
 
 ## Explicitly deferable decisions
 

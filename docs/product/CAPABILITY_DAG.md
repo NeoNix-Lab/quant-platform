@@ -9,7 +9,7 @@ supervised happy-path proof on the smallest real partition; deployability carrie
 ADR-0072 Amendment 1 bounds and the recorded proof findings. S08 is not authorized,
 J11 remains deferred, and no Wave 8 or DG-K/DG-K2 Golden proof is claimed.
 L2 promotion to main is a separate final wave PR; no deployment is performed here. DG-M — Canonical feature identity for deck
-results v1 is CLOSED on `implement/fid` (#475): `M01`, `M02`, `M04` and `M05` are COMPLETE within their row bounds (PR #466, #468,
+results v1 is CLOSED on `implement/fid` (#475). DG-N — Multi-instrument Bybit linear trades v1 is registered and authorized (#483, ADR-0074 `ACCEPTED`): `T01`-`T04` are `FROZEN`/`MISSING`, nothing is implemented. DG-M detail: `M01`, `M02`, `M04` and `M05` are COMPLETE within their row bounds (PR #466, #468,
 #473, #474) under ADR-0073 and its Amendment 1, `M03` is superseded; the server now seals the identities of the definitions a deck
 names and the deck builder must declare them. No real-host run is claimed, and promotion into `main` is the operator's separate PR.**
 
@@ -21,19 +21,19 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after the DG-M closeout (#475),
+Current audited inventory after the DG-N registration (#483),
 recomputed mechanically from the atom tables, not by hand:
 
 ```text
-TOTAL_ATOMS                     = 123
-CLASSIFIED_ATOMS                = 123
+TOTAL_ATOMS                     = 127
+CLASSIFIED_ATOMS                = 127
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 111 / 123 = 90.2%
+SEMANTIC_FROZEN_OR_RESOLVED     = 115 / 127 = 90.6%
 OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 111 + 3 + 9 = 123
-ROADMAP_PLANNING_COMPLETENESS   = 123 / 123 = 100%
-IMPLEMENTATION_COMPLETE         = 103 / 123 = 83.7%
+ROADMAP_DEFINED                 = 115 + 3 + 9 = 127
+ROADMAP_PLANNING_COMPLETENESS   = 127 / 127 = 100%
+IMPLEMENTATION_COMPLETE         = 103 / 127 = 81.1%
 ```
 
 Reconciliation #444 preserves all accepted DG-K/DG-K2 credits from main and
@@ -43,7 +43,11 @@ invented by this merge; the seven L2 subatoms and eight S atoms were already
 registered on their respective lines. [SCOPE.md](../../SCOPE.md#executable-governance-verification)
 contains the executable two-parent verification.
 
-DG-M closeout (issue #475): `M01`, `M02`, `M04` and `M05` move from `MISSING` to `COMPLETE` on `implement/fid` (99 -> 103; implementation
+DG-N registration and authorization (issue #483): ADR-0074 is `ACCEPTED` (#377, 2026-10-19). Four atoms `T01`-`T04` are added directly as
+`FROZEN`/`MISSING` (123 -> 127 atoms; 111 -> 115 decided); no existing atom changes state. The counts above are recomputed from these
+tables by script.
+
+Earlier, DG-M closeout (issue #475): `M01`, `M02`, `M04` and `M05` move from `MISSING` to `COMPLETE` on `implement/fid` (99 -> 103; implementation
 80.5% -> 83.7%); no new atom and no decision-state change (111 decided, 3 `OPEN_BLOCKING`, 9 `OPEN_DEFERABLE`, 123 atoms). The counts above
 are recomputed from these tables by script. Promotion into `main` is the operator's separate PR; the real-host run is operator evidence.
 
@@ -155,6 +159,7 @@ K  Operations
 P  Process Topology (DG-K; ADR-0068/ADR-0069)
 S  Server/deck composition (DG-K2)
 M  Feature identity (DG-M)
+T  Multi-instrument trades (DG-N)
 ```
 
 The implemented ownership direction remains governed by ADR-0024 and architecture tests. `application` composes existing capabilities and owns no quantitative meaning.
@@ -364,6 +369,17 @@ Registered by governance issue #453 after the DG-K2 closeout (#409); the design 
 | M04 | Server definition registry and admit carriage v1 | Application/API | M01, M02, S01, P06 | M05 | FROZEN | COMPLETE | ADR-0073 §5 (accepted; authorized by #458). Closed in-code registry (one entry); optional `definitions` field of `admit` (at most 8 entries, additive under ADR-0066 §1, family version unchanged); the manifest's `definition_identities` populated with the sorted, deduplicated bar-flow and feature identities; a request without `definitions` seals a byte-identical manifest; eight stable refusal reasons (ADR-0073 Amendment 1, #469: one bar duration per admission). Amendment 2 of ADR-0072 and Amendment 3 of ADR-0069 are appended by this atom. Credited `COMPLETE` at the DG-M closeout (#475): #463 / PR #473 on `implement/fid`; ADR-0072 Amendment 2 (§1 row) and ADR-0069 Amendment 3 appended; a request without `definitions` seals the pre-change digest; a wire digit ceiling found in review was removed. |
 | M05 | Deck feature-identity declaration and proof v1 | Client/Operations | M04, S05, S07 | feature-traceable deck results | FROZEN | COMPLETE | ADR-0073 §6, §8 (accepted; authorized by #458). The deck builder no longer adds definition references itself and refuses `definition_not_declared`; K13 `_validate_run_compatibility` unchanged and now non-vacuous; the four facts of §8 proved on `PostgresSplitTopology`, with the omission case refused and zero writes asserted. Amendment 2 of ADR-0072 §5 is appended by this atom. The server attests the admitted name, not the deck's computation. Credited `COMPLETE` at the DG-M closeout (#475): #464 / PR #474 on `implement/fid`; ADR-0072 Amendment 2 (§5 item 2); the four facts of ADR-0073 §8 proved on `PostgresSplitTopology` (CI; also 18 of 18 run in WSL on PostgreSQL 16). The real-host run is operator evidence and is not claimed. |
 
+### T — Multi-instrument Bybit linear trades (DG-N)
+
+Registered and authorized by governance issue #483 after the design gate #377 produced ADR-0074, `ACCEPTED` on 2026-10-19 (PR #482). The maintainer wants to read, deliver and ingest live the Bybit linear USDT instruments BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT and DOGEUSDT, and to run this work in the current wave (`implement/fid`). `SCOPE.md` Part B records the start gate and the acceptance of each atom; the order is `T01`, `T04`, `T03`, `T02`. No atom here is implemented.
+
+| ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
+|---|---|---|---|---|---|---|---|
+| T01 | Multi-instrument read and delivery v1 | Data Access/Application | A06, A08, A09, K12 | T04, T03, T02 | FROZEN | MISSING | ADR-0074 §1, §2, §5 (accepted; authorized by #483). The closed constant `BYBIT_LINEAR_TRADE_INSTRUMENTS_V1` (BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT) drives the ordering and eligibility applicability; a non-BTC dataset is read, admitted and delivered end to end (`DataGateway`, K12 `admit`/`deliver`); a read-only check of the catalog for the allow-list and registration of what is missing through the producer path (materialize, certify, publish); BTC identities and ordering key unchanged. |
+| T04 | Historical import per instrument v1 | Source/Producer | A07, T01 | T02 | FROZEN | MISSING | ADR-0074 §4 (accepted; authorized by #483). `--instrument` over the allow-list for the one-UTC-day historical import; the source evidence for the new instruments is stated in its issue; history enters only through the producer path; no repair of live gaps (ADR-0044 stands). |
+| T03 | Explicit per-instrument fees v1 | Execution | H02, T01 | T02 | FROZEN | MISSING | ADR-0074 §7 (accepted; authorized by #483). Fee parameters are explicit per instrument; an execution or replay over a dataset whose instrument is not BTCUSDT and that names no fee schedule is refused (fail-closed); BTCUSDT behaviour unchanged. |
+| T02 | Live trades ingest per instrument v1 | Data Plane/Operations | A11, K10, T01, T03, T04 | multi-asset live research | FROZEN | MISSING | ADR-0074 §3, §6 (accepted; authorized by #483). Adapter and server parameterized by instrument; one process per instrument with its own checkpoint and subject (`quant-platform-live-ingest@<INSTRUMENT>.service`, runbook); two instances proved not to collide on checkpoints, partitions or catalog rows; one hour of real provider traffic for ETHUSDT; deployment is a manual operator step and the capacity rule gates enabling beyond BTCUSDT. |
+
 ## Dependency integrity
 
 The `Requires` relation is a DAG. In particular, operational capability and implementation sequencing are not conflated:
@@ -547,6 +563,14 @@ Closed by ADR-0073: one canonical feature `order_flow.failed_aggression@1` over 
 M01 ──> M02 ──> M04 ──> M05      (M03 superseded)
 ```
 
+### DG-N — Multi-instrument Bybit linear trades v1 — CLOSED (design gate; ADR-0074 `ACCEPTED`, #377)
+
+Closed by ADR-0074: a closed allow-list of five Bybit linear USDT instruments, per-instrument dataset, subject and checkpoint identity, one live process per instrument, ADR-0044 unchanged for gaps, a capacity rule that gates production enabling on the #378 measurements, explicit fees per instrument. Implementation of `T01`-`T04` is authorized by #483 and not started. Fixed inputs (not reopened): ADR-0040, ADR-0042, ADR-0043, ADR-0044, no change of any BTCUSDT identity byte. Out of scope: a second venue (`A12`), spot and inverse, L2 for other instruments, a generic provider resolver, measured capacity.
+
+```text
+T01 ──> T04 ──> T03 ──> T02
+```
+
 ## Vertical milestones
 
 | ID | Path | Proposition | State |
@@ -689,6 +713,7 @@ DG-K2  Server/deck deployment composition              COMPLETE within recorded 
 DG-C/L2 L2 historical v1 (#442)                         COMPLETE on implement/l2: A14,A14a-A14e; golden #413/#430 11/11;
                                                        A14f/A14g held MISSING; separate L2 promotion to main
 DG-M   Canonical feature identity for deck results v1   COMPLETE within recorded bounds on implement/fid (closeout #475); M01,M02,M04,M05; M03 superseded; no real-host run claimed
+DG-N   Multi-instrument Bybit linear trades v1          AUTHORIZED (#483; ADR-0074 ACCEPTED #377); T01,T04,T03,T02 FROZEN/MISSING; nothing implemented
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```
