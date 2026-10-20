@@ -8,12 +8,16 @@ refused without publishing anything. Requires ``DATA_GATEWAY_TEST_DSN`` and a PO
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -21,6 +25,7 @@ import psycopg  # noqa: E402
 from quant_platform.access.catalog import Catalog  # noqa: E402
 from quant_platform.access.gateway import DataGateway  # noqa: E402
 from quant_platform.access.models import DataRequest, LifecyclePolicy  # noqa: E402
+from quant_platform.application import bybit_archive_import  # noqa: E402
 from quant_platform.application.bybit_archive_import import ArchiveImportRefused, import_bybit_archive_day  # noqa: E402
 from quant_platform.data import DatasetIdentity, Instant  # noqa: E402
 from quant_platform.source_adapters.bybit import BYBIT_ORDERING_PROVIDER, BYBIT_TRADE_V1_ORDERING_POLICY  # noqa: E402
@@ -37,6 +42,10 @@ def archive(directory: Path, instrument: str, day: str, start: int, rows: list[t
     ]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode("utf-8")))
     return path
+
+
+def day_start(day: str) -> int:
+    return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp())
 
 
 def refused(phase: str, connection, **kwargs) -> None:
@@ -60,6 +69,31 @@ def partition_states(connection, instrument: str) -> dict[str, list[str]]:
     for key, state in rows:
         states.setdefault(key, []).append(state)
     return states
+
+
+def published_rows(connection, instrument: str, partition_key: str) -> list[tuple]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT p.state, p.content_sha256, p.manifest_sha256 FROM catalog.partitions p "
+            "JOIN catalog.datasets d ON d.dataset_id = p.dataset_id "
+            "WHERE d.instrument = %s AND d.layer = 'canonical' AND p.partition_key = %s ORDER BY p.revision",
+            (instrument, partition_key),
+        )
+        rows = cursor.fetchall()
+    connection.rollback()
+    return [(state, str(content).strip(), str(manifest).strip()) for state, content, manifest in rows]
+
+
+def assert_files_match_catalog(connection, dataset_root: Path, instrument: str, day: str) -> None:
+    """What the catalog certified is what is on disk: the Parquet and the partition manifest hash to the catalog's values."""
+
+    partition_key = f"dt={day}"
+    rows = published_rows(connection, instrument, partition_key)
+    assert len(rows) == 1 and rows[0][0] == "valid", rows
+    parquet = (dataset_root / partition_key / "part-001.parquet").read_bytes()
+    manifest = (dataset_root / partition_key / "partition-manifest.json").read_bytes()
+    assert hashlib.sha256(parquet).hexdigest() == rows[0][1], "the Parquet on disk is not the one the catalog certified"
+    assert hashlib.sha256(manifest).hexdigest() == rows[0][2], "the partition manifest on disk is not the one the catalog holds"
 
 
 def main() -> int:
@@ -141,7 +175,99 @@ def main() -> int:
             assert "valid" not in partition_states(connection, "SOLUSDT").get("dt=2024-01-16", [])
             assert partition_states(connection, "SOLUSDT")["dt=2024-01-15"] == ["valid"]
 
-            # 6. Outside the allow-list and unknown storage roots are refused as requests.
+            # 6. Two imports of the same day at once: B starts while A is between its checks and its first write. Whoever is
+            #    second is refused; the files that stay on disk are exactly the ones the catalog certified (they are never
+            #    replaced by the loser before its refusal).
+            race_day = "2024-01-18"
+            race = archive(staging, "ETHUSDT", race_day, start + 3 * 86400, [(7, ".5", "Buy", "1", "2400", "r-1"), (9, ".5", "Sell", "2", "2401", "r-2")])
+            real_read = bybit_archive_import.read_bybit_archive_day
+            nested: dict[str, object] = {}
+
+            def read_then_let_b_in(*args, **kwargs):
+                if "outcome" not in nested:
+                    nested["outcome"] = "started"
+                    with psycopg.connect(dsn) as other:
+                        try:
+                            import_bybit_archive_day(other, instrument="ETHUSDT", day=race_day, archive_path=race,
+                                                     storage_root_id=STORAGE_ROOT_ID, code_ref="integration-commit-b")
+                            nested["outcome"] = "published"
+                        except ArchiveImportRefused as exc:
+                            nested["outcome"] = f"refused:{exc.phase}"
+                return real_read(*args, **kwargs)
+
+            with mock.patch.object(bybit_archive_import, "read_bybit_archive_day", read_then_let_b_in):
+                try:
+                    import_bybit_archive_day(connection, instrument="ETHUSDT", day=race_day, archive_path=race,
+                                             storage_root_id=STORAGE_ROOT_ID, code_ref="integration-commit-a")
+                    outer = "published"
+                except ArchiveImportRefused as exc:
+                    outer = f"refused:{exc.phase}"
+            outcomes = sorted([str(nested["outcome"]), outer])
+            assert outcomes == ["published", "refused:LOCK"], outcomes
+            assert_files_match_catalog(connection, dataset_root, "ETHUSDT", race_day)
+            assert not list(dataset_root.glob("**/.import-*.lock")), "a lock file was left behind"
+
+            # 6b. The winner publishes and releases between the loser's first check and its lock: the loser looks again under the
+            #     lock and is refused by the catalog, before any target file is considered.
+            late_day = "2024-01-19"
+            late = archive(staging, "ETHUSDT", late_day, day_start(late_day), [(3, ".5", "Buy", "1", "2300", "l-1")])
+            real_lock = bybit_archive_import._day_lock
+            ran: list[str] = []
+
+            @bybit_archive_import.contextmanager
+            def winner_first(path):
+                if not ran:
+                    ran.append("winner")
+                    with psycopg.connect(dsn) as other:
+                        import_bybit_archive_day(other, instrument="ETHUSDT", day=late_day, archive_path=late,
+                                                 storage_root_id=STORAGE_ROOT_ID, code_ref="integration-commit-w")
+                with real_lock(path):
+                    yield
+
+            with mock.patch.object(bybit_archive_import, "_day_lock", winner_first):
+                refused("CATALOG", connection, instrument="ETHUSDT", day=late_day, archive_path=late)
+            assert_files_match_catalog(connection, dataset_root, "ETHUSDT", late_day)
+
+            # 7. Real threads: many days of a new instrument at once (first dataset manifest) and the same day from several
+            #    threads. Every day ends valid exactly once, with files that match the catalog.
+            xrp_days = [f"2024-02-{n:02d}" for n in range(1, 7)]
+            xrp_files = {d: archive(staging, "XRPUSDT", d, day_start(d), [(1, ".1", "Buy", "10", "0.5", f"x-{d}-1"), (2, ".2", "Sell", "20", "0.51", f"x-{d}-2")])
+                         for d in xrp_days}
+            results: list[tuple[str, str]] = []
+            details: list[str] = []
+            gate = threading.Barrier(len(xrp_days) * 2)
+
+            def work(day: str) -> None:
+                with psycopg.connect(dsn) as own:
+                    gate.wait()
+                    try:
+                        import_bybit_archive_day(own, instrument="XRPUSDT", day=day, archive_path=xrp_files[day],
+                                                 storage_root_id=STORAGE_ROOT_ID, code_ref="integration-commit")
+                        results.append((day, "published"))
+                    except ArchiveImportRefused as exc:
+                        results.append((day, f"refused:{exc.phase}"))
+                        details.append(f"{day} {exc}")
+
+            threads = [threading.Thread(target=work, args=(d,)) for d in xrp_days for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            xrp_root = storage / "canonical" / "trades" / "bybit" / "XRPUSDT" / "trade-v1"
+            for day in xrp_days:
+                outcomes = sorted(outcome for d, outcome in results if d == day)
+                assert len(outcomes) == 2 and outcomes[0] == "published" and outcomes[1].startswith("refused:"), (day, outcomes, details)
+                assert outcomes[1] in ("refused:LOCK", "refused:CATALOG"), (day, outcomes)
+                assert_files_match_catalog(connection, xrp_root, "XRPUSDT", day)
+            assert not list(xrp_root.glob("**/.import-*.lock")), "a lock file was left behind"
+
+            # 8. A lock left by a crashed import is not taken over: the day is refused and nothing is written.
+            stale = archive(staging, "XRPUSDT", "2024-02-20", day_start("2024-02-20"), [(1, ".1", "Buy", "1", "1", "s-1")])
+            (xrp_root / ".import-dt=2024-02-20.lock").write_text("pid=1 host=crashed", encoding="utf-8")
+            refused("LOCK", connection, instrument="XRPUSDT", day="2024-02-20", archive_path=stale)
+            assert not (xrp_root / "dt=2024-02-20").exists()
+
+            # 9. Outside the allow-list and unknown storage roots are refused as requests.
             refused("REQUEST", connection, instrument="ADAUSDT", day="2024-01-15", archive_path=eth)
             try:
                 import_bybit_archive_day(connection, instrument="ETHUSDT", day="2024-01-17", archive_path=eth,

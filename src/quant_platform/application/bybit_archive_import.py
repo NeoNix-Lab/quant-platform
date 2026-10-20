@@ -5,6 +5,11 @@ only: materialize, emit the partition and coverage manifests, S13 certification,
 here writes a catalog row directly, overwrites a file or repairs a live gap: a day that already has any partition in the catalog
 (an SQLite ``BTCUSDT`` day, a live day) is refused, and so is a target file that already exists.
 
+Two imports of the same day never write at once: the day is guarded by an exclusive lock file created before anything is checked or
+written, and the catalog and the target files are checked again under it. The loser is refused with phase ``LOCK`` before it touches a
+file, so the files that stay on disk are the ones the catalog certified. A lock left by a crashed import is **not** taken over: the
+day stays refused until the operator confirms that no import is running and removes the named lock file.
+
 Layout under the dataset root ``<storage root>/canonical/trades/bybit/<INSTRUMENT>/trade-v1``: ``dataset-manifest.json`` shared by
 the dataset (emitted only when absent), and per day ``dt=<day>/part-001.parquet``, ``dt=<day>/partition-manifest.json`` and
 ``dt=<day>/coverage-manifest.json``.
@@ -13,11 +18,17 @@ the dataset (emitted only when absent), and per day ``dt=<day>/part-001.parquet`
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+import os
 from pathlib import Path
+import socket
+import time
 from typing import Any
+import uuid
 
 from quant_platform.data import Instant
 from quant_platform.data.manifests import emit_coverage_manifest, emit_dataset_manifest, emit_partition_manifest
@@ -101,13 +112,36 @@ def import_bybit_archive_day(
     partition_key = f"dt={day}"
 
     abs_path = _storage_root_path(connection, storage_root_id)
-    if _partition_exists(connection, identity, partition_key):
-        raise ArchiveImportRefused(
-            "CATALOG", f"{instrument} {partition_key} already has a partition in the catalog; the archive does not replace it"
-        )
+    _refuse_if_in_catalog(connection, identity, partition_key, instrument)
     dataset_root = Path(abs_path).joinpath(
         identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id
     )
+    try:
+        dataset_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ArchiveImportRefused("TARGET", f"cannot create the dataset root: {exc}") from exc
+    with _day_lock(dataset_root / f".import-{partition_key}.lock"):
+        # Checked again under the lock: the winner of a race may have published between the first check and the lock.
+        _refuse_if_in_catalog(connection, identity, partition_key, instrument)
+        return _import_locked(
+            connection, identity=identity, instrument=instrument, day=day, start=start, partition_key=partition_key,
+            archive_path=archive_path, storage_root_id=storage_root_id, code_ref=code_ref, dataset_root=dataset_root,
+        )
+
+
+def _import_locked(
+    connection: Any,
+    *,
+    identity: Any,
+    instrument: str,
+    day: str,
+    start: datetime,
+    partition_key: str,
+    archive_path: str | Path,
+    storage_root_id: str,
+    code_ref: str,
+    dataset_root: Path,
+) -> ArchiveImportReport:
     rel_path = f"{partition_key}/part-001.parquet"
     artifact_path = dataset_root / rel_path
     dataset_manifest_path = dataset_root / "dataset-manifest.json"
@@ -129,11 +163,7 @@ def import_bybit_archive_day(
         materialization = materialize_bybit_trade_v1(artifact_path, records_day.records, dataset_identity=identity)
         if materialization.row_count != records_day.evidence.row_count:
             raise ArchiveImportRefused("MATERIALIZE", "materialized row count differs from the source row count")
-        if not dataset_manifest_path.exists():
-            emit_dataset_manifest(
-                dataset_manifest_path, dataset_identity=identity, created_at=now,
-                schema_version="dataset-manifest-v2", origin=DATASET_ORIGIN, transform=DATASET_TRANSFORM,
-            )
+        _ensure_dataset_manifest(dataset_manifest_path, identity, now)
         partition = emit_partition_manifest(
             partition_manifest_path, materialization, dataset_identity=identity, dataset_root=dataset_root,
             partition_key=partition_key, revision=1, rel_path=rel_path, created_at=now, closed_at=now,
@@ -155,11 +185,16 @@ def import_bybit_archive_day(
         raise ArchiveImportRefused("MATERIALIZE", str(exc)) from exc
 
     try:
-        run = PublicationCertification(CatalogPublicationWriter(connection), BybitTradeV1CertificationProfile(code_ref)).run(
-            SealedPartitionEvidence(
-                dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,), artifact_path, storage_root_id,
+        with _first_registration_guard(connection, identity, dataset_root):
+            run = PublicationCertification(
+                CatalogPublicationWriter(connection), BybitTradeV1CertificationProfile(code_ref)
+            ).run(
+                SealedPartitionEvidence(
+                    dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,), artifact_path, storage_root_id,
+                )
             )
-        )
+    except ArchiveImportRefused:
+        raise
     except Exception as exc:
         raise ArchiveImportRefused("S13", str(exc)) from exc
     if run.certification.status != "pass":
@@ -193,44 +228,49 @@ def compare_archive_day_with_parquet(
     """Compare one archive day with an existing ``trade-v1`` Parquet file of the same day; reads both, writes nothing.
 
     The evidence of ADR-0074 Amendment 1 A1.2 item 8 (old file against the archive before it is replaced) and of the ``BTCUSDT``
-    equivalence proof. Timestamps are compared at millisecond precision, the precision of the import; prices and sizes both as
-    text and as values, so a trailing-zero difference is told apart from a different number.
+    equivalence proof. Every field of the canonical record is compared: ``venue``, ``instrument``, ``exchange_ts`` (at
+    millisecond precision, the precision of the import), ``aggressor_side``, ``price`` and ``size`` (as text and as values, so a
+    trailing-zero difference is told apart from a different number), ``receive_ts`` and ``sequence`` (the archive has neither, so
+    the old file must not carry them either). A row of the old file without a ``trade_id`` cannot be matched and is a difference.
     """
 
     archive = read_bybit_archive_day(archive_path, instrument=instrument, day=day).records
     existing: dict[str, Any] = {}
     parquet_rows = 0
+    null_trade_ids = 0
     for batch in scan_trade_v1_all(Path(parquet_path), batch_size=65_536):
         for record in batch:
             parquet_rows += 1
-            existing[record.trade_id] = record
+            if record.trade_id is None:
+                null_trade_ids += 1
+            else:
+                existing[record.trade_id] = record
     fresh = {record.trade_id: record for record in archive}
     only_archive = sorted(set(fresh) - set(existing))
     only_parquet = sorted(set(existing) - set(fresh))
     differences: Counter[str] = Counter()
     for trade_id in set(fresh) & set(existing):
         new, old = fresh[trade_id], existing[trade_id]
-        if new.instrument != old.instrument:
-            differences["instrument"] += 1
+        for name in ("venue", "instrument", "aggressor_side", "receive_ts", "sequence"):
+            if getattr(new, name) != getattr(old, name):
+                differences[name] += 1
         if Instant.parse(new.exchange_ts).epoch_ns != Instant.parse(old.exchange_ts).epoch_ns // 1_000_000 * 1_000_000:
             differences["exchange_ts_ms"] += 1
-        if new.aggressor_side != old.aggressor_side:
-            differences["aggressor_side"] += 1
         for name in ("price", "size"):
             if getattr(new, name) != getattr(old, name):
                 differences[f"{name}_text"] += 1
                 if Decimal(getattr(new, name)) != Decimal(getattr(old, name)):
                     differences[f"{name}_value"] += 1
-    value_fields = ("instrument", "exchange_ts_ms", "aggressor_side", "price_value", "size_value")
-    same_trades = (
-        not only_archive and not only_parquet and parquet_rows == len(existing) and not any(differences[f] for f in value_fields)
-    )
+    value_differences = sum(count for name, count in differences.items() if not name.endswith("_text"))
+    duplicates = parquet_rows - null_trade_ids - len(existing)
+    same_trades = not (only_archive or only_parquet or null_trade_ids or duplicates or value_differences)
     return {
         "instrument": instrument,
         "day": day,
         "archive_rows": len(archive),
         "parquet_rows": parquet_rows,
-        "parquet_duplicate_trade_ids": parquet_rows - len(existing),
+        "parquet_null_trade_ids": null_trade_ids,
+        "parquet_duplicate_trade_ids": duplicates,
         "only_in_archive": len(only_archive),
         "only_in_parquet": len(only_parquet),
         "examples_only_in_archive": only_archive[:5],
@@ -239,6 +279,110 @@ def compare_archive_day_with_parquet(
         "same_trades": same_trades,
         "identical": same_trades and not differences,
     }
+
+
+class _LockHeld(ArchiveImportRefused):
+    """The lock file exists: another import holds it, or a crashed one left it."""
+
+
+def _acquire_lock(path: Path) -> None:
+    """Create the lock file exclusively; never waits and never takes over an existing one."""
+
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            holder = path.read_text(encoding="utf-8").strip() or "being created"
+        except OSError:
+            holder = "unreadable"
+        raise _LockHeld(
+            "LOCK", f"another import holds {path.name} ({holder}); if no import is running, confirm that and remove {path}"
+        ) from None
+    except OSError as exc:
+        raise ArchiveImportRefused("LOCK", f"cannot create the lock {path}: {exc}") from exc
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(f"pid={os.getpid()} host={socket.gethostname()} at={_utc_text(datetime.now(timezone.utc))}")
+
+
+@contextmanager
+def _day_lock(path: Path) -> Iterator[None]:
+    """Exclusive lock on one day: a held or left-over lock refuses the import."""
+
+    _acquire_lock(path)
+    try:
+        yield
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@contextmanager
+def _first_registration_guard(connection: Any, identity: Any, dataset_root: Path, *, timeout: float = 120.0) -> Iterator[None]:
+    """Serialize the S13 seal while the instrument's dataset is not in the catalog yet.
+
+    S13 registers the dataset row on the first seal, and two seals racing to do it end in a unique-key violation for the second
+    (fail-closed, but the day is lost). While the dataset is unregistered the imports of the instrument take this lock, one at a
+    time, waiting at most ``timeout`` seconds; once it is registered nothing is held and days run in parallel.
+    """
+
+    if _dataset_registered(connection, identity):
+        yield
+        return
+    path = dataset_root / ".import-dataset-registration.lock"
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            _acquire_lock(path)
+            break
+        except _LockHeld:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def _ensure_dataset_manifest(path: Path, identity: Any, created_at: str) -> None:
+    """Create the shared dataset manifest at most once: the first writer wins, every other import reads the same bytes.
+
+    The manifest is written to a private temporary name and linked into place; ``link`` fails when the target exists, so the
+    manifest the catalog registers is never replaced by a concurrent import of another day of the same instrument.
+    """
+
+    if path.exists():
+        return
+    temporary = path.with_name(f".dataset-manifest.{uuid.uuid4().hex}.json")
+    try:
+        emit_dataset_manifest(
+            temporary, dataset_identity=identity, created_at=created_at,
+            schema_version="dataset-manifest-v2", origin=DATASET_ORIGIN, transform=DATASET_TRANSFORM,
+        )
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _dataset_registered(connection: Any, identity: Any) -> bool:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT 1 FROM catalog.datasets WHERE layer = %s AND kind = %s AND venue = %s AND instrument = %s "
+            "AND schema_id = %s AND feature_set_def_id IS NULL LIMIT 1",
+            (identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id),
+        )
+        row = cursor.fetchone()
+    connection.rollback()
+    return row is not None
+
+
+def _refuse_if_in_catalog(connection: Any, identity: Any, partition_key: str, instrument: str) -> None:
+    if _partition_exists(connection, identity, partition_key):
+        raise ArchiveImportRefused(
+            "CATALOG", f"{instrument} {partition_key} already has a partition in the catalog; the archive does not replace it"
+        )
 
 
 def _storage_root_path(connection: Any, storage_root_id: str) -> str:

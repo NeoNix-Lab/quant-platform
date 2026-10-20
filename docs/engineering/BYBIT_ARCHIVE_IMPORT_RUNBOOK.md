@@ -47,9 +47,22 @@ mv /srv/marketdata/canonical/trades/bybit/ETHUSDT /srv/marketdata/replaced-ETHUS
 for f in /srv/staging/bybit-archive/ETHUSDT/ETHUSDT*.csv.gz; do d=$(basename "$f" .csv.gz); d=${d#ETHUSDT}; python tools/import_bybit_archive_day.py --instrument ETHUSDT --day "$d" --archive "$f" || echo "REFUSED $d"; done
 ```
 
-Each day prints one JSON line: the published partition (`state: valid`) or the refusing phase (`REQUEST`, `CATALOG`, `TARGET`,
+Each day prints one JSON line: the published partition (`state: valid`) or the refusing phase (`REQUEST`, `CATALOG`, `LOCK`, `TARGET`,
 `SOURCE`, `MATERIALIZE`, `S13`, `S14`) with its reason. A refused day is not published; its files, if any were written before the
 refusal, stay unpublished for inspection. A rerun skips nothing silently: a day already published is refused by `CATALOG`.
+
+### Concurrent imports and locks
+
+Several imports may run at once, for different days or by mistake for the same one. Each day is guarded by an exclusive lock file
+`.import-dt=<day>.lock` in the dataset directory, created before anything is checked or written: a second import of the same day
+is refused with `LOCK` before it touches a file, so the files on disk are always the ones the catalog certified. While an
+instrument's dataset is not in the catalog yet, the seals of its first days are serialized (a short wait, at most 2 minutes,
+guarded by `.import-dataset-registration.lock`); afterwards days run in parallel.
+
+A lock left by an import that crashed is **never taken over**. The refusal names the lock file and the process that created it
+(`pid`, `host`, time). Confirm that no import is running, then remove that one file and run the day again. A day refused after
+its files were written (`S13`, `S14`) leaves them for inspection and is refused as `CATALOG` or `TARGET` on rerun until the
+operator decides what to do with them.
 
 ## 5. Check and only then delete
 
