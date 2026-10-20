@@ -46,7 +46,6 @@ from quant_platform.source_adapters.bybit_live import (
     BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1,
     SUPPORTED_CATEGORY,
     SUPPORTED_SYMBOL,
-    SUPPORTED_TOPIC,
     BybitLiveSessionEvidence,
     BybitLiveSourceError,
     BybitLiveTradeV1CertificationProfile,
@@ -56,6 +55,7 @@ from quant_platform.source_adapters.bybit_live import (
     TradeKeyV1,
     build_bybit_live_coverage_document,
     bybit_live_dataset_identity,
+    bybit_live_topic,
     canonicalize_bybit_live_message,
     canonicalize_bybit_recent_public_trade,
     deduplicate_live_records,
@@ -175,10 +175,11 @@ class BybitRestartReconciliationCertificationProfile:
         return self._live_profile().validate_records(identity, records)
 
 
-def fetch_recent_public_trades(*, limit: int = 100) -> tuple[Any, ...]:
+def fetch_recent_public_trades(*, limit: int = 100, instrument: str = SUPPORTED_SYMBOL) -> tuple[Any, ...]:
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
         raise BybitLiveSourceError("recent trade limit must be in [1, 1000]", field="limit")
-    query = urlencode({"category": SUPPORTED_CATEGORY, "symbol": SUPPORTED_SYMBOL, "limit": str(limit)})
+    instrument = bybit_live_dataset_identity(instrument).instrument  # validates against the allow-list
+    query = urlencode({"category": SUPPORTED_CATEGORY, "symbol": instrument, "limit": str(limit)})
     with urlopen(f"{BYBIT_RECENT_TRADES_URL}?{query}", timeout=10) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if payload.get("retCode") != 0:
@@ -186,13 +187,14 @@ def fetch_recent_public_trades(*, limit: int = 100) -> tuple[Any, ...]:
     result = payload.get("result") or {}
     if result.get("category") != SUPPORTED_CATEGORY:
         raise BybitLiveSourceError("recent-trade response category does not match requested linear category")
-    return tuple(canonicalize_bybit_recent_public_trade(item) for item in result.get("list") or ())
+    return tuple(canonicalize_bybit_recent_public_trade(item, instrument=instrument) for item in result.get("list") or ())
 
 
 async def run_bounded_live_provider_proof(
     *,
     max_messages: int = 3,
     max_seconds: float = 20.0,
+    instrument: str = SUPPORTED_SYMBOL,
 ) -> LiveProviderProofReport:
     try:
         import websockets  # type: ignore[import-not-found]
@@ -205,13 +207,14 @@ async def run_bounded_live_provider_proof(
     if max_seconds <= 0:
         raise BybitLiveSourceError("max_seconds must be positive")
 
-    tracker = LiveSessionTracker()
+    topic = bybit_live_topic(instrument)  # validates the instrument against the allow-list
+    tracker = LiveSessionTracker(instrument)
     accepted = []
     errors: list[str] = []
     try:
         async with websockets.connect(BYBIT_PUBLIC_LINEAR_WS_URL, ping_interval=None, close_timeout=5) as socket:
             tracker.connected()
-            await socket.send(json.dumps({"op": "subscribe", "args": [SUPPORTED_TOPIC]}))
+            await socket.send(json.dumps({"op": "subscribe", "args": [topic]}))
             deadline = asyncio.get_running_loop().time() + max_seconds
             messages = 0
             while messages < max_messages:
@@ -223,14 +226,14 @@ async def run_bounded_live_provider_proof(
                 if document.get("op") == "subscribe":
                     if document.get("success") is not True:
                         raise LiveProviderProofPending(f"subscription refused: {document!r}")
-                    tracker.subscribed(topic=SUPPORTED_TOPIC, conn_id=document.get("conn_id"))
+                    tracker.subscribed(topic=topic, conn_id=document.get("conn_id"))
                     continue
                 if document.get("op") in {"pong", "ping"}:
                     tracker.heartbeat(conn_id=document.get("conn_id"))
                     continue
-                if document.get("topic") != SUPPORTED_TOPIC:
+                if document.get("topic") != topic:
                     continue
-                batch = canonicalize_bybit_live_message(document)
+                batch = canonicalize_bybit_live_message(document, instrument=instrument)
                 tracker.observed_message(batch)
                 accepted.extend(batch.records)
                 messages += 1
@@ -252,7 +255,7 @@ async def run_bounded_live_provider_proof(
     deduped = deduplicate_live_records(accepted)
     return LiveProviderProofReport(
         status="PASS" if evidence.validated_messages and not errors else "LIVE_PROVIDER_PROOF_PENDING",
-        topic=SUPPORTED_TOPIC,
+        topic=topic,
         messages=evidence.validated_messages,
         records=len(deduped),
         duplicates_removed=len(accepted) - len(deduped),
@@ -263,8 +266,12 @@ async def run_bounded_live_provider_proof(
     )
 
 
-def run_bounded_live_provider_proof_sync(*, max_messages: int = 3, max_seconds: float = 20.0) -> LiveProviderProofReport:
-    return asyncio.run(run_bounded_live_provider_proof(max_messages=max_messages, max_seconds=max_seconds))
+def run_bounded_live_provider_proof_sync(
+    *, max_messages: int = 3, max_seconds: float = 20.0, instrument: str = SUPPORTED_SYMBOL
+) -> LiveProviderProofReport:
+    return asyncio.run(
+        run_bounded_live_provider_proof(max_messages=max_messages, max_seconds=max_seconds, instrument=instrument)
+    )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -405,6 +412,7 @@ def run_real_server_publish_proof(
     dsn: str | None,
     producer: str,
     code_ref: str,
+    instrument: str = SUPPORTED_SYMBOL,
 ) -> RealServerPublishProofReport:
     """K02 (#108) minimum real-server proof.
 
@@ -414,7 +422,9 @@ def run_real_server_publish_proof(
     swapped to BybitLiveTradeV1CertificationProfile and live coverage.
     """
     acquire_started_at = datetime.now(timezone.utc)
-    report = run_bounded_live_provider_proof_sync(max_messages=max_messages, max_seconds=max_seconds)
+    report = run_bounded_live_provider_proof_sync(
+        max_messages=max_messages, max_seconds=max_seconds, instrument=instrument,
+    )
     acquire_finished_at = datetime.now(timezone.utc)
 
     if report.status != "PASS" or not report.accepted_records or report.session_evidence is None:
@@ -422,7 +432,7 @@ def run_real_server_publish_proof(
 
     records = report.accepted_records
     session_evidence = report.session_evidence
-    identity = bybit_live_dataset_identity()
+    identity = bybit_live_dataset_identity(instrument)
     day = acquire_started_at.strftime("%Y-%m-%d")
     partition_key = f"dt={day}"
     intent_start = acquire_started_at.isoformat().replace("+00:00", "Z")
@@ -586,13 +596,15 @@ def _publish_restart_reconciliation_records(
     dsn: str | None,
     producer: str,
     code_ref: str,
+    instrument: str = SUPPORTED_SYMBOL,
 ) -> RealServerPublishProofReport:
+    topic = bybit_live_topic(instrument)
     if not accepted_records:
         return RealServerPublishProofReport(
             status="REAL_RESTART_PROOF_PENDING",
             acquisition=LiveProviderProofReport(
                 status="REAL_RESTART_PROOF_PENDING",
-                topic=SUPPORTED_TOPIC,
+                topic=topic,
                 messages=0,
                 records=0,
                 duplicates_removed=0,
@@ -601,7 +613,7 @@ def _publish_restart_reconciliation_records(
             ),
         )
 
-    identity = bybit_live_dataset_identity()
+    identity = bybit_live_dataset_identity(instrument)
     intent_start, intent_end = _record_intent_interval(accepted_records)
     partition_key = f"dt={intent_start[:10]}"
     revision = _next_revision(dsn, identity, partition_key)
@@ -664,7 +676,7 @@ def _publish_restart_reconciliation_records(
 
     report = LiveProviderProofReport(
         status="PASS",
-        topic=SUPPORTED_TOPIC,
+        topic=topic,
         messages=0,
         records=len(accepted_records),
         duplicates_removed=0,
@@ -843,6 +855,15 @@ def resume_live_ingest(
         partition_manifest_sha256=durable_publication.partition_manifest_sha256,
     )
 
+    for record in (*recent_rest_records, *buffered_ws_records):
+        if (record.venue, record.instrument) != (
+            checkpoint.dataset_identity.venue, checkpoint.dataset_identity.instrument,
+        ):
+            raise CheckpointDomainMismatch(
+                f"record ({record.venue}/{record.instrument}) does not belong to the checkpoint's dataset domain "
+                f"({checkpoint.dataset_identity.venue}/{checkpoint.dataset_identity.instrument})"
+            )
+
     last_durable_key = TradeKeyV1(
         checkpoint.dataset_identity.venue,
         checkpoint.dataset_identity.instrument,
@@ -976,10 +997,22 @@ def load_current_durable_publication_state(
     )
 
 
+def _require_checkpoint_domain(checkpoint: LiveCheckpointV1 | None, instrument: str) -> None:
+    """A checkpoint is the recovery domain of one instrument (ADR-0042 S1, ADR-0074 section 2): an instance of another
+    instrument pointed at it must stop before it acquires, publishes or reconciles anything."""
+
+    if checkpoint is not None and checkpoint.dataset_identity != bybit_live_dataset_identity(instrument):
+        raise CheckpointDomainMismatch(
+            f"the checkpoint belongs to {checkpoint.dataset_identity.venue}/{checkpoint.dataset_identity.instrument}, "
+            f"not to {instrument}"
+        )
+
+
 def _persist_checkpoint_from_publication(
     *,
     publication: RealServerPublishProofReport,
     checkpoint_path: str | Path,
+    instrument: str = SUPPORTED_SYMBOL,
 ) -> tuple[CheckpointStore, LiveCheckpointV1] | None:
     if (
         publication.durable_publication is None
@@ -990,12 +1023,19 @@ def _persist_checkpoint_from_publication(
 
     store = CheckpointStore(checkpoint_path)
     previous = store.load()
+    _require_checkpoint_domain(previous, instrument)
     last_record = publication.acquisition.accepted_records[-1]
+    if (last_record.venue, last_record.instrument) != (
+        bybit_live_dataset_identity(instrument).venue, instrument,
+    ):
+        raise CheckpointDomainMismatch(
+            f"the published records ({last_record.venue}/{last_record.instrument}) are not those of {instrument}"
+        )
     if previous is None:
         checkpoint = advance_checkpoint(
             None,
             LiveCheckpointV1(
-                dataset_identity=bybit_live_dataset_identity(),
+                dataset_identity=bybit_live_dataset_identity(instrument),
                 source_semantics_id=BYBIT_LIVE_SOURCE_SEMANTICS_V1,
                 last_canonical_exchange_ts=Instant.parse(last_record.exchange_ts),
                 last_canonical_trade_id=last_record.trade_id,
@@ -1033,6 +1073,7 @@ def run_real_server_restart_publish_phase(
     checkpoint_path: str | Path,
     producer: str,
     code_ref: str,
+    instrument: str = SUPPORTED_SYMBOL,
 ) -> RealServerRestartProofReport:
     """Publish one bounded real batch and durably persist the restart checkpoint.
 
@@ -1040,7 +1081,10 @@ def run_real_server_restart_publish_phase(
     it does not fetch the provider's recent-trade window and does not attempt
     restart reconciliation. Operators can then run the restart phase from a
     separate OS process against the same checkpoint path.
+
+    An existing checkpoint of another instrument stops the phase before anything is acquired or published.
     """
+    _require_checkpoint_domain(CheckpointStore(checkpoint_path).load(), instrument)
     publication = run_real_server_publish_proof(
         max_messages=max_messages,
         max_seconds=max_seconds,
@@ -1049,6 +1093,7 @@ def run_real_server_restart_publish_phase(
         dsn=dsn,
         producer=producer,
         code_ref=code_ref,
+        instrument=instrument,
     )
     if publication.status != "PASS":
         return RealServerRestartProofReport(status=publication.status, publication=publication)
@@ -1056,6 +1101,7 @@ def run_real_server_restart_publish_phase(
     persisted = _persist_checkpoint_from_publication(
         publication=publication,
         checkpoint_path=checkpoint_path,
+        instrument=instrument,
     )
     if persisted is None:
         return RealServerRestartProofReport(
@@ -1081,6 +1127,7 @@ def run_real_server_restart_phase(
     code_ref: str,
     recent_limit: int = 1000,
     durable_publication: DurablePublicationState | None = None,
+    instrument: str = SUPPORTED_SYMBOL,
 ) -> RealServerRestartProofReport:
     """Load an existing checkpoint, reconcile, publish, then advance it.
 
@@ -1099,6 +1146,7 @@ def run_real_server_restart_phase(
             publication=None,
             checkpoint_path=str(store.path),
         )
+    _require_checkpoint_domain(checkpoint, instrument)
 
     current_publication = durable_publication or load_current_durable_publication_state(
         checkpoint=checkpoint,
@@ -1112,7 +1160,7 @@ def run_real_server_restart_phase(
         partition_manifest_sha256=current_publication.partition_manifest_sha256,
     )
 
-    recent_records = fetch_recent_public_trades(limit=recent_limit)
+    recent_records = fetch_recent_public_trades(limit=recent_limit, instrument=instrument)
     outcome = resume_live_ingest(
         checkpoint_store=store,
         recent_rest_records=recent_records,
@@ -1137,6 +1185,7 @@ def run_real_server_restart_phase(
             dsn=dsn,
             producer=producer,
             code_ref=code_ref,
+            instrument=instrument,
         )
         if publication.status != "PASS":
             status = publication.status
@@ -1144,6 +1193,7 @@ def run_real_server_restart_phase(
             persisted = _persist_checkpoint_from_publication(
                 publication=publication,
                 checkpoint_path=checkpoint_path,
+                instrument=instrument,
             )
             if persisted is None:
                 status = "REAL_RESTART_PROOF_PENDING"
@@ -1179,6 +1229,7 @@ def run_real_server_restart_proof(
     code_ref: str,
     recent_limit: int = 1000,
     phase: str = "both",
+    instrument: str = SUPPORTED_SYMBOL,
 ) -> RealServerRestartProofReport:
     """K10 real-server restart proof entry point.
 
@@ -1199,6 +1250,7 @@ def run_real_server_restart_proof(
             producer=producer,
             code_ref=code_ref,
             recent_limit=recent_limit,
+            instrument=instrument,
         )
 
     published = run_real_server_restart_publish_phase(
@@ -1210,6 +1262,7 @@ def run_real_server_restart_proof(
         checkpoint_path=checkpoint_path,
         producer=producer,
         code_ref=code_ref,
+        instrument=instrument,
     )
     if phase == "publish" or published.status != "CHECKPOINT_PERSISTED":
         return published
@@ -1227,6 +1280,7 @@ def run_real_server_restart_proof(
             if published.publication is not None
             else None
         ),
+        instrument=instrument,
     )
     return RealServerRestartProofReport(
         status=restarted.status,

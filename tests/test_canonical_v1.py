@@ -149,7 +149,13 @@ class CanonicalV1Tests(unittest.TestCase):
         # A14e adds the L2 event-size encoding with the same declared profile;
         # it is a byte-size estimate, not an identity or a fixture change.
         self.assertEqual(sorted(expected + additional, key=lambda site: (site["path"], site["ordinal"])), sites)
-        expected_raw = [[path, ast.dump(ast.parse(expression, mode="eval").body,
+        # T02 part 2 (#495, ADR-0074): the live subscription names the topic of the session's own instrument instead of the
+        # BTCUSDT constant. The fixture stays untouched; the one changed expression is declared here.
+        declared_raw_changes = {
+            ("src/quant_platform/application/bybit_live.py", 'json.dumps({"op": "subscribe", "args": [SUPPORTED_TOPIC]})'):
+                'json.dumps({"op": "subscribe", "args": [topic]})',
+        }
+        expected_raw = [[path, ast.dump(ast.parse(declared_raw_changes.get((path, expression), expression), mode="eval").body,
                                        include_attributes=False)]
                         for path, expression in INVENTORY["raw_exceptions"]]
         self.assertEqual(expected_raw, raw)
