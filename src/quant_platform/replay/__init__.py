@@ -20,7 +20,9 @@ from typing import Any
 from ..access import CoveragePolicy, DataRequest, DataSliceMetadata, LifecyclePolicy
 from ..data.models import DatasetIdentity, Instant, TradeRecord
 from ..execution import (
+    FEE_SCHEDULE_NOT_EXPLICIT,
     FeeSchedule,
+    FeeScheduleNotExplicit,
     Fill,
     LiquidityRole,
     Order,
@@ -53,6 +55,12 @@ REPLAY_RISK_SNAPSHOT_IDENTITY_DOMAIN = "replay-risk-snapshot-v1"
 
 class ReplayError(Exception):
     """Base class for deterministic replay failures."""
+
+
+class ReplayFeeScheduleNotExplicit(ReplayError):
+    """The replayed instrument is not BTCUSDT and the fee schedule defaulted a rate (stable ``reason``)."""
+
+    reason = FEE_SCHEDULE_NOT_EXPLICIT
 
 
 class ReplayOutputMode(str, Enum):
@@ -118,6 +126,10 @@ class ReplaySpec:
         object.__setattr__(self, "initial_capital", _decimal(self.initial_capital, "initial_capital", allow_zero=False))
         if not isinstance(self.fee_schedule, FeeSchedule):
             raise ReplayError("fee_schedule must be a FeeSchedule")
+        try:
+            self.fee_schedule.require_explicit_for(self.dataset.instrument)
+        except FeeScheduleNotExplicit as exc:
+            raise ReplayFeeScheduleNotExplicit(str(exc)) from exc
         if self.slippage_model is not None and not isinstance(self.slippage_model, SyntheticSlippageModel):
             raise ReplayError("slippage_model must be a SyntheticSlippageModel")
         object.__setattr__(self, "lifecycle_policy", LifecyclePolicy(self.lifecycle_policy))
@@ -839,6 +851,7 @@ __all__ = [
     "ReplayContext",
     "ReplayEngine",
     "ReplayError",
+    "ReplayFeeScheduleNotExplicit",
     "ReplayOutputConfig",
     "ReplayOutputMode",
     "ReplayResult",

@@ -22,6 +22,7 @@ from quant_platform.application.market_data import (  # noqa: E402
     resolve_market_data_request,
 )
 from quant_platform.data.models import DatasetIdentity, Instant  # noqa: E402
+from quant_platform.execution import FeeSchedule, FeeScheduleNotExplicit  # noqa: E402
 from quant_platform.data.models import TradeRecord  # noqa: E402
 from quant_platform.source_adapters import bybit  # noqa: E402
 from quant_platform.source_adapters.bybit import (  # noqa: E402
@@ -116,6 +117,18 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
         self.assertIn('SUPPORTED_INSTRUMENT = "BTCUSDT"', read("src/quant_platform/application/bybit_import.py"))
         self.assertIn("Canonical Bybit BTCUSDT linear perpetual VIP0 rates", read("src/quant_platform/execution/__init__.py"))
         self.assertIn("exactly one venue, instrument and", read("docs/decisions/ADR-0043-live-ingest-server-composition-v1.md"))
+
+    def test_the_default_fee_rates_are_for_btcusdt_only(self) -> None:
+        # T03 (ADR-0074 section 7): the defaults stay the BTCUSDT VIP0 rates; any other instrument needs both rates stated.
+        defaulted = FeeSchedule(policy_key="guard.fees")
+        defaulted.require_explicit_for("BTCUSDT")
+        stated = FeeSchedule(policy_key="guard.fees", maker_fee_rate="0.0001", taker_fee_rate="0.0004")
+        for instrument in ALLOW_LIST[1:]:
+            with self.subTest(instrument=instrument):
+                with self.assertRaises(FeeScheduleNotExplicit) as refused:
+                    defaulted.require_explicit_for(instrument)
+                self.assertEqual("fee_schedule_not_explicit", refused.exception.reason)
+                stated.require_explicit_for(instrument)
 
     # -- BTCUSDT must not change (true today and after) -----------------------------------------------------
 
