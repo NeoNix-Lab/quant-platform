@@ -19,6 +19,7 @@ from typing import Any
 
 from ..data.models import DataIntegrityError, DatasetIdentity, Instant, TradeRecord
 from .bybit import (
+    BYBIT_LINEAR_TRADE_INSTRUMENTS_V1,
     bybit_trade_v1_applies_to,
     bybit_trade_v1_ordering_key,
     validate_bybit_trade_v1_eligibility,
@@ -46,6 +47,8 @@ SUPPORTED_SYMBOL = "BTCUSDT"
 SUPPORTED_TOPIC = "publicTrade.BTCUSDT"
 SUPPORTED_VENUE = "bybit"
 RECORD_SCHEMA_ID = "trade-v1"
+# ``SUPPORTED_SYMBOL`` / ``SUPPORTED_TOPIC`` are the BTCUSDT defaults. Every function below takes the instrument as an explicit
+# argument (ADR-0074 section 2) restricted to ``BYBIT_LINEAR_TRADE_INSTRUMENTS_V1``; with no argument the behaviour is BTCUSDT.
 
 _POSITIVE_DECIMAL_RE = re.compile(r"^(?:0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$")
 # schemas/trade-v1.json's `digit_string`: non-negative integer text, no
@@ -161,9 +164,11 @@ class ReconnectResult:
 
 
 class LiveSessionTracker:
-    """Small explicit state machine for A11 session evidence."""
+    """Small explicit state machine for A11 session evidence, for one instrument of the allow-list."""
 
-    def __init__(self) -> None:
+    def __init__(self, instrument: str = SUPPORTED_SYMBOL) -> None:
+        self._topic = bybit_live_topic(instrument)  # also validates the instrument against the allow-list
+        self._instrument = instrument
         self._state = SessionState.DISCONNECTED
         self._events: list[SessionEvent] = [
             SessionEvent(self._state, "initial", {})
@@ -180,8 +185,9 @@ class LiveSessionTracker:
     def connected(self, *, conn_id: str | None = None) -> None:
         self._transition(SessionState.CONNECTED, "connected", {"conn_id": conn_id})
 
-    def subscribed(self, *, topic: str = SUPPORTED_TOPIC, conn_id: str | None = None) -> None:
-        if topic != SUPPORTED_TOPIC:
+    def subscribed(self, *, topic: str | None = None, conn_id: str | None = None) -> None:
+        topic = self._topic if topic is None else topic
+        if topic != self._topic:
             raise BybitLiveSourceError("subscription acknowledgement is for an unsupported topic", field="topic")
         if self._state in {SessionState.SUBSCRIBED, SessionState.ACQUIRING}:
             # Bybit does not guarantee the subscribe ack is delivered before
@@ -201,6 +207,8 @@ class LiveSessionTracker:
         self._events.append(SessionEvent(self._state, "heartbeat_pong", {"conn_id": conn_id}))
 
     def observed_message(self, batch: LiveTradeBatch) -> None:
+        if batch.message_evidence.topic != self._topic:
+            raise BybitLiveSourceError("trade message is for another topic than this session's", field="topic")
         if self._state == SessionState.CONNECTED:
             # A real, matching topic message is itself sufficient evidence
             # the subscription succeeded (Bybit may deliver the first topic
@@ -246,8 +254,20 @@ class LiveSessionTracker:
         self._events.append(SessionEvent(state, event, dict(detail)))
 
 
-def bybit_live_dataset_identity() -> DatasetIdentity:
-    return DatasetIdentity("canonical", "trades", SUPPORTED_VENUE, SUPPORTED_SYMBOL, RECORD_SCHEMA_ID)
+def _require_instrument(instrument: Any) -> str:
+    if not isinstance(instrument, str) or instrument not in BYBIT_LINEAR_TRADE_INSTRUMENTS_V1:
+        raise BybitLiveSourceError(f"unsupported instrument {instrument!r}", field="instrument")
+    return instrument
+
+
+def bybit_live_topic(instrument: str = SUPPORTED_SYMBOL) -> str:
+    """The public-trade topic of one instrument of the allow-list (``publicTrade.<INSTRUMENT>``)."""
+
+    return f"publicTrade.{_require_instrument(instrument)}"
+
+
+def bybit_live_dataset_identity(instrument: str = SUPPORTED_SYMBOL) -> DatasetIdentity:
+    return DatasetIdentity("canonical", "trades", SUPPORTED_VENUE, _require_instrument(instrument), RECORD_SCHEMA_ID)
 
 
 def trade_key_v1(record: TradeRecord) -> TradeKeyV1:
@@ -256,11 +276,12 @@ def trade_key_v1(record: TradeRecord) -> TradeKeyV1:
     return TradeKeyV1(record.venue, record.instrument, Instant.parse(record.exchange_ts), record.trade_id)
 
 
-def canonicalize_bybit_live_message(message: Mapping[str, Any]) -> LiveTradeBatch:
+def canonicalize_bybit_live_message(message: Mapping[str, Any], *, instrument: str = SUPPORTED_SYMBOL) -> LiveTradeBatch:
+    expected_topic = bybit_live_topic(instrument)
     if not isinstance(message, Mapping):
         raise BybitLiveSourceError("Bybit live message must be an object")
     topic = _require_str(message, "topic")
-    if topic != SUPPORTED_TOPIC:
+    if topic != expected_topic:
         raise BybitLiveSourceError(f"unsupported live topic {topic!r}", field="topic")
     if message.get("type") != "snapshot":
         raise BybitLiveSourceError("Bybit public trade message type must be snapshot", field="type")
@@ -268,7 +289,7 @@ def canonicalize_bybit_live_message(message: Mapping[str, Any]) -> LiveTradeBatc
     rows = message.get("data")
     if not isinstance(rows, list):
         raise BybitLiveSourceError("Bybit public trade message data must be an array", field="data")
-    records = tuple(canonicalize_bybit_live_trade(item) for item in rows)
+    records = tuple(canonicalize_bybit_live_trade(item, instrument=instrument) for item in rows)
     return LiveTradeBatch(
         records=records,
         message_evidence=BybitLiveMessageEvidence(
@@ -282,12 +303,13 @@ def canonicalize_bybit_live_message(message: Mapping[str, Any]) -> LiveTradeBatc
     )
 
 
-def canonicalize_bybit_live_trade(row: Mapping[str, Any]) -> TradeRecord:
+def canonicalize_bybit_live_trade(row: Mapping[str, Any], *, instrument: str = SUPPORTED_SYMBOL) -> TradeRecord:
+    _require_instrument(instrument)
     if not isinstance(row, Mapping):
         raise BybitLiveSourceError("Bybit live trade row must be an object")
     trade_id = _require_str(row, "i")
     symbol = _require_str(row, "s", trade_id=trade_id)
-    if symbol != SUPPORTED_SYMBOL:
+    if symbol != instrument:
         raise BybitLiveSourceError(f"unsupported symbol {symbol!r}", field="s", trade_id=trade_id)
     trade_time_ms = _require_int(row, "T", trade_id=trade_id)
     side = _side(row.get("S"), field="S", trade_id=trade_id)
@@ -307,12 +329,13 @@ def canonicalize_bybit_live_trade(row: Mapping[str, Any]) -> TradeRecord:
     )
 
 
-def canonicalize_bybit_recent_public_trade(row: Mapping[str, Any]) -> TradeRecord:
+def canonicalize_bybit_recent_public_trade(row: Mapping[str, Any], *, instrument: str = SUPPORTED_SYMBOL) -> TradeRecord:
+    _require_instrument(instrument)
     if not isinstance(row, Mapping):
         raise BybitLiveSourceError("Bybit recent trade row must be an object")
     trade_id = _require_str(row, "execId")
     symbol = _require_str(row, "symbol", trade_id=trade_id)
-    if symbol != SUPPORTED_SYMBOL:
+    if symbol != instrument:
         raise BybitLiveSourceError(f"unsupported symbol {symbol!r}", field="symbol", trade_id=trade_id)
     time_ms = _int_text(row.get("time"), field="time", trade_id=trade_id)
     side = _side(row.get("side"), field="side", trade_id=trade_id)
@@ -724,6 +747,7 @@ __all__ = [
     "TradeKeyV1",
     "build_bybit_live_coverage_document",
     "bybit_live_dataset_identity",
+    "bybit_live_topic",
     "canonicalize_bybit_live_message",
     "canonicalize_bybit_live_trade",
     "canonicalize_bybit_recent_public_trade",
