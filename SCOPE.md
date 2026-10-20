@@ -1,6 +1,6 @@
 # Scope: DG-N — Multi-instrument Bybit linear trades v1
 
-Status: **OPEN — design gate CLOSED, implementation of `T01`, `T04`, `T03` and `T02` AUTHORIZED (governance issue #483, 2026-10-19).** The design gate #377 produced ADR-0074 (PR #481), `ACCEPTED` by the maintainer on 2026-10-19 (PR #482). The integration branch is `implement/fid`, the current wave (the maintainer's choice, 2026-10-19): when the four atoms are merged and reconciled, the whole wave (DG-M and DG-N) is promoted to `main` by the operator and the first version of the product is declared concluded. No atom is implemented yet: **today only `BTCUSDT` is readable, deliverable or ingestable live.**
+Status: **OPEN — design gate CLOSED; `T01` and `T04` COMPLETE (reconciliation #489, 2026-10-20); `T03` and `T02` AUTHORIZED, not started (governance issue #483).** The design gate #377 produced ADR-0074 (PR #481), `ACCEPTED` by the maintainer on 2026-10-19 (PR #482); its Amendment 1 (design gate #487, PR #488), accepted on 2026-10-20, chose the Bybit public trade archive as the historical source. The integration branch is `implement/fid`, the current wave (the maintainer's choice, 2026-10-19): when the four atoms are merged and reconciled, the whole wave (DG-M and DG-N) is promoted to `main` by the operator and the first version of the product is declared concluded. **Today the five instruments are readable, admittable and deliverable once their partitions are `valid` in the catalog, and the historical import takes any of them from the archive; only `BTCUSDT` is registered on the server, and only `BTCUSDT` is ingestable live.**
 
 Scope kind: a design-gate sequencing scope that, after the gate closed, carries the Part B authorized inventory below.
 
@@ -14,7 +14,7 @@ This file previously recorded **DG-M — Canonical feature identity for deck res
 
 ## Why this scope exists
 
-The platform ingests, publishes, serves and delivers Bybit linear trades for one instrument. The maintainer holds `trade-v1` Parquet files for other Bybit linear USDT instruments and wants them readable, deliverable to the deck and ingested live. On `implement/fid` the DataGateway refuses any non-BTC dataset before it reaches the catalog (`bybit_trade_v1_applies_to` is `BTCUSDT` only), the live adapter, the live server subject, the historical import and the default fees are bound to `BTCUSDT`, and ADR-0043 states a single-instrument invariant. ADR-0074 is the answer; this scope sequences its implementation.
+The platform ingests, publishes, serves and delivers Bybit linear trades for one instrument. The maintainer holds `trade-v1` Parquet files for other Bybit linear USDT instruments and wants them readable, deliverable to the deck and ingested live. At the registration (#483) the DataGateway refused any non-BTC dataset before it reached the catalog (`bybit_trade_v1_applies_to` was `BTCUSDT` only), the live adapter, the live server subject, the historical import and the default fees were bound to `BTCUSDT`, and ADR-0043 states a single-instrument invariant. ADR-0074 is the answer; this scope sequences its implementation. `T01` (PR #486) and `T04` (PR #488) have since changed the read, delivery and historical import; the live adapter, the live subject and the default fees remain bound to `BTCUSDT` until `T02` and `T03`.
 
 ---
 
@@ -22,7 +22,7 @@ The platform ingests, publishes, serves and delivers Bybit linear trades for one
 
 1. **ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044:** the live trades acquisition, the checkpoint identity (it carries its `dataset_identity`), the single-process loop and the explicit-gap policy with no authoritative repair source. ADR-0074 amends only what its section 8 lists.
 2. **ADR-0057, ADR-0064, ADR-0069, ADR-0072:** the server is the sole authority for canonical data; the deck receives verified bytes and has no storage mount; the wire and the K12/K13 contracts do not change.
-3. **ADR-0074** (accepted): the decisions in the Part B acceptance below.
+3. **ADR-0074** (accepted) and its **Amendment 1** (accepted 2026-10-20: the Bybit public trade archive is the historical source of every instrument): the decisions in the Part B acceptance below.
 4. Every `BTCUSDT` identity, the ordering key `(exchange_ts, trade_id)` and `TradeKeyV1` are unchanged byte for byte (pinned by `tests/test_multi_instrument_trades_contract_v1.py`).
 5. **Out of this scope:** a second venue (`A12`), spot and inverse markets, L2 for other instruments (its ordering policy is keyed by `(venue, instrument)`), a generic provider resolver, capacity measurements (#378), deployment to the server.
 
@@ -44,10 +44,10 @@ Each atom is its own implementation issue (`[implementation]` template), opened 
 
 | Atom | Result | Requires (besides ADR-0074) | Start gate |
 |---|---|---|---|
-| `T01` | Read and delivery for the allow-list | `A06`, `A08`, `A09`, `K12` | startable |
-| `T04` | Historical import `--instrument` | `A07`, `T01` | after `T01` is merged |
-| `T03` | Explicit per-instrument fees | `H02`, `T01` | after `T01` is merged |
-| `T02` | Live ingest per instrument | `A11`, `K10`, `T01`, `T03`, `T04` | after `T01`, `T04` and `T03` are merged |
+| `T01` | Read and delivery for the allow-list | `A06`, `A08`, `A09`, `K12` | **COMPLETE** (#485, PR #486) |
+| `T04` | Historical import `--instrument` from the Bybit public archive | `A07`, `T01` | **COMPLETE** (#487, PR #488) |
+| `T03` | Explicit per-instrument fees | `H02`, `T01` | startable (`T01` is merged) |
+| `T02` | Live ingest per instrument | `A11`, `K10`, `T01`, `T03`, `T04` | after `T03` is merged (`T01` and `T04` are merged) |
 
 ```text
 T01 ──> T04 ──> T03 ──> T02
@@ -57,8 +57,8 @@ Order: strictly `T01`, `T04`, `T03`, `T02`, one bounded mutation slice at a time
 
 ### Acceptance per atom (from ADR-0074; an implementation issue adds no semantic decision)
 
-- **`T01`** (ADR-0074 §1, §2, §5). The closed constant `BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT")` in `source_adapters/bybit.py`, used by `bybit_trade_v1_applies_to` and the eligibility profile; every other symbol (and `BTCUSD`, `BTCUSDC`, empty) stays refused. A non-BTC dataset is read through the `DataGateway` and admitted and delivered through K12 `admit`/`deliver` end to end in a test (the J02 wire and the deck unchanged). A **read-only catalog check** of the allow-list reports which instruments are registered `valid`; what is missing is registered **only through the producer path** (materialize, certify, publish), a file that does not pass certification is not published, and no catalog row is written directly. The BTC identities, the ordering key and an existing BTC read are unchanged (regression). The `expectedFailure` markers of the guard test that this atom makes true are removed, and its baseline-fact tests are updated to the new facts. Mutation checks for the allow-list and the applicability.
-- **`T04`** (§4). The historical import takes `--instrument` over the allow-list (any other value refused), keeps one UTC day per invocation and the producer path; the source evidence for the new instruments is stated in the issue before implementation; BTCUSDT behaviour unchanged; no repair of live gaps (ADR-0044 stands).
+- **`T01`** (ADR-0074 §1, §2, §5). The closed constant `BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT")` in `source_adapters/bybit.py`, used by `bybit_trade_v1_applies_to` and the eligibility profile; every other symbol (and `BTCUSD`, `BTCUSDC`, empty) stays refused. A non-BTC dataset is read through the `DataGateway` and admitted and delivered through K12 `admit`/`deliver` end to end in a test (the J02 wire and the deck unchanged). A **read-only catalog check** of the allow-list reports which instruments are registered `valid`; what is missing enters the catalog **only through the producer path** (materialize, certify, publish) — for the maintainer's existing Parquet by the archive import of Amendment 1, not by registration —, a file that does not pass certification is not published, and no catalog row is written directly. The BTC identities, the ordering key and an existing BTC read are unchanged (regression). The `expectedFailure` markers of the guard test that this atom makes true are removed, and its baseline-fact tests are updated to the new facts. Mutation checks for the allow-list and the applicability. **Credited `COMPLETE` (reconciliation #489): #485 / PR #486.** The registration of the existing Parquet was superseded by Amendment 1: their coverage manifests declare `bybit-public-trades-csv-v1`, which no commit produced and S13 refuses, so they are replaced through the archive import (A1.2 item 8). Not claimed: that any non-BTC dataset is registered in the server catalog.
+- **`T04`** (§4 and Amendment 1). The historical source of every instrument, `BTCUSDT` included, is the Bybit public trade archive (`<INSTRUMENT><YYYY-MM-DD>.csv.gz`, one file per UTC day, read from a local file; no network call in the producer path), with the versioned source profile `bybit-public-trade-archive-v1`; the import takes `--instrument` over the allow-list (any other value refused), keeps one UTC day per invocation and the producer path (materialize, manifests, S13, S14), refuses a day that already has a partition in the catalog and never overwrites a file; certification accepts the SQLite and the archive profile and refuses mixtures; BTCUSDT behaviour and the 2 118 existing `valid` days unchanged; no repair of live gaps (ADR-0044 stands). **Credited `COMPLETE` (reconciliation #489): #487 / PR #488.** Not claimed: the server-side record-by-record proof of BTCUSDT 2024-01-15 against the published day (`tools/compare_archive_day.py`), a real-host run, and any download, replacement or deletion of the existing files (operator steps, `docs/engineering/BYBIT_ARCHIVE_IMPORT_RUNBOOK.md`).
 - **`T03`** (§7). Fee parameters are explicit per instrument: an execution or replay over a dataset whose instrument is not `BTCUSDT` and that names no fee schedule is refused (fail-closed), with a stable reason; `BTCUSDT` defaults and identities unchanged; tests with an allow-list instrument with and without a schedule.
 - **`T02`** (§3, §6). The live adapter and server are parameterized by instrument from the allow-list (topic `publicTrade.<INSTRUMENT>`, symbol check, dataset identity, `subject_identity = bybit:<INSTRUMENT>:<storage_root_id>`, per-instance checkpoint path, gap orchestration bound to the instance's dataset); `tools/live_ingest_server.py` gets `--instrument`; a systemd template unit `quant-platform-live-ingest@<INSTRUMENT>.service` with per-instance environment files and the runbook; **a proof that two instances with different instruments do not collide** on checkpoints, partitions or catalog rows (stop condition otherwise); one hour of real provider traffic for `ETHUSDT` (handshake, `trade_id` deduplication, healthy signals, durable checkpoint) recorded as evidence; the BTC unit and its behaviour unchanged. Deployment to the server is a manual operator step and is not part of the acceptance; enabling more than `BTCUSDT` in production waits for the #378 measurements and the 365-day rule.
 
@@ -67,8 +67,8 @@ Order: strictly `T01`, `T04`, `T03`, `T02`, one bounded mutation slice at a time
 ## Authority
 
 - `AGENTS.md`
-- governance issues #381, #409, #453, #458, #475, #479, #483; design-gate issue #377; evidence issue #378
-- `docs/decisions/ADR-0074-multi-instrument-bybit-linear-trades-v1.md` (`ACCEPTED`)
+- governance issues #381, #409, #453, #458, #475, #479, #483, #489; design-gate issues #377, #487; evidence issue #378; implementation issues #485, #487
+- `docs/decisions/ADR-0074-multi-instrument-bybit-linear-trades-v1.md` (`ACCEPTED`, with Amendment 1 `ACCEPTED`)
 - `docs/product/ROADMAP.md`, `docs/product/CAPABILITY_DAG.md` (`T` atoms), `docs/architecture/OPEN_DECISIONS.md` (DG-N)
 - ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0054, ADR-0057, ADR-0064, ADR-0069, ADR-0072
 - `tests/test_package_boundaries_v1.py`, `tests/test_multi_instrument_trades_contract_v1.py`
@@ -81,8 +81,8 @@ Accepted ADRs and frozen contracts remain normative. This reconciliation weakens
 
 ```text
 main @ ef14279 (DG-K P01-P06, DG-K2 S01-S07 and DG-C/A14 v1 COMPLETE within recorded bounds)
-implement/fid: main + DG-M (M01, M02, M04, M05 COMPLETE, closeout #475, follow-on #477) + ADR-0074 (#481, #482) + this reconciliation
-DG-N: T01, T04, T03, T02 FROZEN / MISSING (authorized by #483)
+implement/fid: main + DG-M (M01, M02, M04, M05 COMPLETE, closeout #475, follow-on #477) + ADR-0074 (#481, #482) + T01 (#486) + T04 and Amendment 1 (#488) + this reconciliation
+DG-N: T01, T04 COMPLETE (reconciliation #489); T03, T02 FROZEN / MISSING (authorized by #483)
 ```
 
 Credit, do not reimplement or re-prove absent invalidating evidence: every atom `COMPLETE` in `CAPABILITY_DAG.md`, within the bound its row records.
@@ -91,8 +91,8 @@ Credit, do not reimplement or re-prove absent invalidating evidence: every atom 
 
 ## Explicit non-claims
 
-- No `T` atom is implemented; no non-BTC dataset is readable, deliverable or ingestable live.
-- The maintainer's existing Parquet files are not known to be registered, readable or certifiable until `T01` checks them.
+- `T03` and `T02` are not implemented: fees still default to `BTCUSDT` and no non-BTC instrument is ingestable live.
+- No non-BTC dataset is registered in the server catalog, so none is readable there yet: the maintainer's existing ETH/SOL/XRP/DOGE Parquet are not registered (they cannot be certified, Amendment 1) and are to be replaced by the archive import, an operator step not yet done. The server-side record-by-record proof of BTCUSDT 2024-01-15 and any real-host run are operator evidence and are not claimed.
 - No capacity is measured (#378): the daily volume, memory and disk figures offered for other instruments are not used, and nothing beyond the bounded `ETHUSDT` proof is enabled before the measurement and the 365-day rule.
 - No deployment, no L2 for other instruments, no second venue, no spot or inverse market, no repair or backfill of live gaps.
 - The generic provider `E07`, the FEI line and Omega are untouched.

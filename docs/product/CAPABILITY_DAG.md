@@ -9,7 +9,7 @@ supervised happy-path proof on the smallest real partition; deployability carrie
 ADR-0072 Amendment 1 bounds and the recorded proof findings. S08 is not authorized,
 J11 remains deferred, and no Wave 8 or DG-K/DG-K2 Golden proof is claimed.
 L2 promotion to main is a separate final wave PR; no deployment is performed here. DG-M — Canonical feature identity for deck
-results v1 is CLOSED on `implement/fid` (#475). DG-N — Multi-instrument Bybit linear trades v1 is registered and authorized (#483, ADR-0074 `ACCEPTED`): `T01`-`T04` are `FROZEN`/`MISSING`, nothing is implemented. DG-M detail: `M01`, `M02`, `M04` and `M05` are COMPLETE within their row bounds (PR #466, #468,
+results v1 is CLOSED on `implement/fid` (#475). DG-N — Multi-instrument Bybit linear trades v1 is registered and authorized (#483, ADR-0074 `ACCEPTED`): `T01` and `T04` are `COMPLETE` within their row bounds (PR #486, #488; ADR-0074 Amendment 1, #489), `T03` and `T02` are `FROZEN`/`MISSING`. DG-M detail: `M01`, `M02`, `M04` and `M05` are COMPLETE within their row bounds (PR #466, #468,
 #473, #474) under ADR-0073 and its Amendment 1, `M03` is superseded; the server now seals the identities of the definitions a deck
 names and the deck builder must declare them. No real-host run is claimed, and promotion into `main` is the operator's separate PR.**
 
@@ -21,7 +21,7 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after the DG-N registration (#483),
+Current audited inventory after the DG-N reconciliation (#489),
 recomputed mechanically from the atom tables, not by hand:
 
 ```text
@@ -33,7 +33,7 @@ OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
 ROADMAP_DEFINED                 = 115 + 3 + 9 = 127
 ROADMAP_PLANNING_COMPLETENESS   = 127 / 127 = 100%
-IMPLEMENTATION_COMPLETE         = 103 / 127 = 81.1%
+IMPLEMENTATION_COMPLETE         = 105 / 127 = 82.7%
 ```
 
 Reconciliation #444 preserves all accepted DG-K/DG-K2 credits from main and
@@ -43,7 +43,12 @@ invented by this merge; the seven L2 subatoms and eight S atoms were already
 registered on their respective lines. [SCOPE.md](../../SCOPE.md#executable-governance-verification)
 contains the executable two-parent verification.
 
-DG-N registration and authorization (issue #483): ADR-0074 is `ACCEPTED` (#377, 2026-10-19). Four atoms `T01`-`T04` are added directly as
+DG-N reconciliation (issue #489): `T01` and `T04` move from `MISSING` to `COMPLETE` on `implement/fid` (103 -> 105; implementation
+81.1% -> 82.7%); no new atom and no decision-state change (115 decided, 3 `OPEN_BLOCKING`, 9 `OPEN_DEFERABLE`, 127 atoms). ADR-0074
+Amendment 1 (accepted 2026-10-20) names the Bybit public trade archive as the historical source and supersedes the registration of
+the existing Parquet. The counts above are recomputed from these tables by script. Promotion into `main` is the operator's separate PR.
+
+Earlier, DG-N registration and authorization (issue #483): ADR-0074 is `ACCEPTED` (#377, 2026-10-19). Four atoms `T01`-`T04` are added directly as
 `FROZEN`/`MISSING` (123 -> 127 atoms; 111 -> 115 decided); no existing atom changes state. The counts above are recomputed from these
 tables by script.
 
@@ -371,12 +376,12 @@ Registered by governance issue #453 after the DG-K2 closeout (#409); the design 
 
 ### T — Multi-instrument Bybit linear trades (DG-N)
 
-Registered and authorized by governance issue #483 after the design gate #377 produced ADR-0074, `ACCEPTED` on 2026-10-19 (PR #482). The maintainer wants to read, deliver and ingest live the Bybit linear USDT instruments BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT and DOGEUSDT, and to run this work in the current wave (`implement/fid`). `SCOPE.md` Part B records the start gate and the acceptance of each atom; the order is `T01`, `T04`, `T03`, `T02`. No atom here is implemented.
+Registered and authorized by governance issue #483 after the design gate #377 produced ADR-0074, `ACCEPTED` on 2026-10-19 (PR #482). The maintainer wants to read, deliver and ingest live the Bybit linear USDT instruments BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT and DOGEUSDT, and to run this work in the current wave (`implement/fid`). `SCOPE.md` Part B records the start gate and the acceptance of each atom; the order is `T01`, `T04`, `T03`, `T02`. `T01` and `T04` are `COMPLETE` on `implement/fid` (reconciliation #489); `T03` and `T02` are not implemented.
 
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
-| T01 | Multi-instrument read and delivery v1 | Data Access/Application | A06, A08, A09, K12 | T04, T03, T02 | FROZEN | MISSING | ADR-0074 §1, §2, §5 (accepted; authorized by #483). The closed constant `BYBIT_LINEAR_TRADE_INSTRUMENTS_V1` (BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT) drives the ordering and eligibility applicability; a non-BTC dataset is read, admitted and delivered end to end (`DataGateway`, K12 `admit`/`deliver`); a read-only check of the catalog for the allow-list and registration of what is missing through the producer path (materialize, certify, publish); BTC identities and ordering key unchanged. |
-| T04 | Historical import per instrument v1 | Source/Producer | A07, T01 | T02 | FROZEN | MISSING | ADR-0074 §4 (accepted; authorized by #483). `--instrument` over the allow-list for the one-UTC-day historical import; the source evidence for the new instruments is stated in its issue; history enters only through the producer path; no repair of live gaps (ADR-0044 stands). |
+| T01 | Multi-instrument read and delivery v1 | Data Access/Application | A06, A08, A09, K12 | T04, T03, T02 | FROZEN | COMPLETE | ADR-0074 §1, §2, §5 (accepted; authorized by #483). The closed constant `BYBIT_LINEAR_TRADE_INSTRUMENTS_V1` (BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT) drives the ordering and eligibility applicability; a non-BTC dataset is read, admitted and delivered end to end (`DataGateway`, K12 `admit`/`deliver`); a read-only check of the catalog for the allow-list; what is missing enters the catalog only through the producer path (for the existing Parquet, by the archive import of ADR-0074 Amendment 1, not by registration); BTC identities and ordering key unchanged. Credited `COMPLETE` at the DG-N reconciliation (#489): #485 / PR #486 on `implement/fid`; the allow-list constant drives the ordering and eligibility applicability for all five instruments, each read through the `DataGateway` and admitted and delivered through K12 end to end on real Parquet and the J14 transfers, plus a read-only catalog check; mutation-checked; BTC identities and ordering key unchanged. The registration of the existing Parquet was superseded by ADR-0074 Amendment 1 (they are replaced through the archive import). Not claimed: that any non-BTC dataset is registered in the server catalog, a real-host run. |
+| T04 | Historical import per instrument v1 | Source/Producer | A07, T01 | T02 | FROZEN | COMPLETE | ADR-0074 §4 and Amendment 1 (accepted; authorized by #483, re-scoped by #487). `--instrument` over the allow-list for the one-UTC-day historical import from the Bybit public trade archive (a local file, no network call in the producer path); history enters only through the producer path; no repair of live gaps (ADR-0044 stands). Credited `COMPLETE` at the DG-N reconciliation (#489): #487 / PR #488 on `implement/fid`; ADR-0074 Amendment 1 (accepted 2026-10-20) names the Bybit public trade archive as the historical source of every instrument; the archive adapter, the SQLite and archive certification profiles (no mixtures), the one-UTC-day import with `--instrument` through the producer path (S13, S14) under a per-day lock, the fetch, import and compare tools, the runbook and a PostgreSQL integration test in CI; BTCUSDT 2024-01-15 from the archive equals the SQLite golden on aggregates. Not claimed: the server-side record-by-record proof, a real-host run, any download or replacement of the existing files. |
 | T03 | Explicit per-instrument fees v1 | Execution | H02, T01 | T02 | FROZEN | MISSING | ADR-0074 §7 (accepted; authorized by #483). Fee parameters are explicit per instrument; an execution or replay over a dataset whose instrument is not BTCUSDT and that names no fee schedule is refused (fail-closed); BTCUSDT behaviour unchanged. |
 | T02 | Live trades ingest per instrument v1 | Data Plane/Operations | A11, K10, T01, T03, T04 | multi-asset live research | FROZEN | MISSING | ADR-0074 §3, §6 (accepted; authorized by #483). Adapter and server parameterized by instrument; one process per instrument with its own checkpoint and subject (`quant-platform-live-ingest@<INSTRUMENT>.service`, runbook); two instances proved not to collide on checkpoints, partitions or catalog rows; one hour of real provider traffic for ETHUSDT; deployment is a manual operator step and the capacity rule gates enabling beyond BTCUSDT. |
 
@@ -565,7 +570,7 @@ M01 ──> M02 ──> M04 ──> M05      (M03 superseded)
 
 ### DG-N — Multi-instrument Bybit linear trades v1 — CLOSED (design gate; ADR-0074 `ACCEPTED`, #377)
 
-Closed by ADR-0074: a closed allow-list of five Bybit linear USDT instruments, per-instrument dataset, subject and checkpoint identity, one live process per instrument, ADR-0044 unchanged for gaps, a capacity rule that gates production enabling on the #378 measurements, explicit fees per instrument. Implementation of `T01`-`T04` is authorized by #483 and not started. Fixed inputs (not reopened): ADR-0040, ADR-0042, ADR-0043, ADR-0044, no change of any BTCUSDT identity byte. Out of scope: a second venue (`A12`), spot and inverse, L2 for other instruments, a generic provider resolver, measured capacity.
+Closed by ADR-0074: a closed allow-list of five Bybit linear USDT instruments, per-instrument dataset, subject and checkpoint identity, one live process per instrument, ADR-0044 unchanged for gaps, a capacity rule that gates production enabling on the #378 measurements, explicit fees per instrument. Implementation of `T01`-`T04` was authorized by #483; `T01` and `T04` are `COMPLETE` (#489) and `T03` and `T02` are not started. ADR-0074 Amendment 1 (accepted 2026-10-20, #487) chose the Bybit public trade archive as the historical source. Fixed inputs (not reopened): ADR-0040, ADR-0042, ADR-0043, ADR-0044, no change of any BTCUSDT identity byte. Out of scope: a second venue (`A12`), spot and inverse, L2 for other instruments, a generic provider resolver, measured capacity.
 
 ```text
 T01 ──> T04 ──> T03 ──> T02
@@ -713,7 +718,7 @@ DG-K2  Server/deck deployment composition              COMPLETE within recorded 
 DG-C/L2 L2 historical v1 (#442)                         COMPLETE on implement/l2: A14,A14a-A14e; golden #413/#430 11/11;
                                                        A14f/A14g held MISSING; separate L2 promotion to main
 DG-M   Canonical feature identity for deck results v1   COMPLETE within recorded bounds on implement/fid (closeout #475); M01,M02,M04,M05; M03 superseded; no real-host run claimed
-DG-N   Multi-instrument Bybit linear trades v1          AUTHORIZED (#483; ADR-0074 ACCEPTED #377); T01,T04,T03,T02 FROZEN/MISSING; nothing implemented
+DG-N   Multi-instrument Bybit linear trades v1          IN PROGRESS on implement/fid (#483, #489; ADR-0074 ACCEPTED #377 and Amendment 1); T01,T04 COMPLETE; T03,T02 FROZEN/MISSING
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```

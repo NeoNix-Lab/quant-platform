@@ -82,7 +82,7 @@ DG-K2 Server/deck deployment composition        COMPLETE within recorded bounds 
                                                     S01-S07 on implement/dgk2; supervised proof: one happy path; S08 not authorized)
 DG-M Canonical feature identity (implement/fid)  COMPLETE within recorded bounds (closeout #475; ADR-0073 and Amendment 1; PR #466/#468/#473/#474);
                                                     M03 superseded; no real-host run claimed; promotion to main is separate
-DG-N Multi-instrument Bybit linear trades (implement/fid)  AUTHORIZED (#483; ADR-0074 ACCEPTED #377); T01,T04,T03,T02 not started
+DG-N Multi-instrument Bybit linear trades (implement/fid)  IN PROGRESS (#483, #489; ADR-0074 ACCEPTED #377, Amendment 1); T01,T04 COMPLETE (PR #486, #488); T03,T02 not started
 DG-C L2 historical v1 (implement/l2, #442)       COMPLETE (A14,A14a-A14e; PR #375/#379/#401/#411/#417/#408;
                                                     golden #413/#430, 11/11 at 1cdd78f; explicit gaps);
                                                     A14f/A14g held MISSING; promotion to main is separate
@@ -116,10 +116,13 @@ OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
 ROADMAP_DEFINED                 = 115 + 3 + 9 = 127
 ROADMAP_PLANNING_COMPLETENESS   = 127 / 127 = 100%
-IMPLEMENTATION_COMPLETE         = 103 / 127 = 81.1%
+IMPLEMENTATION_COMPLETE         = 105 / 127 = 82.7%
 ```
 
-DG-N registration (#483): ADR-0074 accepted; `T01`-`T04` added as `FROZEN`/`MISSING` (123 -> 127 atoms; semantic 90.2% -> 90.6%;
+DG-N reconciliation (#489): `T01` and `T04` are credited `COMPLETE` on `implement/fid` (103 -> 105 of 127; implementation 81.1% -> 82.7%);
+no new atom and no decision-state change. ADR-0074 Amendment 1 chose the Bybit public trade archive as the historical source.
+
+Earlier, DG-N registration (#483): ADR-0074 accepted; `T01`-`T04` added as `FROZEN`/`MISSING` (123 -> 127 atoms; semantic 90.2% -> 90.6%;
 implementation 83.7% -> 81.1%); nothing is implemented.
 
 Earlier, DG-M closeout (#475): `M01`, `M02`, `M04`, `M05` are credited `COMPLETE` on `implement/fid` (99 -> 103 of 123; implementation
@@ -191,7 +194,7 @@ DG-J  Remote Service Topology (Wave 8)           RESOLVED / IMPLEMENTED
 DG-K  Process Topology v1                        RESOLVED / IMPLEMENTED within recorded bounds (ADR-0068, ADR-0069; closeout #381)
 DG-K2 Server/deck deployment composition         RESOLVED / IMPLEMENTED within recorded bounds (ADR-0072, Amendment 1; closeout #409)
 DG-M  Canonical feature identity for deck results   RESOLVED / IMPLEMENTED within recorded bounds (ADR-0073, Amendment 1; closeout #475)
-DG-N  Multi-instrument Bybit linear trades v1       AUTHORIZED (ADR-0074 ACCEPTED #377; reconciliation #483); implementation not started
+DG-N  Multi-instrument Bybit linear trades v1       IN PROGRESS (ADR-0074 ACCEPTED #377 and Amendment 1; reconciliations #483, #489); T01,T04 implemented, T03,T02 not started
 ```
 
 Important current boundaries:
@@ -211,7 +214,7 @@ Explicit deferables — second-provider resolution, exact L3/MBO semantics, Data
 - DG-K: Process Topology v1 is resolved (#318 registration, #319 design gate: ADR-0068 process topology v1, ADR-0069 J02 carriage of consumer seams and deck handoff v1). `P01`-`P06` are `FROZEN`/`COMPLETE` within recorded bounds (operator closeout #381), merged into `implement/dgk`, not composed in any executable and without a Golden proof; owner inputs fix identity-preserving canonical profiles, hosts in `tools/`, one J03 worker, a free server with data-local J03 handlers only, heavy compute on the deck on its own initiative, and `J11` not planned. See `OPEN_DECISIONS.md` (DG-K).
 - DG-K2: registered by #382 after the DG-K closeout; its design gate #383 produced ADR-0072, accepted on 2026-10-16, and #389 authorizes `S01`-`S07` (K12 authority, K13 composition, API host with TLS/mTLS, credential and trust operations, deck workload module, deployment units, two-part topology proof) on the integration branch `implement/dgk2` (name proposed, to be confirmed by the maintainer). Closed by operator closeout #409: all seven are implemented on `implement/dgk2` within the bounds recorded in `CAPABILITY_DAG.md`; the split is deployable only within the bounds of ADR-0072 Amendment 1; Omega adoption is out of scope. Default proposed placement: before Wave 9, because the split is the precondition for any remote consumer; the order remains the maintainer's.
 - DG-M: registered by #453 after the DG-K2 closeout; the maintainer named feature traceability as a requirement on 2026-10-18. Its design gate #454 produced ADR-0073, accepted on 2026-10-18 (#457), #458 authorized `M01` (bar-flow representation), `M02` (failed-aggression feature), `M04` (server registry and `definitions` carriage) and `M05` (deck declaration rule and proof) on the integration branch `implement/fid`; `M03` is superseded. Closed by operator closeout #475: all four are implemented and merged (PR #466, #468, #473, #474) within the bounds recorded in `CAPABILITY_DAG.md`; no real-host run is claimed, and promotion into `main` is the operator's separate PR. Follow-on #477 / PR #478: the deck protocol client carries `definitions` (not an atom). Independent of the FEI line. Default proposed placement: after DG-K2 and before Wave 9; the order remains the maintainer's.
-- DG-N: the maintainer holds Parquet trades for other Bybit linear USDT instruments and wants them read, delivered and ingested live (2026-10-19). The design gate #377 produced ADR-0074 (accepted, #482) and #483 authorizes `T01` (read and delivery), `T04` (historical import), `T03` (explicit fees) and `T02` (live ingest per instrument) on `implement/fid`, in the current wave; the wave is promoted to `main` at its end. A second venue, spot, inverse and L2 for other instruments are out of scope.
+- DG-N: the maintainer holds Parquet trades for other Bybit linear USDT instruments and wants them read, delivered and ingested live (2026-10-19). The design gate #377 produced ADR-0074 (accepted, #482) and #483 authorized `T01` (read and delivery), `T04` (historical import), `T03` (explicit fees) and `T02` (live ingest per instrument) on `implement/fid`, in the current wave; the wave is promoted to `main` at its end. Amendment 1 (#487, accepted 2026-10-20) chose the Bybit public trade archive as the only historical source, because the existing files declare a source profile no commit produced and S13 refuses; `T01` and `T04` are `COMPLETE` (#489). A second venue, spot, inverse and L2 for other instruments are out of scope.
 
 ## Operational dependency direction
 

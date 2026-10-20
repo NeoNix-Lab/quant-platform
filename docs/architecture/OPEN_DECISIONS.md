@@ -2,7 +2,7 @@
 
 This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
-## Inventory checkpoint — DG-N registration (#483)
+## Inventory checkpoint — DG-N reconciliation (#489)
 
 Recomputed from the union of the actual DAG rows and checked against expanded
 Capability Map rows, preserving both parents' accepted credits. No new atom,
@@ -19,7 +19,7 @@ OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
 ROADMAP_DEFINED                 = 115 + 3 + 9 = 127
 ROADMAP_PLANNING_COMPLETENESS   = 127 / 127 = 100%
-IMPLEMENTATION_COMPLETE         = 103 / 127 = 81.1%
+IMPLEMENTATION_COMPLETE         = 105 / 127 = 82.7%
 ```
 
 ## Resolved foundation — reference only
@@ -944,11 +944,14 @@ linear USDT instruments (BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT) in one co
 identity with every BTCUSDT identity unchanged; one live process per instrument; ADR-0044 unchanged (explicit gaps, no repair source);
 existing Parquet enters only through the producer path; a capacity rule (at least 365 days to the critical-pressure threshold) that gates
 production enabling and waits for the #378 measurements; explicit fees per instrument. Implementation of `T01`, `T04`, `T03`, `T02` is
-authorized and not started (`SCOPE.md` Part B).
+authorized (`SCOPE.md` Part B): `T01` and `T04` are `COMPLETE` (#489; PR #486, #488), `T03` and `T02` are not started. Amendment 1
+(#487, accepted 2026-10-20) decided the historical source: the Bybit public trade archive for every instrument, BTCUSDT included, with
+versioned source profiles, certification accepting the SQLite and the archive profile, and the existing Parquet replaced through the
+archive import instead of registered (their declared CSV source profile was never produced by any commit and S13 refuses it).
 
 Live follow-ups, none authorized: the Phase A measurements of #378 (they gate enabling live ingest beyond BTCUSDT in production); the
-location and registration state of the maintainer's existing Parquet (checked by `T01`); the historical source for the new instruments
-(stated by `T04`); L2 for other instruments (its ordering policy is keyed by `(venue, instrument)` and is not covered); a second venue
+replacement of the maintainer's existing ETH/SOL/XRP/DOGE Parquet by the archive import and the server-side record-by-record proof of
+BTCUSDT 2024-01-15 (operator steps, with `tools/compare_archive_day.py`); L2 for other instruments (its ordering policy is keyed by `(venue, instrument)` and is not covered); a second venue
 (`A12`); a new instrument beyond the allow-list needs an ADR-0074 amendment.
 
 ## Explicitly deferable decisions
