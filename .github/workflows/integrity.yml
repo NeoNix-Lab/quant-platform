@@ -260,6 +260,10 @@ jobs:
         env:
           DATA_GATEWAY_TEST_DSN: postgresql://postgres:ci-postgres-password@127.0.0.1:5432/market_catalog_eligibility
         run: python tests/integration_publication_eligibility_postgres.py
+      - name: Run Bybit archive historical import PostgreSQL integration
+        env:
+          DATA_GATEWAY_TEST_DSN: postgresql://postgres:ci-postgres-password@127.0.0.1:5432/market_catalog_eligibility
+        run: python tests/integration_bybit_archive_import_postgres.py
 
   adversarial-refusal-postgres:
     name: Disposable PostgreSQL 17 adversarial publication refusal test

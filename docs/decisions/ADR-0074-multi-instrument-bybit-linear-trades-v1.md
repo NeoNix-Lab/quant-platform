@@ -1,7 +1,7 @@
 # ADR-0074 - Multi-instrument Bybit linear trades: read, delivery and live ingest v1
 
 **Status:** ACCEPTED (design gate #377, PR #481; accepted by the maintainer 2026-10-19, recorded in issue #377). Amendment 1
-(historical source, design gate #487): PROPOSED.
+(historical source, design gate #487): ACCEPTED 2026-10-20.
 **Date:** 2026-10-19
 
 Design gate #377; evidence issue #378. Amends ADR-0040, ADR-0043 and the applicability of the Bybit `trade-v1` ordering and
@@ -157,9 +157,9 @@ the proposal were resolved as follows:
    slice 1 begins with the read-only catalog check and registers what is missing through the producer path.
 4. **Historical source.** Stated by the issue of slice 4 with its own evidence; this ADR does not choose it.
 
-## Amendment 1 - Historical source: the Bybit public trade archive (PROPOSED)
+## Amendment 1 - Historical source: the Bybit public trade archive
 
-**Status:** PROPOSED (design gate #487, 2026-10-20). Effective only when the maintainer accepts it.
+**Status:** ACCEPTED (design gate #487, PR #488; accepted by the maintainer on 2026-10-20, see A1.6).
 
 ### A1.1 Facts
 
@@ -197,7 +197,7 @@ the proposal were resolved as follows:
 
 1. **Source.** The historical source of every instrument of the allow-list, `BTCUSDT` included, is the Bybit public trade archive,
    one file per UTC day. The importer reads a **local** file that the operator downloaded; the producer path makes no network call.
-   A download helper, if any, is a separate operator tool outside the producer path.
+   The download helper `tools/fetch_bybit_trade_archive.py` is an operator tool outside the producer path.
 2. **Source profile.** New versioned names: `source_semantics = "bybit-public-trade-archive-v1"`, `mapping =
    "bybit-archive-day-extract-v1"`. The unversioned `bybit-public-trades-csv-v1` / `bybit-csv-day-extract-v1` are not adopted.
 3. **Header.** Exactly one of the two headers of A1.1; any other header refuses the day. A new archive format is a new amendment.
@@ -221,8 +221,8 @@ the proposal were resolved as follows:
    other checks are unchanged. A partition already `valid` from the SQLite source is untouched.
 8. **Existing Parquet.** The files of A1.1 are **not registered**. Per instrument they are replaced through the producer path: the
    operator moves the instrument's directory aside on the same disk, the archive import writes and publishes each day, a comparison
-   per day against the old file (row count and set of `trade_id`) is reported, and only then does the maintainer delete the old
-   copy. Removing data stays the maintainer's step.
+   per day against the old file (`tools/compare_archive_day.py`: `trade_id` set, millisecond timestamp, side, price and size) is
+   reported, and only then does the maintainer delete the old copy. Removing data stays the maintainer's step.
 9. **BTCUSDT.** Any future historical import of `BTCUSDT` uses the archive. The 2 118 `valid` days from the SQLite source stay as
    they are; this amendment does not re-import them.
 
@@ -254,3 +254,12 @@ registration part of `T01` (#485) is closed by the same reconciliation: there is
    `BTCUSDT` archive day differ from its SQLite day.
 2. **Download.** A helper in `tools/` that fetches one day into a staging directory, or the operator's own command.
 3. **Re-import of the 2 118 `BTCUSDT` days.** Proposed: no.
+
+### A1.6 Acceptance record
+
+Accepted by the maintainer on 2026-10-20 (the instruction to implement the amendment on PR #488). The open items of A1.5 are
+resolved as proposed:
+
+1. **Precision.** Milliseconds, truncated (A1.2 item 4).
+2. **Download.** `tools/fetch_bybit_trade_archive.py` fetches days into a staging directory; the import reads the local file.
+3. **Re-import of the 2 118 `BTCUSDT` days.** No; an archive import of a day that already has a catalog partition is refused.
