@@ -1,6 +1,6 @@
 # ADR-0075 - Live trades: one continuous session and append-only slices v1
 
-**Status:** PROPOSED (design gate #504)
+**Status:** ACCEPTED (design gate #504, PR #505; accepted by the maintainer 2026-10-21, recorded in issue #504)
 **Date:** 2026-10-21
 
 Amends ADR-0040 (§6, §8), ADR-0042 (§1) and ADR-0043 (§1) only where section 8 says so, and only when this ADR is `ACCEPTED`. It
@@ -194,3 +194,19 @@ The maintainer delegated the bounds and the order of work to the author of this 
    so a deletion that an operator builds over them would remove them. The cleanup code is the maintainer's and stays untouched
    by this ADR.
 4. **Consolidation:** not now (item 7).
+
+## Acceptance record
+
+Accepted by the maintainer on 2026-10-21: the proposal (PR #505) was merged, and the maintainer instructed to continue **without
+consolidation**. The choices of the delegation above stand as accepted:
+
+1. **Bounds** (configurable defaults): `slice_seconds` 300, `slice_max_trades` 50 000, buffer 20 000 messages.
+2. **Order of work:** slice 9.1, then 9.2, then 9.3.
+3. **The existing live partitions** are left as they are; recovery is paused. If a gap makes the data unusable, the history is
+   re-ingested from scratch. The cleanup code is the maintainer's and is untouched.
+4. **Consolidation:** not part of this decision. It stays outside the first version and is opened only on a measured read or
+   admission cost; the slices already make every acquired trade readable.
+5. **Assumption to be measured, not accepted as a fact:** that the provider's stream is non-decreasing in `exchange_ts`. The proof of
+   slice 9.3 reports the number of violations; a violation is an interruption.
+
+Implementation of slices 9.1 to 9.3 is authorized by a governance reconciliation (a separate issue); no slice is implemented yet.
