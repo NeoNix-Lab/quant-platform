@@ -42,6 +42,7 @@ from quant_platform.source_adapters.bybit_live import (
     BYBIT_RECENT_PUBLIC_TRADES_MAPPING_V1,
     BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1,
     ReconnectStatus,
+    SUPPORTED_SYMBOL,
     bybit_live_dataset_identity,
 )
 
@@ -209,6 +210,7 @@ def record_explicit_long_gap(
     code_ref: str,
     detected_at: Instant | str,
     evaluation: RepairSourceEvaluation | None = None,
+    instrument: str = SUPPORTED_SYMBOL,
 ) -> LongGapRecord:
     """Persist explicit non-complete coverage for a long gap.
 
@@ -218,7 +220,12 @@ def record_explicit_long_gap(
     chain instead of emitting disconnected overlapping records.
     """
 
-    identity = bybit_live_dataset_identity()
+    identity = bybit_live_dataset_identity(instrument)
+    if interval.start_key.instrument != identity.instrument:
+        raise ValueError(
+            f"the gap anchor belongs to {interval.start_key.instrument}, not to {identity.instrument}: "
+            "one instrument's gap evidence never goes into another's dataset"
+        )
     created_at = Instant.parse(detected_at)
     evaluation = evaluation or evaluate_current_bybit_archive_authority(interval)
     dataset_root = Path(storage_root).joinpath(
@@ -310,7 +317,7 @@ class OpenLongGapLoad:
     unparseable_manifest_paths: tuple[str, ...]
 
 
-def load_open_long_gap_records(*, storage_root: str | Path) -> OpenLongGapLoad:
+def load_open_long_gap_records(*, storage_root: str | Path, instrument: str = SUPPORTED_SYMBOL) -> OpenLongGapLoad:
     """Load durable open long-gap heads for the Bybit live dataset.
 
     This is a read model over Declared Coverage files. A gap manifest remains
@@ -324,7 +331,7 @@ def load_open_long_gap_records(*, storage_root: str | Path) -> OpenLongGapLoad:
     via ``unparseable_manifest_paths`` instead.
     """
 
-    identity = bybit_live_dataset_identity()
+    identity = bybit_live_dataset_identity(instrument)
     dataset_root = Path(storage_root).joinpath(
         identity.layer,
         identity.dataset_kind,
