@@ -68,7 +68,7 @@ reconciled nor recorded as a gap, and the checkpoint advances across it (ADR-004
 ### 1. One continuous session per instance
 
 The WebSocket session is not closed between publications. A reader keeps receiving while a slice is being published; received
-messages go into a **bounded in-memory buffer**, and the publisher drains it. There is no interval during which the process is
+messages go into a **bounded in-memory buffer** (default 20 000 messages), and the publisher drains it. There is no interval during which the process is
 not listening unless the session itself is interrupted. A buffer that would overflow is an **interruption** (item 5), never a
 silent drop. Instance, subject, checkpoint and dataset stay per instrument (ADR-0074).
 
@@ -78,7 +78,7 @@ The unit of publication is a **slice**: the trades of one instrument whose `exch
 `[B(k-1), B(k))`, published as one partition. Windows of one session **chain exactly**: the end of a window is the start of the
 next. Boundaries are defined in exchange time only, from the stream itself:
 
-- a slice closes after `slice_seconds` of wall clock (default 300) or `slice_max_trades` trades, whichever comes first, at a message
+- a slice closes after `slice_seconds` of wall clock (default 300) or `slice_max_trades` trades (default 50 000), whichever comes first, at a message
   boundary;
 - the boundary `B(k)` is the greatest `exchange_ts` received so far; trades with `exchange_ts == B(k)` stay in the buffer for the
   next slice, so a slice never splits a millisecond between two partitions;
@@ -123,8 +123,11 @@ of the admission, not of this ADR, and is unchanged.
 
 ### 7. Not decided here
 
-- **Day consolidation** (replacing a closed day's slices with one partition, for instance from the Bybit archive) is a separate
-  decision with its own trigger: a measured read or admission cost, not an assumption.
+- **Day consolidation.** With slices a closed day is stored as about 288 small partitions. Consolidation would later replace
+  them with one partition per day (merging the slices, or taking the day from the Bybit archive), so that a read of a whole day
+  opens one file instead of 288. It is an optimization of reads, not a condition of correctness: with slices every trade is
+  already readable and nothing is superseded. It is therefore not part of this decision, and it is opened only if a measured read
+  or admission cost asks for it.
 - **The already damaged days** (the supersession of F1 and the loss of F2 in the existing catalog) are **not repaired**.
   Maintainer's instruction of 2026-10-21: recovery is paused; if a gap makes the data unusable the history is re-ingested from
   scratch. Existing live partitions stay as they are.
@@ -165,13 +168,29 @@ ADR-0040 §4, §5, §7, §9, §10, ADR-0042 §2 to §7 and ADR-0044 are untouche
 - That Bybit's stream is non-decreasing in `exchange_ts`; the proof of item 9.3 measures it, and a violation is fail-closed.
 - That the existing damaged days are recoverable or repaired; they are left as they are.
 - Any measured read latency over many slices, or a choice of the consolidation policy.
-- That five minutes and 100 000 trades are the right bounds; they are the proposed defaults.
+- That 300 s, 50 000 trades and 20 000 messages are the best bounds; they are chosen by the estimates of the bounds paragraph
+  of item 2 and are checked, not proven, by the proof of item 9.3.
 - A deployment: enabling a changed server on the host is a manual operator step.
 
-## Open items for the maintainer
+## Choices made under the maintainer's delegation (2026-10-21)
 
-1. **Bounds.** `slice_seconds` 300 and `slice_max_trades` 100 000 as defaults, and a buffer bound (proposed: 200 000 messages).
-2. **Order of work.** Slice 9.1 alone ends F1 quickly and leaves F2; slices 9.1 and 9.2 together end both. Proposed: 9.1, then 9.2.
-3. **The existing live partitions.** Left as they are (recovery is paused, item 7). Confirm that neither retention nor any cleanup
-   is to touch `superseded` partitions until the history is re-ingested or consciously discarded.
-4. **Consolidation.** Whether to open it now or only on a measured trigger.
+The maintainer delegated the bounds and the order of work to the author of this proposal and asked to test as early as possible.
+
+1. **Bounds** (configurable; these are the defaults):
+   - `slice_seconds` **300**: at the busiest hour of the archive day five minutes are about 26 000 trades, about 1 MB (estimate),
+     and a K12 window of up to an hour is at most 13 members, within the 16 allowed. One minute would give 1 440 partitions a day
+     and 61 members an hour, over the limit.
+   - `slice_max_trades` **50 000**: about 1.9 MB at 37 bytes a trade (estimate), under the 3 MiB per member that K12 carries; the
+     bound only binds on a burst, since five minutes of the busiest hour is 26 000.
+   - **Buffer 20 000 messages**: the busiest hour is at most 86 trades a second, hence at most 86 messages a second (one trade
+     per message at worst); 20 000 messages cover at least about four minutes of stalled publication, against the second or two a
+     publication takes in the runs of PR #502. A larger stall is an interruption (item 5).
+2. **Order of work: 9.1, then 9.2, then 9.3.** Slice 9.1 is small and makes every day readable at once (ends F1); slice 9.2 ends F2;
+   slice 9.3 holds the configuration and the one-hour real-provider run, which then also covers `T02` part 6.
+3. **The existing live partitions.** Left as they are; recovery is paused (item 7). Nothing in the repository runs retention or
+   deletion by itself: the only callers of `operations/retention.py` and `application/retention_deletion.py` are
+   `tools/dispose_source_copy.py` (disposal of a source copy) and the wave-6 golden proof, both started by an operator, and
+   neither is pointed at canonical `superseded` partitions. The policy code does classify such partitions as candidates by age,
+   so a deletion that an operator builds over them would remove them. The cleanup code is the maintainer's and stays untouched
+   by this ADR.
+4. **Consolidation:** not now (item 7).
