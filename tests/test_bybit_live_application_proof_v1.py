@@ -127,8 +127,8 @@ class _SpyTracker(app_bybit_live.LiveSessionTracker):
 
     created: list["_SpyTracker"] = []
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
         self.disconnect_reasons: list[str] = []
         _SpyTracker.created.append(self)
 
