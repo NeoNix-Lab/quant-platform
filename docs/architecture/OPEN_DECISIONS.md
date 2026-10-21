@@ -2,7 +2,7 @@
 
 This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
-## Inventory checkpoint — DG-N reconciliation (#489)
+## Inventory checkpoint — DG-O registration (#507)
 
 Recomputed from the union of the actual DAG rows and checked against expanded
 Capability Map rows, preserving both parents' accepted credits. No new atom,
@@ -11,15 +11,15 @@ capability or follow-on authorization is created. DG-K/DG-K2 are already on main
 The [scope verifier](../../SCOPE.md#executable-governance-verification) captures both OIDs.
 
 ```text
-TOTAL_ATOMS                     = 127
-CLASSIFIED_ATOMS                = 127
+TOTAL_ATOMS                     = 130
+CLASSIFIED_ATOMS                = 130
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 115 / 127 = 90.6%
+SEMANTIC_FROZEN_OR_RESOLVED     = 118 / 130 = 90.8%
 OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 115 + 3 + 9 = 127
-ROADMAP_PLANNING_COMPLETENESS   = 127 / 127 = 100%
-IMPLEMENTATION_COMPLETE         = 105 / 127 = 82.7%
+ROADMAP_DEFINED                 = 118 + 3 + 9 = 130
+ROADMAP_PLANNING_COMPLETENESS   = 130 / 130 = 100%
+IMPLEMENTATION_COMPLETE         = 105 / 130 = 80.8%
 ```
 
 ## Resolved foundation — reference only
@@ -953,6 +953,20 @@ Live follow-ups, none authorized: the Phase A measurements of #378 (they gate en
 replacement of the maintainer's existing ETH/SOL/XRP/DOGE Parquet by the archive import and the server-side record-by-record proof of
 BTCUSDT 2024-01-15 (operator steps, with `tools/compare_archive_day.py`); L2 for other instruments (its ordering policy is keyed by `(venue, instrument)` and is not covered); a second venue
 (`A12`); a new instrument beyond the allow-list needs an ADR-0074 amendment.
+
+## DG-O — Live publication: continuous session and append-only slices v1 — RESOLVED (ADR-0075 `ACCEPTED`, #504)
+
+Designed by #504 (ADR-0075, PR #505), accepted on 2026-10-21 (PR #506) and registered by #507. Decided: one continuous WebSocket session per
+instance decoupled from publication by a bounded buffer; slices with chained exchange-time windows (300 s or 50 000 trades, never across a UTC
+midnight); each slice is revision 1 of its own partition `dt=<day>/seg=<start>` and is never superseded; checkpoint invariants unchanged
+(it binds a slice partition); interruptions as ADR-0040 section 7 and ADR-0042 section 5 already decide, ADR-0044 unchanged. Implementation of
+`O01`, `O02`, `O03` is authorized (`SCOPE.md` Part C) and not started; `T02` closes with `O03`.
+
+Live follow-ups, none authorized: consolidation of a closed day's slices into one partition (a read optimization, opened only on a measured
+read or admission cost); the already damaged live days (the superseded revisions and the trades never acquired before the fix), left as they
+are with recovery paused, re-ingested from scratch if a gap makes the data unusable; the assumption that the provider's `exchange_ts` is
+non-decreasing along the stream, measured by `O03`; the retention policy's classification of `superseded` partitions as candidates by age
+(the cleanup code is the maintainer's and is untouched).
 
 ## Explicitly deferable decisions
 
