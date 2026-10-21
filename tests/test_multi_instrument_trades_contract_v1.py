@@ -113,7 +113,6 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
         live = read("src/quant_platform/source_adapters/bybit_live.py")
         self.assertIn('SUPPORTED_SYMBOL = "BTCUSDT"', live)
         self.assertIn('SUPPORTED_TOPIC = "publicTrade.BTCUSDT"', live)
-        self.assertIn('subject_identity=f"bybit:BTCUSDT:{config.storage_root_id}"', read("src/quant_platform/application/live_ingest_server.py"))
         self.assertIn('SUPPORTED_INSTRUMENT = "BTCUSDT"', read("src/quant_platform/application/bybit_import.py"))
         self.assertIn("Canonical Bybit BTCUSDT linear perpetual VIP0 rates", read("src/quant_platform/execution/__init__.py"))
         self.assertIn("exactly one venue, instrument and", read("docs/decisions/ADR-0043-live-ingest-server-composition-v1.md"))
@@ -145,12 +144,31 @@ class MultiInstrumentTradesContractV1Tests(unittest.TestCase):
         )
         self.assertEqual((stamp, "t-1"), bybit_trade_v1_ordering_key(record))
 
-    # -- the target properties: they fail on the baseline (expectedFailure) ----------------------------------
+    # -- the target properties: they failed on the baseline (expectedFailure) and T02 part 3 made them true ----
 
-    @unittest.expectedFailure
-    def test_target_the_live_subject_and_checkpoint_are_per_instrument(self) -> None:
+    def test_the_live_subject_and_checkpoint_are_per_instrument(self) -> None:
         source = read("src/quant_platform/application/live_ingest_server.py")
         self.assertNotIn('subject_identity=f"bybit:BTCUSDT:', source)
+        self.assertIn('subject_identity=f"bybit:{config.instrument}:{config.storage_root_id}"', source)
+        # behaviour, not text: each instrument's subject is its own, and the BTCUSDT subject is the one it always was
+        from quant_platform.application.live_ingest_server import LiveIngestServerConfigV1, _subject
+        from quant_platform.operations.pressure import PressurePolicyDefinition
+        from datetime import timedelta
+
+        policy = PressurePolicyDefinition(
+            max_capacity_observation_age=timedelta(seconds=1), pressure_available_bytes=1, critical_available_bytes=1,
+            exhausted_available_bytes=0,
+        )
+        for instrument in ALLOW_LIST:
+            config = LiveIngestServerConfigV1(
+                storage_root="/srv/marketdata", storage_root_id="hot", checkpoint_path=f"/srv/{instrument}.json",
+                pressure_policy=policy, instrument=instrument,
+            )
+            self.assertEqual(f"bybit:{instrument}:hot", _subject(config).subject_identity)
+        default = LiveIngestServerConfigV1(
+            storage_root="/srv/marketdata", storage_root_id="hot", checkpoint_path="/srv/x.json", pressure_policy=policy,
+        )
+        self.assertEqual("bybit:BTCUSDT:hot", _subject(default).subject_identity)
 
 
 if __name__ == "__main__":

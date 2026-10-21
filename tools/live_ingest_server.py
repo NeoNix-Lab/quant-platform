@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from quant_platform.application.live_ingest_server import (  # noqa: E402
+    BYBIT_LINEAR_TRADE_INSTRUMENTS_V1,
     LiveIngestServerConfigV1,
     PressurePolicyDefinition,
     SERVER_FAILED,
@@ -75,6 +76,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dsn", default=None, help="PostgreSQL DSN; otherwise standard PG environment is used")
     parser.add_argument("--storage-root", required=True, help="Absolute path matching --storage-root-id in catalog.storage_roots")
     parser.add_argument("--storage-root-id", default="hot")
+    parser.add_argument("--instrument", default="BTCUSDT", choices=BYBIT_LINEAR_TRADE_INSTRUMENTS_V1,
+                        help="The one Bybit linear instrument this process ingests (ADR-0074); each instrument needs "
+                             "its own checkpoint path")
     parser.add_argument("--checkpoint-path", required=True, help="K10 checkpoint JSON path owned by the live-ingest identity")
     parser.add_argument("--recent-limit", type=int, default=1000)
     parser.add_argument("--code-ref", default="live-ingest-server-v1")
@@ -119,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         max_seconds_per_cycle=args.max_seconds_per_cycle,
         recent_limit=args.recent_limit,
         cycle_interval_seconds=args.cycle_interval_seconds,
+        instrument=args.instrument,
     )
 
     stop_state = {"stop": False}
@@ -142,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
                 stop_state["stop"] = True
 
     print("=== live-ingest server v1 ===")
+    print(f"instrument={args.instrument}")
     report = run_live_ingest_server(
         config,
         stop_requested=lambda: stop_state["stop"],
