@@ -91,6 +91,7 @@ OWNERS = {
     "quant_platform.source_adapters.bybit_historical": "source",
     "quant_platform.source_adapters.bybit_archive": "source",
     "quant_platform.source_adapters.bybit_live": "source",
+    "quant_platform.source_adapters.bybit_live_slices": "source",
     "quant_platform.source_adapters.bybit_l2": "source",
     "quant_platform.source_adapters.bybit_l2_archive": "source",
     "quant_platform.source_adapters.l2": "source",

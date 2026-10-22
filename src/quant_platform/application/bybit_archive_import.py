@@ -400,9 +400,9 @@ def _partition_exists(connection: Any, identity: Any, partition_key: str) -> boo
         cursor.execute(
             "SELECT 1 FROM catalog.partitions p JOIN catalog.datasets d ON d.dataset_id = p.dataset_id "
             "WHERE d.layer = %s AND d.kind = %s AND d.venue = %s AND d.instrument = %s AND d.schema_id = %s "
-            "AND d.feature_set_def_id IS NULL AND p.partition_key = %s LIMIT 1",
+            "AND d.feature_set_def_id IS NULL AND (p.partition_key = %s OR p.partition_key LIKE %s) LIMIT 1",
             (identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id,
-             partition_key),
+             partition_key, f"{partition_key}/%"),
         )
         row = cursor.fetchone()
     connection.rollback()

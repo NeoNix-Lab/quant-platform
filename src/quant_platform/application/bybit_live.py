@@ -58,8 +58,15 @@ from quant_platform.source_adapters.bybit_live import (
     bybit_live_topic,
     canonicalize_bybit_live_message,
     canonicalize_bybit_recent_public_trade,
+    check_live_slice_coverage,
     deduplicate_live_records,
     reconcile_after_disconnect,
+)
+from quant_platform.source_adapters.bybit_live_slices import (
+    SLICE_MAX_TRADES_DEFAULT,
+    SLICE_SECONDS_DEFAULT,
+    LiveSlice,
+    plan_slices,
 )
 from quant_platform.operations.checkpoint import (
     CheckpointBindingError,
@@ -133,6 +140,9 @@ class BybitRestartReconciliationCertificationProfile:
     code_ref: str
     profile_id: str = BYBIT_RESTART_RECONCILIATION_CERTIFICATION_PROFILE
     check_suite: str = BYBIT_RESTART_RECONCILIATION_CHECK_SUITE
+    # ADR-0075 section 3: the same slice window checks as the live profile.
+    published_floor: Instant | None = None
+    chain_start: Instant | None = None
 
     def _live_profile(self) -> BybitLiveTradeV1CertificationProfile:
         return BybitLiveTradeV1CertificationProfile(self.code_ref)
@@ -165,10 +175,14 @@ class BybitRestartReconciliationCertificationProfile:
                     continue
                 if not any(item.get("kind") == "reconciliation" for item in assertion.get("evidence") or ()):
                     raise BybitLiveSourceError("complete restart coverage lacks reconciliation evidence")
+        slices = check_live_slice_coverage(
+            coverage_documents, published_floor=self.published_floor, chain_start=self.chain_start,
+        )
         return {
             "source_semantics": BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1,
             "mapping": BYBIT_RECENT_PUBLIC_TRADES_MAPPING_V1,
             "documents": len(coverage_documents),
+            "slices": slices,
         }
 
     def validate_records(self, identity, records: Sequence[TradeRecord]) -> Mapping[str, Any]:
@@ -309,6 +323,14 @@ class RealServerPublishProofReport:
     durable_publication: DurablePublicationState | None = None
     coverage_id: str | None = None
     coverage_assertion_id: str | None = None
+    # ADR-0075: what a publication did. ``durable_publication`` and ``partition_key`` are those of the LAST slice (the one a
+    # checkpoint binds); ``slice_keys`` lists every slice in order. ``ordering_violations`` counts trades of a live acquisition
+    # before what is already published (nothing is published then); ``replayed_records`` counts trades dropped because their
+    # slice is already published.
+    slices: int = 0
+    slice_keys: tuple[str, ...] = ()
+    ordering_violations: int = 0
+    replayed_records: int = 0
 
 
 def _connect_catalog(dsn: str | None):
@@ -317,38 +339,36 @@ def _connect_catalog(dsn: str | None):
     return psycopg.connect(dsn) if dsn else psycopg.connect()
 
 
-def _next_revision(dsn: str | None, identity: Any, partition_key: str) -> int:
-    """Each bounded proof run acquires a fresh physical parquet artifact, so
-    it cannot reuse a prior run's already-sealed revision for the same
-    partition_key (seal_partition correctly refuses a closed target whose
-    physical evidence doesn't match). Query the real next revision instead
-    of assuming 1, which only holds for a partition_key never sealed before."""
+def _published_floor(dsn: str | None, identity: Any) -> Instant | None:
+    """The end of the latest durable partition of this dataset, read from the catalog (ADR-0075 section 4), or ``None``.
+
+    A new window never starts inside coverage that is already declared, whatever declared it: a live slice, a day published
+    before ADR-0075 (``dt=<day>``) or a day imported from the archive. A trade before this instant is a replay of a published
+    slice or, on a live acquisition, an ordering violation.
+    """
+
     connection = _connect_catalog(dsn)
     try:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT COALESCE(MAX(p.revision), 0)
+                SELECT MAX(p.ts_end)
                   FROM catalog.partitions p
                   JOIN catalog.datasets d ON d.dataset_id = p.dataset_id
                  WHERE d.layer=%s AND d.kind=%s AND d.venue=%s
                    AND d.instrument=%s AND d.schema_id=%s
-                   AND p.partition_key=%s
+                   AND d.feature_set_def_id IS NULL
+                   AND p.state IN (%s, %s, %s)
                 """,
-                (identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id, partition_key),
+                (
+                    identity.layer, identity.dataset_kind, identity.venue, identity.instrument,
+                    identity.record_schema_id, *K10_RESTART_DURABLE_STATES,
+                ),
             )
-            return int(cursor.fetchone()[0]) + 1
+            value = cursor.fetchone()[0]
     finally:
         connection.close()
-
-
-def _record_intent_interval(records: tuple[TradeRecord, ...]) -> tuple[str, str]:
-    instants = tuple(Instant.parse(record.exchange_ts) for record in records)
-    min_ns = min(instant.epoch_ns for instant in instants)
-    max_ns = max(instant.epoch_ns for instant in instants)
-    start = Instant((min_ns // 1_000) * 1_000)
-    end = Instant(((max_ns // 1_000) + 1) * 1_000)
-    return start.isoformat(), end.isoformat()
+    return None if value is None else Instant.parse(value)
 
 
 def _build_restart_reconciliation_coverage_document(
@@ -403,6 +423,273 @@ def _build_restart_reconciliation_coverage_document(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _PublishedSlice:
+    planned: LiveSlice
+    run: Any
+    coverage_id: str
+    coverage_assertion_id: str
+    coverage_status: str
+    categories: tuple[tuple[str, str], ...]
+    read_count: int
+    eligibility_published: bool
+
+
+def _read_back_slice(connection: Any, identity: Any, window: LiveSlice) -> list[Any]:
+    """Read one slice's window through the DataGateway (valid partitions only, strict coverage)."""
+
+    request = DataRequest(
+        identity, window.window_start, window.window_end,
+        schema_requirement=identity.record_schema_id,
+        lifecycle_policy=LifecyclePolicy.VALID_ONLY,
+        coverage_policy="strict",
+        ordering_policy=BYBIT_ORDERING_PROVIDER.identity,
+    )
+    gateway = DataGateway(Catalog(connection=connection), ordering_providers=(BYBIT_ORDERING_PROVIDER,))
+    scan = gateway.scan(request, batch_size=1000)
+    read_records: list[Any] = []
+    try:
+        for batch in scan:
+            read_records.extend(batch)
+    finally:
+        if getattr(scan, "completed_metadata", None) is None:
+            scan.close()
+    return read_records
+
+
+def _publish_slices(
+    *,
+    records: tuple[TradeRecord, ...],
+    acquisition: LiveProviderProofReport,
+    reconciling: bool,
+    live_session_evidence: BybitLiveSessionEvidence | None,
+    reconcile_result: ReconnectResult | None,
+    storage_root: str | Path,
+    storage_root_id: str,
+    dsn: str | None,
+    producer: str,
+    code_ref: str,
+    instrument: str,
+    slice_seconds: int,
+    slice_max_trades: int,
+) -> RealServerPublishProofReport:
+    """Publish the records of one acquisition as append-only slices (ADR-0075 sections 2 to 4).
+
+    Each slice is revision 1 of its own partition ``dt=<day>/seg=<HHMMSS.mmm>``, certified and made eligible on its own and read
+    back through the DataGateway; nothing is superseded. ``reconciling`` selects the restart reconciliation profile and
+    coverage (evidence: ``reconcile_result``), otherwise the live session profile (evidence: ``live_session_evidence``). A slice
+    already published is never republished: trades before the catalog's floor are a replay (reconciliation) or an ordering
+    violation (live, fail closed).
+    """
+
+    pending_status = "REAL_RESTART_PROOF_PENDING" if reconciling else "LIVE_PROVIDER_PROOF_PENDING"
+    identity = bybit_live_dataset_identity(instrument)
+    floor = _published_floor(dsn, identity)
+    plan = plan_slices(
+        records, floor=floor, start_at_floor=reconciling and floor is not None,
+        max_trades=slice_max_trades, slice_seconds=slice_seconds,
+    )
+    if plan.below_floor and not reconciling:
+        return RealServerPublishProofReport(
+            status="SLICE_ORDERING_VIOLATION", acquisition=acquisition, ordering_violations=len(plan.below_floor),
+        )
+    if not plan.slices:
+        return RealServerPublishProofReport(
+            status=pending_status, acquisition=acquisition, replayed_records=len(plan.below_floor),
+        )
+
+    storage_root_path = Path(storage_root)
+    dataset_root = storage_root_path.joinpath(
+        identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id,
+    )
+    dataset_manifest_path = dataset_root / "dataset-manifest.json"
+    dataset_manifest_fields: dict[str, Any] = {}
+    published: list[_PublishedSlice] = []
+    previous_end: Instant | None = None
+    for planned in plan.slices:
+        outcome = _publish_one_slice(
+            planned=planned, identity=identity, dataset_root=dataset_root,
+            dataset_manifest_path=dataset_manifest_path, dataset_manifest_fields=dataset_manifest_fields,
+            floor=floor, chain_start=previous_end, reconciling=reconciling,
+            live_session_evidence=live_session_evidence, reconcile_result=reconcile_result,
+            storage_root_id=storage_root_id, dsn=dsn, producer=producer, code_ref=code_ref,
+            acquisition=acquisition, replayed_records=len(plan.below_floor),
+        )
+        if isinstance(outcome, RealServerPublishProofReport):
+            return outcome
+        published.append(outcome)
+        previous_end = planned.window_end
+
+    last = published[-1]
+    total_read = sum(item.read_count for item in published)
+    return RealServerPublishProofReport(
+        status="PASS", acquisition=acquisition,
+        partition_key=last.planned.partition_key,
+        artifact_path=str(dataset_root / last.planned.partition_key / "part-001.parquet"),
+        coverage_status=last.coverage_status,
+        certification_status=last.run.certification.status,
+        certification_categories=last.categories,
+        eligibility_published=all(item.eligibility_published for item in published),
+        datagateway_read_record_count=total_read,
+        datagateway_read_matches_published=total_read == sum(len(item.planned.records) for item in published),
+        durable_publication=DurablePublicationState(
+            catalog_dataset_id=last.run.sealed_partition.dataset_id,
+            partition_key=last.run.sealed_partition.natural_identity.partition_key,
+            revision=last.run.sealed_partition.natural_identity.revision,
+            partition_manifest_sha256=last.run.sealed_partition.manifest_sha256,
+        ),
+        coverage_id=last.coverage_id,
+        coverage_assertion_id=last.coverage_assertion_id,
+        slices=len(published),
+        slice_keys=tuple(item.planned.partition_key for item in published),
+        replayed_records=len(plan.below_floor),
+        **dataset_manifest_fields,
+    )
+
+
+def _publish_one_slice(
+    *,
+    planned: LiveSlice,
+    identity: Any,
+    dataset_root: Path,
+    dataset_manifest_path: Path,
+    dataset_manifest_fields: dict[str, Any],
+    floor: Instant | None,
+    chain_start: Instant | None,
+    reconciling: bool,
+    live_session_evidence: BybitLiveSessionEvidence | None,
+    reconcile_result: ReconnectResult | None,
+    storage_root_id: str,
+    dsn: str | None,
+    producer: str,
+    code_ref: str,
+    acquisition: LiveProviderProofReport,
+    replayed_records: int,
+) -> RealServerPublishProofReport | _PublishedSlice:
+    """S13 (seal, certify), S14 (eligibility) and a DataGateway read-back of one slice, as revision 1 of its own partition.
+
+    Returns the failure report of the first step that did not pass, or the published slice.
+    """
+
+    key = planned.partition_key
+    token = planned.token
+    start_text, end_text = planned.window_start.isoformat(), planned.window_end.isoformat()
+    rel_path = f"{key}/part-001.parquet"
+    artifact_path = dataset_root / rel_path
+    partition_manifest_path = dataset_root / key / "partition-manifest.json"
+    coverage_manifest_path = dataset_root / key / "coverage-manifest.json"
+
+    materialization = materialize_bybit_trade_v1(artifact_path, planned.records, dataset_identity=identity)
+    # The dataset manifest describes the canonical DatasetIdentity as a whole (shared verbatim between the historical and live
+    # producers), not one slice: it is registered once, and whatever is already durably registered at this shared path is
+    # reused. Matches application/conformity.py's production emission (v2, origin=source_acquired).
+    dataset_emission = None
+    if not dataset_manifest_path.exists():
+        dataset_emission = emit_dataset_manifest(
+            dataset_manifest_path, dataset_identity=identity, created_at=end_text,
+            schema_version=DATASET_MANIFEST_V2, origin="source_acquired",
+            transform="canonicalize-trades-v1",
+        )
+        dataset_manifest_fields.update({
+            "dataset_manifest_freshly_emitted": True,
+            "dataset_manifest_sha256": dataset_emission.manifest_sha256,
+            "dataset_manifest_rel_root": dataset_emission.document["rel_root"],
+        })
+    partition_emission = emit_partition_manifest(
+        partition_manifest_path, materialization, dataset_identity=identity,
+        dataset_root=dataset_root, partition_key=key, revision=1,
+        rel_path=rel_path, created_at=start_text, closed_at=end_text,
+        producer=producer, code_ref=code_ref,
+    )
+    # data/manifests.py's frozen _IDENTIFIER is `^[a-z0-9]+(?:[._-][a-z0-9]+)*$`.
+    if reconciling:
+        coverage_id = f"k10-restart-reconciliation-slice-{token}"
+        assertion_id = f"k10-restart-reconciliation-slice-assertion-{token}"
+        coverage_input = _build_restart_reconciliation_coverage_document(
+            dataset_identity=identity, coverage_id=coverage_id,
+            intent_start=start_text, intent_end=end_text,
+            assertion_id=assertion_id,
+            assertion_start=start_text, assertion_end=end_text,
+            partition_key=key, revision=1, reconcile_result=reconcile_result,
+            created_at=end_text, producer=producer, code_ref=code_ref,
+        )
+        profile: Any = BybitRestartReconciliationCertificationProfile(
+            code_ref, published_floor=floor, chain_start=chain_start,
+        )
+        eligibility_profile = BYBIT_RESTART_RECONCILIATION_CERTIFICATION_PROFILE
+        eligibility_suite = BYBIT_RESTART_RECONCILIATION_CHECK_SUITE
+    else:
+        coverage_id = f"live-slice-{token}"
+        assertion_id = f"live-slice-assertion-{token}"
+        coverage_input = build_bybit_live_coverage_document(
+            dataset_identity=identity, coverage_id=coverage_id,
+            intent_start=start_text, intent_end=end_text,
+            assertion_id=assertion_id,
+            assertion_start=start_text, assertion_end=end_text,
+            partition_key=key, revision=1, session_evidence=live_session_evidence,
+            created_at=end_text, producer=producer, code_ref=code_ref,
+        )
+        profile = BybitLiveTradeV1CertificationProfile(code_ref, published_floor=floor, chain_start=chain_start)
+        eligibility_profile = BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE
+        eligibility_suite = BYBIT_LIVE_TRADE_V1_CHECK_SUITE
+    emit_coverage_manifest(
+        coverage_manifest_path, dataset_identity=identity,
+        partition_manifests=[partition_emission.document], **coverage_input,
+    )
+    coverage_status = coverage_input["assertions"][0]["status"]
+
+    def failure(status: str, **fields: Any) -> RealServerPublishProofReport:
+        return RealServerPublishProofReport(
+            status=status, acquisition=acquisition, partition_key=key, artifact_path=str(artifact_path),
+            coverage_status=coverage_status, replayed_records=replayed_records, **fields, **dataset_manifest_fields,
+        )
+
+    connection = _connect_catalog(dsn)
+    try:
+        try:
+            run = PublicationCertification(CatalogPublicationWriter(connection), profile).run(
+                SealedPartitionEvidence(
+                    dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
+                    artifact_path, storage_root_id,
+                )
+            )
+        except CatalogPublicationConflict as exc:
+            # Surface the freshly emitted dataset manifest's own hash/rel_root so an operator can decide whether to align
+            # catalog.datasets to it (a lineage-pointer update, never touching existing sealed partitions) rather than crash.
+            return failure("DATASET_MANIFEST_CONFLICT", certification_status=f"seal_refused: {exc}")
+        categories = tuple((c.category, c.status) for c in run.certification.categories)
+        if run.certification.status != "pass":
+            return failure(
+                "CERTIFICATION_FAILED", certification_status=run.certification.status,
+                certification_categories=categories,
+            )
+        eligibility = PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
+            PublicationEligibilityEvidence(
+                dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
+                storage_root_id, eligibility_profile, eligibility_suite,
+            )
+        )
+    finally:
+        connection.close()
+
+    connection = _connect_catalog(dsn)
+    try:
+        read_records = _read_back_slice(connection, identity, planned)
+    finally:
+        connection.close()
+    published_keys = sorted((r.exchange_ts.epoch_ns, r.trade_id) for r in planned.records)
+    read_keys = sorted((r.exchange_ts.epoch_ns, r.trade_id) for r in read_records)
+    if published_keys != read_keys:
+        return failure(
+            "SLICE_READ_BACK_MISMATCH", certification_status=run.certification.status,
+            certification_categories=categories, datagateway_read_record_count=len(read_records),
+            datagateway_read_matches_published=False,
+        )
+    return _PublishedSlice(
+        planned, run, coverage_id, assertion_id, coverage_status, categories, len(read_records), eligibility is not None,
+    )
+
+
 def run_real_server_publish_proof(
     *,
     max_messages: int,
@@ -413,177 +700,25 @@ def run_real_server_publish_proof(
     producer: str,
     code_ref: str,
     instrument: str = SUPPORTED_SYMBOL,
+    slice_seconds: int = SLICE_SECONDS_DEFAULT,
+    slice_max_trades: int = SLICE_MAX_TRADES_DEFAULT,
 ) -> RealServerPublishProofReport:
-    """K02 (#108) minimum real-server proof.
+    """K02 (#108) minimum real-server proof, publishing append-only slices (ADR-0075).
 
-    Reuses #107's bounded acquisition seam (never re-implements it), then
-    composes the same S13/S14/DataGateway production seams
-    application/conformity.py already uses for the historical vertical --
-    swapped to BybitLiveTradeV1CertificationProfile and live coverage.
+    Reuses #107's bounded acquisition seam (never re-implements it), then publishes the acquired trades as slices through the
+    same S13/S14/DataGateway production seams application/conformity.py already uses for the historical vertical, swapped to
+    BybitLiveTradeV1CertificationProfile and live coverage.
     """
-    acquire_started_at = datetime.now(timezone.utc)
     report = run_bounded_live_provider_proof_sync(
         max_messages=max_messages, max_seconds=max_seconds, instrument=instrument,
     )
-    acquire_finished_at = datetime.now(timezone.utc)
-
     if report.status != "PASS" or not report.accepted_records or report.session_evidence is None:
         return RealServerPublishProofReport(status="LIVE_PROVIDER_PROOF_PENDING", acquisition=report)
-
-    records = report.accepted_records
-    session_evidence = report.session_evidence
-    identity = bybit_live_dataset_identity(instrument)
-    day = acquire_started_at.strftime("%Y-%m-%d")
-    partition_key = f"dt={day}"
-    intent_start = acquire_started_at.isoformat().replace("+00:00", "Z")
-    intent_end = acquire_finished_at.isoformat().replace("+00:00", "Z")
-    revision = _next_revision(dsn, identity, partition_key)
-
-    storage_root_path = Path(storage_root)
-    dataset_root = storage_root_path.joinpath(
-        identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id,
-    )
-    suffix = acquire_started_at.strftime("%H%M%S")
-    rel_path = f"{partition_key}/part-{suffix}.parquet"
-    artifact_path = dataset_root / rel_path
-    dataset_manifest_path = dataset_root / "dataset-manifest.json"
-    partition_manifest_path = dataset_root / f"partition-manifest-{suffix}.json"
-    coverage_manifest_path = dataset_root / f"coverage-manifest-{suffix}.json"
-
-    materialization = materialize_bybit_trade_v1(artifact_path, records, dataset_identity=identity)
-    # The dataset manifest describes the canonical DatasetIdentity as a
-    # whole (shared verbatim between the historical and live producers --
-    # AC4: same trade-v1/TradeKeyV1/canonical order), not this one bounded
-    # run. It is registered once; catalog_publication.py's dataset-conflict
-    # check correctly refuses a second, differently-timestamped emission
-    # for the same identity. Reuse whatever is already durably registered
-    # at this shared path instead of re-emitting it on every run.
-    dataset_emission = None
-    if not dataset_manifest_path.exists():
-        # Matches application/conformity.py's real production dataset-manifest
-        # emission for this same shared canonical identity exactly (v2,
-        # origin=source_acquired -- no raw-dataset lineage row required),
-        # not the derived_from=[raw] shape used only by hermetic test
-        # fixtures. A mismatched schema here is exactly what produced the
-        # first DATASET_MANIFEST_CONFLICT/PublicationEligibilityRefusal.
-        dataset_emission = emit_dataset_manifest(
-            dataset_manifest_path, dataset_identity=identity, created_at=intent_end,
-            schema_version=DATASET_MANIFEST_V2, origin="source_acquired",
-            transform="canonicalize-trades-v1",
-        )
-    partition_emission = emit_partition_manifest(
-        partition_manifest_path, materialization, dataset_identity=identity,
-        dataset_root=dataset_root, partition_key=partition_key, revision=revision,
-        rel_path=rel_path, created_at=intent_start, closed_at=intent_end,
-        producer=producer, code_ref=code_ref,
-    )
-    # data/manifests.py's frozen _IDENTIFIER is `^[a-z0-9]+(?:[._-][a-z0-9]+)*$`
-    # -- lowercase only, no ISO "T"/"Z" separators.
-    run_tag = f"{acquire_started_at.strftime('%Y%m%d')}-{suffix}"
-    coverage_id = f"k02-real-server-{run_tag}"
-    coverage_assertion_id = f"k02-real-server-assertion-{run_tag}"
-    coverage_input = build_bybit_live_coverage_document(
-        dataset_identity=identity, coverage_id=coverage_id,
-        intent_start=intent_start, intent_end=intent_end,
-        assertion_id=coverage_assertion_id,
-        assertion_start=intent_start, assertion_end=intent_end,
-        partition_key=partition_key, revision=revision, session_evidence=session_evidence,
-        created_at=intent_end, producer=producer, code_ref=code_ref,
-    )
-    emit_coverage_manifest(
-        coverage_manifest_path, dataset_identity=identity,
-        partition_manifests=[partition_emission.document], **coverage_input,
-    )
-    coverage_status = coverage_input["assertions"][0]["status"]
-    dataset_manifest_fields: dict[str, Any] = {}
-    if dataset_emission is not None:
-        dataset_manifest_fields = {
-            "dataset_manifest_freshly_emitted": True,
-            "dataset_manifest_sha256": dataset_emission.manifest_sha256,
-            "dataset_manifest_rel_root": dataset_emission.document["rel_root"],
-        }
-
-    connection = _connect_catalog(dsn)
-    try:
-        profile = BybitLiveTradeV1CertificationProfile(code_ref)
-        try:
-            run = PublicationCertification(CatalogPublicationWriter(connection), profile).run(
-                SealedPartitionEvidence(
-                    dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
-                    artifact_path, storage_root_id,
-                )
-            )
-        except CatalogPublicationConflict as exc:
-            # Surface the freshly emitted dataset manifest's own hash/rel_root
-            # so an operator can decide whether to align catalog.datasets to
-            # it (a lineage-pointer update, never touching existing sealed
-            # partitions) rather than crash with a bare traceback.
-            return RealServerPublishProofReport(
-                status="DATASET_MANIFEST_CONFLICT", acquisition=report,
-                partition_key=partition_key, artifact_path=str(artifact_path),
-                coverage_status=coverage_status,
-                certification_status=f"seal_refused: {exc}",
-                **dataset_manifest_fields,
-            )
-        categories = tuple((c.category, c.status) for c in run.certification.categories)
-        if run.certification.status != "pass":
-            return RealServerPublishProofReport(
-                status="CERTIFICATION_FAILED", acquisition=report,
-                partition_key=partition_key, artifact_path=str(artifact_path),
-                coverage_status=coverage_status,
-                certification_status=run.certification.status,
-                certification_categories=categories,
-                **dataset_manifest_fields,
-            )
-
-        eligibility = PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
-            PublicationEligibilityEvidence(
-                dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
-                storage_root_id, BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE, BYBIT_LIVE_TRADE_V1_CHECK_SUITE,
-            )
-        )
-    finally:
-        connection.close()
-
-    connection = _connect_catalog(dsn)
-    try:
-        request = DataRequest(
-            identity, Instant.parse(intent_start), Instant.parse(intent_end),
-            schema_requirement=identity.record_schema_id,
-            lifecycle_policy=LifecyclePolicy.VALID_ONLY,
-            coverage_policy="strict",
-            ordering_policy=BYBIT_ORDERING_PROVIDER.identity,
-        )
-        gateway = DataGateway(Catalog(connection=connection), ordering_providers=(BYBIT_ORDERING_PROVIDER,))
-        scan = gateway.scan(request, batch_size=1000)
-        read_records: list[Any] = []
-        try:
-            for batch in scan:
-                read_records.extend(batch)
-        finally:
-            if getattr(scan, "completed_metadata", None) is None:
-                scan.close()
-    finally:
-        connection.close()
-
-    return RealServerPublishProofReport(
-        status="PASS", acquisition=report,
-        partition_key=partition_key, artifact_path=str(artifact_path),
-        coverage_status=coverage_status,
-        certification_status=run.certification.status,
-        certification_categories=categories,
-        eligibility_published=eligibility is not None,
-        datagateway_read_record_count=len(read_records),
-        datagateway_read_matches_published=len(read_records) == len(records),
-        durable_publication=DurablePublicationState(
-            catalog_dataset_id=run.sealed_partition.dataset_id,
-            partition_key=run.sealed_partition.natural_identity.partition_key,
-            revision=run.sealed_partition.natural_identity.revision,
-            partition_manifest_sha256=run.sealed_partition.manifest_sha256,
-        ),
-        coverage_id=coverage_id,
-        coverage_assertion_id=coverage_assertion_id,
-        **dataset_manifest_fields,
+    return _publish_slices(
+        records=report.accepted_records, acquisition=report, reconciling=False,
+        live_session_evidence=report.session_evidence, reconcile_result=None, storage_root=storage_root, storage_root_id=storage_root_id, dsn=dsn,
+        producer=producer, code_ref=code_ref, instrument=instrument,
+        slice_seconds=slice_seconds, slice_max_trades=slice_max_trades,
     )
 
 
@@ -597,6 +732,8 @@ def _publish_restart_reconciliation_records(
     producer: str,
     code_ref: str,
     instrument: str = SUPPORTED_SYMBOL,
+    slice_seconds: int = SLICE_SECONDS_DEFAULT,
+    slice_max_trades: int = SLICE_MAX_TRADES_DEFAULT,
 ) -> RealServerPublishProofReport:
     topic = bybit_live_topic(instrument)
     if not accepted_records:
@@ -612,68 +749,6 @@ def _publish_restart_reconciliation_records(
                 errors=("restart reconciliation produced no post-checkpoint records",),
             ),
         )
-
-    identity = bybit_live_dataset_identity(instrument)
-    intent_start, intent_end = _record_intent_interval(accepted_records)
-    partition_key = f"dt={intent_start[:10]}"
-    revision = _next_revision(dsn, identity, partition_key)
-
-    storage_root_path = Path(storage_root)
-    dataset_root = storage_root_path.joinpath(
-        identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id,
-    )
-    suffix = datetime.now(timezone.utc).strftime("%H%M%S")
-    rel_path = f"{partition_key}/part-{suffix}.parquet"
-    artifact_path = dataset_root / rel_path
-    dataset_manifest_path = dataset_root / "dataset-manifest.json"
-    partition_manifest_path = dataset_root / f"partition-manifest-{suffix}.json"
-    coverage_manifest_path = dataset_root / f"coverage-manifest-{suffix}.json"
-
-    materialization = materialize_bybit_trade_v1(artifact_path, accepted_records, dataset_identity=identity)
-    dataset_emission = None
-    if not dataset_manifest_path.exists():
-        dataset_emission = emit_dataset_manifest(
-            dataset_manifest_path, dataset_identity=identity, created_at=intent_end,
-            schema_version=DATASET_MANIFEST_V2, origin="source_acquired",
-            transform="canonicalize-trades-v1",
-        )
-    partition_emission = emit_partition_manifest(
-        partition_manifest_path, materialization, dataset_identity=identity,
-        dataset_root=dataset_root, partition_key=partition_key, revision=revision,
-        rel_path=rel_path, created_at=intent_start, closed_at=intent_end,
-        producer=producer, code_ref=code_ref,
-    )
-    run_tag = f"{intent_start[:10].replace('-', '')}-{suffix}"
-    coverage_id = f"k10-restart-reconciliation-{run_tag}"
-    coverage_assertion_id = f"k10-restart-reconciliation-assertion-{run_tag}"
-    coverage_input = _build_restart_reconciliation_coverage_document(
-        dataset_identity=identity,
-        coverage_id=coverage_id,
-        intent_start=intent_start,
-        intent_end=intent_end,
-        assertion_id=coverage_assertion_id,
-        assertion_start=intent_start,
-        assertion_end=intent_end,
-        partition_key=partition_key,
-        revision=revision,
-        reconcile_result=reconcile_result,
-        created_at=intent_end,
-        producer=producer,
-        code_ref=code_ref,
-    )
-    emit_coverage_manifest(
-        coverage_manifest_path, dataset_identity=identity,
-        partition_manifests=[partition_emission.document], **coverage_input,
-    )
-    coverage_status = coverage_input["assertions"][0]["status"]
-    dataset_manifest_fields: dict[str, Any] = {}
-    if dataset_emission is not None:
-        dataset_manifest_fields = {
-            "dataset_manifest_freshly_emitted": True,
-            "dataset_manifest_sha256": dataset_emission.manifest_sha256,
-            "dataset_manifest_rel_root": dataset_emission.document["rel_root"],
-        }
-
     report = LiveProviderProofReport(
         status="PASS",
         topic=topic,
@@ -684,96 +759,11 @@ def _publish_restart_reconciliation_records(
         errors=(),
         accepted_records=accepted_records,
     )
-
-    connection = _connect_catalog(dsn)
-    try:
-        profile = BybitRestartReconciliationCertificationProfile(code_ref)
-        try:
-            run = PublicationCertification(CatalogPublicationWriter(connection), profile).run(
-                SealedPartitionEvidence(
-                    dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
-                    artifact_path, storage_root_id,
-                )
-            )
-        except CatalogPublicationConflict as exc:
-            return RealServerPublishProofReport(
-                status="DATASET_MANIFEST_CONFLICT", acquisition=report,
-                partition_key=partition_key, artifact_path=str(artifact_path),
-                coverage_status=coverage_status,
-                certification_status=f"seal_refused: {exc}",
-                **dataset_manifest_fields,
-            )
-        categories = tuple((c.category, c.status) for c in run.certification.categories)
-        if run.certification.status != "pass":
-            return RealServerPublishProofReport(
-                status="CERTIFICATION_FAILED", acquisition=report,
-                partition_key=partition_key, artifact_path=str(artifact_path),
-                coverage_status=coverage_status,
-                certification_status=run.certification.status,
-                certification_categories=categories,
-                **dataset_manifest_fields,
-            )
-
-        eligibility = PublicationEligibilityBridge(PublicationEligibilityCatalog(connection)).publish(
-            PublicationEligibilityEvidence(
-                dataset_manifest_path, partition_manifest_path, (coverage_manifest_path,),
-                storage_root_id,
-                BYBIT_RESTART_RECONCILIATION_CERTIFICATION_PROFILE,
-                BYBIT_RESTART_RECONCILIATION_CHECK_SUITE,
-            )
-        )
-    finally:
-        connection.close()
-
-    connection = _connect_catalog(dsn)
-    try:
-        request = DataRequest(
-            identity, Instant.parse(intent_start), Instant.parse(intent_end),
-            schema_requirement=identity.record_schema_id,
-            lifecycle_policy=LifecyclePolicy.VALID_ONLY,
-            coverage_policy="strict",
-            ordering_policy=BYBIT_ORDERING_PROVIDER.identity,
-        )
-        gateway = DataGateway(Catalog(connection=connection), ordering_providers=(BYBIT_ORDERING_PROVIDER,))
-        scan = gateway.scan(request, batch_size=1000)
-        read_records: list[Any] = []
-        try:
-            for batch in scan:
-                read_records.extend(batch)
-        finally:
-            if getattr(scan, "completed_metadata", None) is None:
-                scan.close()
-    finally:
-        connection.close()
-
-    accepted_keys = {
-        (Instant.parse(record.exchange_ts).isoformat(), record.trade_id)
-        for record in accepted_records
-    }
-    read_keys = [
-        (Instant.parse(record.exchange_ts).isoformat(), record.trade_id)
-        for record in read_records
-    ]
-    read_matches_published = accepted_keys.issubset(set(read_keys)) and len(read_keys) == len(set(read_keys))
-
-    return RealServerPublishProofReport(
-        status="PASS", acquisition=report,
-        partition_key=partition_key, artifact_path=str(artifact_path),
-        coverage_status=coverage_status,
-        certification_status=run.certification.status,
-        certification_categories=categories,
-        eligibility_published=eligibility is not None,
-        datagateway_read_record_count=len(read_records),
-        datagateway_read_matches_published=read_matches_published,
-        durable_publication=DurablePublicationState(
-            catalog_dataset_id=run.sealed_partition.dataset_id,
-            partition_key=run.sealed_partition.natural_identity.partition_key,
-            revision=run.sealed_partition.natural_identity.revision,
-            partition_manifest_sha256=run.sealed_partition.manifest_sha256,
-        ),
-        coverage_id=coverage_id,
-        coverage_assertion_id=coverage_assertion_id,
-        **dataset_manifest_fields,
+    return _publish_slices(
+        records=accepted_records, acquisition=report, reconciling=True, live_session_evidence=None,
+        reconcile_result=reconcile_result,
+        storage_root=storage_root, storage_root_id=storage_root_id, dsn=dsn, producer=producer, code_ref=code_ref,
+        instrument=instrument, slice_seconds=slice_seconds, slice_max_trades=slice_max_trades,
     )
 
 
