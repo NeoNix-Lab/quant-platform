@@ -138,7 +138,11 @@ dt=<UTC day of the window start>/seg=<HHMMSS.mmm of the window start>/part-001.p
   refused under `strict` coverage, because that pause is not covered (it ends with the continuous session, `O02`); under
   `allow-partial` it returns everything published.
 - The restart reconciliation publishes its records as a slice too, starting where the last published slice ended (continuity proven
-  by the provider's recent-trades window). A slice already published is never republished.
+  by the provider's recent-trades window). When that proven span reaches a UTC midnight before the first new trade, the span up to
+  the midnight is a slice with no trade (a bridge), so the chain has no hole. A slice already published is never republished.
+- "Already published" means valid: a slice that was sealed but never became valid (certification or eligibility failed) is not
+  readable and is not a replay. After the restart its trades are published again; if the window is the same, the failed attempt is
+  replaced by the next revision (`part-002.parquet`, ...). A valid slice is never superseded.
 - A live trade before the end of what is already published is an ordering violation: the loop stops with the failure code
   `SLICE_ORDERING_VIOLATION`, publishes nothing, and the next start reconciles from the checkpoint.
 - Partitions published before ADR-0075 (`dt=<day>`, many superseded revisions) are left as they are; there is no repair.

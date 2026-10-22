@@ -143,6 +143,7 @@ class BybitRestartReconciliationCertificationProfile:
     # ADR-0075 section 3: the same slice window checks as the live profile.
     published_floor: Instant | None = None
     chain_start: Instant | None = None
+    revision: int = 1
 
     def _live_profile(self) -> BybitLiveTradeV1CertificationProfile:
         return BybitLiveTradeV1CertificationProfile(self.code_ref)
@@ -177,6 +178,7 @@ class BybitRestartReconciliationCertificationProfile:
                     raise BybitLiveSourceError("complete restart coverage lacks reconciliation evidence")
         slices = check_live_slice_coverage(
             coverage_documents, published_floor=self.published_floor, chain_start=self.chain_start,
+            revision=self.revision,
         )
         return {
             "source_semantics": BYBIT_RECENT_PUBLIC_TRADES_SEMANTICS_V1,
@@ -340,11 +342,12 @@ def _connect_catalog(dsn: str | None):
 
 
 def _published_floor(dsn: str | None, identity: Any) -> Instant | None:
-    """The end of the latest durable partition of this dataset, read from the catalog (ADR-0075 section 4), or ``None``.
+    """The end of the latest *valid* partition of this dataset, read from the catalog (ADR-0075 section 4), or ``None``.
 
-    A new window never starts inside coverage that is already declared, whatever declared it: a live slice, a day published
+    A new window never starts inside coverage that a reader can already see, whatever declared it: a live slice, a day published
     before ADR-0075 (``dt=<day>``) or a day imported from the archive. A trade before this instant is a replay of a published
-    slice or, on a live acquisition, an ordering violation.
+    slice or, on a live acquisition, an ordering violation. A partition that is only ``closed`` (sealed, but not certified or
+    not made eligible) is not readable and is not published: its trades are not a replay and are published again.
     """
 
     connection = _connect_catalog(dsn)
@@ -358,17 +361,59 @@ def _published_floor(dsn: str | None, identity: Any) -> Instant | None:
                  WHERE d.layer=%s AND d.kind=%s AND d.venue=%s
                    AND d.instrument=%s AND d.schema_id=%s
                    AND d.feature_set_def_id IS NULL
-                   AND p.state IN (%s, %s, %s)
+                   AND p.state = ANY(%s)
                 """,
                 (
                     identity.layer, identity.dataset_kind, identity.venue, identity.instrument,
-                    identity.record_schema_id, *K10_RESTART_DURABLE_STATES,
+                    identity.record_schema_id, list(LifecyclePolicy.VALID_ONLY.states),
                 ),
             )
             value = cursor.fetchone()[0]
     finally:
         connection.close()
     return None if value is None else Instant.parse(value)
+
+
+def _next_slice_revision(dsn: str | None, identity: Any, key: str) -> int:
+    """1 for a window never sealed; the next revision when an earlier attempt at the same window never became valid.
+
+    Such an attempt (sealed, then certification or eligibility failed) is replaced, as a failed publication always was; a
+    valid slice is never superseded, and one at this key would mean the floor is wrong, so it is refused.
+    """
+
+    connection = _connect_catalog(dsn)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT p.revision, p.state
+                  FROM catalog.partitions p
+                  JOIN catalog.datasets d ON d.dataset_id = p.dataset_id
+                 WHERE d.layer=%s AND d.kind=%s AND d.venue=%s
+                   AND d.instrument=%s AND d.schema_id=%s
+                   AND d.feature_set_def_id IS NULL
+                   AND p.partition_key=%s
+                """,
+                (
+                    identity.layer, identity.dataset_kind, identity.venue, identity.instrument,
+                    identity.record_schema_id, key,
+                ),
+            )
+            found = cursor.fetchall()
+    finally:
+        connection.close()
+    if any(state == "valid" for _revision, state in found):
+        raise BybitLiveSourceError(f"{key} already holds a valid slice; it is never superseded")
+    return max((int(revision) for revision, _state in found), default=0) + 1
+
+
+def _slice_file_names(revision: int) -> tuple[str, str, str]:
+    """``(artifact, partition manifest, coverage manifest)`` names inside a slice's directory."""
+
+    if revision == 1:
+        return "part-001.parquet", "partition-manifest.json", "coverage-manifest.json"
+    suffix = f"{revision:03d}"
+    return f"part-{suffix}.parquet", f"partition-manifest-{suffix}.json", f"coverage-manifest-{suffix}.json"
 
 
 def _build_restart_reconciliation_coverage_document(
@@ -426,6 +471,7 @@ def _build_restart_reconciliation_coverage_document(
 @dataclass(frozen=True, slots=True)
 class _PublishedSlice:
     planned: LiveSlice
+    revision: int
     run: Any
     coverage_id: str
     coverage_assertion_id: str
@@ -475,8 +521,9 @@ def _publish_slices(
 ) -> RealServerPublishProofReport:
     """Publish the records of one acquisition as append-only slices (ADR-0075 sections 2 to 4).
 
-    Each slice is revision 1 of its own partition ``dt=<day>/seg=<HHMMSS.mmm>``, certified and made eligible on its own and read
-    back through the DataGateway; nothing is superseded. ``reconciling`` selects the restart reconciliation profile and
+    Each slice is revision 1 of its own partition ``dt=<day>/seg=<HHMMSS.mmm>`` (a later revision only replaces an earlier
+    attempt that never became valid), certified and made eligible on its own and read back through the DataGateway; no valid
+    slice is superseded. ``reconciling`` selects the restart reconciliation profile and
     coverage (evidence: ``reconcile_result``), otherwise the live session profile (evidence: ``live_session_evidence``). A slice
     already published is never republished: trades before the catalog's floor are a replay (reconciliation) or an ordering
     violation (live, fail closed).
@@ -505,10 +552,12 @@ def _publish_slices(
     dataset_manifest_path = dataset_root / "dataset-manifest.json"
     dataset_manifest_fields: dict[str, Any] = {}
     published: list[_PublishedSlice] = []
-    previous_end: Instant | None = None
+    # a reconciliation has proven continuity from the floor: its first slice must start exactly there
+    previous_end: Instant | None = floor if reconciling else None
     for planned in plan.slices:
         outcome = _publish_one_slice(
-            planned=planned, identity=identity, dataset_root=dataset_root,
+            planned=planned, revision=_next_slice_revision(dsn, identity, planned.partition_key),
+            identity=identity, dataset_root=dataset_root,
             dataset_manifest_path=dataset_manifest_path, dataset_manifest_fields=dataset_manifest_fields,
             floor=floor, chain_start=previous_end, reconciling=reconciling,
             live_session_evidence=live_session_evidence, reconcile_result=reconcile_result,
@@ -525,7 +574,7 @@ def _publish_slices(
     return RealServerPublishProofReport(
         status="PASS", acquisition=acquisition,
         partition_key=last.planned.partition_key,
-        artifact_path=str(dataset_root / last.planned.partition_key / "part-001.parquet"),
+        artifact_path=str(dataset_root / last.planned.partition_key / _slice_file_names(last.revision)[0]),
         coverage_status=last.coverage_status,
         certification_status=last.run.certification.status,
         certification_categories=last.categories,
@@ -550,6 +599,7 @@ def _publish_slices(
 def _publish_one_slice(
     *,
     planned: LiveSlice,
+    revision: int,
     identity: Any,
     dataset_root: Path,
     dataset_manifest_path: Path,
@@ -566,7 +616,7 @@ def _publish_one_slice(
     acquisition: LiveProviderProofReport,
     replayed_records: int,
 ) -> RealServerPublishProofReport | _PublishedSlice:
-    """S13 (seal, certify), S14 (eligibility) and a DataGateway read-back of one slice, as revision 1 of its own partition.
+    """S13 (seal, certify), S14 (eligibility) and a DataGateway read-back of one slice, as a revision of its own partition.
 
     Returns the failure report of the first step that did not pass, or the published slice.
     """
@@ -574,10 +624,11 @@ def _publish_one_slice(
     key = planned.partition_key
     token = planned.token
     start_text, end_text = planned.window_start.isoformat(), planned.window_end.isoformat()
-    rel_path = f"{key}/part-001.parquet"
+    artifact_name, partition_manifest_name, coverage_manifest_name = _slice_file_names(revision)
+    rel_path = f"{key}/{artifact_name}"
     artifact_path = dataset_root / rel_path
-    partition_manifest_path = dataset_root / key / "partition-manifest.json"
-    coverage_manifest_path = dataset_root / key / "coverage-manifest.json"
+    partition_manifest_path = dataset_root / key / partition_manifest_name
+    coverage_manifest_path = dataset_root / key / coverage_manifest_name
 
     materialization = materialize_bybit_trade_v1(artifact_path, planned.records, dataset_identity=identity)
     # The dataset manifest describes the canonical DatasetIdentity as a whole (shared verbatim between the historical and live
@@ -597,7 +648,7 @@ def _publish_one_slice(
         })
     partition_emission = emit_partition_manifest(
         partition_manifest_path, materialization, dataset_identity=identity,
-        dataset_root=dataset_root, partition_key=key, revision=1,
+        dataset_root=dataset_root, partition_key=key, revision=revision,
         rel_path=rel_path, created_at=start_text, closed_at=end_text,
         producer=producer, code_ref=code_ref,
     )
@@ -610,11 +661,11 @@ def _publish_one_slice(
             intent_start=start_text, intent_end=end_text,
             assertion_id=assertion_id,
             assertion_start=start_text, assertion_end=end_text,
-            partition_key=key, revision=1, reconcile_result=reconcile_result,
+            partition_key=key, revision=revision, reconcile_result=reconcile_result,
             created_at=end_text, producer=producer, code_ref=code_ref,
         )
         profile: Any = BybitRestartReconciliationCertificationProfile(
-            code_ref, published_floor=floor, chain_start=chain_start,
+            code_ref, published_floor=floor, chain_start=chain_start, revision=revision,
         )
         eligibility_profile = BYBIT_RESTART_RECONCILIATION_CERTIFICATION_PROFILE
         eligibility_suite = BYBIT_RESTART_RECONCILIATION_CHECK_SUITE
@@ -626,10 +677,12 @@ def _publish_one_slice(
             intent_start=start_text, intent_end=end_text,
             assertion_id=assertion_id,
             assertion_start=start_text, assertion_end=end_text,
-            partition_key=key, revision=1, session_evidence=live_session_evidence,
+            partition_key=key, revision=revision, session_evidence=live_session_evidence,
             created_at=end_text, producer=producer, code_ref=code_ref,
         )
-        profile = BybitLiveTradeV1CertificationProfile(code_ref, published_floor=floor, chain_start=chain_start)
+        profile = BybitLiveTradeV1CertificationProfile(
+            code_ref, published_floor=floor, chain_start=chain_start, revision=revision,
+        )
         eligibility_profile = BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE
         eligibility_suite = BYBIT_LIVE_TRADE_V1_CHECK_SUITE
     emit_coverage_manifest(
@@ -686,7 +739,8 @@ def _publish_one_slice(
             datagateway_read_matches_published=False,
         )
     return _PublishedSlice(
-        planned, run, coverage_id, assertion_id, coverage_status, categories, len(read_records), eligibility is not None,
+        planned, revision, run, coverage_id, assertion_id, coverage_status, categories, len(read_records),
+        eligibility is not None,
     )
 
 

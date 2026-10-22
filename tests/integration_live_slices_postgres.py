@@ -11,7 +11,8 @@ superseded; every live partition is revision 1 of its own ``dt=<day>/seg=<HHMMSS
 do not collide; a restart's reconciliation chains to the last slice; a replay of a published slice publishes nothing; a live
 trade inside what is already published is refused, fail closed; an acquisition across a UTC midnight is two chained slices; a
 slice that cannot be read back exactly as published ends the loop; the archive import and the live path do not cover the same
-interval.
+interval; a slice that was sealed but never became valid is not a replay (its trades are published again, under a new revision
+when the window is the same); a reconciliation across a UTC midnight leaves no hole.
 
 What it does NOT claim: that the pauses between cycles are covered. The loop still closes its WebSocket between cycles (F2,
 ended by O02), so the windows of two cycles do not chain and a strict read across them refuses.
@@ -52,7 +53,10 @@ from quant_platform.operations.checkpoint import CheckpointStore  # noqa: E402
 from quant_platform.operations.observability import SignalKind  # noqa: E402
 from quant_platform.operations.pressure import PressurePolicyDefinition  # noqa: E402
 from quant_platform.source_adapters.bybit import BYBIT_ORDERING_PROVIDER  # noqa: E402
+from quant_platform.application.bybit_live import BybitRestartReconciliationCertificationProfile  # noqa: E402
 from quant_platform.source_adapters.bybit_live import (  # noqa: E402
+    BybitLiveSourceError,
+    BybitLiveTradeV1CertificationProfile,
     LiveSessionTracker,
     bybit_live_dataset_identity,
     canonicalize_bybit_live_message,
@@ -62,6 +66,7 @@ from quant_platform.source_adapters.bybit_live_slices import slice_partition_key
 STORAGE_ROOT_ID = "live-hot"
 INSTRUMENT = "ETHUSDT"
 OTHER = "SOLUSDT"
+THIRD = "XRPUSDT"
 MS = 1_000_000
 POLICY = PressurePolicyDefinition(
     max_capacity_observation_age=timedelta(seconds=300), pressure_available_bytes=1, critical_available_bytes=1,
@@ -234,7 +239,8 @@ def main() -> int:
         return 0
     provider = ScriptedProvider(INSTRUMENT)
     other = ScriptedProvider(OTHER)
-    providers = {INSTRUMENT: provider, OTHER: other}
+    third = ScriptedProvider(THIRD)
+    providers = {INSTRUMENT: provider, OTHER: other, THIRD: third}
 
     def acquisition(**kwargs):
         return providers[kwargs["instrument"]].acquisition(**kwargs)
@@ -378,7 +384,70 @@ def main() -> int:
             assert [r[0] for r in partitions(connection, OTHER, slices_only=False)] == ["dt=2026-10-21"]
             assert not sol_checkpoint.exists()
 
-        assert [r[0] for r in rows(connection, "SELECT instrument FROM catalog.datasets ORDER BY 1")] == [INSTRUMENT, OTHER]
+            # 9. A slice that was sealed and never became valid (certification failed) is not a published replay. Its trades are
+            #    still in the provider's window after the restart and are published again; the failed one stays closed.
+            third_checkpoint = storage / "_k10_checkpoints" / f"live-ingest-server-v1-{THIRD}.json"
+            check_healthy(run_server(dsn, storage, third_checkpoint, cycles=1, instrument=THIRD))
+            fail_live = mock.patch.object(BybitLiveTradeV1CertificationProfile, "validate_source",
+                                          side_effect=BybitLiveSourceError("injected"))
+            with fail_live:  # the reconciliation is published, then the next live slice fails after S13 sealed it
+                report, signals = run_server(dsn, storage, third_checkpoint, cycles=2, instrument=THIRD)
+            assert report.status == SERVER_FAILED and failure_codes(signals) == ["CERTIFICATION_FAILED"], failure_codes(signals)
+            states = {r[0]: r[2] for r in partitions(connection, THIRD)}
+            assert sorted(states.values()) == ["closed", "valid", "valid"], states
+            failed_key = next(k for k, v in states.items() if v == "closed")
+            third.recent_mode = "replay"
+            check_healthy(run_server(dsn, storage, third_checkpoint, cycles=2, instrument=THIRD))  # recover, then acquire
+            found = partitions(connection, THIRD)
+            assert [r[2] for r in found].count("closed") == 1 and [r[0] for r in found if r[2] == "closed"] == [failed_key]
+            assert {r[1] for r in found} == {1} and "superseded" not in {r[2] for r in found}
+            everything = gateway_read(connection, Instant.parse(found[0][3]), Instant.parse(found[-1][4]), "allow-partial", THIRD)
+            assert [key_of(r) for r in everything] == [key_of(r) for r in sorted(third.history, key=key_of)], \
+                "the trades of the failed slice are not readable"
+            assert len(third.history) == 3 + 1 + 3 + 3  # first cycle, reconciliation, the failed one, the one after recovery
+
+            #    The same window attempted twice: a reconciliation slice that fails at its window start (the floor), then the
+            #    recovery: the window is the same, so the key is the same and the failed attempt is replaced by revision 2.
+            third.recent_mode = "fresh"
+            before_keys = {r[0] for r in found}
+            with mock.patch.object(BybitRestartReconciliationCertificationProfile, "validate_source",
+                                   side_effect=BybitLiveSourceError("injected")):
+                report, signals = run_server(dsn, storage, third_checkpoint, cycles=1, instrument=THIRD)
+            assert report.status == SERVER_FAILED and failure_codes(signals) == ["CERTIFICATION_FAILED"], failure_codes(signals)
+            third.recent_mode = "replay"
+            check_healthy(run_server(dsn, storage, third_checkpoint, cycles=1, instrument=THIRD))
+            both = rows(connection, "SELECT p.partition_key, p.revision, p.state, p.rel_path FROM catalog.partitions p JOIN "
+                                    "catalog.datasets d ON d.dataset_id = p.dataset_id WHERE d.instrument = %s "
+                                    "AND p.partition_key = ANY(%s) ORDER BY p.partition_key, p.revision",
+                        (THIRD, [r[0] for r in partitions(connection, THIRD)]))
+            retried = [r for r in both if r[0] not in before_keys]
+            assert [(r[1], r[2]) for r in retried] == [(1, "superseded"), (2, "valid")], retried
+            assert [r[3].rsplit("/", 1)[1] for r in retried] == ["part-001.parquet", "part-002.parquet"]
+            found = partitions(connection, THIRD)
+            everything = gateway_read(connection, Instant.parse(found[0][3]), Instant.parse(found[-1][4]), "allow-partial", THIRD)
+            assert [key_of(r) for r in everything] == [key_of(r) for r in sorted(third.history, key=key_of)]
+
+            # 10. A reconciliation across a UTC midnight leaves no hole: the last slice ended one millisecond before it, the
+            #     first new trade is after it; a bridge slice with no trade carries the proven span up to the midnight.
+            third.recent_mode = "fresh"
+            third.cursor_ms = MIDNIGHT_MS - 4  # a live slice of 23:59:59.996, .997, .998: its window ends at 23:59:59.999
+            check_healthy(run_server(dsn, storage, third_checkpoint, cycles=2, instrument=THIRD))  # reconcile, then acquire
+            third.recent_gap_ms = 5  # the first new trade: 00:00:00.004
+            check_healthy(run_server(dsn, storage, third_checkpoint, cycles=1, instrument=THIRD))
+            third.recent_gap_ms = 0
+            found = partitions(connection, THIRD)
+            tail = found[-3:]
+            assert [r[0] for r in tail] == ["dt=2026-10-21/seg=235959.996", "dt=2026-10-21/seg=235959.999", "dt=2026-10-22/seg=000000.000"], \
+                [r[0] for r in tail]
+            assert [r[5] for r in tail] == [3, 0, 1] and {r[2] for r in tail} == {"valid"}, [(r[0], r[5], r[2]) for r in tail]
+            joined = gateway_read(connection, Instant.parse(tail[0][3]), Instant.parse(tail[-1][4]), "strict", THIRD)
+            assert [r.trade_id for r in joined] == [r.trade_id for r in third.history[-4:]], "a hole across the midnight"
+            saved = CheckpointStore(third_checkpoint).load()
+            assert saved.partition_key == tail[-1][0], saved  # the checkpoint binds the last slice, not the empty bridge
+            everything = gateway_read(connection, Instant.parse(found[0][3]), Instant.parse(found[-1][4]), "allow-partial", THIRD)
+            assert [key_of(r) for r in everything] == [key_of(r) for r in sorted(third.history, key=key_of)]
+
+        assert [r[0] for r in rows(connection, "SELECT instrument FROM catalog.datasets ORDER BY 1")] == [INSTRUMENT, OTHER, THIRD]
     print("POSTGRESQL LIVE SLICES GATE PASSED")
     return 0
 

@@ -32,6 +32,8 @@ class LiveSliceError(DataIntegrityError):
 
 @dataclass(frozen=True, slots=True)
 class LiveSlice:
+    """``records`` is empty only for the bridge slice of a reconciliation (see :func:`plan_slices`)."""
+
     window_start: Instant
     window_end: Instant
     records: tuple[TradeRecord, ...]
@@ -117,7 +119,9 @@ def plan_slices(
     ``slice_seconds`` or more after the slice's first trade, or at a UTC midnight (forced to the midnight instant). The
     acquisition's last window ends one millisecond after its greatest ``exchange_ts``: the session closes at a message
     boundary, so no acquired trade is dropped. Windows chain exactly; the first starts at the first trade, or at ``floor`` when
-    ``start_at_floor`` (continuity proven by reconciliation). A window that would hold no trade is not produced.
+    ``start_at_floor`` (continuity proven by reconciliation). A window that would hold no trade is not produced, except the
+    bridge of a reconciliation: when the proven interval from the floor reaches a UTC midnight before its first trade, the span
+    up to the midnight is a slice with no trade, so the chain stays exact and the coverage has no hole.
     """
 
     if not isinstance(max_trades, int) or isinstance(max_trades, bool) or max_trades < 1:
@@ -166,6 +170,11 @@ def plan_slices(
             midnight = utc_day_start_ns(window_start_ns) + _NS_PER_DAY
             if current:
                 close(midnight)
+            elif start_at_floor:
+                # continuity was proven across this span although it holds no trade, and a window cannot cross the midnight:
+                # a bridge slice with no trade keeps the chain exact
+                slices.append(LiveSlice(Instant(window_start_ns), Instant(midnight), ()))
+                window_start_ns = midnight
             else:
                 # nothing was acquired in this window: it is not published; the loop moves on a day at a time
                 window_start_ns = midnight

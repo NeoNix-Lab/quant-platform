@@ -64,8 +64,8 @@ def trade(ms: int, trade_id: str, instrument: str = "ETHUSDT") -> TradeRecord:
 D0 = ts_ms("2026-10-21T14:30:15.123Z")
 
 
-def check_plan_invariants(test: unittest.TestCase, records, plan) -> None:
-    """The properties every plan must have, whatever the stream."""
+def check_plan_invariants(test: unittest.TestCase, records, plan, *, bridges: bool = False) -> None:
+    """The properties every plan must have, whatever the stream. ``bridges``: a reconciliation may hold empty bridge slices."""
 
     slices = plan.slices
     taken = [r for s in slices for r in s.records]
@@ -74,7 +74,8 @@ def check_plan_invariants(test: unittest.TestCase, records, plan) -> None:
                      sorted((r.exchange_ts.epoch_ns, r.trade_id) for r in (*taken, *plan.below_floor)))
     previous_end = None
     for s in slices:
-        test.assertTrue(s.records, "an empty window is never published")
+        if not bridges:
+            test.assertTrue(s.records, "an empty window is never published")
         test.assertLess(s.window_start.epoch_ns, s.window_end.epoch_ns)
         for r in s.records:  # half-open: start <= ts < end
             test.assertLessEqual(s.window_start.epoch_ns, r.exchange_ts.epoch_ns)
@@ -87,8 +88,15 @@ def check_plan_invariants(test: unittest.TestCase, records, plan) -> None:
             test.assertLessEqual(previous_end, s.window_start.epoch_ns)
         previous_end = s.window_end.epoch_ns
     # a millisecond is never split between two slices
-    for left, right in zip(slices, slices[1:]):
+    populated = [s for s in slices if s.records]
+    for left, right in zip(populated, populated[1:]):
         test.assertLess(left.records[-1].exchange_ts.epoch_ns, right.records[0].exchange_ts.epoch_ns)
+    if bridges:  # no hole: the windows of a reconciliation chain exactly, bridges included
+        for left, right in zip(slices, slices[1:]):
+            test.assertEqual(left.window_end, right.window_start)
+        for s in slices:
+            if not s.records:
+                test.assertEqual(s.window_end.epoch_ns % DAY, 0, "a bridge ends at a UTC midnight")
 
 
 class PlannerTests(unittest.TestCase):
@@ -189,10 +197,35 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual([2], [len(s.records) for s in plan.slices])
         self.assertEqual([1, 1], [len(s.records) for s in plan_slices(records, floor=floor, start_at_floor=True, slice_seconds=200).slices])
 
-    def test_start_at_floor_across_midnight_does_not_claim_the_unlistened_span(self) -> None:
+    def test_a_reconciliation_across_a_midnight_bridges_the_span_up_to_it(self) -> None:
+        midnight = ts_ms("2026-10-22T00:00:00Z")
+        floor = Instant((midnight - 1) * MS)  # the last published slice ended one millisecond before the midnight
+        records = [trade(midnight + 4, "a")]
+        plan = plan_slices(records, floor=floor, start_at_floor=True)
+        bridge, real = plan.slices
+        self.assertEqual((), bridge.records)
+        self.assertEqual((floor, Instant(midnight * MS)), (bridge.window_start, bridge.window_end))
+        self.assertEqual("dt=2026-10-21/seg=235959.999", bridge.partition_key)
+        self.assertEqual((Instant(midnight * MS), Instant((midnight + 5) * MS)), (real.window_start, real.window_end))
+        check_plan_invariants(self, records, plan, bridges=True)
+
+    def test_a_live_acquisition_across_a_midnight_does_not_bridge(self) -> None:
         floor = Instant(ts_ms("2026-10-21T23:00:00Z") * MS)
-        plan = plan_slices([trade(ts_ms("2026-10-22T00:10:00Z"), "a")], floor=floor, start_at_floor=True)
-        self.assertEqual(ts_ms("2026-10-22T00:00:00Z") * MS, plan.slices[0].window_start.epoch_ns)
+        plan = plan_slices([trade(ts_ms("2026-10-22T00:10:00Z"), "a")], floor=floor)
+        self.assertEqual(1, len(plan.slices))  # it starts at its own first trade; nothing is claimed before it
+
+    def test_a_reconciliation_that_stays_in_its_day_has_no_bridge(self) -> None:
+        floor = Instant(ts_ms("2026-10-21T23:00:00Z") * MS)
+        plan = plan_slices([trade(ts_ms("2026-10-21T23:10:00Z"), "a")], floor=floor, start_at_floor=True)
+        self.assertEqual([floor], [s.window_start for s in plan.slices])
+        self.assertEqual(1, len(plan.slices))
+
+    def test_a_reconciliation_after_several_idle_days_bridges_each_of_them(self) -> None:
+        floor = Instant(ts_ms("2026-10-21T22:00:00Z") * MS)
+        records = [trade(ts_ms("2026-10-23T01:00:00Z"), "a")]
+        plan = plan_slices(records, floor=floor, start_at_floor=True)
+        self.assertEqual([0, 0, 1], [len(s.records) for s in plan.slices])
+        check_plan_invariants(self, records, plan, bridges=True)
 
     def test_nothing_in_nothing_out(self) -> None:
         self.assertEqual(((), ()), (plan_slices([]).slices, plan_slices([]).below_floor))
@@ -229,15 +262,15 @@ class PlannerTests(unittest.TestCase):
                 max_trades=rng.choice((1, 2, 5, 50_000)), slice_seconds=rng.choice((1, 60, 300)),
             )
             with self.subTest(case=case):
-                check_plan_invariants(self, records, plan)
+                check_plan_invariants(self, records, plan, bridges=floor is not None and case % 2 == 0)
                 if floor is not None:
                     self.assertTrue(all(r.exchange_ts.epoch_ns < floor.epoch_ns for r in plan.below_floor))
                     self.assertTrue(all(r.exchange_ts.epoch_ns >= floor.epoch_ns for s in plan.slices for r in s.records))
                 for left, right in zip(plan.slices, plan.slices[1:]):
-                    # windows chain exactly unless a midnight with no trade (or the end of a day) ends the chain
+                    # windows chain exactly unless a live acquisition crosses a midnight with no trade (a reconciliation bridges)
                     self.assertTrue(
                         left.window_end == right.window_start
-                        or left.window_end.epoch_ns % DAY == 0,
+                        or (left.window_end.epoch_ns % DAY == 0 and not (floor is not None and case % 2 == 0)),
                         (left.window_end, right.window_start),
                     )
 
@@ -312,6 +345,12 @@ class WindowCheckTests(unittest.TestCase):
         for name, document in cases.items():
             with self.subTest(name), self.assertRaises(BybitLiveSourceError):
                 check_live_slice_coverage((document,))
+
+    def test_a_later_revision_is_accepted_only_when_it_is_the_expected_one(self) -> None:
+        self.assertEqual(1, check_live_slice_coverage((self.good(revision=2),), revision=2))
+        for expected, named in ((1, 2), (2, 1), (2, 3)):
+            with self.subTest(expected=expected, named=named), self.assertRaises(BybitLiveSourceError):
+                check_live_slice_coverage((self.good(revision=named),), revision=expected)
 
     def test_the_end_of_the_day_is_allowed(self) -> None:
         document = window_document("dt=2026-10-21/seg=235959.500", "2026-10-21T23:59:59.5Z", "2026-10-22T00:00:00Z")
@@ -391,7 +430,7 @@ class PublishWiringTests(unittest.TestCase):
             final_state="ACQUIRING", errors=(), accepted_records=tuple(records),
         )
 
-    def publish(self, records, *, reconciling=False, floor=None, max_trades=2, outcomes=None):
+    def publish(self, records, *, reconciling=False, floor=None, max_trades=2, outcomes=None, revision=1):
         calls: list[dict] = []
 
         def fake_one(**kwargs):
@@ -401,11 +440,12 @@ class PublishWiringTests(unittest.TestCase):
             planned = kwargs["planned"]
             sealed = SimpleNamespace(
                 dataset_id="dataset", manifest_sha256="a" * 64,
-                natural_identity=SimpleNamespace(partition_key=planned.partition_key, revision=1))
+                natural_identity=SimpleNamespace(partition_key=planned.partition_key, revision=kwargs["revision"]))
             run = SimpleNamespace(certification=SimpleNamespace(status="pass"), sealed_partition=sealed)
-            return app._PublishedSlice(planned, run, f"c-{len(calls)}", f"a-{len(calls)}", "complete", (), len(planned.records), True)
+            return app._PublishedSlice(
+                planned, kwargs["revision"], run, f"c-{len(calls)}", f"a-{len(calls)}", "complete", (), len(planned.records), True)
 
-        with tempfile.TemporaryDirectory() as holder,                 mock.patch.object(app, "_published_floor", lambda dsn, identity: floor),                 mock.patch.object(app, "_publish_one_slice", fake_one):
+        with tempfile.TemporaryDirectory() as holder,                 mock.patch.object(app, "_published_floor", lambda dsn, identity: floor), mock.patch.object(app, "_next_slice_revision", lambda dsn, identity, key: revision),                 mock.patch.object(app, "_publish_one_slice", fake_one):
             report = app._publish_slices(
                 records=tuple(records), acquisition=self.acquisition(records), reconciling=reconciling,
                 live_session_evidence=None, reconcile_result=None, storage_root=holder, storage_root_id="hot", dsn=None,
@@ -439,7 +479,20 @@ class PublishWiringTests(unittest.TestCase):
             [trade(D0 + 1, "a"), trade(D0 + 2, "b"), trade(D0 + 9, "c")], reconciling=True, floor=floor)
         self.assertEqual(("PASS", 2, [True]), (report.status, report.replayed_records, [c["reconciling"] for c in calls]))
         self.assertEqual([floor], [c["planned"].window_start for c in calls])
+        self.assertEqual([floor], [c["chain_start"] for c in calls])  # the first slice must start exactly at the floor
         self.assertEqual(["c"], [r.trade_id for c in calls for r in c["planned"].records])
+
+    def test_the_revision_chosen_for_the_key_reaches_the_slice(self) -> None:
+        report, calls = self.publish([trade(D0, "a")], revision=3)
+        self.assertEqual(([3], 3), ([c["revision"] for c in calls], report.durable_publication.revision))
+
+    def test_a_bridge_is_published_like_any_slice_and_the_report_is_the_last_populated_one(self) -> None:
+        midnight = ts_ms("2026-10-22T00:00:00Z")
+        floor = Instant((midnight - 1) * MS)
+        report, calls = self.publish([trade(midnight + 4, "a")], reconciling=True, floor=floor, max_trades=50_000)
+        self.assertEqual(2, len(calls))
+        self.assertEqual([floor, calls[0]["planned"].window_end], [c["chain_start"] for c in calls])
+        self.assertEqual(("PASS", 2, calls[1]["planned"].partition_key), (report.status, report.slices, report.partition_key))
 
     def test_without_a_floor_a_reconciliation_starts_at_its_first_trade(self) -> None:
         report, calls = self.publish([trade(D0 + 4, "a")], reconciling=True, floor=None)
@@ -457,6 +510,90 @@ class PublishWiringTests(unittest.TestCase):
         failure = RealServerPublishProofReport(status="CERTIFICATION_FAILED", acquisition=self.acquisition([]))
         report, calls = self.publish([trade(D0 + i, f"t{i}") for i in range(5)], outcomes={2: failure})
         self.assertEqual(("CERTIFICATION_FAILED", 2), (report.status, len(calls)))  # the third slice is never attempted
+
+
+class NextRevisionTests(unittest.TestCase):
+    """``_next_slice_revision``: 1 for a window never sealed; the next revision over an attempt that never became valid."""
+
+    @staticmethod
+    def revision(found):
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, sql, params):
+                self.params = params
+
+            def fetchall(self):
+                return found
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+            def close(self):
+                pass
+
+        with mock.patch.object(app, "_connect_catalog", lambda dsn: Connection()):
+            return app._next_slice_revision(None, app.bybit_live_dataset_identity("ETHUSDT"), "dt=2026-10-21/seg=143015.123")
+
+    def test_a_window_never_sealed_is_revision_one(self) -> None:
+        self.assertEqual(1, self.revision([]))
+
+    def test_an_attempt_that_never_became_valid_is_replaced_by_the_next_revision(self) -> None:
+        self.assertEqual(2, self.revision([(1, "closed")]))
+        self.assertEqual(3, self.revision([(1, "superseded"), (2, "closed")]))
+        self.assertEqual(4, self.revision([(2, "superseded"), (1, "superseded"), (3, "closed")]))
+
+    def test_a_valid_slice_is_never_superseded(self) -> None:
+        for found in ([(1, "valid")], [(1, "superseded"), (2, "valid")]):
+            with self.subTest(found=found), self.assertRaises(BybitLiveSourceError):
+                self.revision(found)
+
+
+class NextRevisionTests(unittest.TestCase):
+    """``_next_slice_revision``: 1 for a window never sealed; the next revision over an attempt that never became valid."""
+
+    @staticmethod
+    def revision(found):
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, sql, params):
+                self.params = params
+
+            def fetchall(self):
+                return found
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+            def close(self):
+                pass
+
+        with mock.patch.object(app, "_connect_catalog", lambda dsn: Connection()):
+            return app._next_slice_revision(None, app.bybit_live_dataset_identity("ETHUSDT"), "dt=2026-10-21/seg=143015.123")
+
+    def test_a_window_never_sealed_is_revision_one(self) -> None:
+        self.assertEqual(1, self.revision([]))
+
+    def test_an_attempt_that_never_became_valid_is_replaced_by_the_next_revision(self) -> None:
+        self.assertEqual(2, self.revision([(1, "closed")]))
+        self.assertEqual(3, self.revision([(1, "superseded"), (2, "closed")]))
+        self.assertEqual(4, self.revision([(2, "superseded"), (1, "superseded"), (3, "closed")]))
+
+    def test_a_valid_slice_is_never_superseded(self) -> None:
+        for found in ([(1, "valid")], [(1, "superseded"), (2, "valid")]):
+            with self.subTest(found=found), self.assertRaises(BybitLiveSourceError):
+                self.revision(found)
 
 
 if __name__ == "__main__":
