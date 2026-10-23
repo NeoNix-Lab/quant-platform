@@ -392,13 +392,13 @@ class PlumbingTests(unittest.TestCase):
                     acquired.update(kwargs)
                     return self.passing_report(kwargs["instrument"])
 
-                def fake_revision(dsn, identity, partition_key):
+                def fake_floor(dsn, identity):
                     identities.append(identity)
                     raise StopHere
 
                 extra = {} if instrument == "BTCUSDT" else {"instrument": instrument}
                 with mock.patch.object(app, "run_bounded_live_provider_proof_sync", fake_sync), \
-                        mock.patch.object(app, "_next_revision", fake_revision):
+                        mock.patch.object(app, "_published_floor", fake_floor):
                     with self.assertRaises(StopHere):
                         app.run_real_server_publish_proof(
                             max_messages=1, max_seconds=1.0, storage_root=self.holder.name, storage_root_id="hot",
@@ -412,7 +412,7 @@ class PlumbingTests(unittest.TestCase):
             with self.subTest(instrument=instrument):
                 identities: list = []
 
-                def fake_revision(dsn, identity, partition_key):
+                def fake_floor(dsn, identity):
                     identities.append(identity)
                     raise StopHere
 
@@ -422,7 +422,7 @@ class PlumbingTests(unittest.TestCase):
                     dsn=None, producer="p", code_ref="c", **extra,
                 )
                 self.assertEqual(f"publicTrade.{instrument}", empty.acquisition.topic)
-                with mock.patch.object(app, "_next_revision", fake_revision):
+                with mock.patch.object(app, "_published_floor", fake_floor):
                     with self.assertRaises(StopHere):
                         app._publish_restart_reconciliation_records(
                             accepted_records=(trade(instrument, T0 + 1, "t-2"),), reconcile_result=None,

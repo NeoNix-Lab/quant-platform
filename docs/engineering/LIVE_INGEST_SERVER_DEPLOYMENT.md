@@ -121,6 +121,32 @@ If readback reports partial coverage inside a half-open millisecond interval,
 that is acceptable only when the checkpoint anchor is present and duplicate
 keys are absent. Do not convert partial coverage into a false complete claim.
 
+## What The Server Publishes (ADR-0075 slices, DG-O `O01`)
+
+Every publication is a **slice**: revision 1 of its own partition, never superseded. Under
+`canonical/trades/bybit/<INSTRUMENT>/trade-v1/`:
+
+```text
+dt=<UTC day of the window start>/seg=<HHMMSS.mmm of the window start>/part-001.parquet
+                                                                    /partition-manifest.json
+                                                                    /coverage-manifest.json
+```
+
+- The window is half-open `[start, end)` in exchange time; the coverage assertion is `complete` over exactly that window. A
+  window never crosses a UTC midnight. The trades of one millisecond are never split between two slices.
+- A `DataGateway` read of a live day returns every published trade (`VALID_ONLY`). A read that spans the pause between two cycles is
+  refused under `strict` coverage, because that pause is not covered (it ends with the continuous session, `O02`); under
+  `allow-partial` it returns everything published.
+- The restart reconciliation publishes its records as a slice too, starting where the last published slice ended (continuity proven
+  by the provider's recent-trades window). When that proven span reaches a UTC midnight before the first new trade, the span up to
+  the midnight is a slice with no trade (a bridge), so the chain has no hole. A slice already published is never republished.
+- "Already published" means valid: a slice that was sealed but never became valid (certification or eligibility failed) is not
+  readable and is not a replay. After the restart its trades are published again; if the window is the same, the failed attempt is
+  replaced by the next revision (`part-002.parquet`, ...). A valid slice is never superseded.
+- A live trade before the end of what is already published is an ordering violation: the loop stops with the failure code
+  `SLICE_ORDERING_VIOLATION`, publishes nothing, and the next start reconciles from the checkpoint.
+- Partitions published before ADR-0075 (`dt=<day>`, many superseded revisions) are left as they are; there is no repair.
+
 ## Rollback
 
 This runbook does not automate rollback. If the service fails:

@@ -6,9 +6,9 @@ ONE catalog, through the real publication path (S13, S14, DataGateway read-back)
 scripted: the provider gives both instruments the same timestamps and the same ``trade_id`` strings, so any shared key would
 collide. Requires ``DATA_GATEWAY_TEST_DSN`` and a POSIX storage path.
 
-What is NOT claimed: that a day's readable data is complete. Each cycle publishes a new revision of the day's partition and the
-previous revision becomes ``superseded`` (existing behaviour of the publication path, identical for ``BTCUSDT``); this test pins
-that behaviour per instrument and does not judge it.
+Every publication is a slice (ADR-0075, DG-O O01): revision 1 of its own partition ``dt=<day>/seg=<HHMMSS.mmm>``, never superseded.
+The proof of that behaviour as such is ``tests/integration_live_slices_postgres.py``; this test pins it per instrument: each
+instrument's slices, files, catalog rows and checkpoint are its own, and the DataGateway returns all of its trades and none of the other's.
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ class ScriptedProvider:
         tracker.observed_message(batch)
         with self.lock:
             self.history[instrument].extend(batch.records)
-        time.sleep(0.05)  # the declared window closes after the trades' timestamps
+        time.sleep(0.05)  # successive cycles of one instrument get distinct millisecond windows
         return LiveProviderProofReport(
             status="PASS", topic=f"publicTrade.{instrument}", messages=1, records=len(batch.records), duplicates_removed=0,
             final_state="ACQUIRING", errors=(), accepted_records=batch.records, session_evidence=tracker.evidence(),
@@ -132,8 +132,7 @@ def run_instance(dsn, storage, checkpoint, instrument, cycles, gate, out):
     config = LiveIngestServerConfigV1(
         storage_root=storage, storage_root_id=STORAGE_ROOT_ID, checkpoint_path=checkpoint, pressure_policy=POLICY, dsn=dsn,
         producer="live-two-instruments-proof", code_ref="integration", max_messages_per_cycle=10, max_seconds_per_cycle=1,
-        # Publications are named by wall-clock second: successive cycles of ONE instrument are spaced like production's.
-        cycle_interval_seconds=1.1, instrument=instrument,
+        cycle_interval_seconds=0.0, instrument=instrument,
     )
     state = {"count": 0}
     signals = []
@@ -195,13 +194,6 @@ def catalog_state(connection) -> list:
                             "ON d.dataset_id = p.dataset_id ORDER BY 1, 2, 3")
 
 
-def next_second() -> None:
-    """Publications are named by wall-clock second (``part-HHMMSS``): a restart in production takes seconds (RestartSec=10s);
-    here the phases are separated explicitly so one instrument's two publications never share a file name."""
-
-    time.sleep(1.2)
-
-
 def check_healthy(out, expected_status=SERVER_STOPPED):
     for instrument, (report, signals) in out.items():
         assert not isinstance(report, BaseException), (instrument, repr(report))
@@ -233,19 +225,17 @@ def main() -> int:
             provider.meet(len(INSTRUMENTS))
             out = run_servers(dsn, storage, pairs, cycles=3)
             check_healthy(out)
-            verify_isolation(connection, storage, checkpoint, provider, revisions=3, generation=3)
+            verify_isolation(connection, storage, checkpoint, provider, slices=3, generation=3)
 
             # 2. Restart, side by side: each reconciles from its own checkpoint (real catalog binding check), publishes
             #    under its own instrument, then acquires once more.
-            next_second()
             provider.meet(len(INSTRUMENTS))
             check_healthy(run_servers(dsn, storage, pairs, cycles=2))
-            verify_isolation(connection, storage, checkpoint, provider, revisions=5, generation=5)
+            verify_isolation(connection, storage, checkpoint, provider, slices=5, generation=5)
 
             # 3. One restarts alone: the other's files, catalog rows and checkpoint are byte-identical afterwards.
             before = {"files": files_of(storage, B), "checkpoint": checkpoint[B].read_bytes(),
                       "catalog": [r for r in catalog_state(connection) if r[0] == B]}
-            next_second()
             provider.alone()
             check_healthy(run_servers(dsn, storage, [(A, checkpoint[A])], cycles=1))
             assert before["files"] == files_of(storage, B)
@@ -271,7 +261,7 @@ def main() -> int:
     return 0
 
 
-def verify_isolation(connection, storage, checkpoint, provider, *, revisions, generation):
+def verify_isolation(connection, storage, checkpoint, provider, *, slices, generation):
     """Each instrument has its own dataset, partitions, files and checkpoint, and nothing of the other's."""
 
     datasets = dict(rows(connection, "SELECT instrument, dataset_id::text FROM catalog.datasets"))
@@ -296,22 +286,24 @@ def verify_isolation(connection, storage, checkpoint, provider, *, revisions, ge
     for instrument in INSTRUMENTS:
         directory = storage / "canonical" / "trades" / "bybit" / instrument / "trade-v1"
         own = [p for p, who in owner.items() if who == instrument]
-        parquet = sorted(directory.glob("dt=*/part-*.parquet"))
-        assert len(parquet) == revisions, (instrument, len(parquet))
+        parquet = sorted(directory.glob("dt=*/seg=*/part-001.parquet"))
+        assert len(parquet) == slices, (instrument, len(parquet))
         assert len([p for p in own if p.endswith("dataset-manifest.json")]) == 1
-        assert len(list(directory.glob("partition-manifest-*.json"))) == revisions
-        assert len(list(directory.glob("coverage-manifest-*.json"))) == revisions
+        assert len(list(directory.glob("dt=*/seg=*/partition-manifest.json"))) == slices
+        assert len(list(directory.glob("dt=*/seg=*/coverage-manifest.json"))) == slices
 
-        # catalog partitions of this instrument: ordered revisions, the last valid and the earlier ones superseded
-        partitions = rows(connection, "SELECT p.revision, p.state, p.rel_path, p.row_count, p.content_sha256, p.manifest_sha256 "
-                                      "FROM catalog.partitions p WHERE p.dataset_id = %s ORDER BY p.revision", (datasets[instrument],))
-        assert [r[0] for r in partitions] == list(range(1, revisions + 1)), partitions
-        assert [r[1] for r in partitions] == ["superseded"] * (revisions - 1) + ["valid"], partitions
-        for _revision, _state, rel_path, row_count, content_sha, manifest_sha in partitions:
+        # catalog partitions of this instrument: every slice revision 1 of its own key, none superseded
+        partitions = rows(connection, "SELECT p.revision, p.state, p.rel_path, p.row_count, p.content_sha256, p.manifest_sha256, "
+                                      "p.partition_key FROM catalog.partitions p WHERE p.dataset_id = %s ORDER BY p.ts_start",
+                          (datasets[instrument],))
+        assert [r[0] for r in partitions] == [1] * slices, partitions
+        assert [r[1] for r in partitions] == ["valid"] * slices, partitions
+        assert len({r[6] for r in partitions}) == slices
+        for _revision, _state, rel_path, row_count, content_sha, manifest_sha, key in partitions:
             artifact = directory / rel_path
+            assert rel_path == f"{key}/part-001.parquet", (rel_path, key)
             assert str(content_sha).strip() == sha(artifact), "the Parquet on disk is not the one the catalog certified"
-            suffix = artifact.name[len("part-"):-len(".parquet")]
-            manifest = directory / f"partition-manifest-{suffix}.json"
+            manifest = artifact.parent / "partition-manifest.json"
             assert str(manifest_sha).strip() == sha(manifest), "the partition manifest on disk is not the catalog's"
             records = [r for batch in scan_trade_v1_all(artifact) for r in batch]
             assert len(records) == row_count
@@ -322,25 +314,27 @@ def verify_isolation(connection, storage, checkpoint, provider, *, revisions, ge
         saved = CheckpointStore(checkpoint[instrument]).load()
         assert saved.dataset_identity == bybit_live_dataset_identity(instrument), saved.dataset_identity
         assert saved.catalog_dataset_id == datasets[instrument]
-        assert (saved.generation, saved.revision) == (generation, revisions), (instrument, saved.generation, saved.revision)
+        assert (saved.generation, saved.revision) == (generation, 1), (instrument, saved.generation, saved.revision)
         last = provider.history[instrument][-1]
         assert saved.last_canonical_trade_id == last.trade_id and saved.last_canonical_exchange_ts == last.exchange_ts
 
-        # DataGateway: only this instrument's records, the latest valid revision's
-        newest = [r for batch in scan_trade_v1_all(directory / partitions[-1][2]) for r in batch]
-        start = Instant(newest[0].exchange_ts.epoch_ns - 1_000_000)
-        end = Instant(newest[-1].exchange_ts.epoch_ns + 1_000_000)
+        # DataGateway: only this instrument's records, and all of them (nothing is superseded)
+        published = sorted(
+            (r for p in parquet for batch in scan_trade_v1_all(p) for r in batch), key=lambda r: (r.exchange_ts, r.trade_id))
+        start = Instant(published[0].exchange_ts.epoch_ns - 1_000_000)
+        end = Instant(published[-1].exchange_ts.epoch_ns + 1_000_000)
         gateway = DataGateway(Catalog(connection=connection), ordering_providers=(BYBIT_ORDERING_PROVIDER,))
         result = gateway.read(DataRequest(
             bybit_live_dataset_identity(instrument), start, end, schema_requirement="trade-v1",
             lifecycle_policy=LifecyclePolicy.VALID_ONLY, coverage_policy="allow-partial",
             ordering_policy=BYBIT_ORDERING_PROVIDER.identity))
         assert {r.instrument for r in result.records} == {instrument}
-        assert [(r.exchange_ts, r.trade_id) for r in result.records] == [(r.exchange_ts, r.trade_id) for r in newest]
+        assert [(r.exchange_ts, r.trade_id) for r in result.records] == [(r.exchange_ts, r.trade_id) for r in published]
+        assert len(result.records) == len(provider.history[instrument]), "a published trade is not readable"
 
     # the adversarial premise held: both instruments carry the very same (timestamp, trade_id) keys
     shared = keys_by_instrument[A] & keys_by_instrument[B]
-    assert shared and len(shared) >= revisions, f"the scripted keys were not shared across instruments: {len(shared)}"
+    assert shared and len(shared) >= slices, f"the scripted keys were not shared across instruments: {len(shared)}"
 
 
 if __name__ == "__main__":

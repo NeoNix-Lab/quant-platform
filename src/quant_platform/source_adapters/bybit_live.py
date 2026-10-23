@@ -24,6 +24,12 @@ from .bybit import (
     bybit_trade_v1_ordering_key,
     validate_bybit_trade_v1_eligibility,
 )
+from .bybit_live_slices import (
+    LiveSliceError,
+    is_legacy_day_partition_key,
+    next_utc_midnight,
+    parse_slice_partition_key,
+)
 from quant_platform.canonical import canonical_bytes
 
 
@@ -543,6 +549,54 @@ def build_bybit_live_coverage_document(
     }
 
 
+def check_live_slice_coverage(
+    coverage_documents: Sequence[Mapping[str, Any]],
+    *,
+    published_floor: Instant | None = None,
+    chain_start: Instant | None = None,
+    revision: int = 1,
+) -> int:
+    """ADR-0075 section 3: the key grammar and the window of every live slice a coverage document names.
+
+    A slice key must name ``revision`` (1, unless an earlier attempt at the same window never became valid and is replaced: a
+    valid slice is never superseded), the assertion must start exactly where the key says, end no later than the next UTC
+    midnight and equal the acquisition intent. ``published_floor`` is the end of what is already published (a window may not
+    start before it: no overlap); ``chain_start`` is where the previous slice of the same acquisition ended (the window must
+    start exactly there). The legacy ``dt=<day>`` key is accepted unchanged. Returns the number of slice keys checked.
+    """
+
+    checked = 0
+    for document in coverage_documents:
+        acquisition = document.get("acquisition") or {}
+        for assertion in document.get("assertions") or ():
+            for reference in assertion.get("partitions") or ():
+                key = reference.get("partition_key")
+                if is_legacy_day_partition_key(key):
+                    continue
+                try:
+                    start = parse_slice_partition_key(key)
+                except LiveSliceError as exc:
+                    raise BybitLiveSourceError(f"unsupported live partition key {key!r}: {exc}") from exc
+                if reference.get("revision") != revision:
+                    raise BybitLiveSourceError(f"a live slice must name revision {revision} of its own partition")
+                end = Instant.parse(assertion["end"])
+                if Instant.parse(assertion["start"]) != start:
+                    raise BybitLiveSourceError(f"coverage window does not start where its key {key!r} says")
+                if end > next_utc_midnight(start):
+                    raise BybitLiveSourceError(f"coverage window of {key!r} crosses a UTC midnight")
+                if (
+                    Instant.parse(acquisition.get("intent_start")) != start
+                    or Instant.parse(acquisition.get("intent_end")) != end
+                ):
+                    raise BybitLiveSourceError(f"acquisition intent of {key!r} is not its window")
+                if published_floor is not None and start < published_floor:
+                    raise BybitLiveSourceError(f"window of {key!r} starts before what is already published")
+                if chain_start is not None and start != chain_start:
+                    raise BybitLiveSourceError(f"window of {key!r} does not chain to the previous slice")
+                checked += 1
+    return checked
+
+
 @dataclass(frozen=True, slots=True)
 class BybitLiveTradeV1CertificationProfile:
     """Live-session counterpart to bybit.py's BybitTradeV1CertificationProfile.
@@ -562,6 +616,10 @@ class BybitLiveTradeV1CertificationProfile:
     code_ref: str
     profile_id: str = BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE
     check_suite: str = BYBIT_LIVE_TRADE_V1_CHECK_SUITE
+    # ADR-0075 section 3: where the already published slices end, and where the previous slice of this acquisition ended.
+    published_floor: Instant | None = None
+    chain_start: Instant | None = None
+    revision: int = 1
 
     def applies_to(self, identity: DatasetIdentity) -> bool:
         return bybit_trade_v1_applies_to(identity)
@@ -592,10 +650,15 @@ class BybitLiveTradeV1CertificationProfile:
                     for item in assertion.get("evidence") or ()
                 ):
                     raise BybitLiveSourceError("complete Bybit live coverage lacks session evidence")
+        slices = check_live_slice_coverage(
+            coverage_documents, published_floor=self.published_floor, chain_start=self.chain_start,
+            revision=self.revision,
+        )
         return {
             "source_semantics": BYBIT_LIVE_SOURCE_SEMANTICS_V1,
             "mapping": BYBIT_LIVE_MAPPING_V1,
             "documents": len(coverage_documents),
+            "slices": slices,
         }
 
     def validate_records(
@@ -746,6 +809,7 @@ __all__ = [
     "SessionState",
     "TradeKeyV1",
     "build_bybit_live_coverage_document",
+    "check_live_slice_coverage",
     "bybit_live_dataset_identity",
     "bybit_live_topic",
     "canonicalize_bybit_live_message",
