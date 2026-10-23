@@ -554,47 +554,5 @@ class NextRevisionTests(unittest.TestCase):
                 self.revision(found)
 
 
-class NextRevisionTests(unittest.TestCase):
-    """``_next_slice_revision``: 1 for a window never sealed; the next revision over an attempt that never became valid."""
-
-    @staticmethod
-    def revision(found):
-        class Cursor:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def execute(self, sql, params):
-                self.params = params
-
-            def fetchall(self):
-                return found
-
-        class Connection:
-            def cursor(self):
-                return Cursor()
-
-            def close(self):
-                pass
-
-        with mock.patch.object(app, "_connect_catalog", lambda dsn: Connection()):
-            return app._next_slice_revision(None, app.bybit_live_dataset_identity("ETHUSDT"), "dt=2026-10-21/seg=143015.123")
-
-    def test_a_window_never_sealed_is_revision_one(self) -> None:
-        self.assertEqual(1, self.revision([]))
-
-    def test_an_attempt_that_never_became_valid_is_replaced_by_the_next_revision(self) -> None:
-        self.assertEqual(2, self.revision([(1, "closed")]))
-        self.assertEqual(3, self.revision([(1, "superseded"), (2, "closed")]))
-        self.assertEqual(4, self.revision([(2, "superseded"), (1, "superseded"), (3, "closed")]))
-
-    def test_a_valid_slice_is_never_superseded(self) -> None:
-        for found in ([(1, "valid")], [(1, "superseded"), (2, "valid")]):
-            with self.subTest(found=found), self.assertRaises(BybitLiveSourceError):
-                self.revision(found)
-
-
 if __name__ == "__main__":
     unittest.main()
