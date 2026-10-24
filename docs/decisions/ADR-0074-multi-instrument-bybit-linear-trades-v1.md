@@ -263,3 +263,219 @@ resolved as proposed:
 1. **Precision.** Milliseconds, truncated (A1.2 item 4).
 2. **Download.** `tools/fetch_bybit_trade_archive.py` fetches days into a staging directory; the import reads the local file.
 3. **Re-import of the 2 118 `BTCUSDT` days.** No; an archive import of a day that already has a catalog partition is refused.
+
+---
+
+## Amendment 2 - Rebuild damaged legacy BTCUSDT live days from the archive
+
+**Status:** PROPOSED (design gate [#515](https://github.com/NeoNix-Lab/quant-platform/issues/515))
+**Date:** 2026-10-24
+
+The accepted ADR and Amendment 1 above remain operative. This proposal is not an
+implementation, a governance reconciliation, an acceptance record or authority to
+change production data. The maintainer requested a reviewable reconstruction
+proposal after the operator evidence below, and chose the reduced form of it
+(2026-10-24): **retire** the damaged legacy day from reads with an ordinary
+quality reassessment, then **import** the archive day under a free key. It does
+not replace a partition atomically (see A2.8). Acceptance and the bounded
+implementation authorization are separate steps.
+
+### A2.1 Problem and evidence
+
+On `homelab`, the legacy live publisher wrote a new revision of `dt=<day>` for
+each batch, superseding the preceding batch rather than accumulating the day.
+The archive can supply trades never acquired between cycles; re-enabling the
+superseded batches alone cannot restore them.
+
+Operator-reported checks in the deployment conversation, on producing commit
+`fc69cc17e8f8aeee1326d1b26287b8db1e61b73d`, establish the following bounded facts.
+These are supplied operational evidence, not a new independent server audit.
+
+| Check | Result |
+| --- | --- |
+| Catalog inventory | 31 candidate dates, 2026-09-23 through 2026-10-23; 85,056 superseded legacy revisions, 24,160,325 declared rows; 9,908 declared rows in valid legacy revisions. Totals are not unique-trade counts. |
+| 2026-10-20 local files | 3,326 distinct readable Parquet footers; all row counts match the catalog; 1,142,059 rows; 41,257,944 bytes. No full physical-hash check was performed by this inventory. |
+| Archive | `BTCUSDT2026-10-20.csv.gz`, 57,387,589 bytes, SHA-256 `d45890283c23973ee061364ff2faf5835dee6dc9c1fee1cbd648375377c4447d`; 1,568,861 rows and unique trade IDs. |
+| In-day ID comparison | 1,141,530 local unique IDs, all in the archive; no in-day duplicate or null IDs; 427,331 archive IDs absent locally. Equality of other canonical fields was not tested. |
+| Day ownership | 529 local rows fall outside 2026-10-20. Legacy catalog coverage intervals also cross UTC midnight. A partition-key date alone does not delimit the replacement's effects. |
+
+The inventory is a candidate list, not permission to rebuild every date in it.
+The 2026-10-23 sample contains both legacy revisions and new live slices; it is
+excluded from the first scope. Whether a day is closed is evaluated in UTC at
+execution, not from a local calendar date or this document's date.
+
+### A2.2 Decision
+
+Authorize an operator-requested rebuild of explicitly selected, closed UTC days of
+`canonical/trades/bybit/BTCUSDT/trade-v1` whose publication is a legacy
+`dt=<day>` family (many superseded revisions and one live revision that holds only
+the day's last batch). Per selected day, in this order:
+
+1. **Retire.** Record a superseding quality reassessment of the day's current live
+   revision, `fail` on completeness, and apply [ADR-0030](ADR-0030-general-quality-lifecycle-v1.md)'s
+   existing mapping `fail -> invalid`. Nothing is deleted or rewritten: the
+   revision stays the live (non-superseded) row of its key, now `invalid`, with its
+   bytes, manifests, quality reports and admissions intact. Every read policy
+   excludes `invalid`, so the day is no longer served from the damaged batch.
+2. **Import.** Import the whole-day archive file of Amendment 1 (same download
+   identity, strict parsing, millisecond mapping, unique non-empty trade IDs,
+   half-open UTC-day coverage) through the ordinary S13/S14 path as **revision 1 of
+   the key `dt=<day>/seg=000000.000`**, `part-001.parquet`: the key grammar of
+   ADR-0075 section 3 for a window that starts at the day's first instant. The legacy
+   key stays as it is; the new key is free, so no revision is raised and no
+   predecessor is superseded.
+3. **Verify.** Compare the imported records with the archive file in full
+   (`tools/compare_archive_day.py`), then read the day through the `DataGateway`
+   strictly and check count, order and duplicates.
+
+The ordinary importer keeps its refusal of an occupied day (A1.6 item 3). The
+rebuild is a separate operation that treats the retired (`invalid`) legacy revision
+of that exact day as not occupying it, and nothing else: a `valid` or `closed`
+partition of the day, or any `dt=<day>/seg=...` partition other than the one it
+creates, still refuses. It is never a `--force` of the ordinary importer.
+
+### A2.3 The reassessment writer
+
+ADR-0030 already defines reassessment: a new, target-bound, immutable quality
+report that carries `metrics.supersedes_assessment_signature` of the assessment it
+supersedes, and an application step that maps its status to a state. The state
+transition exists (`valid` is an allowed source state for `fail`). What does not
+exist is a writer of such a report for a revision that is not `closed`:
+`record_quality_report` refuses any other state, and the repair path writes reports
+only for candidates inside its own cutover.
+
+The slice adds that writer, in the data plane next to the lifecycle seam, with these
+properties:
+
+- it targets the current live revision of one natural partition, locked in the same
+  order as the lifecycle application, and refuses a superseded, foreign or
+  `writing` revision;
+- it copies the bound evidence of the assessment it supersedes unchanged (profile,
+  natural identity, dataset, partition and content hashes, coverage manifest and
+  assertion identities) and sets the status, the coverage category and a
+  violation that names the reason (`legacy_publication_incomplete_day`) and the
+  archive identity that shows it; it carries the producing commit;
+- the reassessment is honest: the partition is not corrupt, it is incomplete for
+  its day, and the report says so; it is idempotent (the same semantic signature
+  adds no second leaf);
+- the lifecycle application then runs through the existing seam, in its own short
+  transaction (a few milliseconds of the dataset row lock, per partition).
+
+**Restore.** A later reassessment `pass` that supersedes the `fail` returns the
+revision to `valid` by the same seam. It is the documented way back if the import
+or its verification fails and the operator prefers the damaged day to no day.
+
+### A2.4 Plan, preconditions and refusals
+
+A read-only plan precedes any change and is bound by a digest the executing command
+must present. For each selected day it records: the incumbent revision (partition
+UUID, key, revision, state, physical and manifest hashes, coverage identities), the
+archive file (URL, SHA-256, size, source-observation time, row count), the producing
+commit, the key to create and the result of the checks below. A changed incumbent,
+source or catalog makes the plan stale; the executor never acquires another target
+and never widens the date set.
+
+A day is refused, and nothing is changed for it, if any of the following holds:
+
+- the day is not closed in UTC: its end is less than 24 hours before execution;
+- the day has a live slice (`dt=<day>/seg=...` other than the one to create), a
+  checkpoint binding to any of its partitions, or an open gap record that names it;
+- its current live revision is not `valid`;
+- **conservation fails.** Every record of the incumbent live revision, by
+  `(exchange_ts, trade_id)`, must be found with equal venue, instrument, exchange
+  time, side, price and size in the archive file of its own UTC day, and that day
+  must be readable after the operation (rebuilt in the same plan, or already valid
+  in the catalog). A record outside the day (the 529 rows of the evidence) is
+  checked against its own day, not dropped. Any difference in a common field refuses
+  the day; there is no partial acceptance;
+- the archive file fails Amendment 1's strict parsing or its hash differs from the
+  plan.
+
+The incumbent live revision of a legacy day holds only the day's last batch; the
+superseded revisions are not read today and are not part of the conservation
+check. The rebuilt day carries the archive's null `receive_ts` and `sequence`. The
+rows that the incumbent revision serves lose the provider `sequence` they have now
+(ADR-0040 keeps it as live evidence): this is an accepted, declared loss of
+provenance on those rows, recoverable from the retained bytes, and not a claim of the
+original session's continuity.
+
+### A2.5 Readers, concurrency and failure
+
+- **No atomic switch, by design.** Between *Retire* and *Import* the day is served
+  by nothing: a strict read refuses with `NoCoverage`; `allow-partial` reports the
+  gap. The order is chosen so that this is an honest absence and never a state in
+  which two valid partitions cover the same day (the gateway refuses that overlap).
+  The days are closed and have no consumer yet (usage tests start after the first
+  version); the plan states the window per day and the executor does one day at a time.
+- **Coherent reads.** `Catalog.select_partitions` selects partitions in one SQL
+  statement filtered by lifecycle state, so each lifecycle commit is seen whole or
+  not at all by a reader; the proofs below use that mechanism.
+- **Crash and retry.** After a crash between *Retire* and *Import* the day is
+  retired and unimported; rerunning the plan imports it. After a crash between the
+  import and the verification the executor finds the valid key it would create
+  and goes to the verification, which is read-only and repeatable. The attempt is
+  identified by the plan digest.
+- **Concurrency.** The lifecycle application and the import take the same dataset
+  row lock as the live publication, each for a short transaction. The executor does
+  not hold a lock across days, the files' reading or the verification.
+- **Untouched.** Live checkpoint files, gap evidence, healthy historical days, live
+  slices, other datasets and all old bytes. No deletion, catalog reset or retention
+  is part of the operation ([ADR-0049](ADR-0049-retention-deletion-authority-v1.md)). Cleaning
+  retired or superseded legacy revisions is the maintainer's retention decision.
+
+### A2.6 Exact effect if accepted
+
+| Authority | Bounded amendment |
+| --- | --- |
+| This ADR A1.6 item 3 and occupied-day refusal | Remains the default for ordinary import. The rebuild treats the retired legacy revision of the selected day as not occupying it and imports under `dt=<day>/seg=000000.000`; nothing else is let through. |
+| ADR-0075 section 7, delegation item 3 and acceptance item 3 | Lift the pause only for the explicitly selected, closed legacy days; current slices, consolidation and live interruption evidence remain unchanged. |
+| ADR-0030 (A16) | No change of meaning. Adds the writer of a reassessment report for a revision that is not `closed` (A2.3). |
+| ADR-0033 (A10) | Not used. The first scope does not need an atomic replacement (A2.8); A10 and its triggers are unchanged. |
+| ADR-0044 | No amendment: no automatic live-gap repair, no new proof of live continuity. |
+| ADR-0018, frozen records and manifests, identity, ordering | Unchanged. The new key uses the accepted two-level grammar; no schema, migration or new control table. |
+| S13, S14 | Unchanged; the import uses them as they are. |
+
+This proposal does not accept ADR-0075 Amendment 1 (#512 / PR #513), resolve #511,
+complete O02/O03 or grant capability credit. It changes no governance file.
+Acceptance must be recorded explicitly and followed by a separately authorized
+implementation issue and, where the active scope requires it, a governance
+reconciliation. Production execution follows a reviewed, pinned implementation and a
+reviewed date plan. The 31-date inventory is not that plan.
+
+### A2.7 Required implementation and operational proof
+
+1. **Writer slice.** The reassessment writer (A2.3) over a disposable PostgreSQL:
+   `valid -> invalid` and back by a superseding `pass`; the supersession link; the
+   bound evidence copied unchanged; idempotence; refusal of a superseded, foreign or
+   stale target; a concurrent publication on the same dataset waits and then
+   proceeds; a `VALID_ONLY` read excludes the retired revision; the old bytes,
+   manifests and reports unchanged.
+2. **Rebuild slice.** The importer variant, the plan and its digest, the
+   conservation check, the runbook. Disposable PostgreSQL probes: a retired day is
+   imported under the new key; a `valid` or `closed` incumbent, a live slice, a
+   checkpoint binding, an open day, a stale plan and a differing common field each
+   refuse without changing anything; a crash between *Retire* and *Import* and
+   another between *Import* and the verification are recovered by rerunning; the
+   restore path; a neighbouring day with its own retired revision whose legacy
+   coverage crossed midnight reads correctly. Strict `DataGateway` read of the pilot
+   day returns exactly 1,568,861 archive records, in order, without duplicates,
+   with full-field equality to the archive (null `receive_ts` and `sequence`
+   expected); non-target days and the live checkpoint are byte-identical.
+3. **Operation.** Dry-run, execute and verify on `2026-10-20` first; further days
+   only from a new reviewed plan. Nothing in the production run is claimed by this
+   proposal.
+
+The runtime proof is required after implementation; this design-only proposal does
+not claim any of those probes passed.
+
+### A2.8 Considered and not adopted
+
+An atomic replacement of the live revision (retire and admit the successor in one
+transaction, with the predecessor readable until the switch), built on ADR-0033's
+cutover and extended to a component of adjacent days with new versioned repair
+triggers, provenance and migration, a prospective certification seam in S13, and a
+bounded lock hold against the live service. Its cost is several implementation
+slices and a lock on the dataset row that the live publication needs, for a benefit
+(no read gap) that closed days without consumers do not require. It stays available
+as a later amendment if a consumer of these days appears; this proposal does not
+close that door.
