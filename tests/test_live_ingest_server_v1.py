@@ -172,7 +172,7 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         def fake_publish(**_kwargs):
             return self._publish_report(batches.pop(0))
 
-        def fail_recent(*, limit):
+        def fail_recent(*, limit, instrument="BTCUSDT"):
             raise AssertionError("steady-state cycles must not fall back to bounded reconciliation")
 
         app_bybit_live.run_real_server_publish_proof = fake_publish
@@ -215,7 +215,7 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         def fake_current_publication(*, checkpoint, dsn):
             return self.publication
 
-        def fake_recent(*, limit):
+        def fake_recent(*, limit, instrument="BTCUSDT"):
             return (anchor, after)
 
         def fake_restart_publish(*, accepted_records, reconcile_result, **_kwargs):
@@ -250,7 +250,7 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         def fake_current_publication(*, checkpoint, dsn):
             return self.publication
 
-        def fake_recent(*, limit):
+        def fake_recent(*, limit, instrument="BTCUSDT"):
             return (trade(1000, "anchor", "1"), after)
 
         def fake_restart_publish(*, accepted_records, reconcile_result, **_kwargs):
@@ -284,7 +284,7 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         def fake_current_publication(*, checkpoint, dsn):
             return self.publication
 
-        def fake_recent(*, limit):
+        def fake_recent(*, limit, instrument="BTCUSDT"):
             return (unrelated,)
 
         def fail_restart_publish(**_kwargs):
@@ -331,7 +331,7 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         def fake_current_publication_v1(*, checkpoint, dsn):
             return self.publication
 
-        def fake_recent_gap(*, limit):
+        def fake_recent_gap(*, limit, instrument="BTCUSDT"):
             return (unrelated,)
 
         def fail_restart_publish(**_kwargs):
@@ -359,7 +359,7 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         def fake_current_publication_v2(*, checkpoint, dsn):
             return publication_v2
 
-        def fake_recent_resumed(*, limit):
+        def fake_recent_resumed(*, limit, instrument="BTCUSDT"):
             return (new_segment, after_restart)
 
         def fake_restart_publish(*, accepted_records, reconcile_result, **_kwargs):
@@ -400,7 +400,7 @@ class LiveIngestServerLoopTests(unittest.TestCase):
         def fake_current_publication(*, checkpoint, dsn):
             return self.publication
 
-        def fake_recent(*, limit):
+        def fake_recent(*, limit, instrument="BTCUSDT"):
             return (unrelated,)
 
         def fake_publish(**_kwargs):

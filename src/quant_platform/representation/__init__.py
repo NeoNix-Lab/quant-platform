@@ -1,5 +1,22 @@
 """Canonical derived representation runtimes."""
 
+from .bar_flow import (
+    BAR_FLOW_RESULT_FINGERPRINT_V1_DOMAIN,
+    BAR_FLOW_V1_RECORD_SCHEMA,
+    BarFlowAggressorSideError,
+    BarFlowCoverageError,
+    BarFlowDefinitionV1,
+    BarFlowFinalizationError,
+    BarFlowInputError,
+    BarFlowOrderingError,
+    BarFlowProvenanceError,
+    BarFlowRecord,
+    HistoricalBarFlowResult,
+    HistoricalBarFlowSourceEvidence,
+    aggregate_historical_bar_flow,
+    build_historical_bar_flow_result,
+    required_bar_flow_bucket_support,
+)
 from .candles import (
     CANDLE_DEFINITION_V1_VERSION,
     CANDLE_INCREMENTAL_RUNTIME_V1_DOMAIN,
@@ -50,6 +67,21 @@ from .footprints import (
 )
 
 __all__ = [
+    "BAR_FLOW_RESULT_FINGERPRINT_V1_DOMAIN",
+    "BAR_FLOW_V1_RECORD_SCHEMA",
+    "BarFlowAggressorSideError",
+    "BarFlowCoverageError",
+    "BarFlowDefinitionV1",
+    "BarFlowFinalizationError",
+    "BarFlowInputError",
+    "BarFlowOrderingError",
+    "BarFlowProvenanceError",
+    "BarFlowRecord",
+    "HistoricalBarFlowResult",
+    "HistoricalBarFlowSourceEvidence",
+    "aggregate_historical_bar_flow",
+    "build_historical_bar_flow_result",
+    "required_bar_flow_bucket_support",
     "CANDLE_DEFINITION_V1_VERSION",
     "CANDLE_INCREMENTAL_RUNTIME_V1_DOMAIN",
     "CANDLE_RESULT_FINGERPRINT_V1_DOMAIN",

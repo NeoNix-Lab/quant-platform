@@ -98,7 +98,7 @@ class CanonicalV1Tests(unittest.TestCase):
                             | {"argument_ast": ast.dump(argument, include_attributes=False),
                                "parameters": parameters})
         # P01's pre-migration fixture is immutable historical evidence. New
-        # application codecs declare their additional usage explicitly rather
+        # domain/application codecs declare additional usage explicitly rather
         # than weakening the complete source inventory or altering that fixture.
         additional = [{
             "path": "src/quant_platform/application/l2_market_data.py",
@@ -130,14 +130,32 @@ class CanonicalV1Tests(unittest.TestCase):
             "ordinal": 1, "scope": "partition_identity_text",
             "argument_ast": ast.dump(ast.parse("identity.stable_dict()", mode="eval").body, include_attributes=False),
             "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
+        }, {
+            "path": "src/quant_platform/representation/bar_flow.py",
+            "ordinal": 1, "scope": "BarFlowDefinitionV1.canonical_utf8_serialization",
+            "argument_ast": ast.dump(ast.parse("self.canonical_payload", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-utf8-v1", "allow_nan": False},
+        }, {
+            "path": "src/quant_platform/representation/bar_flow.py",
+            "ordinal": 2, "scope": "HistoricalBarFlowResult.result_identity",
+            "argument_ast": ast.dump(ast.parse("payload", mode="eval").body, include_attributes=False),
+            "parameters": {"profile": "sorted-compact-ascii-v1", "allow_nan": False},
         }]  # #338: existing J12 canonical identities, unchanged byte profile; #339: the J13 wire message; #391: the natural partition identity text.
+        # #461 / ADR-0073: additive bar-flow definition and result domains;
+        # all historical sites and the pre-migration fixture remain unchanged.
         # #342: the feature-provider identity (ADR-0069 s7, the ADR-0068
         # sorted-compact-ascii-v1 profile) and the size bound of a bundle's JSON
         # documents; each is one declared call site, no new profile.
         # A14e adds the L2 event-size encoding with the same declared profile;
         # it is a byte-size estimate, not an identity or a fixture change.
         self.assertEqual(sorted(expected + additional, key=lambda site: (site["path"], site["ordinal"])), sites)
-        expected_raw = [[path, ast.dump(ast.parse(expression, mode="eval").body,
+        # T02 part 2 (#495, ADR-0074): the live subscription names the topic of the session's own instrument instead of the
+        # BTCUSDT constant. The fixture stays untouched; the one changed expression is declared here.
+        declared_raw_changes = {
+            ("src/quant_platform/application/bybit_live.py", 'json.dumps({"op": "subscribe", "args": [SUPPORTED_TOPIC]})'):
+                'json.dumps({"op": "subscribe", "args": [topic]})',
+        }
+        expected_raw = [[path, ast.dump(ast.parse(declared_raw_changes.get((path, expression), expression), mode="eval").body,
                                        include_attributes=False)]
                         for path, expression in INVENTORY["raw_exceptions"]]
         self.assertEqual(expected_raw, raw)

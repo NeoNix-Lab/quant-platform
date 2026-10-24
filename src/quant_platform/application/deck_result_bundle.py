@@ -10,9 +10,12 @@ the upload and submit calls stay the client's.
 
 v1 pins the deck to the server's commit (ADR-0072 section 5): the manifest's ``git_identity`` is the
 commit the API recorded at startup, and the workload must run exactly that commit from a clean tree.
-The ``RunIdentity`` carries it, and covers the manifest's logical inputs and definitions, which are
-the K13 compatibility checks (``GovernedResultImportService``); everything else a run declares
-(study, trial, extra identities, configuration) is the workload's own and is not decided here.
+The ``RunIdentity`` carries it. It covers the manifest's logical inputs itself, and requires the
+workload to *declare* the manifest's definitions (ADR-0073 section 6): a definition identity the
+admission carries and the run does not name is ``definition_not_declared``, because the workload, not
+the builder, states which definitions it evaluated. Both are the K13 compatibility checks
+(``GovernedResultImportService``); everything else a run declares (study, trial, extra identities,
+configuration) is the workload's own and is not decided here.
 """
 
 from __future__ import annotations
@@ -59,7 +62,13 @@ DECK_OUTPUT_ROLES_V1: Mapping[str, tuple[str, str]] = MappingProxyType({
 })
 REPLAY_ROLES_V1: frozenset[str] = frozenset({"replay-result", "replay-summary"})
 LOGICAL_INPUT_REFERENCE_KIND = "admitted-input"
-DEFINITION_REFERENCE_KIND = "definition"
+# ADR-0073 section 6. K13 compares identity strings, not kinds: the kind is for readers and tooling.
+FEATURE_DEFINITION_REFERENCE_KIND = "feature-definition"
+REPRESENTATION_DEFINITION_REFERENCE_KIND = "representation-definition"
+_DEFINITION_REFERENCE_KINDS = (
+    ("feature-definition-v1:", FEATURE_DEFINITION_REFERENCE_KIND),
+    ("bar-flow-definition-v1:", REPRESENTATION_DEFINITION_REFERENCE_KIND),
+)
 _GIT_TIMEOUT_SECONDS = 30
 _COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
@@ -180,6 +189,20 @@ class DeckResult:
     bundle: GovernedResultBundleV1
     wire: dict[str, Any]
     uploads: tuple[DeckUpload, ...]
+
+
+def definition_reference(identity: str) -> IdentityReference:
+    """The reference a workload declares for a definition identity the server admitted.
+
+    A ``feature-definition-v1`` identity is a ``feature-definition`` and a ``bar-flow-definition-v1``
+    identity a ``representation-definition`` (ADR-0073 section 6); any other identity has no kind
+    this module knows.
+    """
+
+    for prefix, kind in _DEFINITION_REFERENCE_KINDS:
+        if type(identity) is str and identity.startswith(prefix):
+            return IdentityReference(kind, identity)
+    raise DeckResultError("definition_kind_unknown", "the identity is not a feature or representation definition")
 
 
 def content_checksum(payload: bytes) -> str:
@@ -331,7 +354,7 @@ def _run_identity(
             TrialIdentity(run.study, dict(run.trial_assignments)),
             IdentityReference("code", code_identity),
             data_identities=_covering(run.data_identities, logical_inputs, LOGICAL_INPUT_REFERENCE_KIND),
-            feature_identities=_covering(run.feature_identities, definitions, DEFINITION_REFERENCE_KIND),
+            feature_identities=_declared(run.feature_identities, definitions),
             research_label_identities=tuple(run.research_label_identities),
             validation_identity=run.validation_identity,
             strategy_policy_execution_identities=tuple(run.strategy_policy_execution_identities),
@@ -340,6 +363,27 @@ def _run_identity(
         ),
         run.execution_id,
     )
+
+
+def _declared(
+    declared: Sequence[IdentityReference], required: Sequence[str],
+) -> tuple[IdentityReference, ...]:
+    """The workload's own references, which must name every definition the admission carries.
+
+    Nothing is added: a definition the workload did not declare is a refusal, so the run says which
+    definitions it evaluated. A run may declare more than the admission carried (K13 verifies
+    coverage, not exclusivity); only the admitted ones are server-attested.
+    """
+
+    references = tuple(declared)
+    present = {reference.identity for reference in references}
+    missing = sorted(identity for identity in required if identity not in present)
+    if missing:
+        raise DeckResultError(
+            "definition_not_declared",
+            "the workload did not declare the admitted definition(s): " + ", ".join(missing),
+        )
+    return references
 
 
 def _covering(
@@ -354,7 +398,7 @@ def _covering(
 
 __all__ = [
     "DECK_OUTPUT_ROLES_V1",
-    "DEFINITION_REFERENCE_KIND",
+    "FEATURE_DEFINITION_REFERENCE_KIND",
     "DeckAdmission",
     "DeckOutput",
     "DeckResult",
@@ -364,8 +408,10 @@ __all__ = [
     "FeatureProviderSource",
     "LOGICAL_INPUT_REFERENCE_KIND",
     "REPLAY_ROLES_V1",
+    "REPRESENTATION_DEFINITION_REFERENCE_KIND",
     "WorkloadTree",
     "build_deck_result",
     "content_checksum",
+    "definition_reference",
     "inspect_workload_tree",
 ]

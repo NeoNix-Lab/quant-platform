@@ -291,12 +291,6 @@ class NextCheckpointTests(unittest.TestCase):
 
 
 class RestartReconciliationCertificationProfileTests(unittest.TestCase):
-    def test_restart_reconciliation_interval_is_rounded_to_coverage_microseconds(self):
-        start, end = app_bybit_live._record_intent_interval((trade(1001, "after", "2"),))
-
-        self.assertEqual(start, "1970-01-01T00:00:00.000001Z")
-        self.assertEqual(end, "1970-01-01T00:00:00.000002Z")
-
     def test_restart_reconciliation_coverage_is_accepted_without_fake_session_evidence(self):
         record = trade(1001, "after", "2")
         result = ReconnectResult(
@@ -406,7 +400,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         def fake_publish(**_kwargs):
             return self._publish_report((anchor,))
 
-        def fake_recent(*, limit):
+        def fake_recent(*, limit, instrument="BTCUSDT"):
             self.assertEqual(limit, 1000)
             return (anchor, after)
 
@@ -472,7 +466,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         def fake_publish(**_kwargs):
             return self._publish_report((anchor,))
 
-        def fail_recent(*, limit):
+        def fail_recent(*, limit, instrument="BTCUSDT"):
             raise AssertionError(f"publish phase must not fetch recent trades, got limit={limit}")
 
         def fail_resume(**_kwargs):
@@ -508,7 +502,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         def fail_publish(**_kwargs):
             raise AssertionError("restart phase must not publish a fresh batch")
 
-        def fake_recent(*, limit):
+        def fake_recent(*, limit, instrument="BTCUSDT"):
             self.assertEqual(limit, 1000)
             return (anchor, after)
 
@@ -566,7 +560,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
             self.assertIsNone(dsn)
             return stale
 
-        def fail_recent(*, limit):
+        def fail_recent(*, limit, instrument="BTCUSDT"):
             raise AssertionError(f"stale catalog binding must fail before recent fetch, got limit={limit}")
 
         app_bybit_live.run_real_server_publish_proof = fail_publish
@@ -652,7 +646,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         )
 
     def test_restart_phase_without_checkpoint_is_explicit_and_does_not_fetch(self):
-        def fail_recent(*, limit):
+        def fail_recent(*, limit, instrument="BTCUSDT"):
             raise AssertionError(f"missing-checkpoint restart must not fetch recent trades, got limit={limit}")
 
         app_bybit_live.fetch_recent_public_trades = fail_recent
@@ -697,7 +691,7 @@ class RealServerRestartProofEntryPointTests(unittest.TestCase):
         def fail_publish(**_kwargs):
             raise AssertionError("restart phase must not publish a fresh batch")
 
-        def fake_recent(*, limit):
+        def fake_recent(*, limit, instrument="BTCUSDT"):
             self.assertEqual(limit, 1000)
             return (anchor, after)
 

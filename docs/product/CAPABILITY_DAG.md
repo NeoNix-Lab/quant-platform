@@ -8,7 +8,10 @@ on main (#434/#437). DG-K2 supplies the later executable composition and one
 supervised happy-path proof on the smallest real partition; deployability carries
 ADR-0072 Amendment 1 bounds and the recorded proof findings. S08 is not authorized,
 J11 remains deferred, and no Wave 8 or DG-K/DG-K2 Golden proof is claimed.
-L2 promotion to main is a separate final wave PR; no deployment is performed here.**
+L2 promotion to main is a separate final wave PR; no deployment is performed here. DG-M — Canonical feature identity for deck
+results v1 is CLOSED on `implement/fid` (#475). DG-N — Multi-instrument Bybit linear trades v1 is registered and authorized (#483, ADR-0074 `ACCEPTED`): `T01` and `T04` are `COMPLETE` within their row bounds (PR #486, #488; ADR-0074 Amendment 1, #489), `T03` and `T02` are `FROZEN`/`MISSING`. DG-O — Live publication: continuous session and append-only slices v1 is registered and authorized (#507, ADR-0075 `ACCEPTED`): `O01`-`O03` are `FROZEN`/`MISSING`, nothing is implemented, and `T02` additionally requires `O03`. DG-M detail: `M01`, `M02`, `M04` and `M05` are COMPLETE within their row bounds (PR #466, #468,
+#473, #474) under ADR-0073 and its Amendment 1, `M03` is superseded; the server now seals the identities of the definitions a deck
+names and the deck builder must declare them. No real-host run is claimed, and promotion into `main` is the operator's separate PR.**
 
 This document is the execution/dependency view of the Quant Platform roadmap. `ROADMAP.md` remains the human-readable macro progression; `CAPABILITY_MAP.md` remains the compact current-state view; accepted ADRs/contracts remain semantic authority.
 
@@ -18,19 +21,19 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after the two-parent L2/main reconciliation (#444),
-recomputed mechanically from the union of the atom tables, not by hand:
+Current audited inventory after the DG-O registration (#507),
+recomputed mechanically from the atom tables, not by hand:
 
 ```text
-TOTAL_ATOMS                     = 119
-CLASSIFIED_ATOMS                = 119
+TOTAL_ATOMS                     = 130
+CLASSIFIED_ATOMS                = 130
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 107 / 119 = 89.9%
+SEMANTIC_FROZEN_OR_RESOLVED     = 118 / 130 = 90.8%
 OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 107 + 3 + 9 = 119
-ROADMAP_PLANNING_COMPLETENESS   = 119 / 119 = 100%
-IMPLEMENTATION_COMPLETE         = 99 / 119 = 83.2%
+ROADMAP_DEFINED                 = 118 + 3 + 9 = 130
+ROADMAP_PLANNING_COMPLETENESS   = 130 / 130 = 100%
+IMPLEMENTATION_COMPLETE         = 105 / 130 = 80.8%
 ```
 
 Reconciliation #444 preserves all accepted DG-K/DG-K2 credits from main and
@@ -39,6 +42,34 @@ had 111 / 84, and their union has 119 / 99. No new atom or capability is
 invented by this merge; the seven L2 subatoms and eight S atoms were already
 registered on their respective lines. [SCOPE.md](../../SCOPE.md#executable-governance-verification)
 contains the executable two-parent verification.
+
+DG-O registration and authorization (issue #507): ADR-0075 is `ACCEPTED` (#504, 2026-10-21). Three atoms `O01`-`O03` are added directly as
+`FROZEN`/`MISSING` (127 -> 130 atoms; 115 -> 118 decided); no existing atom changes state, and `T02` gains the requirement `O03` (its one-hour
+`ETHUSDT` proof is the one of `O03`). `T03` and `T02` parts 1 to 5 are merged and are credited by the DG-N closeout, not here. The counts above
+are recomputed from these tables by script.
+
+Earlier, DG-N reconciliation (issue #489): `T01` and `T04` move from `MISSING` to `COMPLETE` on `implement/fid` (103 -> 105; implementation
+81.1% -> 82.7%); no new atom and no decision-state change (115 decided, 3 `OPEN_BLOCKING`, 9 `OPEN_DEFERABLE`, 127 atoms). ADR-0074
+Amendment 1 (accepted 2026-10-20) names the Bybit public trade archive as the historical source and supersedes the registration of
+the existing Parquet. The counts above are recomputed from these tables by script. Promotion into `main` is the operator's separate PR.
+
+Earlier, DG-N registration and authorization (issue #483): ADR-0074 is `ACCEPTED` (#377, 2026-10-19). Four atoms `T01`-`T04` are added directly as
+`FROZEN`/`MISSING` (123 -> 127 atoms; 111 -> 115 decided); no existing atom changes state. The counts above are recomputed from these
+tables by script.
+
+Earlier, DG-M closeout (issue #475): `M01`, `M02`, `M04` and `M05` move from `MISSING` to `COMPLETE` on `implement/fid` (99 -> 103; implementation
+80.5% -> 83.7%); no new atom and no decision-state change (111 decided, 3 `OPEN_BLOCKING`, 9 `OPEN_DEFERABLE`, 123 atoms). The counts above
+are recomputed from these tables by script. Promotion into `main` is the operator's separate PR; the real-host run is operator evidence.
+
+Earlier, DG-M reconciliation (issue #458): ADR-0073 is `ACCEPTED` (#457, 2026-10-18). `M01`, `M02`, `M04` and `M05` move from
+`OPEN_BLOCKING` to `FROZEN` (107 -> 111 decided; 8 -> 3 `OPEN_BLOCKING`) and stay `MISSING`; `M03` is `SUPERSEDED` by the ADR
+(an `EventSpec` is hypothesis-bound, not a server-known definition) and leaves the inventory (124 -> 123 atoms). Implementation
+stays 99 `COMPLETE`, so it reads 99 / 123 = 80.5%; nothing is implemented and the server still passes no feature identity.
+
+Earlier, DG-M registration (issue #453): five candidate atoms `M01`-`M05` are added as `OPEN_BLOCKING`/`MISSING` under the DG-M design
+gate (#454, ADR-0073). No existing atom changes decision or implementation state; the percentages fall because the
+inventory grows from 119 to 124 atoms (semantic 89.9% -> 86.3%; implementation 83.2% -> 79.8%), not because anything
+regressed.
 
 DG-C / A14 v1 closeout (#442): six rows (`A14`, `A14a`-`A14e`) move to
 `COMPLETE` on `implement/l2` (78 -> 84); no new atom or decision-state change.
@@ -137,6 +168,9 @@ J  Runtime & Interface
 K  Operations
 P  Process Topology (DG-K; ADR-0068/ADR-0069)
 S  Server/deck composition (DG-K2)
+M  Feature identity (DG-M)
+T  Multi-instrument trades (DG-N)
+O  Live publication (DG-O)
 ```
 
 The implemented ownership direction remains governed by ADR-0024 and architecture tests. `application` composes existing capabilities and owns no quantitative meaning.
@@ -334,6 +368,39 @@ Registered by governance issue #382 after the DG-K closeout (#381); the design g
 | S07 | Real-topology proof v1 | Operations | S01,S02,S03,S04,S05,S06 | server/deck split | FROZEN | COMPLETE | ADR-0072 §7 (accepted; authorized by #389). PostgreSQL + API + worker + deck client over WSS/mTLS: admit, deliver, verify, acknowledge, run, upload, submit and register, plus the fault cases the gate defines. Defines "ready to split" Credit (#409): PR #427 (issue #397), part 1, the hermetic proof `PostgresSplitTopology` (14 tests, run by the CI job of the runtime stores), and PR #428, the record of part 2. Bound: part 2 is one happy path on the smallest real partition (3 122 bytes) executed by the maintainer and reported from the session log, on a pull-request commit; no fault was repeated there and the largest real day (252.8 MiB) was not delivered. The topology is deployable only within the bounds of ADR-0072 Amendment 1; see `docs/engineering/DGK2_SPLIT_TOPOLOGY_PROOF.md`. |
 | S08 | First data-local J03 handlers v1 | Application | P04a,P04b | remote data-local jobs | OPEN_DEFERABLE | MISSING | Trigger: the maintainer names a first handler (feature/representation materialization, historical import or catalog maintenance). `DATA_LOCAL_JOB_REGISTRY` ships empty; each handler enters through its own issue citing ADR-0068 §6 |
 
+### M — Feature identity for deck results (DG-M)
+
+Registered by governance issue #453 after the DG-K2 closeout (#409); the design gate #454 produced ADR-0073, `ACCEPTED` on 2026-10-18 (#457), and governance issue #458 authorizes `M01`, `M02`, `M04` and `M05` for implementation on the integration branch `implement/fid`. The maintainer named the requirement on 2026-10-18: a deck result must be attributable to a server-known, canonical feature definition, the first being failed aggression. `SCOPE.md` (archived at the closeout #475) recorded the start gate and the acceptance of each atom. `M03` is superseded and not counted. `M01`, `M02`, `M04` and `M05` are `COMPLETE` on `implement/fid` within the bounds of their rows. Follow-on, not an atom: #477 / PR #478 lets the deck protocol client carry `definitions` (governance #479).
+
+| ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
+|---|---|---|---|---|---|---|---|
+| M01 | Bar-flow representation v1 | Representation | D03, D06 | M02 | FROZEN | COMPLETE | ADR-0073 §2 (accepted; authorized by #458). Additive `BarFlowDefinitionV1(duration_ns)` and `bar-flow-v1` record: the candle's six aggregates plus `taker_buy_volume`/`taker_sell_volume`, one pass over `trade-v1`, no tick grid, `aggressor_side` missing or unknown refuses the bucket, duration 1 second to 1 day, identity domain `bar-flow-definition-v1`. The candle, footprint and H01 identities are pinned and must not change. Credited `COMPLETE` at the DG-M closeout (#475): #461 / PR #466 on `implement/fid`; `BarFlowDefinitionV1`, the `bar-flow-v1` record and its golden fixture; the candle, footprint and H01 identities are unchanged. |
+| M02 | Failed-aggression FeatureDefinition v1 | Feature Engine | M01, E02, E06 | M04 | FROZEN | COMPLETE | ADR-0073 §1, §3, §4 (accepted; authorized by #458). `order_flow.failed_aggression@1`: input contract `bar_flow.bar@1`, FINAL_ONLY, exact division-free rule (`D >= i*T` and wick `> w*range`), defaults `imbalance_threshold` 0.3 and `wick_ratio` 0.5 with declared domains, signed output -1/0/+1; constructor, pure evaluator, golden vectors, and the reference `EventSpec` predicates (`equal 1`, `equal -1`, `not_equal 0`) exercised by a test. Credited `COMPLETE` at the DG-M closeout (#475): #462 / PR #468 on `implement/fid`; review findings R1-R3 fixed, R1 (observation identity across durations) held at admission level by ADR-0073 Amendment 1 (#469 / PR #471). |
+| M03 | Failed-aggression event definition v1 | Research | M02, F02 | — | SUPERSEDED | N/A | Superseded by ADR-0073 §1 (accepted; closed by #458): an `EventSpec` is bound to a `hypothesis_id`, a research object, so no event definition is canonical or server-known. The reference-usage test moves into `M02`. Excluded from the inventory counts. |
+| M04 | Server definition registry and admit carriage v1 | Application/API | M01, M02, S01, P06 | M05 | FROZEN | COMPLETE | ADR-0073 §5 (accepted; authorized by #458). Closed in-code registry (one entry); optional `definitions` field of `admit` (at most 8 entries, additive under ADR-0066 §1, family version unchanged); the manifest's `definition_identities` populated with the sorted, deduplicated bar-flow and feature identities; a request without `definitions` seals a byte-identical manifest; eight stable refusal reasons (ADR-0073 Amendment 1, #469: one bar duration per admission). Amendment 2 of ADR-0072 and Amendment 3 of ADR-0069 are appended by this atom. Credited `COMPLETE` at the DG-M closeout (#475): #463 / PR #473 on `implement/fid`; ADR-0072 Amendment 2 (§1 row) and ADR-0069 Amendment 3 appended; a request without `definitions` seals the pre-change digest; a wire digit ceiling found in review was removed. |
+| M05 | Deck feature-identity declaration and proof v1 | Client/Operations | M04, S05, S07 | feature-traceable deck results | FROZEN | COMPLETE | ADR-0073 §6, §8 (accepted; authorized by #458). The deck builder no longer adds definition references itself and refuses `definition_not_declared`; K13 `_validate_run_compatibility` unchanged and now non-vacuous; the four facts of §8 proved on `PostgresSplitTopology`, with the omission case refused and zero writes asserted. Amendment 2 of ADR-0072 §5 is appended by this atom. The server attests the admitted name, not the deck's computation. Credited `COMPLETE` at the DG-M closeout (#475): #464 / PR #474 on `implement/fid`; ADR-0072 Amendment 2 (§5 item 2); the four facts of ADR-0073 §8 proved on `PostgresSplitTopology` (CI; also 18 of 18 run in WSL on PostgreSQL 16). The real-host run is operator evidence and is not claimed. |
+
+### T — Multi-instrument Bybit linear trades (DG-N)
+
+Registered and authorized by governance issue #483 after the design gate #377 produced ADR-0074, `ACCEPTED` on 2026-10-19 (PR #482). The maintainer wants to read, deliver and ingest live the Bybit linear USDT instruments BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT and DOGEUSDT, and to run this work in the current wave (`implement/fid`). `SCOPE.md` Part B records the start gate and the acceptance of each atom; the order is `T01`, `T04`, `T03`, `T02`. `T01` and `T04` are `COMPLETE` on `implement/fid` (reconciliation #489); `T03` and `T02` are not implemented.
+
+| ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
+|---|---|---|---|---|---|---|---|
+| T01 | Multi-instrument read and delivery v1 | Data Access/Application | A06, A08, A09, K12 | T04, T03, T02 | FROZEN | COMPLETE | ADR-0074 §1, §2, §5 (accepted; authorized by #483). The closed constant `BYBIT_LINEAR_TRADE_INSTRUMENTS_V1` (BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT) drives the ordering and eligibility applicability; a non-BTC dataset is read, admitted and delivered end to end (`DataGateway`, K12 `admit`/`deliver`); a read-only check of the catalog for the allow-list; what is missing enters the catalog only through the producer path (for the existing Parquet, by the archive import of ADR-0074 Amendment 1, not by registration); BTC identities and ordering key unchanged. Credited `COMPLETE` at the DG-N reconciliation (#489): #485 / PR #486 on `implement/fid`; the allow-list constant drives the ordering and eligibility applicability for all five instruments, each read through the `DataGateway` and admitted and delivered through K12 end to end on real Parquet and the J14 transfers, plus a read-only catalog check; mutation-checked; BTC identities and ordering key unchanged. The registration of the existing Parquet was superseded by ADR-0074 Amendment 1 (they are replaced through the archive import). Not claimed: that any non-BTC dataset is registered in the server catalog, a real-host run. |
+| T04 | Historical import per instrument v1 | Source/Producer | A07, T01 | T02 | FROZEN | COMPLETE | ADR-0074 §4 and Amendment 1 (accepted; authorized by #483, re-scoped by #487). `--instrument` over the allow-list for the one-UTC-day historical import from the Bybit public trade archive (a local file, no network call in the producer path); history enters only through the producer path; no repair of live gaps (ADR-0044 stands). Credited `COMPLETE` at the DG-N reconciliation (#489): #487 / PR #488 on `implement/fid`; ADR-0074 Amendment 1 (accepted 2026-10-20) names the Bybit public trade archive as the historical source of every instrument; the archive adapter, the SQLite and archive certification profiles (no mixtures), the one-UTC-day import with `--instrument` through the producer path (S13, S14) under a per-day lock, the fetch, import and compare tools, the runbook and a PostgreSQL integration test in CI; BTCUSDT 2024-01-15 from the archive equals the SQLite golden on aggregates. Not claimed: the server-side record-by-record proof, a real-host run, any download or replacement of the existing files. |
+| T03 | Explicit per-instrument fees v1 | Execution | H02, T01 | T02 | FROZEN | MISSING | ADR-0074 §7 (accepted; authorized by #483). Fee parameters are explicit per instrument; an execution or replay over a dataset whose instrument is not BTCUSDT and that names no fee schedule is refused (fail-closed); BTCUSDT behaviour unchanged. |
+| T02 | Live trades ingest per instrument v1 | Data Plane/Operations | A11, K10, T01, T03, T04, O03 | multi-asset live research | FROZEN | MISSING | ADR-0074 §3, §6 (accepted; authorized by #483). Adapter and server parameterized by instrument; one process per instrument with its own checkpoint and subject (`quant-platform-live-ingest@<INSTRUMENT>.service`, runbook); two instances proved not to collide on checkpoints, partitions or catalog rows; one hour of real provider traffic for ETHUSDT (delivered by `O03`); deployment is a manual operator step and the capacity rule gates enabling beyond BTCUSDT. |
+
+### O — Live publication: continuous session and append-only slices (DG-O)
+
+Registered and authorized by governance issue #507 after the design gate #504 produced ADR-0075, `ACCEPTED` on 2026-10-21 (PR #505, #506). Measured on the maintainer's server on 2026-10-21: the live publication supersedes every cycle with the next (a day reads as under 0.4% of its published trades) and the loop closes its WebSocket between cycles (about 27% of a day's trades are never acquired). `SCOPE.md` Part C records the start gate and the acceptance of each atom; the order is `O01`, `O02`, `O03`. No atom here is implemented. `T02` requires `O03`: its one-hour `ETHUSDT` proof is the one of `O03`.
+
+| ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
+|---|---|---|---|---|---|---|---|
+| O01 | Append-only live slices v1 | Data Plane/Application | A11, K10, T01 | O02 | FROZEN | MISSING | ADR-0075 §2 to §4 (accepted; authorized by #507). A slice is the trades of one instrument in a half-open exchange-time window, closed after `slice_seconds` (300) or `slice_max_trades` (50 000) at a message boundary and never crossing a UTC midnight; each slice is revision 1 of its own partition `dt=<day>/seg=<HHMMSS.mmm>` and is never superseded; windows of one session chain exactly; the checkpoint binds a slice partition; the live certification profile accepts the key grammar and checks the chain. Ends F1 (a day reads as its last cycle). |
+| O02 | Continuous live session v1 | Data Plane/Operations | O01 | O03 | FROZEN | MISSING | ADR-0075 §1, §5 (accepted; authorized by #507). One WebSocket session per instance, decoupled from publication by a bounded buffer (20 000 messages); a buffer overflow, a disconnect or an ordering violation is an interruption handled by ADR-0040 §7 and ADR-0042 §5 (reconcile from the last durable key or record an explicit gap; ADR-0044 unchanged); signals for the buffer and the interruptions. Ends F2 (about 27% of a day's trades never acquired). |
+| O03 | Live slice configuration, runbook and real-provider proof v1 | Data Plane/Operations | O02, T03, T04 | T02 | FROZEN | MISSING | ADR-0075 §9.3 (accepted; authorized by #507). `slice_seconds`, `slice_max_trades` and the buffer bound in the unit templates and the runbook; a real-provider run of at least one hour for ETHUSDT that reports the trades captured against the Bybit archive of the same day, the trades readable through the DataGateway and the number of `exchange_ts` ordering violations. This is the one-hour proof of `T02`. |
+
 ## Dependency integrity
 
 The `Requires` relation is a DAG. In particular, operational capability and implementation sequencing are not conflated:
@@ -509,6 +576,30 @@ S05 ──────────────────┘
 S08   (deferable; trigger: a named first handler)
 ```
 
+### DG-M — Canonical feature identity for deck results v1 — CLOSED (design gate; ADR-0073 `ACCEPTED`, #457)
+
+Closed by ADR-0073: one canonical feature `order_flow.failed_aggression@1` over a new additive `bar-flow-v1` representation; the event is not server-known (`M03` superseded); the deck names definitions in an optional `definitions` field of `admit` and the server seals their identities in `definition_identities`; K13 is unchanged and the deck builder must declare them. Implementation of `M01`, `M02`, `M04`, `M05` was authorized by #458 and is `COMPLETE` on `implement/fid` (closeout #475). Registered by governance issue #453 after the DG-K2 closeout (#409), whose trigger 1 ("the maintainer names feature traceability as a requirement") the maintainer exercised on 2026-10-18. The server passes the deck no feature identity (`definition_identities` is empty), no governed representation carries taker volumes, and the failed-aggression observable has no canonical definition. The gate is one ADR (ADR-0073) that decides the decomposition, the input representation, availability, numerics, the server carriage, the K13 rule, the research alignment and the proof. Fixed inputs (not reopened): ADR-0057, ADR-0064, ADR-0066 §1, ADR-0069, ADR-0072, ADR-0026/ADR-0035, no change of any existing identity bytes. Out of scope: the generic provider `E07` and the FEI line (DG-L, independent), precomputed feature artifacts as deck inputs, Omega, `J11`. Full question set: `OPEN_DECISIONS.md` (DG-M).
+
+```text
+M01 ──> M02 ──> M04 ──> M05      (M03 superseded)
+```
+
+### DG-N — Multi-instrument Bybit linear trades v1 — CLOSED (design gate; ADR-0074 `ACCEPTED`, #377)
+
+Closed by ADR-0074: a closed allow-list of five Bybit linear USDT instruments, per-instrument dataset, subject and checkpoint identity, one live process per instrument, ADR-0044 unchanged for gaps, a capacity rule that gates production enabling on the #378 measurements, explicit fees per instrument. Implementation of `T01`-`T04` was authorized by #483; `T01` and `T04` are `COMPLETE` (#489) and `T03` and `T02` are not started. ADR-0074 Amendment 1 (accepted 2026-10-20, #487) chose the Bybit public trade archive as the historical source. Fixed inputs (not reopened): ADR-0040, ADR-0042, ADR-0043, ADR-0044, no change of any BTCUSDT identity byte. Out of scope: a second venue (`A12`), spot and inverse, L2 for other instruments, a generic provider resolver, measured capacity.
+
+```text
+T01 ──> T04 ──> T03 ──> T02
+```
+
+### DG-O — Live publication: continuous session and append-only slices v1 — CLOSED (design gate; ADR-0075 `ACCEPTED`, #504)
+
+Closed by ADR-0075: one continuous WebSocket session per instance decoupled from publication by a bounded buffer; slices with chained exchange-time windows (300 s or 50 000 trades); each slice is revision 1 of its own partition `dt=<day>/seg=<start>`, never superseded; interruptions follow ADR-0040 §7 and ADR-0042 §5, ADR-0044 unchanged. Implementation of `O01`-`O03` is authorized by #507 and not started. Not decided (deferred, with a measured trigger): consolidation of a closed day's slices into one partition. Not repaired (paused by the maintainer): the already damaged live days, which stay as they are; if a gap makes the data unusable the history is re-ingested from scratch. Assumption to be measured by `O03`: the provider's `exchange_ts` is non-decreasing along the stream. Out of scope: a second venue (`A12`), L2, any change to `trade-v1`, the ordering key, `TradeKeyV1` or the J02 wire.
+
+```text
+O01 ──> O02 ──> O03 ──> T02
+```
+
 ## Vertical milestones
 
 | ID | Path | Proposition | State |
@@ -650,6 +741,9 @@ DG-K   Process Topology v1                               COMPLETE within recorde
 DG-K2  Server/deck deployment composition              COMPLETE within recorded bounds (operator closeout #409); S01-S07; deployable only within ADR-0072 Amendment 1 bounds; S08 not authorized
 DG-C/L2 L2 historical v1 (#442)                         COMPLETE on implement/l2: A14,A14a-A14e; golden #413/#430 11/11;
                                                        A14f/A14g held MISSING; separate L2 promotion to main
+DG-M   Canonical feature identity for deck results v1   COMPLETE within recorded bounds on implement/fid (closeout #475); M01,M02,M04,M05; M03 superseded; no real-host run claimed
+DG-N   Multi-instrument Bybit linear trades v1          IN PROGRESS on implement/fid (#483, #489; ADR-0074 ACCEPTED #377 and Amendment 1); T01,T04 COMPLETE; T03,T02 FROZEN/MISSING
+DG-O   Live publication: continuous session and append-only slices v1   AUTHORIZED (#507; ADR-0075 ACCEPTED #504); O01,O02,O03 FROZEN/MISSING; nothing implemented
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```

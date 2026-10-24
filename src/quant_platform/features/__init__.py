@@ -75,6 +75,15 @@ from .imbalance import (
     compute_diagonal_imbalance,
     compute_stacked_imbalance,
 )
+from .failed_aggression import (
+    BAR_FLOW_BAR_CONTRACT,
+    FAILED_AGGRESSION_FEATURE_KEY,
+    FAILED_AGGRESSION_SIGNAL_SHAPE,
+    FailedAggressionBarInput,
+    evaluate_failed_aggression,
+    evaluate_failed_aggression_bars,
+    failed_aggression_definition,
+)
 from .h01_imbalance import (
     DIAGONAL_IMBALANCE_FEATURE_KEY,
     FOOTPRINT_PRICE_LEVEL_CONTRACT,
@@ -170,4 +179,11 @@ __all__ = [
     "stacked_imbalance_definition",
     "values_semantically_equivalent",
     "verify_matches_request",
+    "BAR_FLOW_BAR_CONTRACT",
+    "FAILED_AGGRESSION_FEATURE_KEY",
+    "FAILED_AGGRESSION_SIGNAL_SHAPE",
+    "FailedAggressionBarInput",
+    "evaluate_failed_aggression",
+    "evaluate_failed_aggression_bars",
+    "failed_aggression_definition",
 ]

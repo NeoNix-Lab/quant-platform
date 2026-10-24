@@ -220,7 +220,13 @@ certificate as the server trust anchor.
 2. **`admit`.** `DeckHandoffClient.from_credentials(url, client_certificate_path=..., client_private_key_path=...,
    server_trust_anchor_path=...)`, then `admit(operation_identity=..., profile_identity=..., dataset=... or
    artifact_identities=...)`. The reply is a sealed admission (`admission_id`, `manifest_digest`, `manifest`,
-   `delivery_attempt`). Keep `admission_id` and the digest with the run record.
+   `delivery_attempt`). Keep `admission_id` and the digest with the run record. To attribute the result to server-known
+   feature definitions, add `definitions=[{"feature_key": ..., "semantic_version": ..., "bar_duration": ...,
+   "parameters": {...}}]` (ADR-0073 section 5, at most 8 entries, one bar duration per admission): the client sends them
+   as given, the server canonicalizes them and seals their identities in the manifest's `definition_identities`, and a
+   refusal (for example `definition_unknown`) arrives as the server's error with nothing sealed. The workload must then
+   declare those identities in its run (`deck_result_bundle.definition_reference`), or the builder refuses
+   `definition_not_declared`.
 3. **`deliver` and verify.** `fetch_inputs(admission)` delivers, verifies every member against the manifest's content
    hashes and identities, and only then acknowledges `delivered` for the `delivery_attempt` it received. Bytes are handed
    over only after that. A failed verification acknowledges `failed` for that attempt and raises.

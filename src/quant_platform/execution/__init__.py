@@ -54,9 +54,27 @@ _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _DEFAULT_MAKER_FEE_RATE = Decimal("0.0002")
 _DEFAULT_TAKER_FEE_RATE = Decimal("0.00055")
 
+# ADR-0074 section 7: the defaults above are the rates of this instrument only. A fill or a replay of any other instrument
+# needs a schedule whose maker and taker rates were both stated by the caller.
+FEE_DEFAULT_INSTRUMENT = "BTCUSDT"
+FEE_SCHEDULE_NOT_EXPLICIT = "fee_schedule_not_explicit"
+
 
 class ExecutionError(ValueError):
     """An Order/Fill v1 semantic value or state transition violates the contract."""
+
+
+class FeeScheduleNotExplicit(ExecutionError):
+    """A defaulted fee schedule meets an instrument whose rates the defaults are not (stable ``reason``)."""
+
+    reason = FEE_SCHEDULE_NOT_EXPLICIT
+
+    def __init__(self, instrument: str):
+        self.instrument = instrument
+        super().__init__(
+            f"{FEE_SCHEDULE_NOT_EXPLICIT}: {instrument} needs a fee schedule with explicit maker and taker rates; "
+            f"the defaults are the {FEE_DEFAULT_INSTRUMENT} VIP0 rates"
+        )
 
 
 class OrderSide(StrEnum):
@@ -584,13 +602,27 @@ class FeeSchedule:
     """Parameterized maker/taker fee rates, applied to fill notional."""
 
     policy_key: str
-    maker_fee_rate: Decimal | str | int = _DEFAULT_MAKER_FEE_RATE
-    taker_fee_rate: Decimal | str | int = _DEFAULT_TAKER_FEE_RATE
+    maker_fee_rate: Decimal | str | int | None = None
+    taker_fee_rate: Decimal | str | int | None = None
+    # True when a rate was left out and the BTCUSDT default filled it in. It is an init field so that ``dataclasses.replace``
+    # keeps it: a copy of a defaulted schedule stays defaulted. It can only make the explicitness check stricter, and it is
+    # not part of the schedule's identity (``stable_dict``).
+    rates_defaulted: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "policy_key", _key(self.policy_key, "fee schedule key"))
-        object.__setattr__(self, "maker_fee_rate", _decimal(self.maker_fee_rate, "maker_fee_rate"))
-        object.__setattr__(self, "taker_fee_rate", _decimal(self.taker_fee_rate, "taker_fee_rate"))
+        defaulted = bool(self.rates_defaulted) or self.maker_fee_rate is None or self.taker_fee_rate is None
+        maker = _DEFAULT_MAKER_FEE_RATE if self.maker_fee_rate is None else self.maker_fee_rate
+        taker = _DEFAULT_TAKER_FEE_RATE if self.taker_fee_rate is None else self.taker_fee_rate
+        object.__setattr__(self, "maker_fee_rate", _decimal(maker, "maker_fee_rate"))
+        object.__setattr__(self, "taker_fee_rate", _decimal(taker, "taker_fee_rate"))
+        object.__setattr__(self, "rates_defaulted", defaulted)
+
+    def require_explicit_for(self, instrument: str) -> None:
+        """Refuse (``FeeScheduleNotExplicit``) a schedule with a defaulted rate for an instrument other than BTCUSDT."""
+
+        if instrument != FEE_DEFAULT_INSTRUMENT and self.rates_defaulted:
+            raise FeeScheduleNotExplicit(instrument)
 
     def fee_for(self, *, notional: Decimal | str | int, liquidity_role: LiquidityRole | str) -> Decimal:
         notional_amount = _decimal(notional, "notional")
@@ -670,6 +702,7 @@ def build_fill(
         raise ExecutionError("order must be an Order")
     if not isinstance(fee_schedule, FeeSchedule):
         raise ExecutionError("fee_schedule must be a FeeSchedule")
+    fee_schedule.require_explicit_for(order.instrument)
     if order.status not in _FILLABLE_STATUSES:
         raise ExecutionError(f"cannot build fill for order in status {order.status.value}")
     normalized_fill_time = Instant.parse(fill_time)
@@ -1266,6 +1299,9 @@ class ExitLegManager:
 
 
 __all__ = [
+    "FEE_DEFAULT_INSTRUMENT",
+    "FEE_SCHEDULE_NOT_EXPLICIT",
+    "FeeScheduleNotExplicit",
     "AdmissionOutcome",
     "AdmissionRefusalReason",
     "ExecutionError",

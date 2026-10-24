@@ -19,9 +19,16 @@ from typing import Any
 
 from ..data.models import DataIntegrityError, DatasetIdentity, Instant, TradeRecord
 from .bybit import (
+    BYBIT_LINEAR_TRADE_INSTRUMENTS_V1,
     bybit_trade_v1_applies_to,
     bybit_trade_v1_ordering_key,
     validate_bybit_trade_v1_eligibility,
+)
+from .bybit_live_slices import (
+    LiveSliceError,
+    is_legacy_day_partition_key,
+    next_utc_midnight,
+    parse_slice_partition_key,
 )
 from quant_platform.canonical import canonical_bytes
 
@@ -46,6 +53,8 @@ SUPPORTED_SYMBOL = "BTCUSDT"
 SUPPORTED_TOPIC = "publicTrade.BTCUSDT"
 SUPPORTED_VENUE = "bybit"
 RECORD_SCHEMA_ID = "trade-v1"
+# ``SUPPORTED_SYMBOL`` / ``SUPPORTED_TOPIC`` are the BTCUSDT defaults. Every function below takes the instrument as an explicit
+# argument (ADR-0074 section 2) restricted to ``BYBIT_LINEAR_TRADE_INSTRUMENTS_V1``; with no argument the behaviour is BTCUSDT.
 
 _POSITIVE_DECIMAL_RE = re.compile(r"^(?:0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$")
 # schemas/trade-v1.json's `digit_string`: non-negative integer text, no
@@ -161,9 +170,11 @@ class ReconnectResult:
 
 
 class LiveSessionTracker:
-    """Small explicit state machine for A11 session evidence."""
+    """Small explicit state machine for A11 session evidence, for one instrument of the allow-list."""
 
-    def __init__(self) -> None:
+    def __init__(self, instrument: str = SUPPORTED_SYMBOL) -> None:
+        self._topic = bybit_live_topic(instrument)  # also validates the instrument against the allow-list
+        self._instrument = instrument
         self._state = SessionState.DISCONNECTED
         self._events: list[SessionEvent] = [
             SessionEvent(self._state, "initial", {})
@@ -180,8 +191,9 @@ class LiveSessionTracker:
     def connected(self, *, conn_id: str | None = None) -> None:
         self._transition(SessionState.CONNECTED, "connected", {"conn_id": conn_id})
 
-    def subscribed(self, *, topic: str = SUPPORTED_TOPIC, conn_id: str | None = None) -> None:
-        if topic != SUPPORTED_TOPIC:
+    def subscribed(self, *, topic: str | None = None, conn_id: str | None = None) -> None:
+        topic = self._topic if topic is None else topic
+        if topic != self._topic:
             raise BybitLiveSourceError("subscription acknowledgement is for an unsupported topic", field="topic")
         if self._state in {SessionState.SUBSCRIBED, SessionState.ACQUIRING}:
             # Bybit does not guarantee the subscribe ack is delivered before
@@ -201,6 +213,8 @@ class LiveSessionTracker:
         self._events.append(SessionEvent(self._state, "heartbeat_pong", {"conn_id": conn_id}))
 
     def observed_message(self, batch: LiveTradeBatch) -> None:
+        if batch.message_evidence.topic != self._topic:
+            raise BybitLiveSourceError("trade message is for another topic than this session's", field="topic")
         if self._state == SessionState.CONNECTED:
             # A real, matching topic message is itself sufficient evidence
             # the subscription succeeded (Bybit may deliver the first topic
@@ -246,8 +260,20 @@ class LiveSessionTracker:
         self._events.append(SessionEvent(state, event, dict(detail)))
 
 
-def bybit_live_dataset_identity() -> DatasetIdentity:
-    return DatasetIdentity("canonical", "trades", SUPPORTED_VENUE, SUPPORTED_SYMBOL, RECORD_SCHEMA_ID)
+def _require_instrument(instrument: Any) -> str:
+    if not isinstance(instrument, str) or instrument not in BYBIT_LINEAR_TRADE_INSTRUMENTS_V1:
+        raise BybitLiveSourceError(f"unsupported instrument {instrument!r}", field="instrument")
+    return instrument
+
+
+def bybit_live_topic(instrument: str = SUPPORTED_SYMBOL) -> str:
+    """The public-trade topic of one instrument of the allow-list (``publicTrade.<INSTRUMENT>``)."""
+
+    return f"publicTrade.{_require_instrument(instrument)}"
+
+
+def bybit_live_dataset_identity(instrument: str = SUPPORTED_SYMBOL) -> DatasetIdentity:
+    return DatasetIdentity("canonical", "trades", SUPPORTED_VENUE, _require_instrument(instrument), RECORD_SCHEMA_ID)
 
 
 def trade_key_v1(record: TradeRecord) -> TradeKeyV1:
@@ -256,11 +282,12 @@ def trade_key_v1(record: TradeRecord) -> TradeKeyV1:
     return TradeKeyV1(record.venue, record.instrument, Instant.parse(record.exchange_ts), record.trade_id)
 
 
-def canonicalize_bybit_live_message(message: Mapping[str, Any]) -> LiveTradeBatch:
+def canonicalize_bybit_live_message(message: Mapping[str, Any], *, instrument: str = SUPPORTED_SYMBOL) -> LiveTradeBatch:
+    expected_topic = bybit_live_topic(instrument)
     if not isinstance(message, Mapping):
         raise BybitLiveSourceError("Bybit live message must be an object")
     topic = _require_str(message, "topic")
-    if topic != SUPPORTED_TOPIC:
+    if topic != expected_topic:
         raise BybitLiveSourceError(f"unsupported live topic {topic!r}", field="topic")
     if message.get("type") != "snapshot":
         raise BybitLiveSourceError("Bybit public trade message type must be snapshot", field="type")
@@ -268,7 +295,7 @@ def canonicalize_bybit_live_message(message: Mapping[str, Any]) -> LiveTradeBatc
     rows = message.get("data")
     if not isinstance(rows, list):
         raise BybitLiveSourceError("Bybit public trade message data must be an array", field="data")
-    records = tuple(canonicalize_bybit_live_trade(item) for item in rows)
+    records = tuple(canonicalize_bybit_live_trade(item, instrument=instrument) for item in rows)
     return LiveTradeBatch(
         records=records,
         message_evidence=BybitLiveMessageEvidence(
@@ -282,12 +309,13 @@ def canonicalize_bybit_live_message(message: Mapping[str, Any]) -> LiveTradeBatc
     )
 
 
-def canonicalize_bybit_live_trade(row: Mapping[str, Any]) -> TradeRecord:
+def canonicalize_bybit_live_trade(row: Mapping[str, Any], *, instrument: str = SUPPORTED_SYMBOL) -> TradeRecord:
+    _require_instrument(instrument)
     if not isinstance(row, Mapping):
         raise BybitLiveSourceError("Bybit live trade row must be an object")
     trade_id = _require_str(row, "i")
     symbol = _require_str(row, "s", trade_id=trade_id)
-    if symbol != SUPPORTED_SYMBOL:
+    if symbol != instrument:
         raise BybitLiveSourceError(f"unsupported symbol {symbol!r}", field="s", trade_id=trade_id)
     trade_time_ms = _require_int(row, "T", trade_id=trade_id)
     side = _side(row.get("S"), field="S", trade_id=trade_id)
@@ -307,12 +335,13 @@ def canonicalize_bybit_live_trade(row: Mapping[str, Any]) -> TradeRecord:
     )
 
 
-def canonicalize_bybit_recent_public_trade(row: Mapping[str, Any]) -> TradeRecord:
+def canonicalize_bybit_recent_public_trade(row: Mapping[str, Any], *, instrument: str = SUPPORTED_SYMBOL) -> TradeRecord:
+    _require_instrument(instrument)
     if not isinstance(row, Mapping):
         raise BybitLiveSourceError("Bybit recent trade row must be an object")
     trade_id = _require_str(row, "execId")
     symbol = _require_str(row, "symbol", trade_id=trade_id)
-    if symbol != SUPPORTED_SYMBOL:
+    if symbol != instrument:
         raise BybitLiveSourceError(f"unsupported symbol {symbol!r}", field="symbol", trade_id=trade_id)
     time_ms = _int_text(row.get("time"), field="time", trade_id=trade_id)
     side = _side(row.get("side"), field="side", trade_id=trade_id)
@@ -520,6 +549,54 @@ def build_bybit_live_coverage_document(
     }
 
 
+def check_live_slice_coverage(
+    coverage_documents: Sequence[Mapping[str, Any]],
+    *,
+    published_floor: Instant | None = None,
+    chain_start: Instant | None = None,
+    revision: int = 1,
+) -> int:
+    """ADR-0075 section 3: the key grammar and the window of every live slice a coverage document names.
+
+    A slice key must name ``revision`` (1, unless an earlier attempt at the same window never became valid and is replaced: a
+    valid slice is never superseded), the assertion must start exactly where the key says, end no later than the next UTC
+    midnight and equal the acquisition intent. ``published_floor`` is the end of what is already published (a window may not
+    start before it: no overlap); ``chain_start`` is where the previous slice of the same acquisition ended (the window must
+    start exactly there). The legacy ``dt=<day>`` key is accepted unchanged. Returns the number of slice keys checked.
+    """
+
+    checked = 0
+    for document in coverage_documents:
+        acquisition = document.get("acquisition") or {}
+        for assertion in document.get("assertions") or ():
+            for reference in assertion.get("partitions") or ():
+                key = reference.get("partition_key")
+                if is_legacy_day_partition_key(key):
+                    continue
+                try:
+                    start = parse_slice_partition_key(key)
+                except LiveSliceError as exc:
+                    raise BybitLiveSourceError(f"unsupported live partition key {key!r}: {exc}") from exc
+                if reference.get("revision") != revision:
+                    raise BybitLiveSourceError(f"a live slice must name revision {revision} of its own partition")
+                end = Instant.parse(assertion["end"])
+                if Instant.parse(assertion["start"]) != start:
+                    raise BybitLiveSourceError(f"coverage window does not start where its key {key!r} says")
+                if end > next_utc_midnight(start):
+                    raise BybitLiveSourceError(f"coverage window of {key!r} crosses a UTC midnight")
+                if (
+                    Instant.parse(acquisition.get("intent_start")) != start
+                    or Instant.parse(acquisition.get("intent_end")) != end
+                ):
+                    raise BybitLiveSourceError(f"acquisition intent of {key!r} is not its window")
+                if published_floor is not None and start < published_floor:
+                    raise BybitLiveSourceError(f"window of {key!r} starts before what is already published")
+                if chain_start is not None and start != chain_start:
+                    raise BybitLiveSourceError(f"window of {key!r} does not chain to the previous slice")
+                checked += 1
+    return checked
+
+
 @dataclass(frozen=True, slots=True)
 class BybitLiveTradeV1CertificationProfile:
     """Live-session counterpart to bybit.py's BybitTradeV1CertificationProfile.
@@ -539,6 +616,10 @@ class BybitLiveTradeV1CertificationProfile:
     code_ref: str
     profile_id: str = BYBIT_LIVE_TRADE_V1_CERTIFICATION_PROFILE
     check_suite: str = BYBIT_LIVE_TRADE_V1_CHECK_SUITE
+    # ADR-0075 section 3: where the already published slices end, and where the previous slice of this acquisition ended.
+    published_floor: Instant | None = None
+    chain_start: Instant | None = None
+    revision: int = 1
 
     def applies_to(self, identity: DatasetIdentity) -> bool:
         return bybit_trade_v1_applies_to(identity)
@@ -569,10 +650,15 @@ class BybitLiveTradeV1CertificationProfile:
                     for item in assertion.get("evidence") or ()
                 ):
                     raise BybitLiveSourceError("complete Bybit live coverage lacks session evidence")
+        slices = check_live_slice_coverage(
+            coverage_documents, published_floor=self.published_floor, chain_start=self.chain_start,
+            revision=self.revision,
+        )
         return {
             "source_semantics": BYBIT_LIVE_SOURCE_SEMANTICS_V1,
             "mapping": BYBIT_LIVE_MAPPING_V1,
             "documents": len(coverage_documents),
+            "slices": slices,
         }
 
     def validate_records(
@@ -723,7 +809,9 @@ __all__ = [
     "SessionState",
     "TradeKeyV1",
     "build_bybit_live_coverage_document",
+    "check_live_slice_coverage",
     "bybit_live_dataset_identity",
+    "bybit_live_topic",
     "canonicalize_bybit_live_message",
     "canonicalize_bybit_live_trade",
     "canonicalize_bybit_recent_public_trade",

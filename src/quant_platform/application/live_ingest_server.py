@@ -44,6 +44,8 @@ from quant_platform.application.live_gap_orchestration import (
     record_explicit_long_gap,
 )
 from quant_platform.data.models import Instant
+from quant_platform.source_adapters.bybit import BYBIT_LINEAR_TRADE_INSTRUMENTS_V1
+from quant_platform.source_adapters.bybit_live import SUPPORTED_SYMBOL, bybit_live_dataset_identity
 from quant_platform.operations.capacity import CapacityObservation, StorageRoot, observe_capacity
 from quant_platform.operations.checkpoint import CheckpointStore
 from quant_platform.operations.observability import (
@@ -83,6 +85,11 @@ class LiveIngestServerConfigV1:
     max_seconds_per_cycle: float = 20.0
     recent_limit: int = 1000
     cycle_interval_seconds: float = 5.0
+    # ADR-0074: one process, one instrument of the allow-list. The default keeps the existing BTCUSDT unit unchanged.
+    instrument: str = SUPPORTED_SYMBOL
+
+    def __post_init__(self) -> None:
+        bybit_live_dataset_identity(self.instrument)  # refuses anything outside BYBIT_LINEAR_TRADE_INSTRUMENTS_V1
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +106,7 @@ def _now() -> Instant:
 def _subject(config: LiveIngestServerConfigV1) -> SubjectReference:
     return SubjectReference(
         subject_kind="live-ingest-server",
-        subject_identity=f"bybit:BTCUSDT:{config.storage_root_id}",
+        subject_identity=f"bybit:{config.instrument}:{config.storage_root_id}",
     )
 
 
@@ -264,7 +271,7 @@ def run_live_ingest_server(
     store = CheckpointStore(config.checkpoint_path)
     cycles = 0
     status = SERVER_STOPPED
-    gap_load = load_open_long_gap_records(storage_root=config.storage_root)
+    gap_load = load_open_long_gap_records(storage_root=config.storage_root, instrument=config.instrument)
     open_gaps: list[LongGapRecord] = list(gap_load.records)
     if gap_load.unparseable_manifest_paths:
         # A durable known_gap manifest exists and was confidently classified
@@ -310,6 +317,7 @@ def run_live_ingest_server(
                     producer=config.producer,
                     code_ref=config.code_ref,
                     recent_limit=config.recent_limit,
+                    instrument=config.instrument,
                 )
                 if report.status == "PASS":
                     needs_reconcile = False
@@ -350,6 +358,7 @@ def run_live_ingest_server(
                         producer=config.producer,
                         code_ref=config.code_ref,
                         detected_at=detected_at,
+                        instrument=config.instrument,
                     )
                     _merge_open_gap_record(open_gaps, gap_record)
                     open_gap_records = tuple(open_gaps)
@@ -390,6 +399,7 @@ def run_live_ingest_server(
                     checkpoint_path=config.checkpoint_path,
                     producer=config.producer,
                     code_ref=config.code_ref,
+                    instrument=config.instrument,
                 )
                 if report.status == "CHECKPOINT_PERSISTED":
                     open_gap_records = tuple(open_gaps)
@@ -443,6 +453,7 @@ def run_live_ingest_server(
 
 
 __all__ = [
+    "BYBIT_LINEAR_TRADE_INSTRUMENTS_V1",
     "CAPABILITY_ID",
     "SESSION_CONTINUOUS",
     "SESSION_RESUMED_WITH_EXPLICIT_GAP",

@@ -358,3 +358,18 @@ clarifications were scoped to those families; this one is scoped to J13.
    message, compares its size with the bound before sending, and refuses locally
    with `request_too_large` when it exceeds it; the server's `max_size` close
    stays defense in depth.
+
+## Amendment 3 (issue #463, atom `M04` of DG-M) — `admit` accepts optional `definitions`
+
+**Date:** 2026-10-18. Authority: ADR-0073 §5 (`ACCEPTED`) and its Amendment 1. Amendment 2 of this ADR belongs to J13 (issue #339).
+Section 5's description of `admit` is extended; `j02-admitted-input-v2` and its request version are unchanged.
+
+`admit` takes, in addition to a dataset selector or accepted artifact identities and the operation/profile identity, an optional
+`definitions` array of at most 8 entries (`feature_key`, `semantic_version`, `bar_duration`, `parameters`) naming definitions from the
+server's closed registry. It is additive under ADR-0066 §1: a request without it is handled as before, and a server that predates it
+refuses a request that carries it as `invalid_request`. A refusal is `invalid_request` with nothing sealed and one of eight stable
+reasons (`definitions_exceed_bound`, `definition_unknown`, `definition_parameters_invalid`, `definition_bar_duration_invalid`,
+`definition_interval_misaligned`, `definition_bar_duration_mixed`, `definition_duplicate`, `definition_input_unavailable`), which the
+public projection of Amendment 1 carries as its `reason`. The sealed manifest's `definition_identities` are the identities of the
+canonicalized definitions (ADR-0072 Amendment 2). `manifest` returns them; `deliver` and `acknowledge` are unchanged. The server
+attests the definitions it admitted, not the deck's computation (section 7).

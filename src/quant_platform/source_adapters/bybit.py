@@ -22,12 +22,23 @@ class BybitTradeV1EligibilityError(ValueError):
     """Raised when schema-valid trade-v1 cannot enter the Bybit valid profile."""
 
 
+# ADR-0074 section 1: the Bybit linear USDT-settled perpetuals the platform admits for canonical
+# ``trades`` / ``trade-v1``. A closed constant, not a free string; a new member is an ADR amendment.
+BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT")
+
+# The historical source profiles ``(source_semantics, mapping)`` a Bybit ``trade-v1`` day may declare: the maintainer's SQLite
+# (first vertical) and, by ADR-0074 Amendment 1, the Bybit public trade archive. Any other profile is refused by certification.
+BYBIT_SQLITE_SOURCE_PROFILE_V1 = ("bybit-public-trades-sqlite-v1", "bybit-sqlite-day-extract-v1")
+BYBIT_ARCHIVE_SOURCE_PROFILE_V1 = ("bybit-public-trade-archive-v1", "bybit-archive-day-extract-v1")
+BYBIT_TRADE_V1_SOURCE_PROFILES = (BYBIT_SQLITE_SOURCE_PROFILE_V1, BYBIT_ARCHIVE_SOURCE_PROFILE_V1)
+
+
 def bybit_trade_v1_applies_to(identity: DatasetIdentity) -> bool:
     return (
         identity.layer == "canonical"
         and identity.venue == "bybit"
         and identity.dataset_kind == "trades"
-        and identity.instrument == "BTCUSDT"
+        and identity.instrument in BYBIT_LINEAR_TRADE_INSTRUMENTS_V1
         and identity.record_schema_id == "trade-v1"
     )
 
@@ -103,20 +114,26 @@ class BybitTradeV1CertificationProfile:
             raise BybitTradeV1EligibilityError("Bybit certification profile does not apply")
         if not coverage_documents:
             raise BybitTradeV1EligibilityError("certification requires durable source coverage evidence")
+        profiles = set()
         for document in coverage_documents:
             acquisition = document.get("acquisition") or {}
-            if acquisition.get("source_semantics") != "bybit-public-trades-sqlite-v1":
+            semantics, mapping = acquisition.get("source_semantics"), acquisition.get("mapping")
+            if semantics not in {profile[0] for profile in BYBIT_TRADE_V1_SOURCE_PROFILES}:
                 raise BybitTradeV1EligibilityError("coverage source_semantics is not the frozen Bybit extract profile")
-            if acquisition.get("mapping") != "bybit-sqlite-day-extract-v1":
+            if (semantics, mapping) not in BYBIT_TRADE_V1_SOURCE_PROFILES:
                 raise BybitTradeV1EligibilityError("coverage mapping is not the frozen Bybit extract mapping")
+            profiles.add((semantics, mapping))
             for assertion in document.get("assertions") or ():
                 if assertion.get("status") != "complete":
                     continue
                 if not any(item.get("kind") == "deterministic_source_extract" for item in assertion.get("evidence") or ()):
                     raise BybitTradeV1EligibilityError("complete Bybit coverage lacks deterministic source-extract evidence")
+        if len(profiles) != 1:
+            raise BybitTradeV1EligibilityError("coverage documents of one partition declare different source profiles")
+        ((semantics, mapping),) = profiles
         return {
-            "source_semantics": "bybit-public-trades-sqlite-v1",
-            "mapping": "bybit-sqlite-day-extract-v1",
+            "source_semantics": semantics,
+            "mapping": mapping,
             "documents": len(coverage_documents),
         }
 
@@ -170,12 +187,18 @@ def build_bybit_trade_v1_source_extract_coverage(
     producer: str,
     code_ref: str,
     supersedes: str | None = None,
+    source_profile: tuple[str, str] = BYBIT_SQLITE_SOURCE_PROFILE_V1,
 ) -> dict[str, Any]:
-    """Translate explicit first-vertical SQLite evidence to generic coverage input.
+    """Translate explicit source-extract evidence to generic coverage input.
 
     The complete status is tied to the caller-provided deterministic extract
-    evidence, never to the presence or count of materialized trades.
+    evidence, never to the presence or count of materialized trades. The
+    source profile defaults to the first-vertical SQLite one; the archive
+    import passes ``BYBIT_ARCHIVE_SOURCE_PROFILE_V1`` (ADR-0074 Amendment 1).
     """
+
+    if tuple(source_profile) not in BYBIT_TRADE_V1_SOURCE_PROFILES:
+        raise BybitTradeV1EligibilityError("source-extract coverage names an unknown Bybit source profile")
 
     if not bybit_trade_v1_applies_to(dataset_identity):
         raise BybitTradeV1EligibilityError(
@@ -194,8 +217,8 @@ def build_bybit_trade_v1_source_extract_coverage(
             "basis": "source_extract",
             "intent_start": intent_start,
             "intent_end": intent_end,
-            "source_semantics": "bybit-public-trades-sqlite-v1",
-            "mapping": "bybit-sqlite-day-extract-v1",
+            "source_semantics": source_profile[0],
+            "mapping": source_profile[1],
         },
         "assertions": [
             {
@@ -220,10 +243,14 @@ def build_bybit_trade_v1_source_extract_coverage(
 
 
 __all__ = [
+    "BYBIT_ARCHIVE_SOURCE_PROFILE_V1",
+    "BYBIT_LINEAR_TRADE_INSTRUMENTS_V1",
     "BYBIT_ORDERING_PROVIDER",
+    "BYBIT_SQLITE_SOURCE_PROFILE_V1",
     "BYBIT_TRADE_V1_CERTIFICATION_PROFILE",
     "BYBIT_TRADE_V1_CHECK_SUITE",
     "BYBIT_TRADE_V1_ORDERING_POLICY",
+    "BYBIT_TRADE_V1_SOURCE_PROFILES",
     "BybitTradeV1CertificationProfile",
     "BybitTradeV1EligibilityError",
     "build_bybit_trade_v1_source_extract_coverage",

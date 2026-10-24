@@ -2,7 +2,7 @@
 
 This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
-## Inventory checkpoint — L2/main reconciliation (#444)
+## Inventory checkpoint — DG-O registration (#507)
 
 Recomputed from the union of the actual DAG rows and checked against expanded
 Capability Map rows, preserving both parents' accepted credits. No new atom,
@@ -11,15 +11,15 @@ capability or follow-on authorization is created. DG-K/DG-K2 are already on main
 The [scope verifier](../../SCOPE.md#executable-governance-verification) captures both OIDs.
 
 ```text
-TOTAL_ATOMS                     = 119
-CLASSIFIED_ATOMS                = 119
+TOTAL_ATOMS                     = 130
+CLASSIFIED_ATOMS                = 130
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 107 / 119 = 89.9%
+SEMANTIC_FROZEN_OR_RESOLVED     = 118 / 130 = 90.8%
 OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 107 + 3 + 9 = 119
-ROADMAP_PLANNING_COMPLETENESS   = 119 / 119 = 100%
-IMPLEMENTATION_COMPLETE         = 99 / 119 = 83.2%
+ROADMAP_DEFINED                 = 118 + 3 + 9 = 130
+ROADMAP_PLANNING_COMPLETENESS   = 130 / 130 = 100%
+IMPLEMENTATION_COMPLETE         = 105 / 130 = 80.8%
 ```
 
 ## Resolved foundation — reference only
@@ -890,6 +890,83 @@ reports if it would require a credential service, a host outside `tools/`, a bin
 that bypasses a sealed manifest, a canonical storage mount on the deck or a way for the server to push work to the
 deck, or weaken ADR-0057, ADR-0063, ADR-0064, ADR-0068 or ADR-0069. Out of this gate: Omega adoption, more than one
 J03 worker, a durable J14 transfer store, `J11`, L2 acquisition and Wave 9/10.
+
+## DG-M — Canonical feature identity for deck results v1 — RESOLVED (ADR-0073 `ACCEPTED`, #457), CLOSED (#475)
+
+Registered by #453, designed by #454 (ADR-0073), accepted on 2026-10-18 and reconciled by #458. All eight questions are answered
+in the ADR: one canonical feature (`order_flow.failed_aggression@1`) and no server-known event (§1); a new additive `bar-flow-v1`
+representation, with the candle, footprint and H01 identities pinned (§2); FINAL bars only, causal floor `bucket_end`, no warm-up
+(§3); an exact, division-free rule with defaults 0.3 and 0.5 (§4); a closed in-code registry, an optional `definitions` field of
+`admit` and the sealed `definition_identities` (§5); K13 unchanged and a deck builder that must declare the definitions (§6);
+`alpha-research` consumes the canonical definitions and keeps hypotheses, event bindings and outcomes local (§7); the four facts
+that show the server passing feature identity (§8). Implementation of `M01`, `M02`, `M04`, `M05` was authorized by #458 and is
+merged into `implement/fid` (PR #466, #468, #473, #474; closeout #475); `M03` is superseded. ADR-0073 Amendment 1 (#469 / PR #471)
+adds one bar duration per admission.
+
+Live follow-ups, none authorized: the maintainer-accepted values that were not measured (thresholds, the 1 second to 1 day
+duration range, at most 8 definitions per `admit`) are revisited only on evidence from a real-host run; a family identity across
+parameterizations has the trigger "a study that needs to relate many parameterizations under one name"; server-side execution or
+re-derivation of the feature (a claim stronger than naming it) is a different design gate.
+
+### DG-M v1 reopening triggers (#475)
+
+Each is a named condition that reopens a decision. None is authorized by the closeout; trigger 3 was later exercised (#477).
+
+1. **Real-host run.** No deck has computed the feature over real delivered trades and registered the result on the real server.
+   That run is operator evidence (ADR-0073 §8); correctness on real data and profitability are not claimed. Trigger: the operator
+   performs it and records the result.
+2. **Observation identity across durations.** Two FINAL observations from bars of different durations that start at the same
+   instant have the same observation identity when produced by separate library calls (ADR-0026, F02's `bar:<RFC3339>`
+   coordinate; H01 has the same property). ADR-0073 Amendment 1 holds it at the admission level (one duration per admission), at
+   the cost of one admission and one delivery per timeframe. Trigger: a study that needs several timeframes under one admission,
+   or a consumer that merges observation streams of several admissions on the support coordinate alone; it needs its own decision
+   on E02/F02.
+3. **Protocol client — EXERCISED and CLOSED (#477 / PR #478, governance #479).** `DeckHandoffClient.admit` now carries the optional
+   `definitions` as given and refuses a sealed admission without definition identities when they were requested; the split topology
+   proof uses it. Remaining limit: the client neither validates nor interprets the entries (every refusal is the server's).
+4. **Reference kind.** The builder and K13 do not enforce the kind of a declared definition reference (ADR-0073 §6). Trigger: a
+   reader or tool that must rely on it.
+5. **More registry entries.** One entry; the H01 definitions are not in it. Adding one is a code change at the deck-pinned commit.
+   A family identity across parameterizations keeps the ADR-0073 trigger "a study that needs to relate many parameterizations
+   under one name".
+6. **Naming versus computing.** The server attests that it admitted a request that named the definitions, not that the deck computed
+   the feature; server-side execution or re-derivation is a different design gate.
+7. **Unmeasured values and costs.** The defaults 0.3 and 0.5, the 1 second to 1 day duration range and at most 8 definitions per
+   `admit` are maintainer-accepted, not measured; the throughput of bar-flow construction over the full delivered history and the
+   cost of a full-history feature run on the deck are not measured. Trigger: evidence from a real-host run.
+8. **Proof environment.** `PostgresSplitTopology` runs on the CI's PostgreSQL 17 and cannot run on Windows (the catalog requires an
+   absolute POSIX `abs_path`). Trigger: a production-like run on a POSIX host.
+
+## DG-N — Multi-instrument Bybit linear trades v1 — RESOLVED (ADR-0074 `ACCEPTED`, #377)
+
+Designed by #377 (ADR-0074, PR #481), accepted on 2026-10-19 (PR #482) and reconciled by #483. Decided: a closed allow-list of five Bybit
+linear USDT instruments (BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT) in one constant; per-instrument dataset, subject and checkpoint
+identity with every BTCUSDT identity unchanged; one live process per instrument; ADR-0044 unchanged (explicit gaps, no repair source);
+existing Parquet enters only through the producer path; a capacity rule (at least 365 days to the critical-pressure threshold) that gates
+production enabling and waits for the #378 measurements; explicit fees per instrument. Implementation of `T01`, `T04`, `T03`, `T02` is
+authorized (`SCOPE.md` Part B): `T01` and `T04` are `COMPLETE` (#489; PR #486, #488), `T03` and `T02` are not started. Amendment 1
+(#487, accepted 2026-10-20) decided the historical source: the Bybit public trade archive for every instrument, BTCUSDT included, with
+versioned source profiles, certification accepting the SQLite and the archive profile, and the existing Parquet replaced through the
+archive import instead of registered (their declared CSV source profile was never produced by any commit and S13 refuses it).
+
+Live follow-ups, none authorized: the Phase A measurements of #378 (they gate enabling live ingest beyond BTCUSDT in production); the
+replacement of the maintainer's existing ETH/SOL/XRP/DOGE Parquet by the archive import and the server-side record-by-record proof of
+BTCUSDT 2024-01-15 (operator steps, with `tools/compare_archive_day.py`); L2 for other instruments (its ordering policy is keyed by `(venue, instrument)` and is not covered); a second venue
+(`A12`); a new instrument beyond the allow-list needs an ADR-0074 amendment.
+
+## DG-O — Live publication: continuous session and append-only slices v1 — RESOLVED (ADR-0075 `ACCEPTED`, #504)
+
+Designed by #504 (ADR-0075, PR #505), accepted on 2026-10-21 (PR #506) and registered by #507. Decided: one continuous WebSocket session per
+instance decoupled from publication by a bounded buffer; slices with chained exchange-time windows (300 s or 50 000 trades, never across a UTC
+midnight); each slice is revision 1 of its own partition `dt=<day>/seg=<start>` and is never superseded; checkpoint invariants unchanged
+(it binds a slice partition); interruptions as ADR-0040 section 7 and ADR-0042 section 5 already decide, ADR-0044 unchanged. Implementation of
+`O01`, `O02`, `O03` is authorized (`SCOPE.md` Part C) and not started; `T02` closes with `O03`.
+
+Live follow-ups, none authorized: consolidation of a closed day's slices into one partition (a read optimization, opened only on a measured
+read or admission cost); the already damaged live days (the superseded revisions and the trades never acquired before the fix), left as they
+are with recovery paused, re-ingested from scratch if a gap makes the data unusable; the assumption that the provider's `exchange_ts` is
+non-decreasing along the stream, measured by `O03`; the retention policy's classification of `superseded` partitions as candidates by age
+(the cleanup code is the maintainer's and is untouched).
 
 ## Explicitly deferable decisions
 
