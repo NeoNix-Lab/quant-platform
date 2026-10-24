@@ -2,7 +2,7 @@
 
 This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
-## Inventory checkpoint — DG-O registration (#507)
+## Inventory checkpoint — DG-R registration (#518)
 
 Recomputed from the union of the actual DAG rows and checked against expanded
 Capability Map rows, preserving both parents' accepted credits. No new atom,
@@ -11,15 +11,15 @@ capability or follow-on authorization is created. DG-K/DG-K2 are already on main
 The [scope verifier](../../SCOPE.md#executable-governance-verification) captures both OIDs.
 
 ```text
-TOTAL_ATOMS                     = 130
-CLASSIFIED_ATOMS                = 130
+TOTAL_ATOMS                     = 132
+CLASSIFIED_ATOMS                = 132
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 118 / 130 = 90.8%
+SEMANTIC_FROZEN_OR_RESOLVED     = 120 / 132 = 90.9%
 OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 118 + 3 + 9 = 130
-ROADMAP_PLANNING_COMPLETENESS   = 130 / 130 = 100%
-IMPLEMENTATION_COMPLETE         = 105 / 130 = 80.8%
+ROADMAP_DEFINED                 = 120 + 3 + 9 = 132
+ROADMAP_PLANNING_COMPLETENESS   = 132 / 132 = 100%
+IMPLEMENTATION_COMPLETE         = 105 / 132 = 79.5%
 ```
 
 ## Resolved foundation — reference only
@@ -958,15 +958,27 @@ BTCUSDT 2024-01-15 (operator steps, with `tools/compare_archive_day.py`); L2 for
 
 Designed by #504 (ADR-0075, PR #505), accepted on 2026-10-21 (PR #506) and registered by #507. Decided: one continuous WebSocket session per
 instance decoupled from publication by a bounded buffer; slices with chained exchange-time windows (300 s or 50 000 trades, never across a UTC
-midnight); each slice is revision 1 of its own partition `dt=<day>/seg=<start>` and is never superseded; checkpoint invariants unchanged
+midnight); each slice is revision 1 of its own partition `dt=<day>/seg=<start>` and a valid slice is never superseded (Amendment 1, accepted 2026-10-23: a bridge slice with no trade across a
+UTC midnight in a reconciliation, and the next revision only over an attempt that never became valid); checkpoint invariants unchanged
 (it binds a slice partition); interruptions as ADR-0040 section 7 and ADR-0042 section 5 already decide, ADR-0044 unchanged. Implementation of
 `O01`, `O02`, `O03` is authorized (`SCOPE.md` Part C) and not started; `T02` closes with `O03`.
 
 Live follow-ups, none authorized: consolidation of a closed day's slices into one partition (a read optimization, opened only on a measured
 read or admission cost); the already damaged live days (the superseded revisions and the trades never acquired before the fix), left as they
-are with recovery paused, re-ingested from scratch if a gap makes the data unusable; the assumption that the provider's `exchange_ts` is
+are by DG-O and rebuilt, day by day, by DG-R once it is implemented; the assumption that the provider's `exchange_ts` is
 non-decreasing along the stream, measured by `O03`; the retention policy's classification of `superseded` partitions as candidates by age
 (the cleanup code is the maintainer's and is untouched).
+
+## DG-R — Rebuild of damaged legacy live days v1 — RESOLVED (ADR-0074 Amendment 2 `ACCEPTED`, #515)
+
+Designed by #515 (ADR-0074 Amendment 2, PR #516), accepted on 2026-10-24 (PR #521) and registered by #518. Decided: for explicitly selected, closed UTC days of the
+legacy `dt=<day>` publication, retire the damaged live revision with an ordinary ADR-0030 reassessment (`fail` -> `invalid`, nothing deleted), import the whole-day
+archive file as revision 1 of `dt=<day>/seg=000000.000` through the ordinary S13/S14 path, verify in full. The ordinary importer keeps refusing an occupied day.
+Implementation of `R01` and `R02` is authorized (`SCOPE.md` Part D) and not started; they are post-version.
+
+Live follow-ups, none authorized: the atomic replacement of a live revision (ADR-0033 cutover extended to a component of adjacent days), opened only if a consumer of
+those days appears (A2.8); retention or deletion of retired and superseded legacy revisions (the cleanup code is the maintainer's); the days to rebuild, which come only
+from a reviewed plan; who reacts to the state `invalid` (retention, eligibility, admitted inputs), to be checked first by `R01`.
 
 ## Explicitly deferable decisions
 
