@@ -1,7 +1,8 @@
 # ADR-0074 - Multi-instrument Bybit linear trades: read, delivery and live ingest v1
 
 **Status:** ACCEPTED (design gate #377, PR #481; accepted by the maintainer 2026-10-19, recorded in issue #377). Amendment 1
-(historical source, design gate #487): ACCEPTED 2026-10-20.
+(historical source, design gate #487): ACCEPTED 2026-10-20. Amendment 2 (rebuild of damaged legacy live days, design gate #515):
+ACCEPTED 2026-10-24.
 **Date:** 2026-10-19
 
 Design gate #377; evidence issue #378. Amends ADR-0040, ADR-0043 and the applicability of the Bybit `trade-v1` ordering and
@@ -268,17 +269,16 @@ resolved as proposed:
 
 ## Amendment 2 - Rebuild damaged legacy BTCUSDT live days from the archive
 
-**Status:** PROPOSED (design gate [#515](https://github.com/NeoNix-Lab/quant-platform/issues/515))
+**Status:** ACCEPTED (design gate [#515](https://github.com/NeoNix-Lab/quant-platform/issues/515), PR #516; accepted by the maintainer 2026-10-24, see A2.9)
 **Date:** 2026-10-24
 
-The accepted ADR and Amendment 1 above remain operative. This proposal is not an
-implementation, a governance reconciliation, an acceptance record or authority to
-change production data. The maintainer requested a reviewable reconstruction
+The accepted ADR and Amendment 1 above remain operative. This amendment is not an
+implementation, a governance reconciliation or authority to change production data. The maintainer requested a reviewable reconstruction
 proposal after the operator evidence below, and chose the reduced form of it
 (2026-10-24): **retire** the damaged legacy day from reads with an ordinary
 quality reassessment, then **import** the archive day under a free key. It does
-not replace a partition atomically (see A2.8). Acceptance and the bounded
-implementation authorization are separate steps.
+not replace a partition atomically (see A2.8). The bounded implementation is
+authorized separately (governance issue #518).
 
 ### A2.1 Problem and evidence
 
@@ -479,3 +479,13 @@ slices and a lock on the dataset row that the live publication needs, for a bene
 (no read gap) that closed days without consumers do not require. It stays available
 as a later amendment if a consumer of these days appears; this proposal does not
 close that door.
+
+### A2.9 Acceptance record
+
+Accepted by the maintainer on 2026-10-24 ("accetto la #516"), after the maintainer chose the reduced form (retire, then import)
+over the atomic replacement of the first draft on 2026-10-24. The text of A2.1 to A2.8 stands as written; the
+operator-reported evidence of A2.1 is accepted as evidence, not as an audit.
+
+Not done by this acceptance: the implementation (`R01`, issue #519; `R02`, issue #520); the governance registration of those
+atoms (issue #518); any change of production data; the choice of the days to rebuild, which comes only from a reviewed plan
+(A2.4). Cleaning retired or superseded legacy revisions remains the maintainer's retention decision.
