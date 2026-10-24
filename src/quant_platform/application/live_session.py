@@ -140,6 +140,7 @@ class _Reader(threading.Thread):
         self.detail = ""
         self.error: BaseException | None = None
         self.high_water = 0
+        self.pongs = 0
 
     def run(self) -> None:
         try:
@@ -180,8 +181,9 @@ class _Reader(threading.Thread):
                         self.subscribed.set()
                         continue
                     if op in {"ping", "pong"}:
-                        with self._lock:
-                            self._tracker.heartbeat(conn_id=document.get("conn_id"))
+                        # counted, not appended to the tracker: its event list lives as long as the connection and would grow
+                        # with every pong; the liveness evidence is the deadline above
+                        self.pongs += 1
                         ping_sent_at, next_ping = None, self._clock() + config.ping_interval
                         continue
                     if document.get("topic") != self._topic:
@@ -221,6 +223,8 @@ class LiveSessionEngine:
         self._chain_end: Instant | None = None
         self._messages = 0
         self._records = 0
+        self._reader: _Reader | None = None
+        self.tracker: LiveSessionTracker | None = None  # the current session's, for diagnostics
 
     # ------------------------------------------------------------------------------------------------ loop
 
@@ -264,6 +268,7 @@ class LiveSessionEngine:
         failure: BaseException | None = None
         stopped = False
         self._messages = self._records = 0
+        self._reader, self.tracker = reader, tracker
         reader.start()
         try:
             established = self._await_subscription(reader, stop_requested)
@@ -272,7 +277,12 @@ class LiveSessionEngine:
                 reason = reader.interruption or Interruption.DISCONNECT
                 failure = reader.error
             else:
-                staged = self._reconcile(reader, buffer, assembler)
+                staged = self._reconcile(reader, buffer, assembler, stop_requested)
+                if staged is None:  # the session ended, or a stop came, before it received a single trade
+                    stopped = stop_requested()
+                    reason = reader.interruption or (None if stopped else Interruption.DISCONNECT)
+                    failure = reader.error
+                    staged = []
                 for batch in staged:  # message by message, as in the steady state: a burst is cut at the bounds too
                     self._take(assembler, batch)
                     if assembler.ordering_violations:
@@ -356,8 +366,17 @@ class LiveSessionEngine:
             except queue.Empty:
                 return drained
 
-    def _reconcile(self, reader: _Reader, buffer: "queue.Queue[LiveTradeBatch]", assembler: SliceAssembler) -> list[LiveTradeBatch]:
-        """Subscribed first, then the recent trades (ADR-0042 section 5): the overlap of the two is the continuity proof."""
+    def _reconcile(
+        self, reader: _Reader, buffer: "queue.Queue[LiveTradeBatch]", assembler: SliceAssembler,
+        stop_requested: Callable[[], bool],
+    ) -> list[LiveTradeBatch] | None:
+        """Subscribed first, then the recent trades (ADR-0042 section 5): the overlap of the two is the continuity proof.
+
+        The recent trades are a snapshot of unknown freshness: their anchor says the last durable key is in the window, not that the
+        window reaches this subscription. So the snapshot is taken AFTER the first trade of the subscription has arrived, and that
+        trade is handed to the reconciliation with it: the existing seam then requires a key present in both, else the interval is an
+        explicit gap. A session that has received no trade yet has nothing to lose and waits (heartbeat and stop stay live);
+        it is never read as continuity restored. ``None`` if the session ended or a stop came first."""
 
         ports = self._ports
         staged = self._drain_available(buffer)
@@ -365,23 +384,34 @@ class LiveSessionEngine:
             assembler.start_window(None)
             self._chain_end = None
             return staged
+        while not staged:
+            if stop_requested() or reader.finished.is_set():
+                return None
+            try:
+                staged.append(buffer.get(timeout=self._config.tick))
+            except queue.Empty:
+                continue
         recent = tuple(ports.fetch_recent(self._config.recent_limit))
         staged += self._drain_available(buffer)
         buffered = tuple(record for batch in staged for record in batch.records)
+        anchor = ports.last_durable_key()  # before the reconciliation advances it
         report = ports.reconcile(recent, buffered)
         status = getattr(report, "status", None)
         if status == "PASS":
             publication = report.publication
             accepted = report.restart_outcome.accepted_records
             end = Instant.parse(publication.window_end)
-            assembler.start_window(end, skip_through=bybit_trade_v1_ordering_key(accepted[-1]))
+            assembler.start_window(
+                end, skip_through=anchor, skip_keys=(bybit_trade_v1_ordering_key(record) for record in accepted))
             self._chain_end = end
             self.summary.reconciliations += 1
             self.summary.slices_published += publication.slices
             self._on_event("reconciled", records=len(accepted), slices=publication.slices, window_end=publication.window_end)
         elif status == "REAL_RESTART_PROOF_PENDING":
             floor = ports.published_floor()
-            assembler.start_window(floor, skip_through=ports.last_durable_key())
+            replayed = getattr(getattr(report, "restart_outcome", None), "accepted_records", ()) or ()
+            assembler.start_window(
+                floor, skip_through=anchor, skip_keys=(bybit_trade_v1_ordering_key(record) for record in replayed))
             self._chain_end = floor
             self.summary.reconciliations += 1
             self._on_event("reconciled", records=0, slices=0, window_end=None if floor is None else floor.isoformat())
@@ -417,6 +447,8 @@ class LiveSessionEngine:
     def _publish(self, sliced: LiveSlice, tracker: LiveSessionTracker) -> None:
         ports = self._ports
         evidence = self._evidence(tracker)
+        if self._reader is not None:  # the pressure of the session that is still open, not only of the ones that ended
+            self.summary.buffer_high_water = max(self.summary.buffer_high_water, self._reader.high_water)
         chain_start = self._chain_end
         if chain_start is not None and chain_start != sliced.window_start:
             # the window moved past a UTC midnight that held no trade: that span has no slice and is not claimed

@@ -39,6 +39,7 @@ class SliceAssembler:
         slice_seconds: int = SLICE_SECONDS_DEFAULT,
         window_start: Instant | None = None,
         skip_through: Key | None = None,
+        skip_keys: Iterable[Key] = (),
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not isinstance(max_trades, int) or isinstance(max_trades, bool) or max_trades < 1:
@@ -50,6 +51,7 @@ class SliceAssembler:
         self._clock = clock
         self._window_start_ns: int | None = None if window_start is None else window_start.epoch_ns
         self._skip_through = skip_through
+        self._skip_keys = frozenset(skip_keys)
         self._pending: dict[Key, TradeRecord] = {}
         self._opened_at: float | None = None
         self.ordering_violations = 0
@@ -63,13 +65,20 @@ class SliceAssembler:
     def pending_count(self) -> int:
         return len(self._pending)
 
-    def start_window(self, start: Instant | None, *, skip_through: Key | None = None) -> None:
-        """A new chain after a reconciliation (``start`` = what it published up to) or after an explicit gap (``None``)."""
+    def start_window(
+        self, start: Instant | None, *, skip_through: Key | None = None, skip_keys: Iterable[Key] = (),
+    ) -> None:
+        """A new chain after a reconciliation (``start`` = what it published up to) or after an explicit gap (``None``).
+
+        The duplicates of what is already published are the keys at or before ``skip_through`` (the last durable key before the
+        reconciliation) and the keys the reconciliation itself accepted (``skip_keys``): a trade the reconciliation never saw is not
+        a duplicate of anything, however low its key, and is judged like any other."""
 
         if self._pending:
             raise LiveSliceError("a window cannot be restarted while records are pending")
         self._window_start_ns = None if start is None else start.epoch_ns
         self._skip_through = skip_through
+        self._skip_keys = frozenset(skip_keys)
         self._opened_at = None
 
     def add(self, records: Iterable[TradeRecord]) -> int:
@@ -81,7 +90,7 @@ class SliceAssembler:
             if record.exchange_ts.epoch_ns % _NS_PER_MS:
                 raise LiveSliceError(f"record exchange_ts must be a whole millisecond: {record.exchange_ts.isoformat()}")
             key = bybit_trade_v1_ordering_key(record)
-            if self._skip_through is not None and key <= self._skip_through:
+            if (self._skip_through is not None and key <= self._skip_through) or key in self._skip_keys:
                 self.duplicates_skipped += 1
                 continue
             if self._window_start_ns is not None and record.exchange_ts.epoch_ns < self._window_start_ns:

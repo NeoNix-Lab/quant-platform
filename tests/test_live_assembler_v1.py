@@ -144,6 +144,15 @@ class AssemblerTests(unittest.TestCase):
         a.add([trade(D0 + 5, "m"), trade(D0 + 4, "z"), trade(D0 + 6, "n")])
         self.assertEqual((2, 0, 1), (a.duplicates_skipped, a.ordering_violations, a.pending_count))
 
+    def test_only_the_keys_a_reconciliation_accepted_are_duplicates_not_every_key_below_the_last_of_them(self) -> None:
+        a = self.assembler()
+        a.start_window(Instant((D0 + 6) * MS), skip_through=(Instant((D0 + 2) * MS), "a"), skip_keys=[(Instant((D0 + 5) * MS), "m")])
+        # "m" was accepted by the reconciliation; "k" (below its last key, never seen) is a trade like any other: it is late
+        violations = a.add([trade(D0 + 5, "m"), trade(D0 + 4, "k"), trade(D0 + 2, "a"), trade(D0 + 7, "n")])
+        self.assertEqual(2, a.duplicates_skipped)  # "m" by key, "a" by the anchor
+        self.assertEqual(1, violations)  # "k"
+        self.assertEqual(1, a.pending_count)  # "n"
+
     def test_flush_closes_one_millisecond_after_the_greatest_trade_and_ends_the_chain(self) -> None:
         a = self.assembler()
         a.add([trade(D0, "a"), trade(D0 + 7, "b"), trade(D0 + 7, "c")])

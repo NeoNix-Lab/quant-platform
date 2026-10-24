@@ -180,15 +180,7 @@ def main() -> int:
         provider = FakeProvider()
         delivered: set[str] = set()  # the trades the platform has published or must publish (the session saw them or the REST proved them)
 
-        arrival_while_reconciling = {"armed": False}
-
         def recent(*, limit, instrument="BTCUSDT"):
-            if arrival_while_reconciling["armed"]:
-                # trades that arrive while the session reconciles: in the REST window AND over the new socket (the overlap proof)
-                arrival_while_reconciling["armed"] = False
-                rows_ = world.make(4)
-                provider.push(world.message(rows_))
-                delivered.update(r["i"] for r in rows_)
             return tuple(world.trades[-limit:])
 
         with mock.patch.object(app, "fetch_recent_public_trades", recent), websockets_stub(provider):
@@ -219,9 +211,13 @@ def main() -> int:
             before = len(slices(connection))
             missed = world.make(6)  # delivered nowhere over the WebSocket: the provider closes the connection first
             delivered.update(r["i"] for r in missed)
-            arrival_while_reconciling["armed"] = True
             provider.close()
-            run.until(lambda: provider.connects == 2, "the reconnect")
+            run.until(lambda: provider.connects == 2 and len(provider.sockets) == 2, "the reconnect")
+            # the first trades of the new subscription: they are in the REST window too (taken after them), the overlap that proves
+            # continuity; until a trade arrives the session waits and reconciles nothing
+            arrival = world.make(4)
+            provider.push(world.message(arrival))
+            delivered.update(r["i"] for r in arrival)
             run.until(lambda: run.health("reconcile"), "the reconciliation")
             more = world.make(5)
             provider.push(world.message(more))
@@ -255,6 +251,9 @@ def main() -> int:
             with mock.patch.object(app, "fetch_recent_public_trades", recent_after_outage), websockets_stub(provider2):
                 run.start()
                 run.until(lambda: provider2.sockets, "the connection after the outage")
+                first_after = world.make(2)  # the first trades of the subscription: below every bound, nothing is published yet
+                provider2.push(world.message(first_after))
+                delivered.update(r["i"] for r in first_after)
                 run.until(lambda: run.health("reconcile") and any("anchor" in str(h.get("reason", "")) or "last durable" in str(h.get("reason", "")) for h in run.health("reconcile")), "the gap")
                 assert CheckpointStore(checkpoint).load().generation == generation, "the checkpoint moved across a gap"
                 assert load_open_long_gap_records(storage_root=storage, instrument=INSTRUMENT).records, "the gap was not recorded"
@@ -292,8 +291,12 @@ def main() -> int:
             with mock.patch.object(app, "fetch_recent_public_trades", recent_all), \
                     mock.patch.object(app, "persist_publication_checkpoint", failing_persist), websockets_stub(provider3):
                 crash.start()
-                crash.until(lambda: provider3.sockets and crash.health("reconcile"), "the reconciliation")
-                for _ in range(4):
+                crash.until(lambda: provider3.sockets, "the connection")
+                rows_ = world.make(3)
+                provider3.push(world.message(rows_))  # the first trade of the subscription: the reconciliation follows it
+                delivered.update(r["i"] for r in rows_)
+                crash.until(lambda: crash.health("reconcile"), "the reconciliation")
+                for _ in range(5):
                     rows_ = world.make(5)
                     provider3.push(world.message(rows_))
                     delivered.update(r["i"] for r in rows_)
@@ -308,7 +311,11 @@ def main() -> int:
             restart = Run(dsn, storage, checkpoint, provider4)
             with mock.patch.object(app, "fetch_recent_public_trades", recent_all), websockets_stub(provider4):
                 restart.start()
-                restart.until(lambda: provider4.sockets and (restart.health("reconcile") or restart.health("slice")), "the replay")
+                restart.until(lambda: provider4.sockets, "the connection")
+                rows_ = world.make(2)
+                provider4.push(world.message(rows_))
+                delivered.update(r["i"] for r in rows_)
+                restart.until(lambda: restart.health("reconcile") or restart.health("slice"), "the replay")
                 more = world.make(4)
                 provider4.push(world.message(more))
                 delivered.update(r["i"] for r in more)
@@ -321,7 +328,11 @@ def main() -> int:
             late = Run(dsn, storage, checkpoint, provider5)
             with mock.patch.object(app, "fetch_recent_public_trades", recent_all), websockets_stub(provider5):
                 late.start()
-                late.until(lambda: provider5.sockets and late.health("reconcile"), "the reconciliation")
+                late.until(lambda: provider5.sockets, "the connection")
+                rows_ = world.make(2)
+                provider5.push(world.message(rows_))
+                delivered.update(r["i"] for r in rows_)
+                late.until(lambda: late.health("reconcile"), "the reconciliation")
                 rows_ = world.make(5)
                 provider5.push(world.message(rows_))
                 delivered.update(r["i"] for r in rows_)
@@ -337,6 +348,37 @@ def main() -> int:
             assert late.health("interruption")[0]["interruption"] == "ordering_violation"
             assert late.health("interruption")[0]["ordering_violations"] == 1
             check_catalog(connection, delivered)  # "t-late" was never published
+
+            # 6. A recent-trades window that still holds the anchor but is behind the subscription proves nothing: the trades of the
+            #    interval nobody listened to are missing from both. The first trades of the subscription do not meet the window, so
+            #    the interval is an explicit gap, never "continuity restored"; the trades in between are not claimed.
+            stale = tuple(world.trades)  # holds the anchor (the last trade ever published), nothing newer
+            world.make(3)  # delivered nowhere: the unlistened interval
+            provider6 = FakeProvider()
+            behind = Run(dsn, storage, checkpoint, provider6)
+            before_gaps = len(load_open_long_gap_records(storage_root=storage, instrument=INSTRUMENT).records)
+            generation = CheckpointStore(checkpoint).load().generation
+
+            def recent_stale(*, limit, instrument="BTCUSDT"):
+                return stale
+
+            with mock.patch.object(app, "fetch_recent_public_trades", recent_stale), websockets_stub(provider6):
+                behind.start()
+                behind.until(lambda: provider6.sockets, "the connection")
+                rows_ = world.make(2)
+                provider6.push(world.message(rows_))
+                delivered.update(r["i"] for r in rows_)
+                behind.until(lambda: behind.health("reconcile"), "the gap")
+                assert any("last durable" in str(h.get("reason", "")) or "overlap" in str(h.get("reason", ""))
+                           for h in behind.health("reconcile")), behind.health("reconcile")
+                assert CheckpointStore(checkpoint).load().generation == generation, "the checkpoint moved across an unproven interval"
+                assert len(load_open_long_gap_records(storage_root=storage, instrument=INSTRUMENT).records) == before_gaps + 1
+                rows_ = world.make(8)
+                provider6.push(world.message(rows_))
+                delivered.update(r["i"] for r in rows_)
+                time.sleep(0.4)
+                behind.finish()
+            found = check_catalog(connection, delivered)  # the three unlistened trades are not in it: nothing was claimed for them
 
         assert [r[0] for r in rows(connection, "SELECT instrument FROM catalog.datasets ORDER BY 1")] == [INSTRUMENT]
     print("POSTGRESQL LIVE SESSION GATE PASSED")

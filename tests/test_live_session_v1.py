@@ -315,24 +315,29 @@ class InterruptionTests(unittest.TestCase):
             return pass_restart(T0 + 40, [record(T0 + 20, "x"), record(T0 + 30, "y")])
 
         with Harness(provider, checkpoint=True, reconcile=reconcile, recent=(anchor,)) as h:
-            h.until(lambda: provider.sockets and "reconcile" in provider.log, "the first reconciliation")
-            provider.push(trade_message(T0 + 100, "a", "b", "c"))
+            h.until(lambda: provider.sockets, "the connection")
+            provider.push(trade_message(T0 + 100, "a", "b", "c"))  # the first trade of the subscription: the reconciliation follows it
+            h.until(lambda: "reconcile" in provider.log, "the first reconciliation")
             provider.push(trade_message(T0 + 110, "d"))
             h.until(lambda: len(h.slices) >= 1, "a slice")
             provider.close()
             h.until(lambda: provider.connects == 2 and len(h.events_named("interruption")) == 1, "the reconnect")
+            provider.push(trade_message(T0 + 200, "e"))  # the second subscription's first trade
             h.until(lambda: h.provider.log.count("reconcile") == 2, "the second reconciliation")
         (event,) = h.events_named("interruption")
         self.assertEqual(Interruption.DISCONNECT.value, event["reason"])
         self.assertEqual(1, h.summary.reconnects)
         # the trades received before the disconnect are all published (the last window closes 1 ms after its greatest trade)
         published = sorted(r.trade_id for s in h.slices for r in s.records)
-        self.assertEqual(["a", "b", "c", "d"], published)
+        self.assertEqual(["a", "b", "c", "d", "e"], published)
         self.assertTrue(all(e.can_assert_complete_interval for e in h.evidences))  # taken before the interruption was recorded
 
     def test_the_session_subscribes_before_it_fetches_the_recent_trades(self) -> None:
         provider = FakeProvider()
         with Harness(provider, checkpoint=True, reconcile=lambda r, b: pass_restart(T0, [record(T0, "x")])) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            self.assertNotIn("fetch_recent", provider.log)  # nothing is fetched before a trade of this subscription arrives
+            provider.push(trade_message(T0 + 3, "a"))
             h.until(lambda: "reconcile" in provider.log, "the reconciliation")
         log = provider.log
         self.assertLess(log.index("subscribe"), log.index("fetch_recent"))
@@ -449,12 +454,24 @@ class ReconciliationTests(unittest.TestCase):
         end = T0 + 51
         accepted = [record(T0 + 50, "last")]
         with Harness(provider, checkpoint=True, reconcile=lambda r, b: pass_restart(end, accepted)) as h:
-            h.until(lambda: "reconcile" in provider.log, "the reconciliation")
+            h.until(lambda: provider.sockets, "the connection")
             provider.push(trade_message(end, "n1", "n2", "n3"))
+            h.until(lambda: "reconcile" in provider.log, "the reconciliation")
             h.until(lambda: h.slices, "a slice")
         self.assertEqual(Instant(end * MS), h.slices[0].window_start)
         self.assertEqual(Instant(end * MS), h.chain_starts[0])
         self.assertEqual(1, h.summary.reconciliations)
+
+    def test_a_buffered_trade_at_or_before_the_last_durable_key_is_a_duplicate_not_a_violation(self) -> None:
+        provider = FakeProvider()
+        end = T0 + 51
+        with Harness(provider, checkpoint=True, reconcile=lambda r, b: pass_restart(end, [record(T0 + 60, "new")]),
+                     last_key=(Instant((T0 + 50) * MS), "anchor")) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            provider.push(trade_message(T0 + 48, "old1", "old2"))  # T0 + 48 and T0 + 49: already durable, the anchor is T0 + 50
+            h.until(lambda: "reconcile" in provider.log, "the reconciliation")
+            time.sleep(0.2)
+        self.assertEqual((0, []), (h.summary.ordering_violations, h.events_named("interruption")))
 
     def test_a_reconciliation_with_nothing_new_continues_from_the_floor(self) -> None:
         provider = FakeProvider()
@@ -462,8 +479,9 @@ class ReconciliationTests(unittest.TestCase):
         pending = SimpleNamespace(status="REAL_RESTART_PROOF_PENDING")
         with Harness(provider, checkpoint=True, reconcile=lambda r, b: pending, floor=floor,
                      last_key=(Instant((T0 + 8) * MS), "k")) as h:
-            h.until(lambda: "reconcile" in provider.log, "the reconciliation")
+            h.until(lambda: provider.sockets, "the connection")
             provider.push(trade_message(T0 + 8, "dup"))  # at or before the last durable key: a duplicate
+            h.until(lambda: "reconcile" in provider.log, "the reconciliation")
             provider.push(trade_message(T0 + 9, "n1", "n2", "n3"))
             h.until(lambda: h.slices, "a slice")
         self.assertEqual(floor, h.slices[0].window_start)
@@ -475,8 +493,9 @@ class ReconciliationTests(unittest.TestCase):
         gap = SimpleNamespace(
             status="GAP_DETECTED", restart_outcome=SimpleNamespace(reconcile_result=SimpleNamespace(evidence={"reason": "anchor absent"})))
         with Harness(provider, checkpoint=True, reconcile=lambda r, b: gap) as h:
-            h.until(lambda: "reconcile" in provider.log, "the reconciliation")
+            h.until(lambda: provider.sockets, "the connection")
             provider.push(trade_message(T0 + 500, "n1", "n2", "n3"))
+            h.until(lambda: "reconcile" in provider.log, "the reconciliation")
             h.until(lambda: h.slices, "a slice")
         self.assertEqual(1, len(h.gaps))
         self.assertEqual(Instant((T0 + 500) * MS), h.slices[0].window_start)  # a new chain at its first trade
@@ -494,8 +513,9 @@ class ReconciliationTests(unittest.TestCase):
             h.until(lambda: h.slices, "a slice of the first session")
             h.checkpoint = True  # a checkpoint exists from now on: the next session reconciles
             provider.close()
-            h.until(lambda: provider.connects == 2 and "reconcile" in provider.log, "the reconciliation of the second session")
+            h.until(lambda: provider.connects == 2 and len(provider.sockets) == 2, "the second connection")
             provider.push(trade_message(T0 + 5000, "n1", "n2", "n3"))
+            h.until(lambda: "reconcile" in provider.log, "the reconciliation of the second session")
             h.until(lambda: any(sl.window_start == Instant((T0 + 5000) * MS) for sl in h.slices), "a slice after the gap")
         after = [i for i, sl in enumerate(h.slices) if sl.window_start == Instant((T0 + 5000) * MS)][0]
         self.assertGreater(after, 0)  # the first session published before the gap
@@ -505,6 +525,8 @@ class ReconciliationTests(unittest.TestCase):
     def test_a_reconciliation_that_fails_stops_the_loop(self) -> None:
         provider = FakeProvider()
         with Harness(provider, checkpoint=True, reconcile=lambda r, b: SimpleNamespace(status="CERTIFICATION_FAILED")) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            provider.push(trade_message(T0, "a"))
             h.thread.join(5)
         self.assertIsInstance(h.error, LiveSessionFailure)
         self.assertEqual([], h.slices)
@@ -536,8 +558,9 @@ class PublicationTests(unittest.TestCase):
         pending = SimpleNamespace(status="REAL_RESTART_PROOF_PENDING")
         config = LiveSessionConfig(slice_seconds=3600, slice_max_trades=3, buffer_messages=50, tick=0.01, ping_interval=30)
         with Harness(provider, config=config, checkpoint=True, reconcile=lambda r, b: pending, floor=floor) as h:
-            h.until(lambda: "reconcile" in provider.log, "the reconciliation")
+            h.until(lambda: provider.sockets, "the connection")
             provider.push(trade_message(midnight + 1000, "n1", "n2", "n3"))
+            h.until(lambda: "reconcile" in provider.log, "the reconciliation")
             h.until(lambda: h.slices, "a slice")
         self.assertEqual(Instant(midnight * MS), h.slices[0].window_start)
         self.assertIsNone(h.chain_starts[0])
@@ -556,6 +579,77 @@ class PublicationTests(unittest.TestCase):
         self.assertIsInstance(event["slice_lag_ms"], int)
         for name in ("reconnects", "ordering_violations", "buffer_high_water", "partition_key", "window_end"):
             self.assertIn(name, event)
+
+
+class ContinuityProofTests(unittest.TestCase):
+    """ADR-0042 section 5: the recent trades prove continuity only when they meet the trades of the subscription."""
+
+    def test_an_idle_subscription_neither_fetches_nor_reconciles_until_a_trade_arrives(self) -> None:
+        provider = FakeProvider()
+        with Harness(provider, checkpoint=True, reconcile=lambda r, b: pass_restart(T0, [record(T0, "x")])) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            time.sleep(0.3)
+            self.assertNotIn("fetch_recent", provider.log)
+            self.assertNotIn("reconcile", provider.log)
+            self.assertEqual([], h.events_named("reconciled"))  # an empty buffer is never read as continuity restored
+        self.assertIsNone(h.error)
+
+    def test_the_snapshot_is_taken_after_the_first_trade_and_the_reconciliation_receives_it(self) -> None:
+        provider = FakeProvider()
+        with Harness(provider, checkpoint=True, reconcile=lambda r, b: pass_restart(T0 + 2, [record(T0 + 1, "x")])) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            provider.push(trade_message(T0 + 5, "w1", "w2"))
+            h.until(lambda: h.reconciled, "the reconciliation")
+        recent, buffered = h.reconciled[0]
+        self.assertEqual(["w1", "w2"], [r.trade_id for r in buffered])  # never an empty buffer
+        log = provider.log
+        self.assertLess(log.index("subscribe"), log.index("fetch_recent"))
+
+    def test_a_session_that_ends_before_any_trade_reconciles_nothing_and_is_an_interruption(self) -> None:
+        provider = FakeProvider()
+        with Harness(provider, checkpoint=True, reconcile=lambda r, b: pass_restart(T0, [record(T0, "x")])) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            provider.close()
+            h.until(lambda: h.events_named("interruption"), "the interruption")
+        self.assertEqual("disconnect", h.events_named("interruption")[0]["reason"])
+        self.assertNotIn("reconcile", provider.log)
+        self.assertNotIn("fetch_recent", provider.log)
+
+
+    def test_a_subscription_that_is_never_acknowledged_ends_the_session_instead_of_waiting_for_a_trade(self) -> None:
+        provider = FakeProvider()
+        provider.acknowledge = False
+        config = LiveSessionConfig(
+            slice_seconds=3600, slice_max_trades=3, buffer_messages=50, ping_interval=30.0, pong_timeout=5.0,
+            connect_timeout=0.2, reconnect_delay=5.0, reconnect_delay_max=5.0, tick=0.01)
+        with Harness(provider, config=config, checkpoint=True,
+                     reconcile=lambda r, b: pass_restart(T0, [record(T0, "x")])) as h:
+            h.until(lambda: h.events_named("interruption"), "the interruption after the connect timeout")
+        self.assertNotIn("reconcile", provider.log)
+
+
+class BoundedMemoryAndPressureTests(unittest.TestCase):
+    def test_a_long_session_does_not_accumulate_heartbeat_history(self) -> None:
+        provider = FakeProvider()
+        config = LiveSessionConfig(
+            slice_seconds=3600, slice_max_trades=3, buffer_messages=50, tick=0.005, ping_interval=0.005, pong_timeout=5.0,
+            connect_timeout=5.0)
+        with Harness(provider, config=config) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            h.until(lambda: provider.log.count("ping") >= 120, "a hundred and twenty pings and their pongs")
+            self.assertLessEqual(len(h.engine.tracker._events), 6)  # the states of the session, not one event per pong
+        self.assertEqual(1, provider.connects)
+
+    def test_the_high_water_mark_is_reported_while_the_first_session_is_still_open(self) -> None:
+        provider = FakeProvider()
+        with Harness(provider) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            provider.push(trade_message(T0, "a", "b"))
+            provider.push(trade_message(T0 + 10, "c", "d"))
+            h.until(lambda: h.events_named("slice_published"), "a slice")
+            (event, *_) = h.events_named("slice_published")
+            self.assertGreater(event["buffer_high_water"], 0)  # the session has not ended
+            self.assertEqual(0, provider.closed_sockets)
 
 
 class ConfigTests(unittest.TestCase):
