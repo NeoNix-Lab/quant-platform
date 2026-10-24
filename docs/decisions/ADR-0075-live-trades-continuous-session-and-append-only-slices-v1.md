@@ -1,6 +1,7 @@
 # ADR-0075 - Live trades: one continuous session and append-only slices v1
 
-**Status:** ACCEPTED (design gate #504, PR #505; accepted by the maintainer 2026-10-21, recorded in issue #504)
+**Status:** ACCEPTED (design gate #504, PR #505; accepted by the maintainer 2026-10-21, recorded in issue #504). Amendment 1
+(design gate #512; authorized by the maintainer 2026-10-23, recorded in issue #512) is `ACCEPTED`.
 **Date:** 2026-10-21
 
 Amends ADR-0040 (§6, §8), ADR-0042 (§1) and ADR-0043 (§1) only where section 8 says so, and only when this ADR is `ACCEPTED`. It
@@ -210,3 +211,70 @@ consolidation**. The choices of the delegation above stand as accepted:
    slice 9.3 reports the number of violations; a violation is an interruption.
 
 Implementation of slices 9.1 to 9.3 is authorized by a governance reconciliation (a separate issue); no slice is implemented yet.
+
+---
+
+## Amendment 1 - A bridge slice across a UTC midnight, and the next revision over an attempt that never became valid
+
+**Status:** ACCEPTED (design gate #512; authorized by the maintainer 2026-10-23: "Autorizzo le due eccezioni", recorded in issue #512)
+**Date:** 2026-10-23
+
+Amends section 2 (empty windows), sections 3 and 4 (revision 1) and section 9.1 of this ADR, and nothing else. It leaves ADR-0040,
+ADR-0042, ADR-0044, ADR-0074, the frozen `trade-v1` record, the ordering key, `TradeKeyV1` and every `BTCUSDT` dataset identity as
+they are.
+
+### A1.1 Why
+
+The independent review of the implementation of slice 9.1 (#510, issue #509) reproduced two cases on a real PostgreSQL that
+sections 2 to 4 cannot express without a hole or a dead end:
+
+1. **A reconciliation across a UTC midnight.** Section 5 lets a reconciliation prove that the interval from the last published
+   boundary is continuous, and section 2 starts the next window at that boundary. If the last slice ended at 23:59:59.999 and the
+   first new trade is at 00:00:00.004, a window cannot cross the midnight (section 2) and a window with no trade is not published
+   (section 2): the span `[23:59:59.999, 00:00:00.000)` has no slice, the server reports a continuous resume, and a strict read over
+   the span fails with `NoCoverage`.
+2. **An attempt that never became valid.** A slice sealed by S13 whose certification or eligibility then fails is `closed` and is
+   never read. The trades are published again after the restart. When the recovery's window is the same as the failed attempt's
+   (for example a reconciliation slice that failed at its window start, the floor), its partition key is the same, and the catalog
+   admits one live row per key: with revision 1 only, those trades cannot be published again.
+
+### A1.2 Decision
+
+1. **Bridge slice (amends section 2).** When a *reconciliation* has proven continuity from the last published boundary and that
+   proven interval reaches a UTC midnight before the first new trade, the span up to the midnight is published as a slice with no
+   trade, `[boundary, midnight)`: row count 0, `complete` under the reconciliation profile, partition key `dt=<day>/seg=<token>` of
+   its window start like any slice, chained exactly to the previous slice. One such slice for each UTC day the proven interval
+   crosses before the first new trade; the first slice with trades then starts at the midnight. A live acquisition never publishes a
+   slice with no trade: section 2 stands for it, and the first window of a live acquisition starts at its first trade. The first slice
+   of a reconciliation must start exactly at the boundary the catalog gives (the floor); a certification profile checks it.
+2. **Revision over a never-valid attempt (amends sections 3 and 4).** A slice is revision 1 of its own partition, with `part-001.parquet`
+   and manifests `partition-manifest.json` and `coverage-manifest.json`, as section 3 says. **Only** when an earlier attempt at the
+   same partition key was sealed and never became valid (its state is not `valid`), the next attempt at that key is the next
+   revision: `part-<NNN>.parquet`, `partition-manifest-<NNN>.json`, `coverage-manifest-<NNN>.json` in the slice's directory, and the
+   catalog supersedes the earlier attempt, which was never readable. **A valid slice is never superseded**: a key that already holds
+   a valid slice is refused. The checkpoint binds the slice that was published, at its revision (1 in every case but this one);
+   ADR-0042's invariants are unchanged.
+3. **The floor is what a reader can see (clarifies section 4).** The end of the latest *valid* partition of the dataset, whatever its
+   key, is the floor: a new window never starts inside coverage a reader can already see, and a trade before it is a replay of a
+   published slice (reconciliation) or an ordering violation (live acquisition, fail closed). A partition that is only `closed` is
+   not published and its trades are not a replay.
+
+### A1.3 What this does not change
+
+- Slices of a live acquisition, the tie rule, the midnight rule for trades, the bounds, the interruption handling (section 5) and the
+  readers (section 6).
+- The existing partitions and their superseded revisions; the claim that a valid slice is append-only.
+- Governance: the `O01` acceptance text in `SCOPE.md` ("an empty window is not published", "revision 1") is reconciled by a governance
+  issue after this amendment is merged; this amendment edits no governance file.
+
+### A1.4 Not claimed
+
+- That a bridge slice is needed at any rate other than a restart that spans a UTC midnight; no read cost of the bridge is measured.
+- Cleanup of an abandoned `closed` attempt or of a superseded one: retention is the maintainer's code and is not touched.
+- That a zero-row partition is accepted by every reader other than the `DataGateway`; the proof reads it through the `DataGateway`
+  strictly.
+
+### A1.5 Acceptance record
+
+Accepted by the maintainer on 2026-10-23 in the implementation session of #510, answering the question of how to treat the two
+findings of the independent review: "Autorizzo le due eccezioni". Implementation is #510 (issue #509); this amendment adds no code.
