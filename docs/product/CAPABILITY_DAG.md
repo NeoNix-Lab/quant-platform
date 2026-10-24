@@ -9,7 +9,7 @@ supervised happy-path proof on the smallest real partition; deployability carrie
 ADR-0072 Amendment 1 bounds and the recorded proof findings. S08 is not authorized,
 J11 remains deferred, and no Wave 8 or DG-K/DG-K2 Golden proof is claimed.
 L2 promotion to main is a separate final wave PR; no deployment is performed here. DG-M — Canonical feature identity for deck
-results v1 is CLOSED on `implement/fid` (#475). DG-N — Multi-instrument Bybit linear trades v1 is registered and authorized (#483, ADR-0074 `ACCEPTED`): `T01` and `T04` are `COMPLETE` within their row bounds (PR #486, #488; ADR-0074 Amendment 1, #489), `T03` and `T02` are `FROZEN`/`MISSING`. DG-O — Live publication: continuous session and append-only slices v1 is registered and authorized (#507, ADR-0075 `ACCEPTED`): `O01`-`O03` are `FROZEN`/`MISSING`, nothing is implemented, and `T02` additionally requires `O03`. DG-M detail: `M01`, `M02`, `M04` and `M05` are COMPLETE within their row bounds (PR #466, #468,
+results v1 is CLOSED on `implement/fid` (#475). DG-N — Multi-instrument Bybit linear trades v1 is registered and authorized (#483, ADR-0074 `ACCEPTED`): `T01` and `T04` are `COMPLETE` within their row bounds (PR #486, #488; ADR-0074 Amendment 1, #489), `T03` and `T02` are `FROZEN`/`MISSING`. DG-O — Live publication: continuous session and append-only slices v1 is registered and authorized (#507, ADR-0075 `ACCEPTED`): `O01`-`O03` are `FROZEN`/`MISSING` (`O01` is merged, PR #510, and credited at the closeout), and `T02` additionally requires `O03`. DG-R — Rebuild of damaged legacy live days v1 is registered and authorized (#518, ADR-0074 Amendment 2 `ACCEPTED`): `R01` and `R02` are `FROZEN`/`MISSING`, nothing is implemented. DG-M detail: `M01`, `M02`, `M04` and `M05` are COMPLETE within their row bounds (PR #466, #468,
 #473, #474) under ADR-0073 and its Amendment 1, `M03` is superseded; the server now seals the identities of the definitions a deck
 names and the deck builder must declare them. No real-host run is claimed, and promotion into `main` is the operator's separate PR.**
 
@@ -21,19 +21,19 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after the DG-O registration (#507),
+Current audited inventory after the DG-R registration (#518),
 recomputed mechanically from the atom tables, not by hand:
 
 ```text
-TOTAL_ATOMS                     = 130
-CLASSIFIED_ATOMS                = 130
+TOTAL_ATOMS                     = 132
+CLASSIFIED_ATOMS                = 132
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 118 / 130 = 90.8%
+SEMANTIC_FROZEN_OR_RESOLVED     = 120 / 132 = 90.9%
 OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 118 + 3 + 9 = 130
-ROADMAP_PLANNING_COMPLETENESS   = 130 / 130 = 100%
-IMPLEMENTATION_COMPLETE         = 105 / 130 = 80.8%
+ROADMAP_DEFINED                 = 120 + 3 + 9 = 132
+ROADMAP_PLANNING_COMPLETENESS   = 132 / 132 = 100%
+IMPLEMENTATION_COMPLETE         = 105 / 132 = 79.5%
 ```
 
 Reconciliation #444 preserves all accepted DG-K/DG-K2 credits from main and
@@ -43,7 +43,11 @@ invented by this merge; the seven L2 subatoms and eight S atoms were already
 registered on their respective lines. [SCOPE.md](../../SCOPE.md#executable-governance-verification)
 contains the executable two-parent verification.
 
-DG-O registration and authorization (issue #507): ADR-0075 is `ACCEPTED` (#504, 2026-10-21). Three atoms `O01`-`O03` are added directly as
+DG-R registration and authorization (issue #518): ADR-0074 Amendment 2 is `ACCEPTED` (#515, 2026-10-24). Two atoms `R01` and `R02` are added directly as
+`FROZEN`/`MISSING` (130 -> 132 atoms; 118 -> 120 decided); no existing atom changes state. `O01` is merged (PR #510) and is credited by the DG-O closeout, not here;
+its row text is reconciled with ADR-0075 Amendment 1. The counts above are recomputed from these tables by script.
+
+Earlier, DG-O registration and authorization (issue #507): ADR-0075 is `ACCEPTED` (#504, 2026-10-21). Three atoms `O01`-`O03` are added directly as
 `FROZEN`/`MISSING` (127 -> 130 atoms; 115 -> 118 decided); no existing atom changes state, and `T02` gains the requirement `O03` (its one-hour
 `ETHUSDT` proof is the one of `O03`). `T03` and `T02` parts 1 to 5 are merged and are credited by the DG-N closeout, not here. The counts above
 are recomputed from these tables by script.
@@ -171,6 +175,7 @@ S  Server/deck composition (DG-K2)
 M  Feature identity (DG-M)
 T  Multi-instrument trades (DG-N)
 O  Live publication (DG-O)
+R  Rebuild of damaged legacy live days (DG-R)
 ```
 
 The implemented ownership direction remains governed by ADR-0024 and architecture tests. `application` composes existing capabilities and owns no quantitative meaning.
@@ -397,9 +402,18 @@ Registered and authorized by governance issue #507 after the design gate #504 pr
 
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
-| O01 | Append-only live slices v1 | Data Plane/Application | A11, K10, T01 | O02 | FROZEN | MISSING | ADR-0075 §2 to §4 (accepted; authorized by #507). A slice is the trades of one instrument in a half-open exchange-time window, closed after `slice_seconds` (300) or `slice_max_trades` (50 000) at a message boundary and never crossing a UTC midnight; each slice is revision 1 of its own partition `dt=<day>/seg=<HHMMSS.mmm>` and is never superseded; windows of one session chain exactly; the checkpoint binds a slice partition; the live certification profile accepts the key grammar and checks the chain. Ends F1 (a day reads as its last cycle). |
+| O01 | Append-only live slices v1 | Data Plane/Application | A11, K10, T01 | O02 | FROZEN | MISSING | ADR-0075 §2 to §4 (accepted; authorized by #507). A slice is the trades of one instrument in a half-open exchange-time window, closed after `slice_seconds` (300) or `slice_max_trades` (50 000) at a message boundary and never crossing a UTC midnight; each slice is revision 1 of its own partition `dt=<day>/seg=<HHMMSS.mmm>` and a valid slice is never superseded (Amendment 1: only an attempt that never became valid is replaced by the next revision, and a reconciliation across a UTC midnight publishes a slice with no trade); windows of one session chain exactly; the checkpoint binds a slice partition; the live certification profile accepts the key grammar and checks the chain. Ends F1 (a day reads as its last cycle). Merged (PR #510); credited at the closeout. |
 | O02 | Continuous live session v1 | Data Plane/Operations | O01 | O03 | FROZEN | MISSING | ADR-0075 §1, §5 (accepted; authorized by #507). One WebSocket session per instance, decoupled from publication by a bounded buffer (20 000 messages); a buffer overflow, a disconnect or an ordering violation is an interruption handled by ADR-0040 §7 and ADR-0042 §5 (reconcile from the last durable key or record an explicit gap; ADR-0044 unchanged); signals for the buffer and the interruptions. Ends F2 (about 27% of a day's trades never acquired). |
 | O03 | Live slice configuration, runbook and real-provider proof v1 | Data Plane/Operations | O02, T03, T04 | T02 | FROZEN | MISSING | ADR-0075 §9.3 (accepted; authorized by #507). `slice_seconds`, `slice_max_trades` and the buffer bound in the unit templates and the runbook; a real-provider run of at least one hour for ETHUSDT that reports the trades captured against the Bybit archive of the same day, the trades readable through the DataGateway and the number of `exchange_ts` ordering violations. This is the one-hour proof of `T02`. |
+
+### R — Rebuild of damaged legacy live days (DG-R)
+
+Registered and authorized by governance issue #518 after the design gate #515 produced ADR-0074 Amendment 2, `ACCEPTED` on 2026-10-24 (PR #516 and #521). Operator-reported evidence (2026-10-23/24, not an audit): 31 candidate legacy days, 2026-09-23 to 2026-10-23; for 2026-10-20 the archive has 1,568,861 trades and the local in-day unique IDs are 1,141,530 (427,331 absent; 529 rows outside the day). `SCOPE.md` Part D records the start gate and the acceptance of each atom; the order is `R01`, `R02`. No atom here is implemented, and no legacy day has been rebuilt. They are post-version work: they do not block `O02` or `O03`.
+
+| ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
+|---|---|---|---|---|---|---|---|
+| R01 | Superseding reassessment writer v1 | Data Plane | A16, A08, A09 | R02 | FROZEN | MISSING | ADR-0074 Amendment 2 A2.3 (accepted; authorized by #518). A writer of a target-bound reassessment report for the current live revision of a natural partition that is not `closed` (today `record_quality_report` refuses it): it copies the bound evidence of the superseded assessment, carries `metrics.supersedes_assessment_signature`, and is applied through the existing ADR-0030 seam (`fail` -> `invalid`; a superseding `pass` restores `valid`); nothing is deleted or rewritten; idempotent; locks in the lifecycle order. |
+| R02 | Legacy-day rebuild: plan, retire, import, verify v1 | Source/Application | R01, T04 | BTCUSDT live-era history readable | FROZEN | MISSING | ADR-0074 Amendment 2 A2.2, A2.4 to A2.7 (accepted; authorized by #518). For explicitly selected, closed UTC days of the damaged legacy `dt=<day>` publication: a read-only plan with a digest, retire the live revision (`R01`), import the archive day as revision 1 of `dt=<day>/seg=000000.000` through the ordinary S13/S14 path, verify in full and through the DataGateway; refusals (open day, slices, checkpoint binding, conservation, differing field, stale plan); the ordinary importer still refuses an occupied day. |
 
 ## Dependency integrity
 
@@ -594,10 +608,18 @@ T01 ──> T04 ──> T03 ──> T02
 
 ### DG-O — Live publication: continuous session and append-only slices v1 — CLOSED (design gate; ADR-0075 `ACCEPTED`, #504)
 
-Closed by ADR-0075: one continuous WebSocket session per instance decoupled from publication by a bounded buffer; slices with chained exchange-time windows (300 s or 50 000 trades); each slice is revision 1 of its own partition `dt=<day>/seg=<start>`, never superseded; interruptions follow ADR-0040 §7 and ADR-0042 §5, ADR-0044 unchanged. Implementation of `O01`-`O03` is authorized by #507 and not started. Not decided (deferred, with a measured trigger): consolidation of a closed day's slices into one partition. Not repaired (paused by the maintainer): the already damaged live days, which stay as they are; if a gap makes the data unusable the history is re-ingested from scratch. Assumption to be measured by `O03`: the provider's `exchange_ts` is non-decreasing along the stream. Out of scope: a second venue (`A12`), L2, any change to `trade-v1`, the ordering key, `TradeKeyV1` or the J02 wire.
+Closed by ADR-0075: one continuous WebSocket session per instance decoupled from publication by a bounded buffer; slices with chained exchange-time windows (300 s or 50 000 trades); each slice is revision 1 of its own partition `dt=<day>/seg=<start>`, never superseded; interruptions follow ADR-0040 §7 and ADR-0042 §5, ADR-0044 unchanged. Implementation of `O01`-`O03` is authorized by #507 and not started. Not decided (deferred, with a measured trigger): consolidation of a closed day's slices into one partition. The already damaged live days are not repaired by DG-O; DG-R (ADR-0074 Amendment 2) rebuilds explicitly selected closed days from the Bybit archive. Assumption to be measured by `O03`: the provider's `exchange_ts` is non-decreasing along the stream. Out of scope: a second venue (`A12`), L2, any change to `trade-v1`, the ordering key, `TradeKeyV1` or the J02 wire.
 
 ```text
 O01 ──> O02 ──> O03 ──> T02
+```
+
+### DG-R — Rebuild of damaged legacy live days v1 — CLOSED (design gate; ADR-0074 Amendment 2 `ACCEPTED`, #515)
+
+Closed by ADR-0074 Amendment 2: for explicitly selected, closed UTC days, retire the damaged live revision with an ordinary ADR-0030 reassessment (`fail` -> `invalid`; nothing deleted), import the whole-day archive file as revision 1 of `dt=<day>/seg=000000.000` through the ordinary S13/S14 path, verify in full. The first draft's atomic replacement (ADR-0033 cutover extended to a component of adjacent days) is considered and not adopted (A2.8). Implementation of `R01` and `R02` is authorized by #518 and not started. Not decided: the atomic replacement, until a consumer of those days appears. Out of scope: consolidation of slices, automatic repair of live gaps (ADR-0044), retention or deletion of retired or superseded revisions, any change to `trade-v1`, the ordering key, `TradeKeyV1` or the J02 wire.
+
+```text
+R01 ──> R02
 ```
 
 ## Vertical milestones
@@ -744,6 +766,7 @@ DG-C/L2 L2 historical v1 (#442)                         COMPLETE on implement/l2
 DG-M   Canonical feature identity for deck results v1   COMPLETE within recorded bounds on implement/fid (closeout #475); M01,M02,M04,M05; M03 superseded; no real-host run claimed
 DG-N   Multi-instrument Bybit linear trades v1          IN PROGRESS on implement/fid (#483, #489; ADR-0074 ACCEPTED #377 and Amendment 1); T01,T04 COMPLETE; T03,T02 FROZEN/MISSING
 DG-O   Live publication: continuous session and append-only slices v1   AUTHORIZED (#507; ADR-0075 ACCEPTED #504); O01,O02,O03 FROZEN/MISSING; nothing implemented
+DG-R   Rebuild of damaged legacy live days v1   AUTHORIZED (#518; ADR-0074 Amendment 2 ACCEPTED #515); R01,R02 FROZEN/MISSING; post-version; nothing implemented
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```
