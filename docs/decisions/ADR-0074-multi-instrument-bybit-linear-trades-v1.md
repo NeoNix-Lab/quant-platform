@@ -274,7 +274,10 @@ resolved as proposed:
 The accepted ADR and Amendment 1 above remain operative. This proposal is not an
 implementation, a governance reconciliation, an acceptance record or authority to
 change production data. The maintainer requested a reviewable reconstruction
-proposal after the operator evidence below. Acceptance and the bounded
+proposal after the operator evidence below, and chose the reduced form of it
+(2026-10-24): **retire** the damaged legacy day from reads with an ordinary
+quality reassessment, then **import** the archive day under a free key. It does
+not replace a partition atomically (see A2.8). Acceptance and the bounded
 implementation authorization are separate steps.
 
 ### A2.1 Problem and evidence
@@ -296,193 +299,183 @@ These are supplied operational evidence, not a new independent server audit.
 | In-day ID comparison | 1,141,530 local unique IDs, all in the archive; no in-day duplicate or null IDs; 427,331 archive IDs absent locally. Equality of other canonical fields was not tested. |
 | Day ownership | 529 local rows fall outside 2026-10-20. Legacy catalog coverage intervals also cross UTC midnight. A partition-key date alone does not delimit the replacement's effects. |
 
-The inventory is a candidate list, not permission to replace every date in it.
+The inventory is a candidate list, not permission to rebuild every date in it.
 The 2026-10-23 sample contains both legacy revisions and new live slices; it is
-excluded from the first replacement scope. Whether a day is closed is evaluated
-in UTC at execution, not from a local calendar date or this document's date.
+excluded from the first scope. Whether a day is closed is evaluated in UTC at
+execution, not from a local calendar date or this document's date.
 
-### A2.2 Proposed decision and authority boundary
+### A2.2 Decision
 
-Authorize an operator-requested reconstruction of explicitly selected, closed
-UTC days of legacy `canonical/trades/bybit/BTCUSDT/trade-v1` from the whole-day
-archive of Amendment 1. This is replacement of damaged historical publication,
-not restoration of the original live session's continuity or sequence evidence.
+Authorize an operator-requested rebuild of explicitly selected, closed UTC days of
+`canonical/trades/bybit/BTCUSDT/trade-v1` whose publication is a legacy
+`dt=<day>` family (many superseded revisions and one live revision that holds only
+the day's last batch). Per selected day, in this order:
 
-The ordinary archive importer keeps its existing refusal for an occupied day.
-Reconstruction is a separate application operation composed over the existing
-data-plane repair owner, never a `--force` bypass in the ordinary importer.
-Healthy historical/SQLite days, new live slice keys, other datasets and the
-active ingest checkpoint are not replacement targets.
+1. **Retire.** Record a superseding quality reassessment of the day's current live
+   revision, `fail` on completeness, and apply [ADR-0030](ADR-0030-general-quality-lifecycle-v1.md)'s
+   existing mapping `fail -> invalid`. Nothing is deleted or rewritten: the
+   revision stays the live (non-superseded) row of its key, now `invalid`, with its
+   bytes, manifests, quality reports and admissions intact. Every read policy
+   excludes `invalid`, so the day is no longer served from the damaged batch.
+2. **Import.** Import the whole-day archive file of Amendment 1 (same download
+   identity, strict parsing, millisecond mapping, unique non-empty trade IDs,
+   half-open UTC-day coverage) through the ordinary S13/S14 path as **revision 1 of
+   the key `dt=<day>/seg=000000.000`**, `part-001.parquet`: the key grammar of
+   ADR-0075 section 3 for a window that starts at the day's first instant. The legacy
+   key stays as it is; the new key is free, so no revision is raised and no
+   predecessor is superseded.
+3. **Verify.** Compare the imported records with the archive file in full
+   (`tools/compare_archive_day.py`), then read the day through the `DataGateway`
+   strictly and check count, order and duplicates.
 
-ADOPT the immutable candidate staging, evidence bindings, lock order,
-compare-and-cutover, quality/eligibility owners and durable convergence principles
-of [ADR-0033](ADR-0033-backfill-repair-v1.md). ADAPT their application composition
-for this bounded defect. Do not introduce a parallel repair engine.
+The ordinary importer keeps its refusal of an occupied day (A1.6 item 3). The
+rebuild is a separate operation that treats the retired (`invalid`) legacy revision
+of that exact day as not occupying it, and nothing else: a `valid` or `closed`
+partition of the day, or any `dt=<day>/seg=...` partition other than the one it
+creates, still refuses. It is never a `--force` of the ordinary importer.
 
-Current `CoverageGapTrigger` cannot replace an occupied natural key, and
-`InvalidRevisionTrigger` requires an authoritative failed assessment and an
-`invalid` predecessor. A legacy final batch can legitimately be `valid` over its
-small interval; calling it invalid merely because it is not a whole day would
-falsify its existing assessment. Neither v1 trigger authorizes this operation.
+### A2.3 The reassessment writer
 
-The proposed additive repair semantics are explicitly named
-`quant-platform/a10-legacy-day-rebuild-v1`, distinct from
-`quant-platform/a10-repair-v1`. Their predecessor-bound trigger records the
-confirmed legacy publication defect, requested whole-day support, archive
-identity and exact incumbent evidence. Existing v1 trigger eligibility, intent
-IDs and outcomes keep their meaning. Implementation must specify and test the
-new intent/plan serialization and dispatch; it must not reinterpret old intents.
+ADR-0030 already defines reassessment: a new, target-bound, immutable quality
+report that carries `metrics.supersedes_assessment_signature` of the assessment it
+supersedes, and an application step that maps its status to a state. The state
+transition exists (`valid` is an allowed source state for `fail`). What does not
+exist is a writer of such a report for a revision that is not `closed`:
+`record_quality_report` refuses any other state, and the repair path writes reports
+only for candidates inside its own cutover.
 
-### A2.3 Inspectable plan and temporal closure
+The slice adds that writer, in the data plane next to the lifecycle seam, with these
+properties:
 
-Before materialization, a read-only plan captures:
+- it targets the current live revision of one natural partition, locked in the same
+  order as the lifecycle application, and refuses a superseded, foreign or
+  `writing` revision;
+- it copies the bound evidence of the assessment it supersedes unchanged (profile,
+  natural identity, dataset, partition and content hashes, coverage manifest and
+  assertion identities) and sets the status, the coverage category and a
+  violation that names the reason (`legacy_publication_incomplete_day`) and the
+  archive identity that shows it; it carries the producing commit;
+- the reassessment is honest: the partition is not corrupt, it is incomplete for
+  its day, and the report says so; it is idempotent (the same semantic signature
+  adds no second leaf);
+- the lifecycle application then runs through the existing seam, in its own short
+  transaction (a few milliseconds of the dataset row lock, per partition).
 
-- the authorized dataset, explicit UTC days and reason for reconstruction;
-- each incumbent partition UUID, key, revision, lifecycle state, physical and
-  manifest hashes, coverage documents/hashes, declared intervals and paths;
-- the source URL, file SHA-256, byte size, source-observation time, expected
-  count, mapping/profile, producing code commit and planned candidate revision;
-- coverage, observed-record and adjacent-day effects; active checkpoint
-  bindings; overlapping slice or healthy-history identities;
-- immutable candidate locations, resource bounds, a canonical plan digest and
-  per-partition repair obligations bound to that exact plan.
+**Restore.** A later reassessment `pass` that supersedes the `fail` returns the
+revision to `valid` by the same seam. It is the documented way back if the import
+or its verification fails and the operator prefers the damaged day to no day.
 
-Re-read and compare this evidence under the repair owner's locks before any
-visibility change. A changed predecessor, new overlap, changed source or changed
-checkpoint relationship makes the plan stale; it cannot silently acquire a
-different target or authorize another date.
+### A2.4 Plan, preconditions and refusals
 
-Every incumbent effect must be contained in the explicitly authorized union of
-closed days, using both declared coverage and actual record bounds. A legacy
-batch spanning midnight can couple adjacent days. The plan reports that closure
-and refuses execution if it reaches an unapproved date, healthy historical day,
-live slice, checkpoint-bound partition or active/current UTC day. An adjacent day
-can enter only through a newly approved plan; no automatic date-range expansion,
-clipping of old manifests, or loss of the 529 out-of-day rows is authorized.
+A read-only plan precedes any change and is bound by a digest the executing command
+must present. For each selected day it records: the incumbent revision (partition
+UUID, key, revision, state, physical and manifest hashes, coverage identities), the
+archive file (URL, SHA-256, size, source-observation time, row count), the producing
+commit, the key to create and the result of the checks below. A changed incumbent,
+source or catalog makes the plan stale; the executor never acquires another target
+and never widens the date set.
 
-A connected component of approved adjacent legacy days is one atomic visibility
-unit, while each candidate remains its own UTC-day partition with its own source
-and certification. Independent components can execute separately and report
-separate outcomes. This is explicit caller orchestration, not native aggregate
-range completeness or a scheduler (ADR-0054).
+A day is refused, and nothing is changed for it, if any of the following holds:
 
-The first 2026-10-20 pilot validates preparation and refusal/cutover semantics in
-disposable PostgreSQL, including neighboring production-shaped intervals. It is
-not permission to replace that day in production while its boundary closure is
-unresolved. A plan whose closure cannot meet these restrictions remains blocked.
+- the day is not closed in UTC: its end is less than 24 hours before execution;
+- the day has a live slice (`dt=<day>/seg=...` other than the one to create), a
+  checkpoint binding to any of its partitions, or an open gap record that names it;
+- its current live revision is not `valid`;
+- **conservation fails.** Every record of the incumbent live revision, by
+  `(exchange_ts, trade_id)`, must be found with equal venue, instrument, exchange
+  time, side, price and size in the archive file of its own UTC day, and that day
+  must be readable after the operation (rebuilt in the same plan, or already valid
+  in the catalog). A record outside the day (the 529 rows of the evidence) is
+  checked against its own day, not dropped. Any difference in a common field refuses
+  the day; there is no partial acceptance;
+- the archive file fails Amendment 1's strict parsing or its hash differs from the
+  plan.
 
-### A2.4 Candidate evidence and immutable storage
+The incumbent live revision of a legacy day holds only the day's last batch; the
+superseded revisions are not read today and are not part of the conservation
+check. The rebuilt day carries the archive's null `receive_ts` and `sequence`. The
+rows that the incumbent revision serves lose the provider `sequence` they have now
+(ADR-0040 keeps it as live evidence): this is an accepted, declared loss of
+provenance on those rows, recoverable from the retained bytes, and not a claim of the
+original session's continuity.
 
-ADOPT Amendment 1's source profile, strict archive parsing, millisecond mapping,
-unique non-empty trade IDs, canonical ordering and half-open UTC-day coverage.
-Complete means the day as the archived source publishes it, not measured provider
-infallibility or certified continuity of the old WebSocket session.
+### A2.5 Readers, concurrency and failure
 
-Materialize each candidate in a collision-safe immutable location distinct from
-every incumbent artifact and manifest. Its final partition revision is the
-contiguous successor captured by the plan, not revision 1 by convenience; its
-files and coverage documents bind that revision. Dataset identity and existing
-dataset-manifest bytes remain unchanged. Use paths representable by the existing
-manifest schemas, with no overwrite or directory move of incumbent data.
-
-Preparation validates file and canonical-content hashes, full source-to-candidate
-canonical-record equality, ordering, uniqueness, identity and day ownership. It
-produces authentic source-specific certification evidence for the candidate's
-final identity using S13's verification semantics without calling its ordinary
-predecessor-superseding seal. Fabricated quality reports or copied predecessor
-reports cannot authorize replacement. Failed attempts retain their own evidence
-for inspection but never alter predecessor visibility.
-
-Archive reconstruction preserves the archive's null `receive_ts` and `sequence`;
-it does not fabricate live-only fields. Live-to-archive comparison distinguishes
-those expected provenance differences from changes in venue, instrument,
-exchange time, side, price or size. ID membership alone is not a full-field gate.
-Source observation, preparation and cutover times are recorded honestly; neither
-availability nor the producing commit is backdated to the trade date.
-
-### A2.5 Cutover, readers and restart
-
-The repair owner provides a transaction-scoped composition for the new semantics:
-all relevant dataset/lineage locks in the existing order, then affected partition
-topologies in deterministic order, then under-lock reauthorization of the whole
-plan. No component commits between its daily candidates.
-
-Within that transaction, admit the final candidate revisions, apply the existing
-A16 and S14 transaction-scoped decisions, supersede the exact approved incumbent
-revisions, and persist predecessor/candidate/plan convergence provenance. Refusal
-of any candidate rolls back the whole component, leaving all predecessors as
-they were. Commit only when every candidate is eligible and the component's
-coverage/identity/row-equality gates pass. Retain authentic failed-attempt evidence
-outside the rolled-back visibility transaction.
-
-This extends A10 composition only for the new version. It does not weaken S13's
-ordinary durable phase boundaries or globally suppress its commits. A10's
-existing cutover already reuses A16/S14 rather than calling ordinary S13 admission;
-the bounded extension must retain that ownership and evidence discipline.
-
-Readers resolving an affected component must use a coherent catalog generation
-for partition selection and coverage evidence, or receive a typed retry/refusal.
-One read may see all of the old component or all of the new component, never a
-mixture. Immutable retained predecessor files let an already-resolved read finish
-after cutover. Application composition owns DataGateway read-back; the data repair
-package must not import Access to perform it (ADR-0019 and ADR-0033).
-
-Persist a versioned plan/attempt/convergence record bound to the exact evidence;
-do not overload existing v1 provenance rows or infer completion from matching
-content hashes. A crash before commit leaves old visibility intact; prepared
-immutable files remain unpublished evidence. After commit, an exact replay
-returns durable convergence, not a second successor revision. A changed plan or
-candidate is a distinct attempt and must be reauthorized. A lost response after
-commit is resolved from provenance before any retry mutates data.
-
-Existing gap evidence and live checkpoint bytes remain untouched. Reconstruction
-does not mark historical live gaps repaired, rewind a checkpoint, claim missing
-sequence continuity, or enable the archive as an automatic live repair source.
-Already sealed admissions and in-flight deliveries retain their referenced bytes
-and source identities; new admissions resolve the new eligible revision. No
-retention or physical/catalog deletion is part of this operation (ADR-0049).
+- **No atomic switch, by design.** Between *Retire* and *Import* the day is served
+  by nothing: a strict read refuses with `NoCoverage`; `allow-partial` reports the
+  gap. The order is chosen so that this is an honest absence and never a state in
+  which two valid partitions cover the same day (the gateway refuses that overlap).
+  The days are closed and have no consumer yet (usage tests start after the first
+  version); the plan states the window per day and the executor does one day at a time.
+- **Coherent reads.** `Catalog.select_partitions` selects partitions in one SQL
+  statement filtered by lifecycle state, so each lifecycle commit is seen whole or
+  not at all by a reader; the proofs below use that mechanism.
+- **Crash and retry.** After a crash between *Retire* and *Import* the day is
+  retired and unimported; rerunning the plan imports it. After a crash between the
+  import and the verification the executor finds the valid key it would create
+  and goes to the verification, which is read-only and repeatable. The attempt is
+  identified by the plan digest.
+- **Concurrency.** The lifecycle application and the import take the same dataset
+  row lock as the live publication, each for a short transaction. The executor does
+  not hold a lock across days, the files' reading or the verification.
+- **Untouched.** Live checkpoint files, gap evidence, healthy historical days, live
+  slices, other datasets and all old bytes. No deletion, catalog reset or retention
+  is part of the operation ([ADR-0049](ADR-0049-retention-deletion-authority-v1.md)). Cleaning
+  retired or superseded legacy revisions is the maintainer's retention decision.
 
 ### A2.6 Exact effect if accepted
 
 | Authority | Bounded amendment |
 | --- | --- |
-| This ADR A1.6 item 3 and occupied-day refusal | Remain the default for ordinary import; the separately authorized legacy-day reconstruction above is the explicit exception. |
-| ADR-0075 section 7, delegation item 3 and acceptance item 3 | Lift the pause only for the explicitly approved historical legacy-day reconstruction; current slices, consolidation and live interruption evidence remain unchanged. |
-| ADR-0033 decision and partition-bounded cutover | Add the distinctly versioned legacy-defect trigger and atomic composition of approved adjacent daily obligations; existing v1 triggers and cutover remain unchanged. |
-| ADR-0044 | No amendment: no automatic live-gap repair or new proof of live continuity. |
-| ADR-0018, frozen records/manifests, identity and ordering | No in-place changes. New repair control/provenance semantics need an explicit versioned contract and migration in their own authorized implementation slice. |
-| S13, A16 and S14 ordinary publication | Existing phase boundaries and eligibility/quality authority remain; reconstruction composes the repair-owned transaction-scoped seams. |
+| This ADR A1.6 item 3 and occupied-day refusal | Remains the default for ordinary import. The rebuild treats the retired legacy revision of the selected day as not occupying it and imports under `dt=<day>/seg=000000.000`; nothing else is let through. |
+| ADR-0075 section 7, delegation item 3 and acceptance item 3 | Lift the pause only for the explicitly selected, closed legacy days; current slices, consolidation and live interruption evidence remain unchanged. |
+| ADR-0030 (A16) | No change of meaning. Adds the writer of a reassessment report for a revision that is not `closed` (A2.3). |
+| ADR-0033 (A10) | Not used. The first scope does not need an atomic replacement (A2.8); A10 and its triggers are unchanged. |
+| ADR-0044 | No amendment: no automatic live-gap repair, no new proof of live continuity. |
+| ADR-0018, frozen records and manifests, identity, ordering | Unchanged. The new key uses the accepted two-level grammar; no schema, migration or new control table. |
+| S13, S14 | Unchanged; the import uses them as they are. |
 
-This proposal does not accept ADR-0075 Amendment 1 (#512 / PR #513), change its
-numbering, resolve #511, complete O02/O03 or grant new capability credit. It does
-not change SCOPE, Roadmap, Capability Map/DAG or Open Decisions. Acceptance must be
-recorded explicitly and followed by a separately authorized implementation issue
-and governance reconciliation where the active scope requires one. Production
-execution follows a reviewed, pinned implementation and a reviewed date plan.
+This proposal does not accept ADR-0075 Amendment 1 (#512 / PR #513), resolve #511,
+complete O02/O03 or grant capability credit. It changes no governance file.
+Acceptance must be recorded explicitly and followed by a separately authorized
+implementation issue and, where the active scope requires it, a governance
+reconciliation. Production execution follows a reviewed, pinned implementation and a
+reviewed date plan. The 31-date inventory is not that plan.
 
 ### A2.7 Required implementation and operational proof
 
-1. **Plan/refusal slice.** Versioned defect, plan and provenance contracts; read-only
-   inventory and boundary closure. Tests reject healthy historical/SQLite days,
-   slices, open UTC days, checkpoint targets, unapproved neighbors and stale plans.
-2. **Candidate slice.** Immutable archive mapping/materialization and genuine
-   final-identity certification evidence; prove full-field equality, malformed
-   source refusal, hash/coverage binding and concurrent-attempt isolation. The
-   2026-10-20 pilot must contain exactly 1,568,861 archive records, all in-day.
-3. **Cutover slice.** Disposable PostgreSQL probes for S13-equivalent verification,
-   A16/S14 refusal, failure after first candidate admission, process/connection
-   loss before and after commit, stale predecessor evidence and exact retry.
-   Every failed component leaves predecessor rows, bytes and readability intact.
-   Real concurrent reader/writer interleavings prove coherent reads, loser
-   non-mutation and lock ordering against ordinary S13/S14/A16. A two-day
-   midnight-crossing fixture proves no adjacent-day record or coverage loss.
-4. **Read-back/operator slice.** Strict DataGateway reads compare the full archive
-   records, count, ordering and duplicate keys over each replaced day; verify
-   unchanged non-target coverage, old admission bytes and live checkpoint. Repeat
-   recovery from a lost successful response. Provide resource/time bounds and an
-   inspect/prepare/execute/resume runbook. No automatic rollback or deletion.
+1. **Writer slice.** The reassessment writer (A2.3) over a disposable PostgreSQL:
+   `valid -> invalid` and back by a superseding `pass`; the supersession link; the
+   bound evidence copied unchanged; idempotence; refusal of a superseded, foreign or
+   stale target; a concurrent publication on the same dataset waits and then
+   proceeds; a `VALID_ONLY` read excludes the retired revision; the old bytes,
+   manifests and reports unchanged.
+2. **Rebuild slice.** The importer variant, the plan and its digest, the
+   conservation check, the runbook. Disposable PostgreSQL probes: a retired day is
+   imported under the new key; a `valid` or `closed` incumbent, a live slice, a
+   checkpoint binding, an open day, a stale plan and a differing common field each
+   refuse without changing anything; a crash between *Retire* and *Import* and
+   another between *Import* and the verification are recovered by rerunning; the
+   restore path; a neighbouring day with its own retired revision whose legacy
+   coverage crossed midnight reads correctly. Strict `DataGateway` read of the pilot
+   day returns exactly 1,568,861 archive records, in order, without duplicates,
+   with full-field equality to the archive (null `receive_ts` and `sequence`
+   expected); non-target days and the live checkpoint are byte-identical.
+3. **Operation.** Dry-run, execute and verify on `2026-10-20` first; further days
+   only from a new reviewed plan. Nothing in the production run is claimed by this
+   proposal.
 
-The runtime proof is required after implementation; this design-only proposal
-does not claim any of those probes passed. Only after the isolated pilot and
-boundary-safe production plan succeed can the operator reconstruct further
-explicitly approved closed days. The 31-date inventory is not that execution plan.
+The runtime proof is required after implementation; this design-only proposal does
+not claim any of those probes passed.
+
+### A2.8 Considered and not adopted
+
+An atomic replacement of the live revision (retire and admit the successor in one
+transaction, with the predecessor readable until the switch), built on ADR-0033's
+cutover and extended to a component of adjacent days with new versioned repair
+triggers, provenance and migration, a prospective certification seam in S13, and a
+bounded lock hold against the live service. Its cost is several implementation
+slices and a lock on the dataset row that the live publication needs, for a benefit
+(no read gap) that closed days without consumers do not require. It stays available
+as a later amendment if a consumer of these days appears; this proposal does not
+close that door.
