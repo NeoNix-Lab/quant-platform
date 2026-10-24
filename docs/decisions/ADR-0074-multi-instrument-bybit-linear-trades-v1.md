@@ -263,3 +263,226 @@ resolved as proposed:
 1. **Precision.** Milliseconds, truncated (A1.2 item 4).
 2. **Download.** `tools/fetch_bybit_trade_archive.py` fetches days into a staging directory; the import reads the local file.
 3. **Re-import of the 2 118 `BTCUSDT` days.** No; an archive import of a day that already has a catalog partition is refused.
+
+---
+
+## Amendment 2 - Rebuild damaged legacy BTCUSDT live days from the archive
+
+**Status:** PROPOSED (design gate [#515](https://github.com/NeoNix-Lab/quant-platform/issues/515))
+**Date:** 2026-10-24
+
+The accepted ADR and Amendment 1 above remain operative. This proposal is not an
+implementation, a governance reconciliation, an acceptance record or authority to
+change production data. The maintainer requested a reviewable reconstruction
+proposal after the operator evidence below. Acceptance and the bounded
+implementation authorization are separate steps.
+
+### A2.1 Problem and evidence
+
+On `homelab`, the legacy live publisher wrote a new revision of `dt=<day>` for
+each batch, superseding the preceding batch rather than accumulating the day.
+The archive can supply trades never acquired between cycles; re-enabling the
+superseded batches alone cannot restore them.
+
+Operator-reported checks in the deployment conversation, on producing commit
+`fc69cc17e8f8aeee1326d1b26287b8db1e61b73d`, establish the following bounded facts.
+These are supplied operational evidence, not a new independent server audit.
+
+| Check | Result |
+| --- | --- |
+| Catalog inventory | 31 candidate dates, 2026-09-23 through 2026-10-23; 85,056 superseded legacy revisions, 24,160,325 declared rows; 9,908 declared rows in valid legacy revisions. Totals are not unique-trade counts. |
+| 2026-10-20 local files | 3,326 distinct readable Parquet footers; all row counts match the catalog; 1,142,059 rows; 41,257,944 bytes. No full physical-hash check was performed by this inventory. |
+| Archive | `BTCUSDT2026-10-20.csv.gz`, 57,387,589 bytes, SHA-256 `d45890283c23973ee061364ff2faf5835dee6dc9c1fee1cbd648375377c4447d`; 1,568,861 rows and unique trade IDs. |
+| In-day ID comparison | 1,141,530 local unique IDs, all in the archive; no in-day duplicate or null IDs; 427,331 archive IDs absent locally. Equality of other canonical fields was not tested. |
+| Day ownership | 529 local rows fall outside 2026-10-20. Legacy catalog coverage intervals also cross UTC midnight. A partition-key date alone does not delimit the replacement's effects. |
+
+The inventory is a candidate list, not permission to replace every date in it.
+The 2026-10-23 sample contains both legacy revisions and new live slices; it is
+excluded from the first replacement scope. Whether a day is closed is evaluated
+in UTC at execution, not from a local calendar date or this document's date.
+
+### A2.2 Proposed decision and authority boundary
+
+Authorize an operator-requested reconstruction of explicitly selected, closed
+UTC days of legacy `canonical/trades/bybit/BTCUSDT/trade-v1` from the whole-day
+archive of Amendment 1. This is replacement of damaged historical publication,
+not restoration of the original live session's continuity or sequence evidence.
+
+The ordinary archive importer keeps its existing refusal for an occupied day.
+Reconstruction is a separate application operation composed over the existing
+data-plane repair owner, never a `--force` bypass in the ordinary importer.
+Healthy historical/SQLite days, new live slice keys, other datasets and the
+active ingest checkpoint are not replacement targets.
+
+ADOPT the immutable candidate staging, evidence bindings, lock order,
+compare-and-cutover, quality/eligibility owners and durable convergence principles
+of [ADR-0033](ADR-0033-backfill-repair-v1.md). ADAPT their application composition
+for this bounded defect. Do not introduce a parallel repair engine.
+
+Current `CoverageGapTrigger` cannot replace an occupied natural key, and
+`InvalidRevisionTrigger` requires an authoritative failed assessment and an
+`invalid` predecessor. A legacy final batch can legitimately be `valid` over its
+small interval; calling it invalid merely because it is not a whole day would
+falsify its existing assessment. Neither v1 trigger authorizes this operation.
+
+The proposed additive repair semantics are explicitly named
+`quant-platform/a10-legacy-day-rebuild-v1`, distinct from
+`quant-platform/a10-repair-v1`. Their predecessor-bound trigger records the
+confirmed legacy publication defect, requested whole-day support, archive
+identity and exact incumbent evidence. Existing v1 trigger eligibility, intent
+IDs and outcomes keep their meaning. Implementation must specify and test the
+new intent/plan serialization and dispatch; it must not reinterpret old intents.
+
+### A2.3 Inspectable plan and temporal closure
+
+Before materialization, a read-only plan captures:
+
+- the authorized dataset, explicit UTC days and reason for reconstruction;
+- each incumbent partition UUID, key, revision, lifecycle state, physical and
+  manifest hashes, coverage documents/hashes, declared intervals and paths;
+- the source URL, file SHA-256, byte size, source-observation time, expected
+  count, mapping/profile, producing code commit and planned candidate revision;
+- coverage, observed-record and adjacent-day effects; active checkpoint
+  bindings; overlapping slice or healthy-history identities;
+- immutable candidate locations, resource bounds, a canonical plan digest and
+  per-partition repair obligations bound to that exact plan.
+
+Re-read and compare this evidence under the repair owner's locks before any
+visibility change. A changed predecessor, new overlap, changed source or changed
+checkpoint relationship makes the plan stale; it cannot silently acquire a
+different target or authorize another date.
+
+Every incumbent effect must be contained in the explicitly authorized union of
+closed days, using both declared coverage and actual record bounds. A legacy
+batch spanning midnight can couple adjacent days. The plan reports that closure
+and refuses execution if it reaches an unapproved date, healthy historical day,
+live slice, checkpoint-bound partition or active/current UTC day. An adjacent day
+can enter only through a newly approved plan; no automatic date-range expansion,
+clipping of old manifests, or loss of the 529 out-of-day rows is authorized.
+
+A connected component of approved adjacent legacy days is one atomic visibility
+unit, while each candidate remains its own UTC-day partition with its own source
+and certification. Independent components can execute separately and report
+separate outcomes. This is explicit caller orchestration, not native aggregate
+range completeness or a scheduler (ADR-0054).
+
+The first 2026-10-20 pilot validates preparation and refusal/cutover semantics in
+disposable PostgreSQL, including neighboring production-shaped intervals. It is
+not permission to replace that day in production while its boundary closure is
+unresolved. A plan whose closure cannot meet these restrictions remains blocked.
+
+### A2.4 Candidate evidence and immutable storage
+
+ADOPT Amendment 1's source profile, strict archive parsing, millisecond mapping,
+unique non-empty trade IDs, canonical ordering and half-open UTC-day coverage.
+Complete means the day as the archived source publishes it, not measured provider
+infallibility or certified continuity of the old WebSocket session.
+
+Materialize each candidate in a collision-safe immutable location distinct from
+every incumbent artifact and manifest. Its final partition revision is the
+contiguous successor captured by the plan, not revision 1 by convenience; its
+files and coverage documents bind that revision. Dataset identity and existing
+dataset-manifest bytes remain unchanged. Use paths representable by the existing
+manifest schemas, with no overwrite or directory move of incumbent data.
+
+Preparation validates file and canonical-content hashes, full source-to-candidate
+canonical-record equality, ordering, uniqueness, identity and day ownership. It
+produces authentic source-specific certification evidence for the candidate's
+final identity using S13's verification semantics without calling its ordinary
+predecessor-superseding seal. Fabricated quality reports or copied predecessor
+reports cannot authorize replacement. Failed attempts retain their own evidence
+for inspection but never alter predecessor visibility.
+
+Archive reconstruction preserves the archive's null `receive_ts` and `sequence`;
+it does not fabricate live-only fields. Live-to-archive comparison distinguishes
+those expected provenance differences from changes in venue, instrument,
+exchange time, side, price or size. ID membership alone is not a full-field gate.
+Source observation, preparation and cutover times are recorded honestly; neither
+availability nor the producing commit is backdated to the trade date.
+
+### A2.5 Cutover, readers and restart
+
+The repair owner provides a transaction-scoped composition for the new semantics:
+all relevant dataset/lineage locks in the existing order, then affected partition
+topologies in deterministic order, then under-lock reauthorization of the whole
+plan. No component commits between its daily candidates.
+
+Within that transaction, admit the final candidate revisions, apply the existing
+A16 and S14 transaction-scoped decisions, supersede the exact approved incumbent
+revisions, and persist predecessor/candidate/plan convergence provenance. Refusal
+of any candidate rolls back the whole component, leaving all predecessors as
+they were. Commit only when every candidate is eligible and the component's
+coverage/identity/row-equality gates pass. Retain authentic failed-attempt evidence
+outside the rolled-back visibility transaction.
+
+This extends A10 composition only for the new version. It does not weaken S13's
+ordinary durable phase boundaries or globally suppress its commits. A10's
+existing cutover already reuses A16/S14 rather than calling ordinary S13 admission;
+the bounded extension must retain that ownership and evidence discipline.
+
+Readers resolving an affected component must use a coherent catalog generation
+for partition selection and coverage evidence, or receive a typed retry/refusal.
+One read may see all of the old component or all of the new component, never a
+mixture. Immutable retained predecessor files let an already-resolved read finish
+after cutover. Application composition owns DataGateway read-back; the data repair
+package must not import Access to perform it (ADR-0019 and ADR-0033).
+
+Persist a versioned plan/attempt/convergence record bound to the exact evidence;
+do not overload existing v1 provenance rows or infer completion from matching
+content hashes. A crash before commit leaves old visibility intact; prepared
+immutable files remain unpublished evidence. After commit, an exact replay
+returns durable convergence, not a second successor revision. A changed plan or
+candidate is a distinct attempt and must be reauthorized. A lost response after
+commit is resolved from provenance before any retry mutates data.
+
+Existing gap evidence and live checkpoint bytes remain untouched. Reconstruction
+does not mark historical live gaps repaired, rewind a checkpoint, claim missing
+sequence continuity, or enable the archive as an automatic live repair source.
+Already sealed admissions and in-flight deliveries retain their referenced bytes
+and source identities; new admissions resolve the new eligible revision. No
+retention or physical/catalog deletion is part of this operation (ADR-0049).
+
+### A2.6 Exact effect if accepted
+
+| Authority | Bounded amendment |
+| --- | --- |
+| This ADR A1.6 item 3 and occupied-day refusal | Remain the default for ordinary import; the separately authorized legacy-day reconstruction above is the explicit exception. |
+| ADR-0075 section 7, delegation item 3 and acceptance item 3 | Lift the pause only for the explicitly approved historical legacy-day reconstruction; current slices, consolidation and live interruption evidence remain unchanged. |
+| ADR-0033 decision and partition-bounded cutover | Add the distinctly versioned legacy-defect trigger and atomic composition of approved adjacent daily obligations; existing v1 triggers and cutover remain unchanged. |
+| ADR-0044 | No amendment: no automatic live-gap repair or new proof of live continuity. |
+| ADR-0018, frozen records/manifests, identity and ordering | No in-place changes. New repair control/provenance semantics need an explicit versioned contract and migration in their own authorized implementation slice. |
+| S13, A16 and S14 ordinary publication | Existing phase boundaries and eligibility/quality authority remain; reconstruction composes the repair-owned transaction-scoped seams. |
+
+This proposal does not accept ADR-0075 Amendment 1 (#512 / PR #513), change its
+numbering, resolve #511, complete O02/O03 or grant new capability credit. It does
+not change SCOPE, Roadmap, Capability Map/DAG or Open Decisions. Acceptance must be
+recorded explicitly and followed by a separately authorized implementation issue
+and governance reconciliation where the active scope requires one. Production
+execution follows a reviewed, pinned implementation and a reviewed date plan.
+
+### A2.7 Required implementation and operational proof
+
+1. **Plan/refusal slice.** Versioned defect, plan and provenance contracts; read-only
+   inventory and boundary closure. Tests reject healthy historical/SQLite days,
+   slices, open UTC days, checkpoint targets, unapproved neighbors and stale plans.
+2. **Candidate slice.** Immutable archive mapping/materialization and genuine
+   final-identity certification evidence; prove full-field equality, malformed
+   source refusal, hash/coverage binding and concurrent-attempt isolation. The
+   2026-10-20 pilot must contain exactly 1,568,861 archive records, all in-day.
+3. **Cutover slice.** Disposable PostgreSQL probes for S13-equivalent verification,
+   A16/S14 refusal, failure after first candidate admission, process/connection
+   loss before and after commit, stale predecessor evidence and exact retry.
+   Every failed component leaves predecessor rows, bytes and readability intact.
+   Real concurrent reader/writer interleavings prove coherent reads, loser
+   non-mutation and lock ordering against ordinary S13/S14/A16. A two-day
+   midnight-crossing fixture proves no adjacent-day record or coverage loss.
+4. **Read-back/operator slice.** Strict DataGateway reads compare the full archive
+   records, count, ordering and duplicate keys over each replaced day; verify
+   unchanged non-target coverage, old admission bytes and live checkpoint. Repeat
+   recovery from a lost successful response. Provide resource/time bounds and an
+   inspect/prepare/execute/resume runbook. No automatic rollback or deletion.
+
+The runtime proof is required after implementation; this design-only proposal
+does not claim any of those probes passed. Only after the isolated pilot and
+boundary-safe production plan succeed can the operator reconstruct further
+explicitly approved closed days. The 31-date inventory is not that execution plan.
