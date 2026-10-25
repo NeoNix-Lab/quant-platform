@@ -366,6 +366,11 @@ class LiveSessionEngine:
             except queue.Empty:
                 return drained
 
+    def _keep_trades(self, batches: list[LiveTradeBatch]) -> list[LiveTradeBatch]:
+        kept = [batch for batch in batches if batch.records]
+        self._messages += len(batches) - len(kept)
+        return kept
+
     def _reconcile(
         self, reader: _Reader, buffer: "queue.Queue[LiveTradeBatch]", assembler: SliceAssembler,
         stop_requested: Callable[[], bool],
@@ -384,11 +389,14 @@ class LiveSessionEngine:
             assembler.start_window(None)
             self._chain_end = None
             return staged
-        while not any(batch.records for batch in staged):  # a frame with no trade is not a trade (an empty snapshot is admitted)
+        # a frame with no trade is not a trade (an empty snapshot is admitted): it is counted and dropped, never held, so the
+        # wait for the first trade cannot grow past the bounded buffer
+        staged = self._keep_trades(staged)
+        while not staged:
             if stop_requested() or reader.finished.is_set():
                 return None
             try:
-                staged.append(buffer.get(timeout=self._config.tick))
+                staged += self._keep_trades([buffer.get(timeout=self._config.tick)])
             except queue.Empty:
                 continue
         recent = tuple(ports.fetch_recent(self._config.recent_limit))

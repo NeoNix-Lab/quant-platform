@@ -7,6 +7,7 @@ real publication path is ``tests/integration_live_session_postgres.py``.
 
 from __future__ import annotations
 
+import gc
 import json
 from pathlib import Path
 import queue
@@ -27,7 +28,7 @@ from quant_platform.application.live_session import (  # noqa: E402
     LiveSessionPorts,
 )
 from quant_platform.data.models import Instant, TradeRecord  # noqa: E402
-from quant_platform.source_adapters.bybit_live import SessionState  # noqa: E402
+from quant_platform.source_adapters.bybit_live import LiveTradeBatch, SessionState  # noqa: E402
 
 MS = 1_000_000
 INSTRUMENT = "ETHUSDT"
@@ -616,6 +617,22 @@ class ContinuityProofTests(unittest.TestCase):
             provider.push(trade_message(T0 + 5, "w1", "w2"))
             h.until(lambda: h.reconciled, "the reconciliation after the first real trade")
         self.assertEqual(["w1", "w2"], [r.trade_id for r in h.reconciled[0][1]])
+
+    def test_frames_with_no_trade_are_not_held_while_the_session_waits_for_the_first_trade(self) -> None:
+        provider = FakeProvider()
+        empty = {"topic": f"publicTrade.{INSTRUMENT}", "type": "snapshot", "ts": T0, "data": []}
+        with Harness(provider, checkpoint=True, reconcile=lambda r, b: pass_restart(T0 + 2, [record(T0 + 1, "x")])) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            for _ in range(300):
+                provider.push(empty)
+                time.sleep(0.001)
+            h.until(lambda: h.engine._messages >= 300, "the empty frames to be taken")
+            gc.collect()
+            held = sum(1 for o in gc.get_objects() if isinstance(o, LiveTradeBatch) and not o.records)
+            self.assertLess(held, 20)  # not one per frame: the wait must not grow past the bounded buffer
+            self.assertNotIn("reconcile", provider.log)
+            provider.push(trade_message(T0 + 5, "w1"))
+            h.until(lambda: h.reconciled, "the reconciliation after the first real trade")
 
     def test_a_session_that_ends_before_any_trade_reconciles_nothing_and_is_an_interruption(self) -> None:
         provider = FakeProvider()
