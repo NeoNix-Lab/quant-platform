@@ -147,6 +147,22 @@ dt=<UTC day of the window start>/seg=<HHMMSS.mmm of the window start>/part-001.p
   `SLICE_ORDERING_VIOLATION`, publishes nothing, and the next start reconciles from the checkpoint.
 - Partitions published before ADR-0075 (`dt=<day>`, many superseded revisions) are left as they are; there is no repair.
 
+### Continuous session (ADR-0075 slice 9.2, `O02`): in the code, not enabled
+
+`LiveIngestServerConfigV1.continuous_session` (a `LiveSessionConfig`) makes the server run ONE WebSocket session instead of the bounded
+cycles: the connection is not closed between publications, a bounded buffer (default 20 000 messages) decouples the reader from
+the publisher, and slices close after `slice_seconds` (300) or `slice_max_trades` (50 000). The default is `None`: the cycle loop above
+is unchanged, and the unit templates, the CLI flags, this runbook's operating steps and the one-hour real-provider run belong to `O03`.
+What an operator will see when it is enabled:
+
+- A disconnect, a missing pong, a full buffer or a trade below the open window **ends the session**; what was received is published,
+  the interruption is signalled (`HEALTH_SNAPSHOT`, `DEGRADED`, `phase=interruption`, with the reason and the counters), the session
+  reconnects with a bounded backoff, subscribes first, fetches the recent trades and reconciles from the last durable key.
+- Continuity proven: the reconciled trades are published as slices and the chain stays exact. Anchor outside the recent window: an
+  explicit gap (ADR-0044), recorded, `DEGRADED`; a new window starts at the first trade after it and nothing is claimed across the gap.
+- Every published slice signals the buffer high-water mark and capacity, the slice lag in milliseconds, the number of reconnects and
+  of ordering violations. A publication, catalog or checkpoint failure stops the loop (`FAILURE`), as in the cycle loop.
+
 ## Rollback
 
 This runbook does not automate rollback. If the service fails:
