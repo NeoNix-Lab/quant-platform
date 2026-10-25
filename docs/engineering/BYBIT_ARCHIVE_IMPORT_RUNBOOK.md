@@ -72,3 +72,102 @@ python tools/check_trades_catalog.py
 
 When the instrument shows the expected `valid` partitions, deleting `/srv/marketdata/replaced-ETHUSDT` is the maintainer's decision
 and step.
+
+## 6. Rebuild damaged legacy live days (DG-R, ADR-0074 Amendment 2)
+
+Operator-run, one explicitly named set of days at a time, from a plan that was reviewed. The days come from you, never from the tool:
+the 31 candidate dates of the amendment are an inventory, not a plan. Start with `2026-10-20`; further days only from a new plan.
+
+**What it does, per day, in this order:** (1) *retire* the damaged live revision of `dt=<day>` with a superseding quality
+reassessment (`fail`, reason `legacy_publication_incomplete_day`, naming the archive file), which the existing lifecycle maps to
+`invalid`: nothing is deleted, its bytes, manifests, reports and admissions stay, and every read policy excludes it; (2) *import* the
+whole archive day as revision 1 of `dt=<day>/seg=000000.000` through the ordinary S13/S14 path; (3) *verify* it against the archive
+file field by field and by a strict `DataGateway` read (count, order, duplicates). The rebuilt rows carry the archive's null
+`receive_ts` and `sequence`: the provider `sequence` of the rows the damaged revision served is lost in the served data (declared and
+accepted; the old bytes are kept).
+
+**Between the retire and the import the day is served by nothing** (a strict read refuses, `allow-partial` reports the gap). There is
+no atomic switch by design. The tool does one day at a time and holds no lock between days or while it reads and verifies.
+
+### 6.1 Before you start
+
+- The days are closed in UTC: the end of the day is at least 24 hours before the execution.
+- The archive file of each day **and of every neighbouring day whose trades the damaged revision holds** (a day can hold rows of the
+  day before or after it) is in one directory, fetched with `tools/fetch_bybit_trade_archive.py` (section 1).
+- The live-ingest checkpoint path of the instrument, so the tool can refuse a day the checkpoint is bound to.
+- The producing commit: the checkout is clean and its `HEAD` is what you want written in the manifests (or pass `--code-ref`).
+- `CATALOG_DSN` (or the variable named by `--dsn-env`) holds the PostgreSQL DSN; it is never passed on the command line.
+
+### 6.2 Plan (read-only)
+
+```bash
+python tools/rebuild_bybit_legacy_days.py --storage-root-id hot plan --days 2026-10-20 \
+  --archive-dir /srv/marketdata/staging/BTCUSDT --checkpoint-path /srv/marketdata/canonical/_k10_checkpoints/live-ingest-server-v1.json \
+  --out plan-2026-10-20.json
+```
+
+It prints the **digest** and the action per day (`retire+import`, `import`, `verify` or `refused` with the reasons) and writes the plan
+file, which it never overwrites. Read the plan file before you go on: for each day the incumbent revision (partition UUID, key,
+revision, state, hashes, coverage), the archive file (URL, SHA-256, size, observation time, rows), the key to create, and the
+conservation summary (how many records the damaged revision holds and the days they belong to).
+
+A day is **refused**, and nothing is changed for it, when: it is not closed in UTC; it has a live slice (`dt=<day>/seg=...`), a
+checkpoint bound to one of its partitions or an open gap record that names it; its live revision is not `valid` (or `invalid`
+retired by this operation for the same archive file); the incumbent's Parquet or durable manifests are missing, do not load, or are not
+the ones the catalog and its quality reports certified (the manifests are looked for beside the Parquet and, for a day published by the
+live publisher before the slices, in the root of the dataset as `partition-manifest-<HHMMSS>.json` and
+`coverage-manifest-<HHMMSS>.json`, the time without the date: a root file that a later day overwrote in the same second is not this
+revision's and the day is refused); the archive file is missing or fails the strict parsing; or **conservation
+fails**: every record of the damaged revision, by `(exchange_ts, trade_id)`, must exist in the archive file of its own UTC day with
+the same venue, instrument, exchange time (millisecond), side, price and size. The records that belong to **another** day must stay
+served: a `valid` partition of that day must hold those very records (a later, partial batch of the day that does not is not enough),
+or that day must be in the same plan and not refused, so that it is rebuilt from its own archive file; a day of the plan that is refused
+contributes nothing, and what depended on it is refused in turn. The hash of every archive file read for this is in the plan. A trade id that the damaged revision holds twice with different content refuses the day too. Any
+difference refuses the day; there is no partial acceptance.
+
+### 6.3 Execute
+
+```bash
+python tools/rebuild_bybit_legacy_days.py --storage-root-id hot execute --plan plan-2026-10-20.json --digest <DIGEST> \
+  --archive-dir /srv/marketdata/staging/BTCUSDT --checkpoint-path /srv/marketdata/canonical/_k10_checkpoints/live-ingest-server-v1.json
+```
+
+The tool recomputes the plan from the catalog, the files and the clock and refuses (`STALE`, nothing done) if the digest differs: a
+changed incumbent, archive file or catalog, or a day that closed in between. It never acquires another target and never widens the
+set of days. It stops at the first day that fails; the later days are not attempted. The import and the verification are bound to the
+archive file the plan approved: they check its SHA-256 on the bytes they parse, so a file replaced after the plan is refused (`SOURCE`)
+and a file replaced after the import fails the verification, whatever is in the directory then. If a run stops after a day that depended
+on a later day of the plan, the later day is retired or untouched: run `verify`, then plan again or `restore` as below.
+
+**Crashes and retries.** After a crash between the retire and the import the day is retired and not imported: run the same command
+again and it imports. After a crash between the import and the verification, run it again: it finds the valid key it would create and
+verifies. A crash while the import was writing files leaves them unpublished; the rerun is refused `TARGET` or `CATALOG` until you
+decide what to do with them (nothing is deleted by the tool).
+
+### 6.4 Verify, and the way back
+
+```bash
+python tools/rebuild_bybit_legacy_days.py --storage-root-id hot verify --days 2026-10-20 --archive-dir /srv/marketdata/staging/BTCUSDT
+```
+
+Read-only and repeatable; pass `--plan plan-2026-10-20.json` to check each day against the archive file the plan approved (the report
+always names the SHA-256 of the file it compared). It passes only if the imported Parquet is identical to the archive file and a strict gateway read returns
+exactly the archive's records, in `(exchange_ts, trade_id)` order, once each. A strict read can also be refused when a neighbouring
+legacy day's coverage crosses midnight and overlaps the rebuilt day: that neighbour is retired and rebuilt by its own plan.
+
+**Restore** is explicit, never automatic, and only for a day that was retired and **not** rebuilt (the import failed and you prefer
+the damaged day to no day):
+
+```bash
+python tools/rebuild_bybit_legacy_days.py --storage-root-id hot restore --day 2026-10-20
+```
+
+It adds a superseding `pass` that returns the revision to `valid`; it is refused while the day has any partition under `dt=<day>/`
+(two valid partitions over one day) and while an import holds the day's lock (`.import-dt=<day>.lock`, the one the import takes from its
+check to its publication; it never waits, so run it again when the import is over). The ordinary importer still refuses an occupied day, a retired one included: the rebuild is a
+separate operation and never a `--force`.
+
+### 6.5 What this does not do
+
+It does not run itself, choose days, delete or clean retired or superseded revisions (the retention decision is the maintainer's), touch
+live slices, checkpoints, gap evidence or healthy days, repair live gaps, or run on the server for you.

@@ -113,6 +113,7 @@ OWNERS = {
     "quant_platform.application.admitted_input_definitions": "application",
     "quant_platform.application.instrument_catalog_check": "application",
     "quant_platform.application.bybit_archive_import": "application",
+    "quant_platform.application.bybit_legacy_day_rebuild": "application",
     "quant_platform.application.deck_result_bundle": "application",
     "quant_platform.application.admitted_input_transport": "application",
     "quant_platform.application.feature_provider_identity": "application",
