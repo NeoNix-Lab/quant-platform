@@ -128,6 +128,7 @@ OWNERS = {
     "quant_platform.application.live_gap_orchestration": "application",
     "quant_platform.application.live_ingest_server": "application",
     "quant_platform.application.live_session": "application",
+    "quant_platform.application.live_window_evidence": "application",
     "quant_platform.application.market_data": "application",
     "quant_platform.application.bybit_l2_day_evidence": "application",
     "quant_platform.application.bybit_l2_day_ingest": "application",

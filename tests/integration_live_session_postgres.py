@@ -16,7 +16,11 @@ session.
 
 from __future__ import annotations
 
+import contextlib
 from datetime import timedelta
+import gzip
+import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -29,10 +33,17 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "tools"))
 import psycopg  # noqa: E402
 import quant_platform.application.bybit_live as app  # noqa: E402
-from integration_live_slices_postgres import gateway_read, key_of, partitions, rows  # noqa: E402
-from quant_platform.application.live_gap_orchestration import load_open_long_gap_records  # noqa: E402
+import live_window_evidence as evidence_tool  # noqa: E402
+from integration_live_slices_postgres import ARCHIVE_HEADER, gateway_read, key_of, partitions, rows  # noqa: E402
+from quant_platform.application.live_gap_orchestration import (  # noqa: E402
+    LongGapInterval,
+    TradeKeyBoundary,
+    load_open_long_gap_records,
+    record_explicit_long_gap,
+)
 from quant_platform.application.live_ingest_server import (  # noqa: E402
     SERVER_FAILED,
     SERVER_STOPPED,
@@ -384,6 +395,92 @@ def main() -> int:
                 time.sleep(0.4)
                 behind.finish()
             found = check_catalog(connection, delivered)  # the three unlistened trades are not in it: nothing was claimed for them
+
+            # 7. The evidence tool (O03) over this real catalog: the archive is every trade the world made, listened to or not. A
+            #    strict read of each exact chain returns what was claimed; every archive trade that is not read back lies in a hole
+            #    the run itself left (an explicit gap), none inside a claimed window; the tool passes and states the shortfall. An
+            #    archive trade inside a claimed window that was never published is an undeclared loss: the tool fails.
+            archive_dir = Path(holder) / "archive"
+            archive_dir.mkdir()
+
+            def write_archive(extra: tuple = ()) -> Path:
+                lines = [ARCHIVE_HEADER]
+                for r in world.trades:
+                    ms = r.exchange_ts.epoch_ns // MS
+                    lines.append(f"{ms // 1000}.{ms % 1000:03d},{INSTRUMENT},{'Buy' if r.aggressor_side == 'buy' else 'Sell'},"
+                                 f"{r.size},{r.price},PlusTick,{r.trade_id},1,2,1")
+                lines.extend(extra)
+                path = archive_dir / f"{INSTRUMENT}2026-10-21.csv.gz"
+                path.write_bytes(gzip.compress((chr(10).join(lines) + chr(10)).encode("utf-8")))
+                return path
+
+            def run_tool(*extra: str, root: Path = storage, archive: Path | None = None) -> tuple[int, dict]:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code = evidence_tool.main(["--instrument", INSTRUMENT, "--dsn", dsn, "--storage-root", str(root), "--archive",
+                                               str(archive or write_archive()), *extra])
+                return code, json.loads(out.getvalue())
+
+            code, report = run_tool()
+            assert code == 0 and report["passed"], report["stop_conditions"]
+            assert report["missing_inside_claimed_windows"] == 0 and report["read_not_in_archive"] == 0 and not report["conflicts"]
+            assert report["read_through_gateway"] == len(delivered) == report["captured_of_archive"], report
+            assert report["slices"]["chain_segments"] >= 3 and len(report["holes"]) == report["slices"]["chain_segments"] - 1
+            assert report["missing_inside_declared_gaps"] > 0 and report["captured_ratio"] < 1.0, "the shortfall is stated"
+            assert report["missing_inside_undeclared_holes"] == 0 and all(h["declared_by"] for h in report["holes"]), report["holes"]
+            assert sum(h["archive_trades_inside"] for h in report["holes"]) == report["missing_inside_declared_gaps"]
+
+            # the same slices and the same archive, but a root where no gap was recorded: the holes are not declared by anything,
+            # and the missing trades are an undeclared loss (the absence of a partition is not a declaration of its cause)
+            empty_root = Path(holder) / "empty-root"
+            empty_root.mkdir()
+            code, blind = run_tool(root=empty_root)
+            assert code == 1 and not blind["passed"] and blind["missing_inside_undeclared_holes"] > 0, blind["stop_conditions"]
+
+            # a recorded gap declares ITS span and no more: a short gap (written by the real record_explicit_long_gap) that ends after
+            # the first missing trade of the first hole excuses that trade only; the later ones are an undeclared loss. A later
+            # manifest of the same anchor that extends the gap over the whole hole (supersedes the first) excuses them all.
+            hole = report["holes"][0]
+            hole_start, hole_end = Instant.parse(hole["start"]), Instant.parse(hole["end"])
+            lost = sorted((r.exchange_ts.epoch_ns, r.trade_id) for r in world.trades
+                          if hole_start.epoch_ns <= r.exchange_ts.epoch_ns < hole_end.epoch_ns and r.trade_id not in delivered)
+            assert len(lost) >= 3, lost
+            short_root = Path(holder) / "short-gap-root"
+            short_root.mkdir()
+            anchor = TradeKeyBoundary(venue="bybit", instrument=INSTRUMENT, exchange_ts=Instant(hole_start.epoch_ns - MS), trade_id="anchor")
+
+            def record(detected_at: Instant) -> None:
+                record_explicit_long_gap(
+                    storage_root=short_root, interval=LongGapInterval(
+                        start_key=anchor, detected_at=detected_at, reason="short", recent_window_records=None, buffered_ws_records=None),
+                    producer="evidence-probe", code_ref="integration", detected_at=detected_at, instrument=INSTRUMENT)
+
+            record(Instant(lost[0][0] + MS))
+            code, short = run_tool(root=short_root)
+            first = short["holes"][0]
+            assert code == 1 and not short["passed"], short["stop_conditions"]
+            assert (first["declared_trades"], first["undeclared_trades"]) == (1, len(lost) - 1), first
+            record(hole_end)
+            code, extended = run_tool(root=short_root)
+            first = extended["holes"][0]
+            assert (first["declared_trades"], first["undeclared_trades"]) == (len(lost), 0), first
+            assert report["slices"]["not_valid_in_catalog"] == 0 and report["slices"]["revisions_above_one"] == 0
+
+            # the requested window is kept: an hour around slices that span a fraction of a second is reported as such
+            first_iso, last_iso = Instant.parse(found[0][3]), Instant.parse(found[-1][4])
+            code, hour = run_tool("--start", Instant(first_iso.epoch_ns - 1800 * 10**9).isoformat(),
+                                  "--end", Instant(last_iso.epoch_ns + 1800 * 10**9).isoformat())
+            assert hour["window"]["requested"] and hour["window"]["seconds"] > 3600 and hour["claimed_share"] < 0.01, hour["window"]
+            assert hour["archive_trades_in_window"] == report["archive_trades_in_window"]
+
+            first_start = Instant.parse(found[0][3]).epoch_ns // MS
+            ghost = f"{(first_start + 1) // 1000}.{(first_start + 1) % 1000:03d},{INSTRUMENT},Buy,1,100.99,PlusTick,ghost-1,1,2,1"
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = evidence_tool.main(["--instrument", INSTRUMENT, "--dsn", dsn, "--storage-root", str(storage), "--archive",
+                                           str(write_archive((ghost,)))])
+            ghost_report = json.loads(out.getvalue())
+            assert code == 1 and not ghost_report["passed"] and ghost_report["examples_missing_inside_claimed_windows"] == ["ghost-1"], ghost_report
 
         assert [r[0] for r in rows(connection, "SELECT instrument FROM catalog.datasets ORDER BY 1")] == [INSTRUMENT]
     print("POSTGRESQL LIVE SESSION GATE PASSED")

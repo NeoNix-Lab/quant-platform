@@ -147,21 +147,95 @@ dt=<UTC day of the window start>/seg=<HHMMSS.mmm of the window start>/part-001.p
   `SLICE_ORDERING_VIOLATION`, publishes nothing, and the next start reconciles from the checkpoint.
 - Partitions published before ADR-0075 (`dt=<day>`, many superseded revisions) are left as they are; there is no repair.
 
-### Continuous session (ADR-0075 slice 9.2, `O02`): in the code, not enabled
+### Continuous session (ADR-0075 slices 9.2 and 9.3, `O02` and `O03`): opt-in per unit
 
-`LiveIngestServerConfigV1.continuous_session` (a `LiveSessionConfig`) makes the server run ONE WebSocket session instead of the bounded
-cycles: the connection is not closed between publications, a bounded buffer (default 20 000 messages) decouples the reader from
-the publisher, and slices close after `slice_seconds` (300) or `slice_max_trades` (50 000). The default is `None`: the cycle loop above
-is unchanged, and the unit templates, the CLI flags, this runbook's operating steps and the one-hour real-provider run belong to `O03`.
-What an operator will see when it is enabled:
+`--mode continuous` (environment variable `QP_LIVE_INGEST_MODE`) makes the server run ONE WebSocket session instead of the bounded
+cycles: the connection is not closed between publications, a bounded buffer decouples the reader from the publisher, and slices
+close after `slice_seconds` of wall clock or `slice_max_trades` trades. The default is `cycles`, the loop described above, and
+nothing changes for a unit whose environment file does not set the mode (an empty or unset value is `cycles`, and an environment
+file that predates these variables still starts the unit). Enabling it is an operator step: edit the environment file of the
+instance and restart the unit; the repository enables nothing, and deployment of a changed server stays manual.
 
+| Variable | Flag | Default | Meaning |
+|---|---|---|---|
+| `QP_LIVE_INGEST_MODE` | `--mode` | `cycles` | `cycles` or `continuous` |
+| `QP_LIVE_INGEST_SLICE_SECONDS` | `--slice-seconds` | 300 | continuous only: wall-clock seconds after which an open slice closes |
+| `QP_LIVE_INGEST_SLICE_MAX_TRADES` | `--slice-max-trades` | 50000 | continuous only: trades after which an open slice closes |
+| `QP_LIVE_INGEST_BUFFER_MESSAGES` | `--buffer-messages` | 20000 | continuous only: bound of the reader's buffer; a full buffer ends the session |
+
+The three bounds are valid only with `continuous`: with `cycles` the server refuses to start (exit status 2) rather than ignore
+them, so leave them empty (an empty value is the default). A non-positive or non-integer value is refused before any connection.
+`--recent-limit` also applies to the reconciliation after an interruption. The ping interval, pong timeout and reconnect backoff are
+not configuration. `--max-cycles`, when used for a bounded proof, counts health snapshots: one per published slice in this mode.
+
+Example, an instance switched to the continuous session with the defaults (`/etc/quant-platform/live-ingest-server-ETHUSDT.env`):
+
+```text
+QP_LIVE_INGEST_MODE=continuous
+QP_LIVE_INGEST_SLICE_SECONDS=
+QP_LIVE_INGEST_SLICE_MAX_TRADES=
+QP_LIVE_INGEST_BUFFER_MESSAGES=
+```
+
+What an operator sees:
+
+- Startup prints `mode=continuous` and the three bounds in force.
 - A disconnect, a missing pong, a full buffer or a trade below the open window **ends the session**; what was received is published,
   the interruption is signalled (`HEALTH_SNAPSHOT`, `DEGRADED`, `phase=interruption`, with the reason and the counters), the session
-  reconnects with a bounded backoff, subscribes first, fetches the recent trades and reconciles from the last durable key.
-- Continuity proven: the reconciled trades are published as slices and the chain stays exact. Anchor outside the recent window: an
-  explicit gap (ADR-0044), recorded, `DEGRADED`; a new window starts at the first trade after it and nothing is claimed across the gap.
-- Every published slice signals the buffer high-water mark and capacity, the slice lag in milliseconds, the number of reconnects and
-  of ordering violations. A publication, catalog or checkpoint failure stops the loop (`FAILURE`), as in the cycle loop.
+  reconnects with a bounded backoff, subscribes first and waits for the first trade of the new subscription. It then fetches the
+  recent trades and reconciles from the last durable key; a subscription with no trade yet reconciles nothing and claims nothing.
+- Continuity proven (a trade of the subscription is in the recent-trades window): the reconciled trades are published as slices and
+  the chain stays exact. Anchor outside the window, or a window that does not meet the subscription: an explicit gap (ADR-0044),
+  recorded, `DEGRADED`; a new window starts at the first trade after it and nothing is claimed across the gap.
+- Every published slice signals `phase=slice` with `buffer_high_water` and `buffer_capacity`, `slice_lag_ms`, `reconnects` and
+  `ordering_violations`. A UTC midnight with no trade is reported as an unclaimed span. A publication, catalog or checkpoint failure
+  stops the loop (`FAILURE`), as in the cycle loop.
+- A `DataGateway` read under `strict` coverage across an interruption's gap is refused; under `allow-partial` it returns everything
+  published.
+
+**Rollback to the cycles:** set `QP_LIVE_INGEST_MODE=cycles` (and the bounds empty), restart the unit. The checkpoint and the
+published partitions are the same in both modes: the first cycle reconciles from the durable checkpoint.
+
+### One-hour real-provider proof (`O03`; the `T02` proof for `ETHUSDT`)
+
+Operator-executed; the repository starts nothing. It measures what ADR-0075 leaves as an assumption: the captured share against
+the provider's archive, the ordering of the provider's `exchange_ts`, the slice sizes and the health signals. Use a **disposable
+catalog and storage root** (or an `ETHUSDT`-only root the maintainer chooses): the proof never touches the `BTCUSDT` dataset or its
+unit, and it enables nothing in production (the ADR-0074 section 6 capacity gate stands).
+
+```bash
+# 1. Run the continuous session for at least one hour, with the signals captured. Stop it cleanly with SIGTERM/SIGINT.
+python tools/live_ingest_server.py --instrument ETHUSDT --mode continuous \
+  --storage-root <ROOT> --storage-root-id <ID> --checkpoint-path <ROOT>/canonical/_k10_checkpoints/live-ingest-server-v1-ETHUSDT.json \
+  --code-ref "$(git rev-parse HEAD)" 2>&1 | tee live-ethusdt-run.log
+
+# 2. After the UTC day (or days) of the run has ended, fetch the archive of each day it touched (tools/fetch_bybit_trade_archive.py).
+# 3. Produce the evidence (read-only; exit 0 = no stop condition, 1 = a stop condition, 2 = usage):
+python tools/live_window_evidence.py --instrument ETHUSDT --storage-root <ROOT> \
+  --archive ETHUSDT<YYYY-MM-DD>.csv.gz [more days] \
+  --signals-log live-ethusdt-run.log --code-ref <SHA> --mode continuous > ethusdt-evidence.json
+```
+
+The report states, for the window compared: the archive trades in it, the trades a `strict` gateway read returns (chunks of at
+most twelve slices, ending on slice boundaries), the captured ratio, the holes between exact chains with the archive trades each
+contains and **what declares it**, the slices (count, rows and seconds: minimum, median, maximum) and the counters of the session.
+Without `--start`/`--end` the window is the extent of the valid live slices; with them it is exactly the window asked for (a slice
+that crosses a bound is refused, not clipped, and the archive of every day the whole window touches is required), so the archive
+trades before the first slice and after the last count against the proof.
+
+A missing trade in a hole is excused only by a **span the run recorded** that contains it: the `known_gap` assertion of an explicit
+gap record under `--storage-root` (ADR-0044; its last durable key must lie in the segment before the hole) or an `unclaimed_span`
+signal in the captured log. Each missing trade is classified against those spans, not against the hole around it: a gap that ends
+before a later loss does not excuse that loss, and the end of a span is exclusive. The absence of a partition is not a declaration
+of its cause.
+
+**Stop conditions** (exit 1; do not read the proof as passed and report): an archive trade inside a claimed window that is not read
+back (an undeclared loss); an archive trade in a hole outside every recorded gap span and signalled span (an undeclared loss); an archive
+trade of the requested window before the first or after the last claimed window; a strict read of a claimed window refused; a trade
+read twice or out of the canonical `(exchange_ts, trade_id)` order; a trade whose payload differs from the archive; valid slices that
+overlap; a gap manifest that cannot be read. A shortfall against the archive inside a **recorded span** is reported, not hidden, and
+is not a stop condition; an ordering violation is a measurement (it is an interruption by design), to be explained in the evidence.
+Record the report, the log and the commit in the pull request of `O03`.
 
 ## Rollback
 
