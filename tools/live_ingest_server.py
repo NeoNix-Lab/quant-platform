@@ -8,6 +8,9 @@ never contains acquisition/publication/checkpoint logic itself. It runs the
 same bounded restart/reconcile composition PR #122 proved as two separate
 OS-process invocations, now as one continuous process.
 
+``--mode continuous`` (ADR-0075, DG-O) runs ONE WebSocket session instead of the bounded cycles; the default, ``cycles``, is the
+existing behaviour. The flags only build the typed configuration; the session itself is ``application.live_session``.
+
 SIGTERM/SIGINT flip a stop flag checked between cycles -- never a hard kill
 of an in-flight publish -- so a stop always lands on ADR-0042 S3's ordinary
 "crash after checkpoint advance" case, not a new invariant.
@@ -35,6 +38,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from quant_platform.application.live_ingest_server import (  # noqa: E402
     BYBIT_LINEAR_TRADE_INSTRUMENTS_V1,
     LiveIngestServerConfigV1,
+    LiveSessionConfig,
     PressurePolicyDefinition,
     SERVER_FAILED,
     SERVER_GAP_DETECTED_AWAITING_REMEDIATION,
@@ -63,6 +67,42 @@ def _identity_evidence() -> dict[str, object]:
     }
 
 
+MODE_CYCLES = "cycles"
+MODE_CONTINUOUS = "continuous"
+# The three bounds of the continuous session (ADR-0075 section 2). An empty value means "not given": a systemd unit renders an
+# unset ``${QP_LIVE_INGEST_...}`` as an empty string, so an environment file that predates the option still yields a valid command.
+_SESSION_BOUNDS = (
+    ("--slice-seconds", "slice_seconds"),
+    ("--slice-max-trades", "slice_max_trades"),
+    ("--buffer-messages", "buffer_messages"),
+)
+
+
+def _session_config(parser: argparse.ArgumentParser, args: argparse.Namespace) -> LiveSessionConfig | None:
+    """The continuous-session configuration the flags ask for; ``None`` for the bounded cycles (the existing behaviour)."""
+
+    mode = args.mode or MODE_CYCLES
+    if mode not in (MODE_CYCLES, MODE_CONTINUOUS):
+        parser.error(f"--mode must be {MODE_CYCLES} or {MODE_CONTINUOUS}, not {mode!r}")
+    given: dict[str, int] = {}
+    for flag, name in _SESSION_BOUNDS:
+        raw = getattr(args, name)
+        if raw is None or raw == "":
+            continue
+        try:
+            given[name] = int(raw)
+        except ValueError:
+            parser.error(f"{flag} must be a positive integer, not {raw!r}")
+    if mode == MODE_CYCLES:
+        if given:
+            parser.error(f"{', '.join(flag for flag, name in _SESSION_BOUNDS if name in given)} can only be used with --mode {MODE_CONTINUOUS}")
+        return None
+    try:
+        return LiveSessionConfig(recent_limit=args.recent_limit, **given)
+    except ValueError as error:
+        parser.error(str(error))
+
+
 def _print_signal(signal_evidence) -> None:
     payload = ",".join(f"{k}={v}" for k, v in sorted(signal_evidence.payload.items()))
     print(
@@ -88,7 +128,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cycle-interval-seconds", type=float, default=5.0,
                          help="Pause between completed cycles so a fast/empty cycle cannot spin (ADR-0043 S4)")
     parser.add_argument("--max-cycles", type=int, default=None,
-                         help="Stop cleanly after this many completed health-snapshot cycles; intended for bounded proofs")
+                         help="Stop cleanly after this many completed health-snapshot cycles (in continuous mode, one per published slice); "
+                              "intended for bounded proofs")
+    parser.add_argument("--mode", default=MODE_CYCLES,
+                        help="cycles (default): the bounded cycle loop of ADR-0043; continuous: one WebSocket session that is not "
+                             "closed between publications (ADR-0075). An empty value means cycles.")
+    parser.add_argument("--slice-seconds", default=None,
+                        help="continuous only: wall-clock seconds after which an open slice is closed (default 300)")
+    parser.add_argument("--slice-max-trades", default=None,
+                        help="continuous only: trades after which an open slice is closed (default 50000)")
+    parser.add_argument("--buffer-messages", default=None,
+                        help="continuous only: bound of the reader's message buffer; a full buffer ends the session (default 20000)")
     parser.add_argument("--pressure-available-bytes", type=int, default=50 * 1024**3,
                          help="K05 PRESSURE threshold on available bytes (deployment-local; default 50 GiB)")
     parser.add_argument("--pressure-critical-available-bytes", type=int, default=20 * 1024**3,
@@ -100,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.max_cycles is not None and args.max_cycles < 1:
         parser.error("--max-cycles must be >= 1")
+    session = _session_config(parser, args)
 
     print("=== effective runtime identity ===")
     for key, value in _identity_evidence().items():
@@ -124,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
         recent_limit=args.recent_limit,
         cycle_interval_seconds=args.cycle_interval_seconds,
         instrument=args.instrument,
+        continuous_session=session,
     )
 
     stop_state = {"stop": False}
@@ -148,6 +200,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print("=== live-ingest server v1 ===")
     print(f"instrument={args.instrument}")
+    print(f"mode={MODE_CYCLES if session is None else MODE_CONTINUOUS}")
+    if session is not None:
+        print(f"slice_seconds={session.slice_seconds} slice_max_trades={session.slice_max_trades} "
+              f"buffer_messages={session.buffer_messages}")
     report = run_live_ingest_server(
         config,
         stop_requested=lambda: stop_state["stop"],

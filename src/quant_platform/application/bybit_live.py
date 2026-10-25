@@ -333,6 +333,8 @@ class RealServerPublishProofReport:
     slice_keys: tuple[str, ...] = ()
     ordering_violations: int = 0
     replayed_records: int = 0
+    # the end (exclusive) of the last window published, ISO text: where the next window of a continuous session starts
+    window_end: str | None = None
 
 
 def _connect_catalog(dsn: str | None):
@@ -481,6 +483,12 @@ class _PublishedSlice:
     eligibility_published: bool
 
 
+def published_floor(dsn: str | None, instrument: str = SUPPORTED_SYMBOL) -> Instant | None:
+    """The end of the latest valid partition of the instrument's dataset (see :func:`_published_floor`)."""
+
+    return _published_floor(dsn, bybit_live_dataset_identity(instrument))
+
+
 def _read_back_slice(connection: Any, identity: Any, window: LiveSlice) -> list[Any]:
     """Read one slice's window through the DataGateway (valid partitions only, strict coverage)."""
 
@@ -569,6 +577,18 @@ def _publish_slices(
         published.append(outcome)
         previous_end = planned.window_end
 
+    return _pass_report(acquisition, dataset_root, published, dataset_manifest_fields, len(plan.below_floor))
+
+
+def _pass_report(
+    acquisition: LiveProviderProofReport,
+    dataset_root: Path,
+    published: list[_PublishedSlice],
+    dataset_manifest_fields: dict[str, Any],
+    replayed_records: int,
+) -> RealServerPublishProofReport:
+    """The report of a publication that passed: ``durable_publication`` is the LAST slice's, the one a checkpoint binds."""
+
     last = published[-1]
     total_read = sum(item.read_count for item in published)
     return RealServerPublishProofReport(
@@ -591,9 +611,51 @@ def _publish_slices(
         coverage_assertion_id=last.coverage_assertion_id,
         slices=len(published),
         slice_keys=tuple(item.planned.partition_key for item in published),
-        replayed_records=len(plan.below_floor),
+        replayed_records=replayed_records,
+        window_end=last.planned.window_end.isoformat(),
         **dataset_manifest_fields,
     )
+
+
+def publish_live_slice(
+    *,
+    planned: LiveSlice,
+    chain_start: Instant | None,
+    live_session_evidence: BybitLiveSessionEvidence,
+    storage_root: str | Path,
+    storage_root_id: str,
+    dsn: str | None,
+    producer: str,
+    code_ref: str,
+    instrument: str = SUPPORTED_SYMBOL,
+) -> RealServerPublishProofReport:
+    """Publish ONE slice that a continuous session assembled (ADR-0075 section 2): the floor, the revision, S13, S14 and the
+    DataGateway read-back of ``O01``, with the session evidence of that window. A window that starts before what a reader can
+    already see is refused (``SLICE_ORDERING_VIOLATION``), nothing published."""
+
+    identity = bybit_live_dataset_identity(instrument)
+    acquisition = LiveProviderProofReport(
+        status="PASS", topic=bybit_live_topic(instrument), messages=live_session_evidence.validated_messages,
+        records=len(planned.records), duplicates_removed=0, final_state=live_session_evidence.final_state.value,
+        errors=(), accepted_records=planned.records, session_evidence=live_session_evidence,
+    )
+    floor = _published_floor(dsn, identity)
+    if floor is not None and planned.window_start < floor:
+        return RealServerPublishProofReport(status="SLICE_ORDERING_VIOLATION", acquisition=acquisition, ordering_violations=1)
+    dataset_root = Path(storage_root).joinpath(
+        identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id,
+    )
+    dataset_manifest_fields: dict[str, Any] = {}
+    outcome = _publish_one_slice(
+        planned=planned, revision=_next_slice_revision(dsn, identity, planned.partition_key),
+        identity=identity, dataset_root=dataset_root, dataset_manifest_path=dataset_root / "dataset-manifest.json",
+        dataset_manifest_fields=dataset_manifest_fields, floor=floor, chain_start=chain_start, reconciling=False,
+        live_session_evidence=live_session_evidence, reconcile_result=None, storage_root_id=storage_root_id, dsn=dsn,
+        producer=producer, code_ref=code_ref, acquisition=acquisition, replayed_records=0,
+    )
+    if isinstance(outcome, RealServerPublishProofReport):
+        return outcome
+    return _pass_report(acquisition, dataset_root, [outcome], dataset_manifest_fields, 0)
 
 
 def _publish_one_slice(
@@ -1107,6 +1169,14 @@ def _persist_checkpoint_from_publication(
     return store, checkpoint
 
 
+def persist_publication_checkpoint(
+    *, publication: RealServerPublishProofReport, checkpoint_path: str | Path, instrument: str = SUPPORTED_SYMBOL,
+) -> tuple[CheckpointStore, LiveCheckpointV1] | None:
+    """Advance the checkpoint after a durable publication (ADR-0042 section 2); ``None`` when the publication carries no progress."""
+
+    return _persist_checkpoint_from_publication(publication=publication, checkpoint_path=checkpoint_path, instrument=instrument)
+
+
 def run_real_server_restart_publish_phase(
     *,
     max_messages: int,
@@ -1172,8 +1242,14 @@ def run_real_server_restart_phase(
     recent_limit: int = 1000,
     durable_publication: DurablePublicationState | None = None,
     instrument: str = SUPPORTED_SYMBOL,
+    recent_records: tuple[TradeRecord, ...] | None = None,
+    buffered_ws_records: tuple[TradeRecord, ...] = (),
 ) -> RealServerRestartProofReport:
     """Load an existing checkpoint, reconcile, publish, then advance it.
+
+    ``recent_records`` and ``buffered_ws_records`` are for a continuous session (ADR-0075 section 5): it subscribed first, holds the
+    trades received since, and fetched the recent trades itself, so the overlap between the two is the continuity proof. Without
+    them the recent trades are fetched here and no WebSocket records are held, as for a restart.
 
     Standalone restart reads the current durable catalog binding for the
     checkpoint's partition family before fetching the provider's recent-trade
@@ -1204,11 +1280,12 @@ def run_real_server_restart_phase(
         partition_manifest_sha256=current_publication.partition_manifest_sha256,
     )
 
-    recent_records = fetch_recent_public_trades(limit=recent_limit, instrument=instrument)
+    if recent_records is None:
+        recent_records = fetch_recent_public_trades(limit=recent_limit, instrument=instrument)
     outcome = resume_live_ingest(
         checkpoint_store=store,
         recent_rest_records=recent_records,
-        buffered_ws_records=(),
+        buffered_ws_records=buffered_ws_records,
         durable_publication=current_publication,
     )
     status = "PASS" if outcome.status == "RESUMED" else outcome.status
@@ -1351,6 +1428,9 @@ __all__ = [
     "fetch_recent_public_trades",
     "load_current_durable_publication_state",
     "next_checkpoint",
+    "persist_publication_checkpoint",
+    "publish_live_slice",
+    "published_floor",
     "resume_live_ingest",
     "run_bounded_live_provider_proof",
     "run_bounded_live_provider_proof_sync",

@@ -34,6 +34,12 @@ import time
 from typing import Any
 
 from quant_platform.application import bybit_live
+from quant_platform.application.live_session import (
+    LiveSessionConfig,
+    LiveSessionEngine,
+    LiveSessionFailure,
+    LiveSessionPorts,
+)
 from quant_platform.application.live_gap_orchestration import (
     LongGapRecord,
     SESSION_CONTINUOUS,
@@ -87,6 +93,9 @@ class LiveIngestServerConfigV1:
     cycle_interval_seconds: float = 5.0
     # ADR-0074: one process, one instrument of the allow-list. The default keeps the existing BTCUSDT unit unchanged.
     instrument: str = SUPPORTED_SYMBOL
+    # ADR-0075 slice 9.2: when given, the server runs ONE continuous session (live_session) instead of the bounded cycles. The
+    # default (None) is the cycle loop, unchanged; the CLI, the unit templates and the default are O03.
+    continuous_session: LiveSessionConfig | None = None
 
     def __post_init__(self) -> None:
         bybit_live_dataset_identity(self.instrument)  # refuses anything outside BYBIT_LINEAR_TRADE_INSTRUMENTS_V1
@@ -267,6 +276,8 @@ def run_live_ingest_server(
             on_signal(signal)
 
     emit(_lifecycle_signal(subject, previous_state="STARTING", resulting_state="RUNNING"))
+    if config.continuous_session is not None:
+        return _run_continuous(config, subject, signals, emit, stop_requested, sleep)
 
     store = CheckpointStore(config.checkpoint_path)
     cycles = 0
@@ -452,6 +463,147 @@ def run_live_ingest_server(
     return LiveIngestServerReport(status=status, cycles=cycles, signals=tuple(signals))
 
 
+def _production_ports(config: LiveIngestServerConfigV1, sleep: Callable[[float], None]) -> LiveSessionPorts:
+    """The real seams of one instance: the provider, the recent trades, the publication path and the checkpoint."""
+
+    try:
+        import websockets  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise bybit_live.LiveProviderProofPending("LIVE_PROVIDER_PROOF_PENDING: optional dependency 'websockets' is not installed") from exc
+    store = CheckpointStore(config.checkpoint_path)
+    instrument = config.instrument
+
+    def last_durable_key():
+        checkpoint = store.load()
+        return None if checkpoint is None else (checkpoint.last_canonical_exchange_ts, checkpoint.last_canonical_trade_id)
+
+    def publish(sliced, chain_start, evidence):
+        return bybit_live.publish_live_slice(
+            planned=sliced, chain_start=chain_start, live_session_evidence=evidence, storage_root=config.storage_root,
+            storage_root_id=config.storage_root_id, dsn=config.dsn, producer=config.producer, code_ref=config.code_ref,
+            instrument=instrument,
+        )
+
+    def persist(report):
+        return bybit_live.persist_publication_checkpoint(
+            publication=report, checkpoint_path=config.checkpoint_path, instrument=instrument)
+
+    def reconcile(recent, buffered):
+        return bybit_live.run_real_server_restart_phase(
+            checkpoint_path=config.checkpoint_path, dsn=config.dsn, storage_root=config.storage_root,
+            storage_root_id=config.storage_root_id, producer=config.producer, code_ref=config.code_ref,
+            recent_limit=config.recent_limit, instrument=instrument, recent_records=tuple(recent),
+            buffered_ws_records=tuple(buffered),
+        )
+
+    def record_gap(report):
+        detected_at = _now()
+        return record_explicit_long_gap(
+            storage_root=config.storage_root, interval=long_gap_interval_from_restart_report(report, detected_at=detected_at),
+            producer=config.producer, code_ref=config.code_ref, detected_at=detected_at, instrument=instrument,
+        )
+
+    return LiveSessionPorts(
+        connect=websockets.connect,
+        fetch_recent=lambda limit: bybit_live.fetch_recent_public_trades(limit=limit, instrument=instrument),
+        publish_slice=publish, persist_checkpoint=persist, reconcile=reconcile,
+        checkpoint_exists=lambda: store.load() is not None,
+        published_floor=lambda: bybit_live.published_floor(config.dsn, instrument),
+        last_durable_key=last_durable_key, record_gap=record_gap,
+        connection_errors=(OSError, websockets.ConnectionClosed), sleep=sleep,
+    )
+
+
+def _run_continuous(
+    config: LiveIngestServerConfigV1,
+    subject: SubjectReference,
+    signals: list[OperationalSignalV1],
+    emit: Callable[[OperationalSignalV1], None],
+    stop_requested: Callable[[], bool],
+    sleep: Callable[[float], None],
+) -> LiveIngestServerReport:
+    """ADR-0075 slice 9.2 under the signals of ADR-0043 section 4: one session, slices, explicit interruptions."""
+
+    store = CheckpointStore(config.checkpoint_path)
+    gap_load = load_open_long_gap_records(storage_root=config.storage_root, instrument=config.instrument)
+    open_gaps: list[LongGapRecord] = list(gap_load.records)
+    if gap_load.unparseable_manifest_paths:
+        emit(_observation_unavailable_signal(
+            subject,
+            reason=(
+                f"{len(gap_load.unparseable_manifest_paths)} durable long-gap coverage "
+                "manifest(s) could not be reconstructed at startup"
+            ),
+            unparseable_manifest_paths=list(gap_load.unparseable_manifest_paths),
+        ))
+    status = SERVER_STOPPED
+    summary = None
+
+    def checkpoint_evidence() -> tuple[EvidenceReference, ...]:
+        checkpoint = store.load()
+        return _checkpoint_evidence(None if checkpoint is None else checkpoint.checkpoint_identity)
+
+    def on_event(name: str, **fields: Any) -> None:
+        records = tuple(open_gaps)
+        pressure_payload, pressure_evidence = _pressure_evidence(config)
+        common = {**_open_gap_signal_payload(records), **pressure_payload}
+        evidence = checkpoint_evidence() + pressure_evidence + _open_gap_evidence(records)
+        counters = {
+            key: fields[key] for key in ("reconnects", "ordering_violations", "buffer_high_water", "buffer_capacity") if key in fields
+        }
+        if name == "slice_published":
+            emit(_health_signal(
+                subject, health=HealthState.HEALTHY, session_state=_session_state(records), phase="slice",
+                partition_key=fields["partition_key"], trades=fields["trades"], window_end=fields["window_end"],
+                slice_lag_ms=fields["slice_lag_ms"], evidence=evidence, **counters, **common,
+            ))
+        elif name == "reconciled":
+            emit(_health_signal(
+                subject, health=HealthState.HEALTHY, session_state=_session_state(records), phase="reconcile",
+                records=fields["records"], slices=fields["slices"], evidence=evidence, **common,
+            ))
+        elif name == "interruption":
+            emit(_health_signal(
+                subject, health=HealthState.DEGRADED, session_state=_session_state(records), phase="interruption",
+                reason=f"{fields['reason']}: {fields['detail']}".rstrip(": "), interruption=fields["reason"],
+                evidence=evidence, **counters, **common,
+            ))
+        elif name == "gap":
+            record = fields["record"]
+            _merge_open_gap_record(open_gaps, record)
+            records = tuple(open_gaps)
+            emit(_health_signal(
+                subject, health=HealthState.DEGRADED, session_state=SESSION_RESUMED_WITH_EXPLICIT_GAP, phase="reconcile",
+                reason=str(fields.get("reason") or "last durable key absent from the bounded recent-trades window"),
+                gap_coverage_id=record.coverage_id, gap_assertion_id=record.assertion_id,
+                gap_manifest_path=record.coverage_manifest_path, gap_state=record.interval_state,
+                evidence=evidence + _open_gap_evidence((record,)), **{**_open_gap_signal_payload(records), **pressure_payload},
+            ))
+        elif name == "unclaimed_span":
+            emit(_health_signal(
+                subject, health=HealthState.DEGRADED, session_state=_session_state(records), phase="slice",
+                reason="a UTC midnight with no trade left a span without a slice; it is not claimed",
+                unclaimed_start=fields["start"], unclaimed_end=fields["end"], evidence=evidence, **common,
+            ))
+
+    try:
+        engine = LiveSessionEngine(
+            instrument=config.instrument, config=config.continuous_session,
+            ports=_production_ports(config, sleep), on_event=on_event,
+        )
+        summary = engine.run(stop_requested)
+    except Exception as exc:  # noqa: BLE001 - any failure must surface as a FAILURE signal, never a silent exit
+        code = "SLICE_PUBLICATION_FAILED" if isinstance(exc, LiveSessionFailure) else type(exc).__name__
+        emit(_failure_signal(subject, failure_code=code, message=str(exc)))
+        status = SERVER_FAILED
+    emit(_lifecycle_signal(
+        subject, previous_state="RUNNING", resulting_state=status,
+        cycles=0 if summary is None else summary.slices_published,
+    ))
+    return LiveIngestServerReport(
+        status=status, cycles=0 if summary is None else summary.slices_published, signals=tuple(signals))
+
+
 __all__ = [
     "BYBIT_LINEAR_TRADE_INSTRUMENTS_V1",
     "CAPABILITY_ID",
@@ -462,6 +614,7 @@ __all__ = [
     "SERVER_GAP_DETECTED_AWAITING_REMEDIATION",
     "LiveIngestServerConfigV1",
     "LiveIngestServerReport",
+    "LiveSessionConfig",
     # Re-exported so the executable boundary (tools/live_ingest_server.py)
     # can build a policy value without importing quant_platform.operations
     # directly -- executable tooling talks to the application seam only.

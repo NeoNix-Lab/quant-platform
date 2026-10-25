@@ -25,9 +25,14 @@ TEMPLATE_ENV = SYSTEMD / "quant-platform-live-ingest@.env.example"
 RUNBOOK = ROOT / "docs" / "engineering" / "LIVE_INGEST_SERVER_DEPLOYMENT.md"
 NOT_BTC = tuple(item for item in BYBIT_LINEAR_TRADE_INSTRUMENTS_V1 if item != "BTCUSDT")
 
-# The existing BTCUSDT unit and environment template, as on implement/fid before T02 part 4 (git show, LF).
+# The existing BTCUSDT unit and environment template, as on implement/fid before T02 part 4 (git show, LF). DG-O O03 added the session
+# options to both: the guard removes exactly that addition and compares the rest with the original, byte for byte.
 PLAIN_UNIT_SHA256 = "bf5b9df14f9547874bd59b1d013df4f45253996fd8803da17abbb342434c26dc"
 PLAIN_ENV_SHA256 = "4f8a2e2ceb648403a60c4f98854597aa7c18729d3dd824ee411338715bdde101"
+O03_EXEC_SUFFIX = (" --mode=${QP_LIVE_INGEST_MODE} --slice-seconds=${QP_LIVE_INGEST_SLICE_SECONDS}"
+                   " --slice-max-trades=${QP_LIVE_INGEST_SLICE_MAX_TRADES} --buffer-messages=${QP_LIVE_INGEST_BUFFER_MESSAGES}")
+O03_ENV_NAMES = ("QP_LIVE_INGEST_MODE", "QP_LIVE_INGEST_SLICE_SECONDS", "QP_LIVE_INGEST_SLICE_MAX_TRADES",
+                 "QP_LIVE_INGEST_BUFFER_MESSAGES")
 
 
 def text(path: Path) -> str:
@@ -66,16 +71,40 @@ def env_variables(path: Path) -> dict[str, str]:
 
 
 def options(exec_start: str) -> dict[str, str]:
-    """``--option -> value`` of an ExecStart line (every option here takes one value)."""
+    """``--option -> value`` of an ExecStart line (every option here takes one value, as ``--option value`` or ``--option=value``)."""
 
     tokens = exec_start.split()
-    return {token: tokens[index + 1] for index, token in enumerate(tokens) if token.startswith("--")}
+    result = {}
+    for index, token in enumerate(tokens):
+        if token.startswith("--"):
+            name, equals, value = token.partition("=")
+            result[name] = value if equals else tokens[index + 1]
+    return result
+
+
+def without_o03(path: Path) -> str:
+    """The artifact as it was before the session options (the exact O03 additions removed)."""
+
+    content = text(path)
+    if path.suffix == ".service":
+        assert content.count(O03_EXEC_SUFFIX) == 1
+        return content.replace(O03_EXEC_SUFFIX, "")
+    kept = []
+    skipping = False
+    for line in content.split("\n"):
+        if line.startswith("# Session mode (ADR-0075"):
+            skipping = True
+        if skipping and (line.startswith("QP_LIVE_INGEST_PRESSURE_AVAILABLE_BYTES")):
+            skipping = False
+        if not skipping:
+            kept.append(line)
+    return "\n".join(kept)
 
 
 class ExistingBtcusdtFilesTests(unittest.TestCase):
-    def test_the_existing_unit_and_environment_template_are_unchanged_byte_for_byte(self) -> None:
-        self.assertEqual(PLAIN_UNIT_SHA256, digest(PLAIN))
-        self.assertEqual(PLAIN_ENV_SHA256, digest(PLAIN_ENV))
+    def test_the_existing_unit_and_environment_template_are_unchanged_apart_from_the_session_options(self) -> None:
+        self.assertEqual(PLAIN_UNIT_SHA256, hashlib.sha256(without_o03(PLAIN).encode("utf-8")).hexdigest())
+        self.assertEqual(PLAIN_ENV_SHA256, hashlib.sha256(without_o03(PLAIN_ENV).encode("utf-8")).hexdigest())
 
     def test_the_existing_unit_still_has_no_instrument_option(self) -> None:
         self.assertNotIn("--instrument", text(PLAIN))
@@ -156,6 +185,123 @@ class EnvironmentTemplateTests(unittest.TestCase):
         self.assertEqual(set(plain) - {"QP_LIVE_INGEST_CHECKPOINT_PATH"}, set(template) - {"QP_LIVE_INGEST_CHECKPOINT_DIR"})
         for name in set(plain) & set(template):
             self.assertEqual(plain[name], template[name], name)
+
+
+class SessionOptionsTests(unittest.TestCase):
+    """DG-O O03: both units and both environment templates carry the session mode and its three bounds."""
+
+    @staticmethod
+    def render(exec_start: str, environment: dict[str, str], instance: str = "ETHUSDT") -> list[str]:
+        """What systemd would run: ``${VAR}`` is the variable's value, an unset one is the empty string, ``%i`` the instance."""
+
+        rendered = re.sub(r"\$\{([A-Z_]+)\}", lambda match: environment.get(match.group(1), ""), exec_start.replace("%i", instance))
+        return rendered.split()
+
+    def run_cli(self, argv: list[str]):
+        import io
+        from contextlib import redirect_stdout
+        from types import SimpleNamespace
+
+        sys.path.insert(0, str(ROOT / "tools"))
+        import live_ingest_server as cli
+
+        seen = []
+        original = cli.run_live_ingest_server
+        cli.run_live_ingest_server = lambda config, **kw: seen.append(config) or SimpleNamespace(status=cli.SERVER_STOPPED, cycles=0, signals=())
+        try:
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(0, cli.main(argv))
+        finally:
+            cli.run_live_ingest_server = original
+        return seen[0]
+
+    def units(self):
+        return ((PLAIN, PLAIN_ENV, "BTCUSDT"), (TEMPLATE, TEMPLATE_ENV, "ETHUSDT"))
+
+    def test_both_units_pass_the_mode_and_the_three_bounds_from_the_environment(self) -> None:
+        for unit, _env, _instance in self.units():
+            (exec_start,) = unit_lines(unit)["Service.ExecStart"]
+            self.assertTrue(exec_start.endswith(O03_EXEC_SUFFIX), unit.name)
+            found = options(exec_start)
+            self.assertEqual("${QP_LIVE_INGEST_MODE}", found["--mode"])
+            self.assertEqual("${QP_LIVE_INGEST_SLICE_SECONDS}", found["--slice-seconds"])
+            self.assertEqual("${QP_LIVE_INGEST_SLICE_MAX_TRADES}", found["--slice-max-trades"])
+            self.assertEqual("${QP_LIVE_INGEST_BUFFER_MESSAGES}", found["--buffer-messages"])
+
+    def test_both_environment_templates_default_to_cycles_with_the_bounds_left_empty(self) -> None:
+        for _unit, env, _instance in self.units():
+            variables = env_variables(env)
+            self.assertEqual("cycles", variables["QP_LIVE_INGEST_MODE"], env.name)
+            for name in O03_ENV_NAMES[1:]:
+                self.assertEqual("", variables[name], (env.name, name))
+            self.assertIn("ADR-0075", text(env))
+
+    def test_the_example_environments_start_the_existing_cycle_loop_in_both_units(self) -> None:
+        for unit, env, instance in self.units():
+            argv = self.render(unit_lines(unit)["Service.ExecStart"][0], env_variables(env), instance)
+            config = self.run_cli(argv[2:])
+            self.assertIsNone(config.continuous_session, unit.name)
+            self.assertEqual(instance, config.instrument)
+
+    def test_an_environment_file_that_predates_the_options_still_gives_a_valid_command_in_the_cycle_mode(self) -> None:
+        for unit, env, instance in self.units():
+            old = {k: v for k, v in env_variables(env).items() if k not in O03_ENV_NAMES}
+            argv = self.render(unit_lines(unit)["Service.ExecStart"][0], old, instance)
+            config = self.run_cli(argv[2:])
+            self.assertIsNone(config.continuous_session, unit.name)
+
+    def test_the_continuous_mode_and_its_bounds_reach_the_session_from_either_environment(self) -> None:
+        for unit, env, instance in self.units():
+            new = {**env_variables(env), "QP_LIVE_INGEST_MODE": "continuous", "QP_LIVE_INGEST_SLICE_SECONDS": "120",
+                   "QP_LIVE_INGEST_SLICE_MAX_TRADES": "9000", "QP_LIVE_INGEST_BUFFER_MESSAGES": "4000"}
+            argv = self.render(unit_lines(unit)["Service.ExecStart"][0], new, instance)
+            session = self.run_cli(argv[2:]).continuous_session
+            self.assertEqual((120, 9000, 4000), (session.slice_seconds, session.slice_max_trades, session.buffer_messages))
+            default = {**env_variables(env), "QP_LIVE_INGEST_MODE": "continuous"}
+            session = self.run_cli(self.render(unit_lines(unit)["Service.ExecStart"][0], default, instance)[2:]).continuous_session
+            self.assertEqual((300, 50_000, 20_000), (session.slice_seconds, session.slice_max_trades, session.buffer_messages))
+
+
+class ContinuousRunbookTests(unittest.TestCase):
+    """DG-O O03: the runbook operates the continuous session and describes the one-hour proof."""
+
+    def setUp(self) -> None:
+        self.runbook = text(RUNBOOK)
+        self.section = self.runbook.split("### Continuous session (ADR-0075", 1)[1].split("\n## Rollback", 1)[0]
+
+    def test_it_no_longer_says_the_session_is_not_enabled(self) -> None:
+        self.assertNotIn("in the code, not enabled", self.runbook)
+        self.assertNotIn("belong to `O03`", self.runbook)
+
+    def test_it_documents_every_variable_and_flag_with_its_default(self) -> None:
+        for name in O03_ENV_NAMES:
+            self.assertIn(f"`{name}`", self.section)
+        for flag in ("--mode", "--slice-seconds", "--slice-max-trades", "--buffer-messages"):
+            self.assertIn(f"`{flag}`", self.section)
+        for default in ("| 300 |", "| 50000 |", "| 20000 |", "| `cycles` |"):
+            self.assertIn(default, self.section)
+        self.assertIn("exit status 2", self.section)  # a bound without the continuous mode is refused, not ignored
+
+    def test_it_keeps_the_cycles_as_the_default_and_describes_the_rollback_and_the_operator_boundary(self) -> None:
+        plain = " ".join(self.section.replace("**", "").split())  # line breaks do not matter
+        for condition in ("The default is `cycles`", "Rollback to the cycles", "operator step", "enables nothing",
+                          "an environment file that predates these variables still starts the unit"):
+            self.assertIn(condition, plain, condition)
+
+    def test_it_describes_the_proof_its_tool_and_the_stop_conditions(self) -> None:
+        plain = " ".join(self.section.replace("**", "").split())
+        for needed in ("tools/live_window_evidence.py", "tools/fetch_bybit_trade_archive.py", "at least one hour",
+                       "disposable", "Stop conditions", "undeclared loss", "ordering violation", "BTCUSDT",
+                       "--storage-root", "span the run recorded", "explicit gap record", "unclaimed_span", "end of a span is exclusive", "(exchange_ts, trade_id)",
+                       "before the first or after the last", "is refused, not clipped"):
+            self.assertIn(needed, plain, needed)
+        for tool in ("live_window_evidence.py", "fetch_bybit_trade_archive.py", "live_ingest_server.py"):
+            self.assertTrue((ROOT / "tools" / tool).is_file(), tool)
+
+    def test_it_states_what_an_operator_sees_of_the_session(self) -> None:
+        for signal in ("phase=interruption", "phase=slice", "buffer_high_water", "slice_lag_ms", "ordering_violations",
+                       "ADR-0044", "unclaimed span"):
+            self.assertIn(signal, self.section)
 
 
 class RunbookTests(unittest.TestCase):
