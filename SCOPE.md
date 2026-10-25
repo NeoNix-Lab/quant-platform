@@ -1,6 +1,6 @@
 # Scope: DG-N — Multi-instrument Bybit linear trades v1, DG-O — Live publication v1, and DG-R — Rebuild of damaged legacy live days v1
 
-Status: **OPEN — three gates. DG-N: design gate CLOSED; `T01` and `T04` COMPLETE (reconciliation #489); `T03` merged (PR #492) and `T02` parts 1 to 5 merged (PR #494, #496, #498, #500, #502), both credited at the closeout, `T02` closing with `O03`. DG-O: design gate CLOSED (ADR-0075 `ACCEPTED` 2026-10-21, #504); `O01` merged (PR #510, credited at the closeout), `O02` and `O03` AUTHORIZED (governance issue #507), not started. DG-R: design gate CLOSED (ADR-0074 Amendment 2 `ACCEPTED` 2026-10-24, #515); `R01` and `R02` AUTHORIZED (governance issue #518), post-version, not started.** Measured on the maintainer's server on 2026-10-21: the live publication supersedes each cycle with the next (a day reads as under 0.4% of its published trades) and about 27% of a day's trades are never acquired; DG-O fixes both, before the rest of the wave. The integration branch is `implement/fid`, the current wave (the maintainer's choice, 2026-10-19). The operator promoted it to `main` once already (PR #514, 2026-10-24: DG-M, DG-N and `O01`, before `O02`, `O03` and the closeout); the rest of the wave follows, and the first version of the product is declared concluded by the maintainer after the closeout. DG-R is post-version work and does not block that declaration. **Today `BTCUSDT` is the only instrument ingested live and registered on the server, and its live days are not fully readable or complete (DG-O); the other four instruments are readable once their partitions are `valid`.**
+Status: **DG-N and DG-O CLOSED within recorded bounds (closeout #527); DG-R OPEN, post-version.** DG-N: design gate CLOSED; `T01`, `T04`, `T03` and `T02` COMPLETE (reconciliations #489, #527; PR #486, #488, #492, #494, #496, #498, #500, #502, #526). DG-O: design gate CLOSED (ADR-0075 `ACCEPTED` 2026-10-21, #504); `O01`, `O02` and `O03` COMPLETE (PR #510, #524, #526; governance #507, #527). **The one-hour `ETHUSDT` real-provider run of `O03` (the `T02` proof) was not performed and is not claimed** (the maintainer's decision, 2026-10-25): the atoms are credited within the bound of their code, configuration, runbook, evidence tool and tests. DG-R: design gate CLOSED (ADR-0074 Amendment 2 `ACCEPTED` 2026-10-24, #515); `R01` and `R02` AUTHORIZED (governance issue #518), post-version, not started. Measured on the maintainer's server on 2026-10-21: the live publication superseded each cycle with the next (a day read as under 0.4% of its published trades) and about 27% of a day's trades were never acquired; DG-O fixes both in the code, which is **not deployed** and was never run against the real provider. The integration branch is `implement/fid`, the current wave (the maintainer's choice, 2026-10-19). The operator promoted it to `main` once already (PR #514, 2026-10-24: DG-M, DG-N and `O01`); a later promotion carries the rest. The first version of the product is declared concluded by the maintainer, after this closeout. DG-R is post-version work and does not block that declaration. **Today `BTCUSDT` is the only instrument ingested live and registered on the server, and the server runs the code deployed before DG-O: its live days remain not fully readable or complete until the operator deploys and (for the old days) DG-R rebuilds them; the other four instruments are readable once their partitions are `valid`.**
 
 Scope kind: a sequencing scope for three gates: DG-N (design gate closed; Part B authorized inventory), DG-O (design gate closed; Part C authorized inventory) and DG-R (design gate closed; Part D authorized inventory, post-version).
 
@@ -48,8 +48,8 @@ Each atom is its own implementation issue (`[implementation]` template), opened 
 |---|---|---|---|
 | `T01` | Read and delivery for the allow-list | `A06`, `A08`, `A09`, `K12` | **COMPLETE** (#485, PR #486) |
 | `T04` | Historical import `--instrument` from the Bybit public archive | `A07`, `T01` | **COMPLETE** (#487, PR #488) |
-| `T03` | Explicit per-instrument fees | `H02`, `T01` | **merged** (#491, PR #492); credited at the closeout |
-| `T02` | Live ingest per instrument | `A11`, `K10`, `T01`, `T03`, `T04`, `O03` | parts 1 to 5 merged (#493 / PR #494, #495 / PR #496, #497 / PR #498, #499 / PR #500, #501 / PR #502); closes with `O03` (its one-hour proof); credited at the closeout |
+| `T03` | Explicit per-instrument fees | `H02`, `T01` | **COMPLETE** (#491, PR #492; closeout #527) |
+| `T02` | Live ingest per instrument | `A11`, `K10`, `T01`, `T03`, `T04`, `O03` | **COMPLETE** (#493 / PR #494, #495 / PR #496, #497 / PR #498, #499 / PR #500, #501 / PR #502; closed by `O03`, PR #526; closeout #527) -- the one-hour real-provider run is not claimed |
 
 ```text
 T01 ──> T04 ──> T03 ──> T02
@@ -72,15 +72,15 @@ Problem, measured on 2026-10-21 (ADR-0075 F1, F2): every cycle is a new revision
 
 | Atom | Result | Requires (besides ADR-0075) | Start gate |
 |---|---|---|---|
-| `O01` | Append-only live slices | `A11`, `K10`, `T01` | **merged** (#509 / PR #510); credited at the closeout |
-| `O02` | Continuous live session | `O01` | after `O01` is merged |
-| `O03` | Configuration, runbook and real-provider proof | `O02`, `T03`, `T04` | after `O02` is merged |
+| `O01` | Append-only live slices | `A11`, `K10`, `T01` | **COMPLETE** (#509 / PR #510; closeout #527) |
+| `O02` | Continuous live session | `O01` | **COMPLETE** (#523 / PR #524; closeout #527) |
+| `O03` | Configuration, runbook and real-provider proof | `O02`, `T03`, `T04` | **COMPLETE within its bound** (#525 / PR #526; closeout #527) -- the real-provider run is not claimed |
 
 ```text
 O01 ──> O02 ──> O03 ──> T02
 ```
 
-Order: strictly `O01`, `O02`, `O03`, one bounded mutation slice at a time; `T02` is credited when `O03` is merged.
+Order: strictly `O01`, `O02`, `O03`, one bounded mutation slice at a time; `T02` was credited when `O03` merged (closeout #527).
 
 ### Acceptance per atom (from ADR-0075; an implementation issue adds no semantic decision)
 
@@ -115,7 +115,7 @@ Order: strictly `R01`, `R02`, one bounded mutation slice at a time.
 ## Authority
 
 - `AGENTS.md`
-- governance issues #381, #409, #453, #458, #475, #479, #483, #489, #507, #518; design-gate issues #377, #487, #504, #512, #515; evidence issue #378; implementation issues #485, #487, #491, #493, #495, #497, #499, #501, #509, #519, #520
+- governance issues #381, #409, #453, #458, #475, #479, #483, #489, #507, #518, #527; design-gate issues #377, #487, #504, #512, #515; evidence issue #378; implementation issues #485, #487, #491, #493, #495, #497, #499, #501, #509, #523, #525, #519, #520
 - `docs/decisions/ADR-0074-multi-instrument-bybit-linear-trades-v1.md` (`ACCEPTED`, with Amendment 1 and Amendment 2 `ACCEPTED`)
 - `docs/decisions/ADR-0075-live-trades-continuous-session-and-append-only-slices-v1.md` (`ACCEPTED`, with Amendment 1 `ACCEPTED`)
 - `docs/decisions/ADR-0030-general-quality-lifecycle-v1.md` and `docs/decisions/ADR-0033-backfill-repair-v1.md` (unchanged; ADR-0030 is used by Part D)
@@ -131,9 +131,9 @@ Accepted ADRs and frozen contracts remain normative. This reconciliation weakens
 
 ```text
 main @ 9cf0b5e (DG-K P01-P06, DG-K2 S01-S07 and DG-C/A14 v1 COMPLETE within recorded bounds; promotion PR #514 brought implement/fid @ fc69cc1 -- DG-M, DG-N, O01 -- into main on 2026-10-24, then ADR-0075 Amendment 1, PR #513)
-implement/fid: main + DG-M (M01, M02, M04, M05 COMPLETE, closeout #475, follow-on #477) + ADR-0074 (#481, #482) + T01 (#486) + T04 and Amendment 1 (#488) + T03 (#492) + T02 parts 1 to 5 (#494, #496, #498, #500, #502) + ADR-0075 (#505, #506) + O01 (#510) + ADR-0075 Amendment 1 (#512 / PR #513, via main) + ADR-0074 Amendment 2 (#515 / PR #516, #521) + this reconciliation
-DG-N: T01, T04 COMPLETE (reconciliation #489); T03, T02 FROZEN / MISSING (authorized by #483; merged, credited at the closeout)
-DG-O: O01 merged (credited at the closeout), O02, O03 FROZEN / MISSING (authorized by #507)
+implement/fid: main + DG-M (M01, M02, M04, M05 COMPLETE, closeout #475, follow-on #477) + ADR-0074 (#481, #482) + T01 (#486) + T04 and Amendment 1 (#488) + T03 (#492) + T02 parts 1 to 5 (#494, #496, #498, #500, #502) + ADR-0075 (#505, #506) + O01 (#510) + ADR-0075 Amendment 1 (#512 / PR #513, via main) + ADR-0074 Amendment 2 (#515 / PR #516, #521) + DG-R registration (#518 / PR #522) + O02 (#524) + O03 (#526) + this closeout (#527)
+DG-N: T01, T04 COMPLETE (reconciliation #489); T03, T02 COMPLETE within bounds (closeout #527; the one-hour real-provider run is not claimed)
+DG-O: O01, O02, O03 COMPLETE within bounds (closeout #527; PR #510, #524, #526)
 DG-R: R01, R02 FROZEN / MISSING (authorized by #518; post-version)
 ```
 
@@ -143,13 +143,24 @@ Credit, do not reimplement or re-prove absent invalidating evidence: every atom 
 
 ## Explicit non-claims
 
-- `T03` and `T02` parts 1 to 5 are merged but **not credited** here: `T02` closes with `O03`, and nothing is deployed, so no non-BTC instrument is ingested live on the server.
+- **The one-hour `ETHUSDT` real-provider run of `O03` (the `T02` proof) was not performed.** `T02` and `O03` are credited within the bound of their code, configuration, runbook, evidence tool and tests (the maintainer's decision, 2026-10-25). What a real hour would report is not claimed: the captured share against the Bybit archive, the slice sizes, the health signals and the number of `exchange_ts` ordering violations. The ordering of the provider's `exchange_ts` stays an **assumption**; the 300 s / 50 000 trades / 20 000 messages bounds are accepted, not measured.
+- **Nothing is deployed.** The server runs the code deployed before DG-O: it still supersedes each cycle and closes its WebSocket between cycles until the operator promotes and restarts it. The default of the CLI, the environment examples and the units is `cycles`; enabling the continuous mode is an operator step, and making it the default is the maintainer's decision after a real run.
 - No non-BTC dataset is registered in the server catalog, so none is readable there yet: the maintainer's existing ETH/SOL/XRP/DOGE Parquet are not registered (they cannot be certified, Amendment 1) and are to be replaced by the archive import, an operator step not yet done. The server-side record-by-record proof of BTCUSDT 2024-01-15 and any real-host run are operator evidence and are not claimed.
 - No capacity is measured (#378): the daily volume, memory and disk figures offered for other instruments are not used, and nothing beyond the bounded `ETHUSDT` proof is enabled before the measurement and the 365-day rule.
-- DG-O: only `O01` is merged (PR #510, not credited here). The live path no longer supersedes each cycle, but it still closes its WebSocket between cycles (`O02`) and the server is not redeployed with `O01`. The existing live partitions and their superseded revisions are left as they are by DG-O. Slices are not consolidated into a day partition. The provider's `exchange_ts` ordering is an assumption until `O03` measures it.
+- DG-O: the existing live partitions and their superseded revisions are left as they are. Slices are not consolidated into a day partition. After a reconnect the session waits for the first trade of the new subscription before reconciling (a quiet interval delays it; a REST window that does not meet the subscription is an explicit gap): how often that happens is unmeasured. The `known_gap` span ends at the local detection instant; the evidence tool classifies missing trades against it.
 - DG-R: nothing is implemented and no legacy day has been rebuilt or retired. The 2026-10-20 evidence is operator-reported; the ID comparison does not establish field equality (the proof is `R02`'s). The 31 candidate dates are not an execution plan: the days come only from a reviewed plan. The atomic replacement is considered and not adopted (ADR-0074 A2.8). Nothing is deleted; retention of retired or superseded revisions is the maintainer's. Running the rebuild on the server is an operator step.
 - No deployment, no L2 for other instruments, no second venue, no spot or inverse market, no repair or backfill of live gaps.
 - The generic provider `E07`, the FEI line and Omega are untouched.
+
+---
+
+## Closeout result (#527)
+
+`T03`, `T02` (parts 1 to 5 and the closing `O03`), `O01`, `O02` and `O03` are merged into `implement/fid` and credited `COMPLETE` within the bounds their rows in `CAPABILITY_DAG.md` record, each with mutation-checked tests, real-PostgreSQL integration where it publishes, and independent review findings fixed. The inventory is 110 of 132 (83.3%), recomputed from the DAG rows by script and equal across the four governance files; no decision-state change. DG-R (`R01`, `R02`) is untouched.
+
+## Reopening triggers (none authorized)
+
+Recorded in full in `docs/architecture/OPEN_DECISIONS.md` ("Closeout of DG-N and DG-O"): (1) the real-provider run and its report; (2) the provider's `exchange_ts` ordering; (3) the bounds; (4) the default mode and the deployment; (5) thin instruments and gaps after a reconnect; (6) the clock of the recorded gap span; (7) capacity (#378) and further instruments; (8) the damaged legacy days (DG-R); (9) consolidation of slices.
 
 ---
 
@@ -163,10 +174,10 @@ Credit, do not reimplement or re-prove absent invalidating evidence: every atom 
 
 ## Exit criteria for this scope
 
-- `T01`, `T04`, `T03`, `T02` and `O01`, `O02`, `O03` implemented and merged into `implement/fid` within the acceptance above (`T02` closes with `O03`), each with its mutation-checked tests. `R01` and `R02` (Part D) are post-version: they are not a condition of the declaration below.
-- A governance closeout issue credits each atom with its PR and bound and records what is not claimed.
-- The promotion of `implement/fid` (DG-M, DG-N and DG-O) into `main`: PR #514 promoted DG-M, DG-N and `O01` on 2026-10-24, before `O02`, `O03` and the closeout; a later promotion carries the rest. The declaration that the first version of the product is concluded is the maintainer's, after the closeout.
-- The Phase A measurements (#378), the production enabling of further live instruments and the deployment are recorded separately; they are not claimed by this scope.
+- **Met:** `T01`, `T04`, `T03`, `T02` and `O01`, `O02`, `O03` implemented and merged into `implement/fid` within the acceptance above (`T02` closed with `O03`), each with its mutation-checked tests -- **except** the real-provider run of at least one hour of `O03`, which was not performed and is not claimed (the maintainer's decision, 2026-10-25). `R01` and `R02` (Part D) are post-version: they are not a condition of the declaration below.
+- **Met:** a governance closeout issue (#527) credits each atom with its PR and bound and records what is not claimed.
+- The promotion of `implement/fid` (DG-M, DG-N and DG-O) into `main`: PR #514 promoted DG-M, DG-N and `O01` on 2026-10-24, before `O02`, `O03` and the closeout; a promotion PR opened after #527 merges carries the rest. The declaration that the first version of the product is concluded is the maintainer's, after the closeout.
+- The Phase A measurements (#378), the production enabling of further live instruments, the deployment and the real-provider run are recorded separately; they are not claimed by this scope.
 
 ---
 
