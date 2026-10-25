@@ -281,9 +281,12 @@ def build_window_evidence(
     declared_trades: dict[int, list[str]] = {}
     undeclared_trades: dict[int, list[str]] = {}
     for index, trade_ids in hole_trades.items():
-        covered = [t for t in trade_ids if any(a <= in_window[t].exchange_ts.epoch_ns < b for _l, a, b in declarations[index])]
-        declared_trades[index] = covered
-        undeclared_trades[index] = [t for t in trade_ids if t not in set(covered)]
+        spans_of_hole = declarations[index]
+        declared_trades[index], undeclared_trades[index] = [], []
+        for trade_id in trade_ids:  # one pass: each trade is tested against the few recorded spans of its hole
+            ts = in_window[trade_id].exchange_ts.epoch_ns
+            inside = any(a <= ts < b for _label, a, b in spans_of_hole)
+            (declared_trades if inside else undeclared_trades)[index].append(trade_id)
     declared_missing = sum(len(v) for v in declared_trades.values())
     undeclared_missing = sum(len(v) for v in undeclared_trades.values())
     if inside_claimed:

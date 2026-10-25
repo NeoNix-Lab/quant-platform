@@ -148,6 +148,21 @@ class ComparisonTests(unittest.TestCase):
             report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(start), at(start + 200), "elsewhere")])
             self.assertFalse(report["passed"], start)
 
+    def test_a_hole_with_many_missing_trades_is_classified_in_linear_time(self) -> None:
+        import time
+
+        count = 60_000
+        archive = [trade(T0, "first"), trade(T0 + count + 20, "last")] + [trade(T0 + 10 + i, f"m{i}") for i in range(count)]
+        held = [archive[0], archive[1]]
+        slices = [window(T0, T0 + 5, 1), window(T0 + count + 15, T0 + count + 30, 1)]
+        gaps = [DeclaredGap(at(T0 + 4), at(T0 + 10 + count // 2), "half")]
+        started = time.monotonic()
+        report, _ = evidence(archive, slices, held, declared_gaps=gaps)
+        elapsed = time.monotonic() - started
+        (hole,) = report["holes"]
+        self.assertEqual((count // 2, count - count // 2), (hole["declared_trades"], hole["undeclared_trades"]))
+        self.assertLess(elapsed, 5.0, "the classification of a hole must not be quadratic")
+
     def test_a_hole_without_archive_trades_needs_no_declaration_but_is_listed(self) -> None:
         archive = [trade(T0, "a"), trade(T0 + 8, "b")]
         report, _ = evidence(archive, list(self.HOLE_SLICES), archive)
