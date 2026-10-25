@@ -11,10 +11,11 @@ interval the run itself declared unclaimed?
   head (before the first slice) and of the tail (after the last) are counted and classified like any other; a slice that crosses a
   bound is refused, not clipped.
 * An archive trade **inside a claimed window** that is not read back is a loss the run did not declare: a stop condition. One inside
-  a hole is excused only when the hole is **declared by recorded evidence**: an explicit gap record of the run (ADR-0044, a durable
-  manifest whose last durable key lies in the segment before the hole) or an ``unclaimed_span`` signal of the captured log that covers
-  the hole. A missing catalog partition is not a declaration of its cause: a hole with no such evidence, a head or a tail that holds
-  an archive trade is a stop condition. A trade read back that the archive does not hold is reported; one the archive holds with a
+  a hole excuses a missing trade only when that trade lies **inside a span the run recorded**: the ``known_gap`` assertion of an
+  explicit gap record (ADR-0044, a durable manifest whose last durable key lies in the segment before the hole) or an
+  ``unclaimed_span`` signal of the captured log. Each missing trade is classified against those spans, not against the whole hole:
+  a gap that ends before a later loss does not excuse it. A missing catalog partition is not a declaration of its cause: a trade in
+  a hole outside every recorded span, and one in a head or a tail, is a stop condition. A trade read back that the archive does not hold is reported; one the archive holds with a
   different payload, read twice or out of the canonical ``(exchange_ts, trade_id)`` order, is a stop condition.
 * The signals are taken from the captured stdout of ``tools/live_ingest_server.py`` (``signal kind=... k=v,k=v`` lines): the
   counters the session reports (ordering violations, reconnects, buffer high-water mark, slice lag) and the interruptions.
@@ -57,9 +58,13 @@ class SliceWindow:
 
 @dataclass(frozen=True, slots=True)
 class DeclaredGap:
-    """An explicit gap the run recorded (ADR-0044): the exchange time of its last durable key and the coverage id."""
+    """An explicit gap the run recorded (ADR-0044): the span ``[start, end)`` of its ``known_gap`` assertion and the coverage id.
+
+    ``start`` is the exchange time of its last durable key and ``end`` the instant it was detected; the manifest declares that
+    span and no more."""
 
     start: Instant
+    end: Instant
     coverage_id: str
 
 
@@ -181,13 +186,16 @@ def unclaimed_spans(text: str) -> list[tuple[Instant, Instant]]:
 def _declarations(
     hole: tuple[Instant, Instant], previous_start: Instant, gaps: Sequence[DeclaredGap],
     spans: Sequence[tuple[Instant, Instant]],
-) -> list[str]:
-    """What the run recorded about one hole: a gap whose last durable key lies in the segment before it, a signalled span over it."""
+) -> list[tuple[str, int, int]]:
+    """``(label, start_ns, end_ns)`` of what the run recorded about one hole.
 
-    found = [f"gap_record:{gap.coverage_id}" for gap in gaps
-             if previous_start.epoch_ns <= gap.start.epoch_ns < hole[1].epoch_ns]
-    found += [f"unclaimed_span_signal:{a.isoformat()}..{b.isoformat()}" for a, b in spans
-              if a.epoch_ns <= hole[0].epoch_ns and hole[1].epoch_ns <= b.epoch_ns]
+    A gap belongs to the hole when its last durable key lies in the segment before it; a signalled span, when it overlaps it. Only
+    the recorded span declares: a trade is excused by the span that contains it, never by the hole that surrounds it."""
+
+    found = [(f"gap_record:{gap.coverage_id}:{gap.start.isoformat()}..{gap.end.isoformat()}", gap.start.epoch_ns, gap.end.epoch_ns)
+             for gap in gaps if previous_start.epoch_ns <= gap.start.epoch_ns < hole[1].epoch_ns]
+    found += [(f"unclaimed_span_signal:{a.isoformat()}..{b.isoformat()}", a.epoch_ns, b.epoch_ns)
+              for a, b in spans if a.epoch_ns < hole[1].epoch_ns and hole[0].epoch_ns < b.epoch_ns]
     return found
 
 
@@ -270,13 +278,19 @@ def build_window_evidence(
         else:
             inside_claimed.append(trade_id)
     declarations = [_declarations(hole, segments[i][0], declared_gaps, spans) for i, hole in enumerate(holes)]
-    declared_missing = sum(len(hole_trades[i]) for i in hole_trades if declarations[i])
-    undeclared_missing = sum(len(hole_trades[i]) for i in hole_trades if not declarations[i])
+    declared_trades: dict[int, list[str]] = {}
+    undeclared_trades: dict[int, list[str]] = {}
+    for index, trade_ids in hole_trades.items():
+        covered = [t for t in trade_ids if any(a <= in_window[t].exchange_ts.epoch_ns < b for _l, a, b in declarations[index])]
+        declared_trades[index] = covered
+        undeclared_trades[index] = [t for t in trade_ids if t not in set(covered)]
+    declared_missing = sum(len(v) for v in declared_trades.values())
+    undeclared_missing = sum(len(v) for v in undeclared_trades.values())
     if inside_claimed:
         stops.append(f"{len(inside_claimed)} archive trades inside a claimed window are not read back (an undeclared loss)")
     if undeclared_missing:
-        stops.append(f"{undeclared_missing} archive trades lie in a hole between slices that no recorded gap or signalled "
-                     "span declares (an undeclared loss)")
+        stops.append(f"{undeclared_missing} archive trades lie in a hole between slices outside every recorded gap span and "
+                     "signalled span (an undeclared loss)")
     if outside_edges:
         stops.append(f"{len(outside_edges)} archive trades of the requested window lie before the first or after the last claimed window")
     extra = sorted(trade_id for trade_id in read_by_id if trade_id not in in_window)
@@ -310,8 +324,10 @@ def build_window_evidence(
         },
         "holes": [
             {"start": a.isoformat(), "end": b.isoformat(), "seconds": (b.epoch_ns - a.epoch_ns) / 1e9,
-             "declared_by": declarations[i],
-             "archive_trades_inside": len(hole_trades[i]), "examples": sorted(hole_trades[i])[:_EXAMPLES]}
+             "declared_by": [label for label, _a, _b in declarations[i]],
+             "archive_trades_inside": len(hole_trades[i]), "declared_trades": len(declared_trades[i]),
+             "undeclared_trades": len(undeclared_trades[i]), "examples": sorted(hole_trades[i])[:_EXAMPLES],
+             "undeclared_examples": sorted(undeclared_trades[i])[:_EXAMPLES]}
             for i, (a, b) in enumerate(holes)
         ],
         "claimed_share": listened_ns / window_ns if window_ns else 1.0,
@@ -420,7 +436,8 @@ def read_declared_gaps(storage_root: str | Path, instrument: str) -> tuple[list[
     from quant_platform.application.live_gap_orchestration import load_open_long_gap_records
 
     loaded = load_open_long_gap_records(storage_root=storage_root, instrument=instrument)
-    gaps = [DeclaredGap(record.interval.start_key.exchange_ts, record.coverage_id) for record in loaded.records]
+    gaps = [DeclaredGap(Instant.parse(record.interval.coverage_start), Instant.parse(record.interval.coverage_end), record.coverage_id)
+            for record in loaded.records]
     return gaps, len(loaded.unparseable_manifest_paths)
 
 

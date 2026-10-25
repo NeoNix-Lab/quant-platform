@@ -223,15 +223,17 @@ Without `--start`/`--end` the window is the extent of the valid live slices; wit
 that crosses a bound is refused, not clipped, and the archive of every day the whole window touches is required), so the archive
 trades before the first slice and after the last count against the proof.
 
-A hole is **declared** only by evidence the run recorded: an explicit gap record under `--storage-root` (ADR-0044) whose last durable
-key lies in the segment before the hole, or an `unclaimed_span` signal in the captured log that covers it. The absence of a partition
-is not a declaration of its cause.
+A missing trade in a hole is excused only by a **span the run recorded** that contains it: the `known_gap` assertion of an explicit
+gap record under `--storage-root` (ADR-0044; its last durable key must lie in the segment before the hole) or an `unclaimed_span`
+signal in the captured log. Each missing trade is classified against those spans, not against the hole around it: a gap that ends
+before a later loss does not excuse that loss, and the end of a span is exclusive. The absence of a partition is not a declaration
+of its cause.
 
 **Stop conditions** (exit 1; do not read the proof as passed and report): an archive trade inside a claimed window that is not read
-back (an undeclared loss); an archive trade in a hole that no recorded gap or signalled span declares (an undeclared loss); an archive
+back (an undeclared loss); an archive trade in a hole outside every recorded gap span and signalled span (an undeclared loss); an archive
 trade of the requested window before the first or after the last claimed window; a strict read of a claimed window refused; a trade
 read twice or out of the canonical `(exchange_ts, trade_id)` order; a trade whose payload differs from the archive; valid slices that
-overlap; a gap manifest that cannot be read. A shortfall against the archive inside a **declared** hole is reported, not hidden, and
+overlap; a gap manifest that cannot be read. A shortfall against the archive inside a **recorded span** is reported, not hidden, and
 is not a stop condition; an ordering violation is a measurement (it is an interruption by design), to be explained in the evidence.
 Record the report, the log and the commit in the pull request of `O03`.
 

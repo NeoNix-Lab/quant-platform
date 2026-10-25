@@ -80,12 +80,14 @@ class ComparisonTests(unittest.TestCase):
         return evidence(archive, list(self.HOLE_SLICES), held, **kwargs)
 
     def test_an_archive_trade_in_a_hole_with_a_recorded_gap_is_reported_with_the_hole_and_is_not_a_stop(self) -> None:
-        report, reader = self.hole_case(declared_gaps=[DeclaredGap(at(T0 + 4), "gap-1")])
+        report, reader = self.hole_case(declared_gaps=[DeclaredGap(at(T0 + 4), at(T0 + 7), "gap-1")])
         self.assertTrue(report["passed"], report["stop_conditions"])
         self.assertEqual((2, 0, 0), (report["missing_inside_declared_gaps"], report["missing_inside_undeclared_holes"],
                                     report["missing_inside_claimed_windows"]))
         (hole,) = report["holes"]
-        self.assertEqual((2, ["t5", "t6"], ["gap_record:gap-1"]), (hole["archive_trades_inside"], hole["examples"], hole["declared_by"]))
+        self.assertEqual((2, ["t5", "t6"]), (hole["archive_trades_inside"], hole["examples"]))
+        self.assertEqual((2, 0), (hole["declared_trades"], hole["undeclared_trades"]))
+        self.assertTrue(hole["declared_by"][0].startswith("gap_record:gap-1:"))
         self.assertEqual(2, report["slices"]["chain_segments"])
         self.assertAlmostEqual(0.8, report["captured_ratio"])  # the shortfall is stated, never rounded up
         self.assertAlmostEqual(8 / 10, report["claimed_share"])
@@ -96,7 +98,7 @@ class ComparisonTests(unittest.TestCase):
             report, _ = self.hole_case(**kwargs)
             self.assertFalse(report["passed"], kwargs)
             self.assertEqual((0, 2), (report["missing_inside_declared_gaps"], report["missing_inside_undeclared_holes"]))
-            self.assertTrue(any("no recorded gap" in c for c in report["stop_conditions"]))
+            self.assertTrue(any("outside every recorded gap span" in c for c in report["stop_conditions"]))
             self.assertEqual([], report["holes"][0]["declared_by"])
 
     def test_a_signalled_unclaimed_span_over_the_hole_declares_it(self) -> None:
@@ -109,9 +111,41 @@ class ComparisonTests(unittest.TestCase):
         report, _ = self.hole_case(signals_text=log.replace(span, smaller))
         self.assertFalse(report["passed"])
 
+    def test_a_recorded_gap_excuses_only_the_trades_inside_its_span_not_the_whole_hole(self) -> None:
+        # the hole is [T0+5, T0+7) and the archive trades t5 (T0+5) and t6 (T0+6) are missing
+        for span, declared, undeclared in (((4, 6), ["t5"], ["t6"]), ((6, 7), ["t6"], ["t5"]), ((4, 5), [], ["t5", "t6"]),
+                                           ((4, 7), ["t5", "t6"], [])):
+            report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(T0 + span[0]), at(T0 + span[1]), "short")])
+            (hole,) = report["holes"]
+            self.assertEqual((len(declared), len(undeclared)), (hole["declared_trades"], hole["undeclared_trades"]), span)
+            self.assertEqual(undeclared, hole["undeclared_examples"], span)
+            self.assertEqual(not undeclared, report["passed"], (span, report["stop_conditions"]))
+            if undeclared:
+                self.assertEqual(len(undeclared), report["missing_inside_undeclared_holes"])
+                self.assertTrue(any("outside every recorded gap span" in c for c in report["stop_conditions"]))
+
+    def test_the_end_of_a_gap_span_is_exclusive_and_two_spans_together_cover_what_each_alone_does_not(self) -> None:
+        report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(T0 + 4), at(T0 + 6), "a")])  # ends AT t6
+        self.assertEqual(["t6"], report["holes"][0]["undeclared_examples"])
+        report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(T0 + 4), at(T0 + 6), "a"), DeclaredGap(at(T0 + 4), at(T0 + 7), "b")])
+        self.assertTrue(report["passed"], report["stop_conditions"])
+        self.assertEqual(2, len(report["holes"][0]["declared_by"]))
+
+    def test_a_signalled_span_elsewhere_is_not_attributed_to_the_hole(self) -> None:
+        span = f"unclaimed_start={at(T0 + 100).isoformat()},unclaimed_end={at(T0 + 200).isoformat()}"
+        report, _ = self.hole_case(signals_text=f"signal kind=HEALTH_SNAPSHOT capability=c signal_id=s health=DEGRADED,{span}")
+        self.assertEqual([], report["holes"][0]["declared_by"])
+        self.assertFalse(report["passed"])
+
+    def test_a_signalled_span_excuses_only_the_trades_inside_it(self) -> None:
+        span = f"unclaimed_start={at(T0 + 5).isoformat()},unclaimed_end={at(T0 + 6).isoformat()}"
+        report, _ = self.hole_case(signals_text=f"signal kind=HEALTH_SNAPSHOT capability=c signal_id=s health=DEGRADED,phase=slice,{span}")
+        self.assertEqual((1, ["t6"]), (report["holes"][0]["declared_trades"], report["holes"][0]["undeclared_examples"]))
+        self.assertFalse(report["passed"])
+
     def test_a_gap_record_of_another_interval_does_not_declare_the_hole(self) -> None:
         for start in (T0 - 100, T0 + 8):  # before the segment that precedes the hole; after the hole
-            report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(start), "elsewhere")])
+            report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(start), at(start + 200), "elsewhere")])
             self.assertFalse(report["passed"], start)
 
     def test_a_hole_without_archive_trades_needs_no_declaration_but_is_listed(self) -> None:
@@ -121,7 +155,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(([], 0), (report["holes"][0]["declared_by"], report["holes"][0]["archive_trades_inside"]))
 
     def test_gap_manifests_that_cannot_be_read_are_a_stop_condition(self) -> None:
-        report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(T0 + 4), "gap-1")], unparseable_gap_manifests=1)
+        report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(T0 + 4), at(T0 + 7), "gap-1")], unparseable_gap_manifests=1)
         self.assertFalse(report["passed"])
 
     def test_the_requested_window_is_kept_the_head_and_the_tail_are_compared(self) -> None:

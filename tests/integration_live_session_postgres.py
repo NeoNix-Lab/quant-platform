@@ -38,7 +38,12 @@ import psycopg  # noqa: E402
 import quant_platform.application.bybit_live as app  # noqa: E402
 import live_window_evidence as evidence_tool  # noqa: E402
 from integration_live_slices_postgres import ARCHIVE_HEADER, gateway_read, key_of, partitions, rows  # noqa: E402
-from quant_platform.application.live_gap_orchestration import load_open_long_gap_records  # noqa: E402
+from quant_platform.application.live_gap_orchestration import (  # noqa: E402
+    LongGapInterval,
+    TradeKeyBoundary,
+    load_open_long_gap_records,
+    record_explicit_long_gap,
+)
 from quant_platform.application.live_ingest_server import (  # noqa: E402
     SERVER_FAILED,
     SERVER_STOPPED,
@@ -431,6 +436,34 @@ def main() -> int:
             empty_root.mkdir()
             code, blind = run_tool(root=empty_root)
             assert code == 1 and not blind["passed"] and blind["missing_inside_undeclared_holes"] > 0, blind["stop_conditions"]
+
+            # a recorded gap declares ITS span and no more: a short gap (written by the real record_explicit_long_gap) that ends after
+            # the first missing trade of the first hole excuses that trade only; the later ones are an undeclared loss. A later
+            # manifest of the same anchor that extends the gap over the whole hole (supersedes the first) excuses them all.
+            hole = report["holes"][0]
+            hole_start, hole_end = Instant.parse(hole["start"]), Instant.parse(hole["end"])
+            lost = sorted((r.exchange_ts.epoch_ns, r.trade_id) for r in world.trades
+                          if hole_start.epoch_ns <= r.exchange_ts.epoch_ns < hole_end.epoch_ns and r.trade_id not in delivered)
+            assert len(lost) >= 3, lost
+            short_root = Path(holder) / "short-gap-root"
+            short_root.mkdir()
+            anchor = TradeKeyBoundary(venue="bybit", instrument=INSTRUMENT, exchange_ts=Instant(hole_start.epoch_ns - MS), trade_id="anchor")
+
+            def record(detected_at: Instant) -> None:
+                record_explicit_long_gap(
+                    storage_root=short_root, interval=LongGapInterval(
+                        start_key=anchor, detected_at=detected_at, reason="short", recent_window_records=None, buffered_ws_records=None),
+                    producer="evidence-probe", code_ref="integration", detected_at=detected_at, instrument=INSTRUMENT)
+
+            record(Instant(lost[0][0] + MS))
+            code, short = run_tool(root=short_root)
+            first = short["holes"][0]
+            assert code == 1 and not short["passed"], short["stop_conditions"]
+            assert (first["declared_trades"], first["undeclared_trades"]) == (1, len(lost) - 1), first
+            record(hole_end)
+            code, extended = run_tool(root=short_root)
+            first = extended["holes"][0]
+            assert (first["declared_trades"], first["undeclared_trades"]) == (len(lost), 0), first
             assert report["slices"]["not_valid_in_catalog"] == 0 and report["slices"]["revisions_above_one"] == 0
 
             # the requested window is kept: an hour around slices that span a fraction of a second is reported as such
