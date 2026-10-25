@@ -291,7 +291,9 @@ class ContinuousRunbookTests(unittest.TestCase):
     def test_it_describes_the_proof_its_tool_and_the_stop_conditions(self) -> None:
         plain = " ".join(self.section.replace("**", "").split())
         for needed in ("tools/live_window_evidence.py", "tools/fetch_bybit_trade_archive.py", "at least one hour",
-                       "disposable", "Stop conditions", "undeclared loss", "ordering violation", "BTCUSDT"):
+                       "disposable", "Stop conditions", "undeclared loss", "ordering violation", "BTCUSDT",
+                       "--storage-root", "declared", "explicit gap record", "unclaimed_span", "(exchange_ts, trade_id)",
+                       "before the first or after the last", "is refused, not clipped"):
             self.assertIn(needed, plain, needed)
         for tool in ("live_window_evidence.py", "fetch_bybit_trade_archive.py", "live_ingest_server.py"):
             self.assertTrue((ROOT / "tools" / tool).is_file(), tool)

@@ -4,11 +4,11 @@
 Read-only: it reads the catalog and files through the ``DataGateway``, the local archive files of the days the run touched and,
 optionally, the captured stdout of ``tools/live_ingest_server.py``; it writes nothing. It prints one JSON report: the archive
 trades in the window the run claimed, the trades a ``strict`` gateway read returns, the missing and the extra ones (a missing one
-is classified as inside a claimed window, an undeclared loss, or inside an unclaimed span, the declared cost of an interruption),
+is an undeclared loss unless it lies in a hole the run declared: a recorded explicit gap or a signalled unclaimed span),
 the holes, the slice sizes and the counters of the session (ordering violations, reconnects, buffer high-water mark, slice lag).
 
 Exit status 0 when no stop condition holds, 1 when one does (the report lists them), 2 on a usage error. A shortfall against the
-archive that falls in an unclaimed span is reported, not hidden, and is not a stop condition.
+archive inside a hole the run declared (a recorded gap, a signalled span) is reported, not hidden, and is not a stop condition.
 
 Run it after the archive of the last day of the window is published (Bybit publishes a day after it ends).
 """
@@ -29,6 +29,7 @@ from quant_platform.application.live_window_evidence import (  # noqa: E402
     gateway_strict_reader,
     load_archive_days,
     parse_window,
+    read_declared_gaps,
     read_live_slices,
 )
 from quant_platform.application.live_ingest_server import BYBIT_LINEAR_TRADE_INSTRUMENTS_V1  # noqa: E402
@@ -38,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--instrument", required=True, choices=BYBIT_LINEAR_TRADE_INSTRUMENTS_V1)
     parser.add_argument("--dsn", default=None, help="PostgreSQL DSN; otherwise standard PG environment is used")
+    parser.add_argument("--storage-root", required=True, type=Path,
+                        help="the storage root the run wrote to: the explicit gaps it recorded (ADR-0044) are read from it")
     parser.add_argument("--archive", required=True, nargs="+", type=Path,
                         help="the local <INSTRUMENT><YYYY-MM-DD>.csv.gz file of every UTC day the window touches")
     parser.add_argument("--start", default=None, help="window start (UTC, ISO); default: the first valid live slice")
@@ -56,7 +59,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(error))
 
     slices = read_live_slices(arguments.dsn, arguments.instrument)
-    needed, missing = archive_days_missing(slices, window, archive_days)
+    try:
+        needed, missing = archive_days_missing(slices, window, archive_days)
+    except ValueError as error:  # a slice crosses a bound of the requested window
+        parser.error(str(error))
+    gaps, unparseable = read_declared_gaps(arguments.storage_root, arguments.instrument)
     if missing:
         parser.error(f"the window touches {', '.join(needed)}; no archive file for {', '.join(missing)}")
     signals_text = None if arguments.signals_log is None else arguments.signals_log.read_text(encoding="utf-8", errors="replace")
@@ -66,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
             instrument=arguments.instrument,
             archive=(record for records in archive_days.values() for record in records),
             slices=slices, read_segment=read_segment, window=window, signals_text=signals_text,
+            declared_gaps=gaps, unparseable_gap_manifests=unparseable,
             configuration={"code_ref": arguments.code_ref, "mode": arguments.mode, "slice_seconds": arguments.slice_seconds,
                            "slice_max_trades": arguments.slice_max_trades, "buffer_messages": arguments.buffer_messages},
         )

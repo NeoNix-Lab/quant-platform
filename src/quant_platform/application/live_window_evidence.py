@@ -7,11 +7,15 @@ interval the run itself declared unclaimed?
 
 * The **windows the run claimed** are the valid live slices of the instrument inside the requested window (a slice is a half-open
   window, ``complete`` over exactly that window). Consecutive slices that chain exactly form a **segment**; a hole between two
-  segments is an interval nobody claimed (an interruption with an explicit gap, a midnight with no trade).
+  segments is an interval nobody claimed. The requested window is kept as asked: with ``--start/--end`` the archive trades of the
+  head (before the first slice) and of the tail (after the last) are counted and classified like any other; a slice that crosses a
+  bound is refused, not clipped.
 * An archive trade **inside a claimed window** that is not read back is a loss the run did not declare: a stop condition. One inside
-  a hole is the declared cost of that interruption: reported with the hole, not a failure. A trade read back that the archive does
-  not hold is reported (the archive is the provider's later view); one the archive holds with a different payload, or read twice,
-  is a stop condition.
+  a hole is excused only when the hole is **declared by recorded evidence**: an explicit gap record of the run (ADR-0044, a durable
+  manifest whose last durable key lies in the segment before the hole) or an ``unclaimed_span`` signal of the captured log that covers
+  the hole. A missing catalog partition is not a declaration of its cause: a hole with no such evidence, a head or a tail that holds
+  an archive trade is a stop condition. A trade read back that the archive does not hold is reported; one the archive holds with a
+  different payload, read twice or out of the canonical ``(exchange_ts, trade_id)`` order, is a stop condition.
 * The signals are taken from the captured stdout of ``tools/live_ingest_server.py`` (``signal kind=... k=v,k=v`` lines): the
   counters the session reports (ordering violations, reconnects, buffer high-water mark, slice lag) and the interruptions.
 
@@ -31,6 +35,7 @@ from typing import Any
 
 from quant_platform.data import Instant
 from quant_platform.data.models import TradeRecord
+from quant_platform.source_adapters.bybit import bybit_trade_v1_ordering_key
 
 _NS_PER_DAY = 86_400_000_000_000
 _NS_PER_MS = 1_000_000
@@ -48,6 +53,14 @@ class SliceWindow:
     start: Instant
     end: Instant
     rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeclaredGap:
+    """An explicit gap the run recorded (ADR-0044): the exchange time of its last durable key and the coverage id."""
+
+    start: Instant
+    coverage_id: str
 
 
 def _ms(instant: Instant) -> int:
@@ -150,6 +163,34 @@ def summarize_signals(text: str) -> dict[str, Any]:
     }
 
 
+def unclaimed_spans(text: str) -> list[tuple[Instant, Instant]]:
+    """The ``unclaimed_span`` signals of a captured log: the spans a UTC midnight with no trade left without a slice."""
+
+    spans = []
+    for line in text.splitlines():
+        match = _SIGNAL_LINE.match(line.strip())
+        if match is None:
+            continue
+        payload = match.group("payload") or ""
+        start, end = _field(payload, "unclaimed_start"), _field(payload, "unclaimed_end")
+        if start and end:
+            spans.append((Instant.parse(start), Instant.parse(end)))
+    return spans
+
+
+def _declarations(
+    hole: tuple[Instant, Instant], previous_start: Instant, gaps: Sequence[DeclaredGap],
+    spans: Sequence[tuple[Instant, Instant]],
+) -> list[str]:
+    """What the run recorded about one hole: a gap whose last durable key lies in the segment before it, a signalled span over it."""
+
+    found = [f"gap_record:{gap.coverage_id}" for gap in gaps
+             if previous_start.epoch_ns <= gap.start.epoch_ns < hole[1].epoch_ns]
+    found += [f"unclaimed_span_signal:{a.isoformat()}..{b.isoformat()}" for a, b in spans
+              if a.epoch_ns <= hole[0].epoch_ns and hole[1].epoch_ns <= b.epoch_ns]
+    return found
+
+
 def build_window_evidence(
     *,
     instrument: str,
@@ -158,22 +199,33 @@ def build_window_evidence(
     read_segment: Callable[[Instant, Instant], Sequence[TradeRecord]],
     window: tuple[Instant, Instant] | None = None,
     signals_text: str | None = None,
+    declared_gaps: Sequence[DeclaredGap] = (),
+    unparseable_gap_manifests: int = 0,
     configuration: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Compare the claimed windows of a run with the archive; ``read_segment(start, end)`` is the ``strict`` gateway read."""
+    """Compare the claimed windows of a run with the archive; ``read_segment(start, end)`` is the ``strict`` gateway read.
+
+    ``window`` is the requested window and is kept as given; without one it is the extent of the valid slices."""
 
     valid = _claimed(slices, window)
     stops: list[str] = []
+    archive_records = list(archive)
     if not valid:
+        low, high = (None, None) if window is None else (window[0].epoch_ns, window[1].epoch_ns)
+        counted = 0 if low is None else sum(1 for r in archive_records if low <= r.exchange_ts.epoch_ns < high)
         return {"instrument": instrument, "passed": False, "stop_conditions": ["no valid live slice in the window"],
-                "window": None}
+                "window": None if window is None else {"start": window[0].isoformat(), "end": window[1].isoformat()},
+                "archive_trades_in_window": counted}
     ordered_slices = sorted(valid, key=lambda s: (s.start.epoch_ns, s.end.epoch_ns))
     overlapping = sum(1 for a, b in zip(ordered_slices, ordered_slices[1:]) if b.start.epoch_ns < a.end.epoch_ns)
     if overlapping:  # the catalog admits no two valid partitions of one dataset over the same time (partitions_one_live)
         stops.append(f"{overlapping} valid slices overlap the one before them")
+    if unparseable_gap_manifests:
+        stops.append(f"{unparseable_gap_manifests} gap manifests of the run could not be read (the holes cannot be attributed)")
     segments = chain_segments(valid)
     holes = _holes(segments)
-    start, end = segments[0][0], segments[-1][1]
+    start, end = (segments[0][0], segments[-1][1]) if window is None else window
+    spans = unclaimed_spans(signals_text) if signals_text is not None else []
 
     # what the gateway returns for the claimed windows, one strict read per exact chain
     read: list[TradeRecord] = []
@@ -193,27 +245,40 @@ def build_window_evidence(
     if duplicated:
         stops.append(f"{len(duplicated)} trades are read more than once")
     read_by_id = {record.trade_id: record for record in read}
-    ordered = [(r.exchange_ts.epoch_ns, r.trade_id) for r in read]
-    out_of_order = sum(1 for a, b in zip(ordered, ordered[1:]) if b[0] < a[0])
+    keys = [bybit_trade_v1_ordering_key(r) for r in read]  # the canonical total order, ties by trade_id included
+    out_of_order = sum(1 for a, b in zip(keys, keys[1:]) if (b[0].epoch_ns, b[1]) < (a[0].epoch_ns, a[1]))
     if out_of_order:
-        stops.append(f"the gateway returned {out_of_order} trades out of exchange_ts order")
+        stops.append(f"the gateway returned {out_of_order} trades out of (exchange_ts, trade_id) order")
 
     low, high = start.epoch_ns, end.epoch_ns
-    in_window = {r.trade_id: r for r in archive if low <= r.exchange_ts.epoch_ns < high}
+    in_window = {r.trade_id: r for r in archive_records if low <= r.exchange_ts.epoch_ns < high}
+    first_claimed, last_claimed = segments[0][0].epoch_ns, segments[-1][1].epoch_ns
     inside_claimed: list[str] = []
-    inside_hole: dict[int, list[str]] = {i: [] for i in range(len(holes))}
+    outside_edges: list[str] = []  # the head and the tail of the requested window: nothing was claimed there
+    hole_trades: dict[int, list[str]] = {i: [] for i in range(len(holes))}
     for trade_id, record in in_window.items():
         if trade_id in read_by_id:
             continue
         ts = record.exchange_ts.epoch_ns
+        if ts < first_claimed or ts >= last_claimed:
+            outside_edges.append(trade_id)
+            continue
         for index, (hole_start, hole_end) in enumerate(holes):
             if hole_start.epoch_ns <= ts < hole_end.epoch_ns:
-                inside_hole[index].append(trade_id)
+                hole_trades[index].append(trade_id)
                 break
         else:
             inside_claimed.append(trade_id)
+    declarations = [_declarations(hole, segments[i][0], declared_gaps, spans) for i, hole in enumerate(holes)]
+    declared_missing = sum(len(hole_trades[i]) for i in hole_trades if declarations[i])
+    undeclared_missing = sum(len(hole_trades[i]) for i in hole_trades if not declarations[i])
     if inside_claimed:
         stops.append(f"{len(inside_claimed)} archive trades inside a claimed window are not read back (an undeclared loss)")
+    if undeclared_missing:
+        stops.append(f"{undeclared_missing} archive trades lie in a hole between slices that no recorded gap or signalled "
+                     "span declares (an undeclared loss)")
+    if outside_edges:
+        stops.append(f"{len(outside_edges)} archive trades of the requested window lie before the first or after the last claimed window")
     extra = sorted(trade_id for trade_id in read_by_id if trade_id not in in_window)
     conflicts: dict[str, list[str]] = {}
     for trade_id, record in read_by_id.items():
@@ -231,7 +296,8 @@ def build_window_evidence(
     lengths = [(s.end.epoch_ns - s.start.epoch_ns) / 1e9 for s in valid]
     report: dict[str, Any] = {
         "instrument": instrument,
-        "window": {"start": start.isoformat(), "end": end.isoformat(), "seconds": window_ns / 1e9},
+        "window": {"start": start.isoformat(), "end": end.isoformat(), "seconds": window_ns / 1e9,
+                   "requested": window is not None},
         "configuration": dict(configuration or {}),
         "slices": {
             "valid": len(valid),
@@ -244,7 +310,8 @@ def build_window_evidence(
         },
         "holes": [
             {"start": a.isoformat(), "end": b.isoformat(), "seconds": (b.epoch_ns - a.epoch_ns) / 1e9,
-             "archive_trades_inside": len(inside_hole[i]), "examples": sorted(inside_hole[i])[:_EXAMPLES]}
+             "declared_by": declarations[i],
+             "archive_trades_inside": len(hole_trades[i]), "examples": sorted(hole_trades[i])[:_EXAMPLES]}
             for i, (a, b) in enumerate(holes)
         ],
         "claimed_share": listened_ns / window_ns if window_ns else 1.0,
@@ -253,9 +320,12 @@ def build_window_evidence(
         "captured_of_archive": captured,
         "captured_ratio": captured / len(in_window) if in_window else 1.0,
         "missing_inside_claimed_windows": len(inside_claimed),
-        "missing_inside_unclaimed_spans": sum(len(v) for v in inside_hole.values()),
+        "missing_inside_declared_gaps": declared_missing,
+        "missing_inside_undeclared_holes": undeclared_missing,
+        "missing_outside_claimed_edges": len(outside_edges),
         "read_not_in_archive": len(extra),
         "examples_missing_inside_claimed_windows": sorted(inside_claimed)[:_EXAMPLES],
+        "examples_missing_outside_claimed_edges": sorted(outside_edges)[:_EXAMPLES],
         "examples_read_not_in_archive": extra[:_EXAMPLES],
         "conflicts": {k: conflicts[k] for k in sorted(conflicts)[:_EXAMPLES]},
         "strict_reads_refused": refused,
@@ -295,21 +365,36 @@ def parse_window(start: str | None, end: str | None) -> tuple[Instant, Instant] 
 def archive_days_missing(
     slices: Sequence[SliceWindow], window: tuple[Instant, Instant] | None, available: Iterable[str],
 ) -> tuple[list[str], list[str]]:
-    """``(days the claimed windows touch, those without an archive file)``; both empty when no valid slice is in the window."""
+    """``(days the compared window touches, those without an archive file)``.
+
+    The compared window is the requested one, whole, whatever slices exist in it; without one it is the extent of the valid slices
+    (both empty when there are none)."""
 
     valid = _claimed(slices, window)
-    if not valid:
+    if window is not None:
+        needed = archive_days_needed(window[0], window[1])
+    elif valid:
+        needed = archive_days_needed(min(s.start for s in valid), max(s.end for s in valid))
+    else:
         return [], []
-    needed = archive_days_needed(min(s.start for s in valid), max(s.end for s in valid))
     have = set(available)
     return needed, [day for day in needed if day not in have]
 
 
 def _claimed(slices: Sequence[SliceWindow], window: tuple[Instant, Instant] | None) -> list[SliceWindow]:
+    """The valid slices inside the window; a valid slice that crosses a bound makes the window unsupported (ValueError)."""
+
     valid = [s for s in slices if s.state == "valid"]
-    if window is not None:
-        valid = [s for s in valid if s.start.epoch_ns >= window[0].epoch_ns and s.end.epoch_ns <= window[1].epoch_ns]
-    return valid
+    if window is None:
+        return valid
+    low, high = window[0].epoch_ns, window[1].epoch_ns
+    for item in valid:
+        for bound in (low, high):
+            if item.start.epoch_ns < bound < item.end.epoch_ns:
+                raise ValueError(
+                    f"the slice {item.key} ({item.start.isoformat()}..{item.end.isoformat()}) crosses the window bound "
+                    f"{Instant(bound).isoformat()}: choose bounds on slice boundaries or omit --start/--end")
+    return [s for s in valid if s.start.epoch_ns >= low and s.end.epoch_ns <= high]
 
 
 def load_archive_days(paths: Iterable[str | Path], *, instrument: str) -> dict[str, list[TradeRecord]]:
@@ -327,6 +412,16 @@ def load_archive_days(paths: Iterable[str | Path], *, instrument: str) -> dict[s
 
 
 # ---------------------------------------------------------------------------------------------------- the real catalog
+
+
+def read_declared_gaps(storage_root: str | Path, instrument: str) -> tuple[list[DeclaredGap], int]:
+    """The explicit gaps recorded under the storage root (ADR-0044 manifests), and how many manifests could not be read."""
+
+    from quant_platform.application.live_gap_orchestration import load_open_long_gap_records
+
+    loaded = load_open_long_gap_records(storage_root=storage_root, instrument=instrument)
+    gaps = [DeclaredGap(record.interval.start_key.exchange_ts, record.coverage_id) for record in loaded.records]
+    return gaps, len(loaded.unparseable_manifest_paths)
 
 
 def read_live_slices(dsn: str | None, instrument: str) -> list[SliceWindow]:
@@ -373,5 +468,8 @@ def gateway_strict_reader(dsn: str | None, instrument: str):
     return read_segment, connection
 
 
-__all__ = ["SliceWindow", "archive_days_missing", "archive_days_needed", "parse_window", "build_window_evidence", "chain_segments", "gateway_strict_reader",
-           "load_archive_days", "read_live_slices", "summarize_signals"]
+__all__ = [
+    "DeclaredGap", "SliceWindow", "archive_days_missing", "archive_days_needed", "build_window_evidence", "chain_segments",
+    "gateway_strict_reader", "load_archive_days", "parse_window", "read_declared_gaps", "read_live_slices", "summarize_signals",
+    "unclaimed_spans",
+]

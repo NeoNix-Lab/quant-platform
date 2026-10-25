@@ -409,10 +409,11 @@ def main() -> int:
                 path.write_bytes(gzip.compress((chr(10).join(lines) + chr(10)).encode("utf-8")))
                 return path
 
-            def run_tool(*extra: str) -> tuple[int, dict]:
+            def run_tool(*extra: str, root: Path = storage, archive: Path | None = None) -> tuple[int, dict]:
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
-                    code = evidence_tool.main(["--instrument", INSTRUMENT, "--dsn", dsn, "--archive", str(write_archive()), *extra])
+                    code = evidence_tool.main(["--instrument", INSTRUMENT, "--dsn", dsn, "--storage-root", str(root), "--archive",
+                                               str(archive or write_archive()), *extra])
                 return code, json.loads(out.getvalue())
 
             code, report = run_tool()
@@ -420,15 +421,31 @@ def main() -> int:
             assert report["missing_inside_claimed_windows"] == 0 and report["read_not_in_archive"] == 0 and not report["conflicts"]
             assert report["read_through_gateway"] == len(delivered) == report["captured_of_archive"], report
             assert report["slices"]["chain_segments"] >= 3 and len(report["holes"]) == report["slices"]["chain_segments"] - 1
-            assert report["missing_inside_unclaimed_spans"] > 0 and report["captured_ratio"] < 1.0, "the shortfall is stated"
-            assert sum(h["archive_trades_inside"] for h in report["holes"]) == report["missing_inside_unclaimed_spans"]
+            assert report["missing_inside_declared_gaps"] > 0 and report["captured_ratio"] < 1.0, "the shortfall is stated"
+            assert report["missing_inside_undeclared_holes"] == 0 and all(h["declared_by"] for h in report["holes"]), report["holes"]
+            assert sum(h["archive_trades_inside"] for h in report["holes"]) == report["missing_inside_declared_gaps"]
+
+            # the same slices and the same archive, but a root where no gap was recorded: the holes are not declared by anything,
+            # and the missing trades are an undeclared loss (the absence of a partition is not a declaration of its cause)
+            empty_root = Path(holder) / "empty-root"
+            empty_root.mkdir()
+            code, blind = run_tool(root=empty_root)
+            assert code == 1 and not blind["passed"] and blind["missing_inside_undeclared_holes"] > 0, blind["stop_conditions"]
             assert report["slices"]["not_valid_in_catalog"] == 0 and report["slices"]["revisions_above_one"] == 0
+
+            # the requested window is kept: an hour around slices that span a fraction of a second is reported as such
+            first_iso, last_iso = Instant.parse(found[0][3]), Instant.parse(found[-1][4])
+            code, hour = run_tool("--start", Instant(first_iso.epoch_ns - 1800 * 10**9).isoformat(),
+                                  "--end", Instant(last_iso.epoch_ns + 1800 * 10**9).isoformat())
+            assert hour["window"]["requested"] and hour["window"]["seconds"] > 3600 and hour["claimed_share"] < 0.01, hour["window"]
+            assert hour["archive_trades_in_window"] == report["archive_trades_in_window"]
 
             first_start = Instant.parse(found[0][3]).epoch_ns // MS
             ghost = f"{(first_start + 1) // 1000}.{(first_start + 1) % 1000:03d},{INSTRUMENT},Buy,1,100.99,PlusTick,ghost-1,1,2,1"
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                code = evidence_tool.main(["--instrument", INSTRUMENT, "--dsn", dsn, "--archive", str(write_archive((ghost,)))])
+                code = evidence_tool.main(["--instrument", INSTRUMENT, "--dsn", dsn, "--storage-root", str(storage), "--archive",
+                                           str(write_archive((ghost,)))])
             ghost_report = json.loads(out.getvalue())
             assert code == 1 and not ghost_report["passed"] and ghost_report["examples_missing_inside_claimed_windows"] == ["ghost-1"], ghost_report
 

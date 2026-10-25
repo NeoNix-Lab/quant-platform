@@ -211,18 +211,29 @@ python tools/live_ingest_server.py --instrument ETHUSDT --mode continuous \
 
 # 2. After the UTC day (or days) of the run has ended, fetch the archive of each day it touched (tools/fetch_bybit_trade_archive.py).
 # 3. Produce the evidence (read-only; exit 0 = no stop condition, 1 = a stop condition, 2 = usage):
-python tools/live_window_evidence.py --instrument ETHUSDT --archive ETHUSDT<YYYY-MM-DD>.csv.gz [more days] \
+python tools/live_window_evidence.py --instrument ETHUSDT --storage-root <ROOT> \
+  --archive ETHUSDT<YYYY-MM-DD>.csv.gz [more days] \
   --signals-log live-ethusdt-run.log --code-ref <SHA> --mode continuous > ethusdt-evidence.json
 ```
 
-The report states, for the window the run claimed (the valid live slices): the archive trades in it, the trades a `strict` gateway
-read returns (chunks of at most twelve slices, ending on slice boundaries), the captured ratio, the holes between exact chains (each
-an interval the run declared unclaimed, with the archive trades it contains), the slices (count, rows and seconds: minimum, median,
-maximum) and the counters of the session. **Stop conditions** (exit 1; do not read the proof as passed and report): an archive trade
-inside a claimed window that is not read back (an undeclared loss); a strict read of a claimed window refused; a trade read twice or
-out of order; a trade whose payload differs from the archive. A shortfall against the archive that falls inside an unclaimed span is
-reported, not hidden, and is not a stop condition; an ordering violation is a measurement (it is an interruption by design), to be
-explained in the evidence. Record the report, the log and the commit in the pull request of `O03`.
+The report states, for the window compared: the archive trades in it, the trades a `strict` gateway read returns (chunks of at
+most twelve slices, ending on slice boundaries), the captured ratio, the holes between exact chains with the archive trades each
+contains and **what declares it**, the slices (count, rows and seconds: minimum, median, maximum) and the counters of the session.
+Without `--start`/`--end` the window is the extent of the valid live slices; with them it is exactly the window asked for (a slice
+that crosses a bound is refused, not clipped, and the archive of every day the whole window touches is required), so the archive
+trades before the first slice and after the last count against the proof.
+
+A hole is **declared** only by evidence the run recorded: an explicit gap record under `--storage-root` (ADR-0044) whose last durable
+key lies in the segment before the hole, or an `unclaimed_span` signal in the captured log that covers it. The absence of a partition
+is not a declaration of its cause.
+
+**Stop conditions** (exit 1; do not read the proof as passed and report): an archive trade inside a claimed window that is not read
+back (an undeclared loss); an archive trade in a hole that no recorded gap or signalled span declares (an undeclared loss); an archive
+trade of the requested window before the first or after the last claimed window; a strict read of a claimed window refused; a trade
+read twice or out of the canonical `(exchange_ts, trade_id)` order; a trade whose payload differs from the archive; valid slices that
+overlap; a gap manifest that cannot be read. A shortfall against the archive inside a **declared** hole is reported, not hidden, and
+is not a stop condition; an ordering violation is a measurement (it is an interruption by design), to be explained in the evidence.
+Record the report, the log and the commit in the pull request of `O03`.
 
 ## Rollback
 

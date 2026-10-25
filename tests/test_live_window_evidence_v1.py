@@ -13,7 +13,9 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from quant_platform.application.live_window_evidence import (  # noqa: E402
+    DeclaredGap,
     SliceWindow,
+    archive_days_missing,
     archive_days_needed,
     build_window_evidence,
     chain_segments,
@@ -64,26 +66,97 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(report["passed"], report["stop_conditions"])
         self.assertEqual((10, 10, 10, 1.0), (report["archive_trades_in_window"], report["read_through_gateway"],
                                             report["captured_of_archive"], report["captured_ratio"]))
-        self.assertEqual((0, 0, 0), (report["missing_inside_claimed_windows"], report["missing_inside_unclaimed_spans"],
-                                    report["read_not_in_archive"]))
+        self.assertEqual((0, 0, 0, 0), (report["missing_inside_claimed_windows"], report["missing_inside_declared_gaps"],
+                                       report["missing_inside_undeclared_holes"], report["read_not_in_archive"]))
         self.assertEqual([], report["holes"])
         self.assertEqual(1.0, report["claimed_share"])
         self.assertEqual(2, report["slices"]["valid"])
 
-    def test_an_archive_trade_inside_an_unclaimed_span_is_reported_with_the_hole_and_is_not_a_stop(self) -> None:
+    HOLE_SLICES = (window(T0, T0 + 5, 5), window(T0 + 7, T0 + 10, 3))
+
+    def hole_case(self, **kwargs):
         archive = [trade(T0 + i, f"t{i}") for i in range(10)]
         held = [r for r in archive if r.trade_id not in {"t5", "t6"}]
-        report, reader = evidence(archive, [window(T0, T0 + 5, 5), window(T0 + 7, T0 + 10, 3)], held)
+        return evidence(archive, list(self.HOLE_SLICES), held, **kwargs)
+
+    def test_an_archive_trade_in_a_hole_with_a_recorded_gap_is_reported_with_the_hole_and_is_not_a_stop(self) -> None:
+        report, reader = self.hole_case(declared_gaps=[DeclaredGap(at(T0 + 4), "gap-1")])
         self.assertTrue(report["passed"], report["stop_conditions"])
-        self.assertEqual(2, report["missing_inside_unclaimed_spans"])
-        self.assertEqual(0, report["missing_inside_claimed_windows"])
+        self.assertEqual((2, 0, 0), (report["missing_inside_declared_gaps"], report["missing_inside_undeclared_holes"],
+                                    report["missing_inside_claimed_windows"]))
         (hole,) = report["holes"]
-        self.assertEqual(2, hole["archive_trades_inside"])
-        self.assertEqual(["t5", "t6"], hole["examples"])
+        self.assertEqual((2, ["t5", "t6"], ["gap_record:gap-1"]), (hole["archive_trades_inside"], hole["examples"], hole["declared_by"]))
         self.assertEqual(2, report["slices"]["chain_segments"])
         self.assertAlmostEqual(0.8, report["captured_ratio"])  # the shortfall is stated, never rounded up
         self.assertAlmostEqual(8 / 10, report["claimed_share"])
         self.assertEqual(2, len(reader.calls))  # one strict read per exact chain
+
+    def test_the_same_hole_with_no_recorded_gap_and_no_signal_is_an_undeclared_loss(self) -> None:
+        for kwargs in ({}, {"signals_text": "signal kind=HEALTH_SNAPSHOT capability=c signal_id=s health=HEALTHY,phase=slice"}):
+            report, _ = self.hole_case(**kwargs)
+            self.assertFalse(report["passed"], kwargs)
+            self.assertEqual((0, 2), (report["missing_inside_declared_gaps"], report["missing_inside_undeclared_holes"]))
+            self.assertTrue(any("no recorded gap" in c for c in report["stop_conditions"]))
+            self.assertEqual([], report["holes"][0]["declared_by"])
+
+    def test_a_signalled_unclaimed_span_over_the_hole_declares_it(self) -> None:
+        span = f"unclaimed_start={at(T0 + 5).isoformat()},unclaimed_end={at(T0 + 7).isoformat()}"
+        log = f"signal kind=HEALTH_SNAPSHOT capability=c signal_id=s health=DEGRADED,phase=slice,{span}"
+        report, _ = self.hole_case(signals_text=log)
+        self.assertTrue(report["passed"], report["stop_conditions"])
+        self.assertTrue(report["holes"][0]["declared_by"][0].startswith("unclaimed_span_signal:"))
+        smaller = f"unclaimed_start={at(T0 + 5).isoformat()},unclaimed_end={at(T0 + 6).isoformat()}"  # does not cover the hole
+        report, _ = self.hole_case(signals_text=log.replace(span, smaller))
+        self.assertFalse(report["passed"])
+
+    def test_a_gap_record_of_another_interval_does_not_declare_the_hole(self) -> None:
+        for start in (T0 - 100, T0 + 8):  # before the segment that precedes the hole; after the hole
+            report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(start), "elsewhere")])
+            self.assertFalse(report["passed"], start)
+
+    def test_a_hole_without_archive_trades_needs_no_declaration_but_is_listed(self) -> None:
+        archive = [trade(T0, "a"), trade(T0 + 8, "b")]
+        report, _ = evidence(archive, list(self.HOLE_SLICES), archive)
+        self.assertTrue(report["passed"], report["stop_conditions"])
+        self.assertEqual(([], 0), (report["holes"][0]["declared_by"], report["holes"][0]["archive_trades_inside"]))
+
+    def test_gap_manifests_that_cannot_be_read_are_a_stop_condition(self) -> None:
+        report, _ = self.hole_case(declared_gaps=[DeclaredGap(at(T0 + 4), "gap-1")], unparseable_gap_manifests=1)
+        self.assertFalse(report["passed"])
+
+    def test_the_requested_window_is_kept_the_head_and_the_tail_are_compared(self) -> None:
+        archive = [trade(T0 - 3, "head"), trade(T0, "a"), trade(T0 + 7, "tail")]
+        report, _ = evidence(archive, [window(T0, T0 + 5, 1)], [trade(T0, "a")], window=(at(T0 - 5), at(T0 + 10)))
+        self.assertFalse(report["passed"])
+        self.assertEqual(3, report["archive_trades_in_window"])
+        self.assertEqual(2, report["missing_outside_claimed_edges"])
+        self.assertEqual(["head", "tail"], report["examples_missing_outside_claimed_edges"])
+        self.assertAlmostEqual(1 / 3, report["captured_ratio"])
+        self.assertEqual((15.0 / 1000, True), (report["window"]["seconds"], report["window"]["requested"]))
+        self.assertAlmostEqual(5 / 15, report["claimed_share"])
+
+    def test_a_requested_window_with_nothing_but_claimed_time_passes(self) -> None:
+        archive = [trade(T0, "a")]
+        report, _ = evidence(archive, [window(T0, T0 + 5, 1)], archive, window=(at(T0), at(T0 + 5)))
+        self.assertTrue(report["passed"], report["stop_conditions"])
+
+    def test_a_slice_that_crosses_a_bound_of_the_requested_window_is_refused_not_clipped(self) -> None:
+        for bounds in ((T0 + 2, T0 + 10), (T0, T0 + 3)):
+            with self.assertRaises(ValueError):
+                evidence([trade(T0, "a")], [window(T0, T0 + 5, 1)], [trade(T0, "a")], window=(at(bounds[0]), at(bounds[1])))
+
+    def test_no_valid_slice_in_a_requested_window_still_counts_its_archive_trades(self) -> None:
+        report, _ = evidence([trade(T0, "a"), trade(T0 + 1, "b")], [], [], window=(at(T0), at(T0 + 5)))
+        self.assertFalse(report["passed"])
+        self.assertEqual(2, report["archive_trades_in_window"])
+
+    def test_the_archive_days_are_those_of_the_whole_requested_window_not_of_the_surviving_slices(self) -> None:
+        midnight = Instant.parse("2026-10-22T00:00:00Z").epoch_ns // MS
+        slices = [window(midnight - 20, midnight - 10)]
+        asked = (at(midnight - 1000), at(midnight + 1000))
+        self.assertEqual((["2026-10-21", "2026-10-22"], ["2026-10-22"]), archive_days_missing(slices, asked, ["2026-10-21"]))
+        self.assertEqual((["2026-10-21"], []), archive_days_missing(slices, None, ["2026-10-21"]))
+        self.assertEqual(([], []), archive_days_missing([], None, []))
 
     def test_an_archive_trade_inside_a_claimed_window_that_is_not_read_back_is_a_stop_condition(self) -> None:
         archive = [trade(T0 + i, f"t{i}") for i in range(10)]
@@ -127,7 +200,15 @@ class ComparisonTests(unittest.TestCase):
         archive = [trade(T0, "a"), trade(T0 + 1, "b")]
         report, _ = evidence(archive, [window(T0, T0 + 5, 2)], list(reversed(archive)))
         self.assertFalse(report["passed"])
-        self.assertTrue(any("out of exchange_ts order" in c for c in report["stop_conditions"]))
+        self.assertTrue(any("out of (exchange_ts, trade_id) order" in c for c in report["stop_conditions"]))
+
+    def test_trades_of_one_millisecond_must_come_back_in_trade_id_order(self) -> None:
+        a, b = trade(T0, "a"), trade(T0, "b")
+        report, _ = evidence([a, b], [window(T0, T0 + 5, 2)], [a, b])
+        self.assertTrue(report["passed"], report["stop_conditions"])
+        report, _ = evidence([a, b], [window(T0, T0 + 5, 2)], [b, a])  # the canonical tie-break is the trade id
+        self.assertFalse(report["passed"])
+        self.assertTrue(any("out of (exchange_ts, trade_id) order" in c for c in report["stop_conditions"]))
 
     def test_valid_slices_that_overlap_are_a_stop_condition_and_are_not_chained(self) -> None:
         archive = [trade(T0, "a")]
