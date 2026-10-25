@@ -197,7 +197,6 @@ class DigestTests(unittest.TestCase):
             "incumbent assertion ids": lambda p: p["days"][0]["incumbent"].update(assertion_ids=["a1"]),
             "conservation": lambda p: p["days"][0]["conservation"].update(rows=11),
             "neighbour archive": lambda p: p["days"][0]["conservation"].update(archives={"2026-10-19": "e" * 64}),
-            "records held elsewhere": lambda p: p["days"][0]["conservation"].update(outside_held={"2026-10-19": True}),
             "refusals": lambda p: p["days"][0].update(refusals=["not closed"]),
             "key": lambda p: p["days"][0].update(key_to_create="dt=2026-10-20/seg=000001.000"),
             "days": lambda p: p["days"].append(deepcopy(p["days"][0]) | {"day": "2026-10-21"}),
@@ -209,7 +208,8 @@ class DigestTests(unittest.TestCase):
 
     def test_progress_is_not_part_of_the_digest(self) -> None:
         base = self.digest(PLAN)
-        for change in (lambda p: p["days"][0].update(action="import"), lambda p: p["days"][0]["incumbent"].update(state="invalid"),
+        for change in (lambda p: p["days"][0]["conservation"].update(outside_held={"2026-10-19": True}),
+                       lambda p: p["days"][0].update(action="import"), lambda p: p["days"][0]["incumbent"].update(state="invalid"),
                        lambda p: p["days"][0].update(created={"partition_id": "n", "state": "valid"}, action="verify"),
                        lambda p: p.update(digest="anything")):
             moved = deepcopy(PLAN)

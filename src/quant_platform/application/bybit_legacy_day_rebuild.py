@@ -328,14 +328,20 @@ _INCUMBENT_IDENTITY = (
 def _digest(plan: Mapping[str, Any]) -> str:
     """The digest binds what the operation is about (the incumbent's identity, the archive, the checks, the commit), not how far it has
     got: the state of the incumbent and the action are progress, so a plan stays current after a retire that was not followed by the
-    import (the crash of A2.5) and is stale as soon as anything the operation depends on changes."""
+    import (the crash of A2.5) and is stale as soon as anything the operation depends on changes.
+
+    ``outside_held`` (whether a valid partition of another day holds the incumbent's records of that day) is progress too: it turns
+    true when the plan itself rebuilds that day. It is left out; what it means for the plan is in the refusals, which are bound, so a
+    change from outside (a held record no longer held, a day of the plan no longer rebuildable) still changes the digest."""
 
     days = []
     for entry in plan["days"]:
         incumbent = entry.get("incumbent")
+        conservation = entry.get("conservation")
         days.append({
             "day": entry["day"], "key_to_create": entry["key_to_create"], "archive": entry.get("archive"),
-            "conservation": entry.get("conservation"), "refusals": entry.get("refusals"),
+            "conservation": None if conservation is None else {k: v for k, v in conservation.items() if k != "outside_held"},
+            "refusals": entry.get("refusals"),
             "incumbent": None if incumbent is None else {k: incumbent.get(k) for k in _INCUMBENT_IDENTITY},
         })
     body = {key: plan[key] for key in ("schema", "instrument", "storage_root_id", "code_ref")}

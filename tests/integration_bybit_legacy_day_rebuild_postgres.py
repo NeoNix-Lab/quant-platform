@@ -612,9 +612,49 @@ def main() -> int:
             assert held_plan["days"][0]["action"] == "retire+import", held_plan["days"][0]["refusals"]
             assert held_plan["days"][0]["conservation"]["outside_held"] == {owner_holding: True}
             kept = {full[owner_holding][0][1], full[owner_holding][1][1]}
+            sql(connection, "UPDATE catalog.partitions SET state='closed' WHERE partition_key=%s", (f"dt={owner_holding}",))
+            changed_plan = make_plan([positive])  # a change from outside is still a change of the plan
+            assert changed_plan["days"][0]["action"] == "refused" and changed_plan["digest"] != held_plan["digest"]
+            sql(connection, "UPDATE catalog.partitions SET state='valid' WHERE partition_key=%s", (f"dt={owner_holding}",))
+            assert make_plan([positive])["digest"] == held_plan["digest"]
             result = run(held_plan)
             assert result["days"][0]["outcome"] == "rebuilt", result
             assert kept <= set(gateway_ids(connection, owner_holding))
+
+            # 12b. a plan of two linked days recovers with the same plan after a crash before the verification of the second (A2.5): the
+            #      rebuild itself turns "the next day holds the records" from false to true, which is progress, not a change of the plan
+            first_day, second_day = "2026-10-06", "2026-10-07"
+            for day in (first_day, second_day):
+                full[day] = world(day)
+                write_archive(archives, day, full[day])
+            crossing_legacy(first_day, second_day, full[second_day][:2])
+            legacy(second_day, subset=[full[second_day][5]])
+            linked = make_plan([first_day, second_day])
+            assert [d["action"] for d in linked["days"]] == ["retire+import", "retire+import"], [d["refusals"] for d in linked["days"]]
+            assert linked["days"][0]["conservation"]["outside_held"] == {second_day: False}
+            real_verify = rebuild.verify_rebuilt_day
+
+            def crash_on_second(connection_, *, day, **kwargs):
+                if day == second_day:
+                    raise RuntimeError("crash before the verification of the second day")
+                return real_verify(connection_, day=day, **kwargs)
+
+            with mock.patch.object(rebuild, "verify_rebuilt_day", crash_on_second):
+                try:
+                    run(linked)
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("the crash was not raised")
+            assert states(connection)[f"dt={second_day}/seg=000000.000"] == ["valid"] and states(connection)[f"dt={second_day}"] == ["invalid"]
+            after_crash = make_plan([first_day, second_day])
+            assert [d["action"] for d in after_crash["days"]] == ["verify", "verify"]
+            assert after_crash["days"][0]["conservation"]["outside_held"] == {second_day: True}  # the progress the plan expected
+            assert after_crash["digest"] == linked["digest"], "the progress of the plan must not change its digest"
+            result = run(linked)  # the same plan, the same digest
+            assert [d["outcome"] for d in result["days"]] == ["verified", "verified"], result
+            assert gateway_ids(connection, first_day) == [r[1] for r in full[first_day]]
+            assert gateway_ids(connection, second_day) == [r[1] for r in full[second_day]]
 
             # 13. restore and import share the day's guard (P1): a restore cannot slip in between the import's check and its publication
             retired_day = "2026-10-12"
