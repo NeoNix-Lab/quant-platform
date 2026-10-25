@@ -119,8 +119,10 @@ live publisher before the slices, in the root of the dataset as `partition-manif
 `coverage-manifest-<HHMMSS>.json`, the time without the date: a root file that a later day overwrote in the same second is not this
 revision's and the day is refused); the archive file is missing or fails the strict parsing; or **conservation
 fails**: every record of the damaged revision, by `(exchange_ts, trade_id)`, must exist in the archive file of its own UTC day with
-the same venue, instrument, exchange time (millisecond), side, price and size, and that day must be readable afterwards (rebuilt in
-the same plan or already `valid`). A trade id that the damaged revision holds twice with different content refuses the day too. Any
+the same venue, instrument, exchange time (millisecond), side, price and size. The records that belong to **another** day must stay
+served: a `valid` partition of that day must hold those very records (a later, partial batch of the day that does not is not enough),
+or that day must be in the same plan and not refused, so that it is rebuilt from its own archive file; a day of the plan that is refused
+contributes nothing, and what depended on it is refused in turn. The hash of every archive file read for this is in the plan. A trade id that the damaged revision holds twice with different content refuses the day too. Any
 difference refuses the day; there is no partial acceptance.
 
 ### 6.3 Execute
@@ -132,7 +134,10 @@ python tools/rebuild_bybit_legacy_days.py --storage-root-id hot execute --plan p
 
 The tool recomputes the plan from the catalog, the files and the clock and refuses (`STALE`, nothing done) if the digest differs: a
 changed incumbent, archive file or catalog, or a day that closed in between. It never acquires another target and never widens the
-set of days. It stops at the first day that fails; the later days are not attempted.
+set of days. It stops at the first day that fails; the later days are not attempted. The import and the verification are bound to the
+archive file the plan approved: they check its SHA-256 on the bytes they parse, so a file replaced after the plan is refused (`SOURCE`)
+and a file replaced after the import fails the verification, whatever is in the directory then. If a run stops after a day that depended
+on a later day of the plan, the later day is retired or untouched: run `verify`, then plan again or `restore` as below.
 
 **Crashes and retries.** After a crash between the retire and the import the day is retired and not imported: run the same command
 again and it imports. After a crash between the import and the verification, run it again: it finds the valid key it would create and
@@ -145,7 +150,8 @@ decide what to do with them (nothing is deleted by the tool).
 python tools/rebuild_bybit_legacy_days.py --storage-root-id hot verify --days 2026-10-20 --archive-dir /srv/marketdata/staging/BTCUSDT
 ```
 
-Read-only and repeatable. It passes only if the imported Parquet is identical to the archive file and a strict gateway read returns
+Read-only and repeatable; pass `--plan plan-2026-10-20.json` to check each day against the archive file the plan approved (the report
+always names the SHA-256 of the file it compared). It passes only if the imported Parquet is identical to the archive file and a strict gateway read returns
 exactly the archive's records, in `(exchange_ts, trade_id)` order, once each. A strict read can also be refused when a neighbouring
 legacy day's coverage crosses midnight and overlaps the rebuilt day: that neighbour is retired and rebuilt by its own plan.
 
@@ -157,7 +163,8 @@ python tools/rebuild_bybit_legacy_days.py --storage-root-id hot restore --day 20
 ```
 
 It adds a superseding `pass` that returns the revision to `valid`; it is refused while the day has any partition under `dt=<day>/`
-(two valid partitions over one day). The ordinary importer still refuses an occupied day, a retired one included: the rebuild is a
+(two valid partitions over one day) and while an import holds the day's lock (`.import-dt=<day>.lock`, the one the import takes from its
+check to its publication; it never waits, so run it again when the import is over). The ordinary importer still refuses an occupied day, a retired one included: the rebuild is a
 separate operation and never a `--force`.
 
 ### 6.5 What this does not do

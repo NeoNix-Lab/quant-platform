@@ -102,7 +102,7 @@ class LegacyManifestLocationTests(unittest.TestCase):
 class DuplicateTradeIdTests(unittest.TestCase):
     def conservation(self, *records):
         with mock.patch.object(rebuild, "scan_trade_v1_all", lambda *a, **k: iter([list(records)])):
-            return rebuild._conservation(None, Path("incumbent.parquet"), "2026-10-20", Path("."), ["2026-10-20"])
+            return rebuild._conservation(Path("incumbent.parquet"), "2026-10-20", Path("."))
 
     def with_id(self, trade_id, **kwargs):
         item = record(**kwargs)
@@ -110,17 +110,57 @@ class DuplicateTradeIdTests(unittest.TestCase):
         return item
 
     def test_a_trade_id_twice_with_different_content_refuses_the_day(self) -> None:
-        refusals, summary = self.conservation(self.with_id("t1", price="100.1"), self.with_id("t1", price="100.2"))
-        self.assertEqual({}, summary)
+        refusals, summary, outside = self.conservation(self.with_id("t1", price="100.1"), self.with_id("t1", price="100.2"))
+        self.assertEqual(({}, {}), (summary, outside))
         self.assertEqual(1, len(refusals))
         self.assertIn("twice with different content", refusals[0])
 
     def test_a_trade_id_twice_with_the_same_content_is_counted_not_hidden(self) -> None:
-        refusals, summary = self.conservation(self.with_id("t1"), self.with_id("t1"))
+        refusals, summary, _outside = self.conservation(self.with_id("t1"), self.with_id("t1"))
         # the archive file of the day is absent in this directory, so the day still refuses; the duplicate is counted
         self.assertEqual(1, summary["duplicate_trade_ids"])
         self.assertEqual(1, summary["rows"])
         self.assertFalse(any("twice" in item for item in refusals))
+
+
+def dependent(day, depends, action="retire+import"):
+    """A plan entry whose incumbent holds records of other days; ``depends`` maps each such day to whether a valid partition holds them."""
+
+    return {"day": day, "action": action, "refusals": [], "conservation": {"days": {d: 2 for d in depends}, "outside_held": dict(depends)}}
+
+
+class DependencyTests(unittest.TestCase):
+    """The records of another day must stay served: held by a valid partition there, or that day rebuilt by this very plan."""
+
+    def resolve(self, *entries):
+        entries = list(entries)
+        rebuild._resolve_dependencies(entries)
+        return {e["day"]: e["action"] for e in entries}
+
+    def test_records_held_by_a_valid_partition_of_their_day_stay_served(self) -> None:
+        self.assertEqual({"a": "retire+import"}, self.resolve(dependent("a", {"b": True})))
+
+    def test_records_held_nowhere_refuse_the_day_before_the_retire(self) -> None:
+        entry = dependent("a", {"b": False})
+        self.assertEqual({"a": "refused"}, self.resolve(entry))
+        self.assertIn("they would stop being served", entry["refusals"][0])
+        self.assertIn("not in this plan", entry["refusals"][0])
+
+    def test_a_day_of_the_plan_serves_them_only_if_it_is_not_refused(self) -> None:
+        self.assertEqual({"a": "retire+import", "b": "retire+import"}, self.resolve(dependent("a", {"b": False}), dependent("b", {})))
+        refused = dependent("b", {}, action="refused")
+        entry = dependent("a", {"b": False})
+        self.assertEqual({"a": "refused", "b": "refused"}, self.resolve(entry, refused))
+        self.assertIn("refused in this plan", entry["refusals"][0])
+        # a refused day changes nothing, so what its valid partition holds is still served
+        self.assertEqual({"a": "retire+import", "b": "refused"}, self.resolve(dependent("a", {"b": True}), dependent("b", {}, action="refused")))
+
+    def test_a_refusal_propagates_along_the_chain(self) -> None:
+        a, b = dependent("a", {"b": False}), dependent("b", {"c": False})
+        self.assertEqual({"a": "refused", "b": "refused"}, self.resolve(a, b))
+
+    def test_a_day_already_retired_is_not_judged_again(self) -> None:
+        self.assertEqual({"a": "import"}, self.resolve(dependent("a", {"b": False}, action="import")))
 
 
 class DifferenceTests(unittest.TestCase):
@@ -156,6 +196,8 @@ class DigestTests(unittest.TestCase):
             "incumbent coverage ids": lambda p: p["days"][0]["incumbent"].update(coverage_ids=["c1"]),
             "incumbent assertion ids": lambda p: p["days"][0]["incumbent"].update(assertion_ids=["a1"]),
             "conservation": lambda p: p["days"][0]["conservation"].update(rows=11),
+            "neighbour archive": lambda p: p["days"][0]["conservation"].update(archives={"2026-10-19": "e" * 64}),
+            "records held elsewhere": lambda p: p["days"][0]["conservation"].update(outside_held={"2026-10-19": True}),
             "refusals": lambda p: p["days"][0].update(refusals=["not closed"]),
             "key": lambda p: p["days"][0].update(key_to_create="dt=2026-10-20/seg=000001.000"),
             "days": lambda p: p["days"].append(deepcopy(p["days"][0]) | {"day": "2026-10-21"}),

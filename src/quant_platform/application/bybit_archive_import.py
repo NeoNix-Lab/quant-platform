@@ -147,6 +147,7 @@ def import_bybit_archive_day_after_retirement(
     archive_path: str | Path,
     storage_root_id: str,
     code_ref: str,
+    expected_source_sha256: str,
 ) -> ArchiveImportReport:
     """The rebuild variant of the import (ADR-0074 Amendment 2, A2.2): the day's legacy revision, once ``invalid``, does not occupy it.
 
@@ -154,7 +155,8 @@ def import_bybit_archive_day_after_retirement(
     variant lets through one thing only: the live revision of the **exact** key ``dt=<day>`` in the state ``invalid`` (its
     superseded predecessors are history). A ``valid``, ``degraded``, ``closed`` or ``writing`` revision of that key, and every
     partition ``dt=<day>/...`` (including the key it would create), still refuses. The key it creates is fixed
-    (:func:`rebuild_partition_key`); it is not a ``--force`` and takes no key argument."""
+    (:func:`rebuild_partition_key`); it is not a ``--force`` and takes no key argument. The bytes it parses and materializes must
+    hash to ``expected_source_sha256`` (the file the plan approved): another file is refused as ``SOURCE`` before anything is written."""
 
     try:
         identity = bybit_archive_dataset_identity(instrument)
@@ -180,7 +182,7 @@ def import_bybit_archive_day_after_retirement(
         return _import_locked(
             connection, identity=identity, instrument=instrument, day=day, start=start, partition_key=rebuild_partition_key(day),
             archive_path=archive_path, storage_root_id=storage_root_id, code_ref=code_ref, dataset_root=dataset_root,
-            coverage_tag_suffix=REBUILD_COVERAGE_TAG_SUFFIX,
+            coverage_tag_suffix=REBUILD_COVERAGE_TAG_SUFFIX, expected_source_sha256=expected_source_sha256,
         )
 
 
@@ -219,6 +221,7 @@ def _import_locked(
     code_ref: str,
     dataset_root: Path,
     coverage_tag_suffix: str = "",
+    expected_source_sha256: str | None = None,
 ) -> ArchiveImportReport:
     rel_path = f"{partition_key}/part-001.parquet"
     artifact_path = dataset_root / rel_path
@@ -233,6 +236,10 @@ def _import_locked(
         records_day = read_bybit_archive_day(archive_path, instrument=instrument, day=day)
     except Exception as exc:
         raise ArchiveImportRefused("SOURCE", str(exc)) from exc
+    if expected_source_sha256 is not None and records_day.evidence.file_sha256 != expected_source_sha256:
+        raise ArchiveImportRefused(
+            "SOURCE", f"the archive file is not the approved one: it hashes to {records_day.evidence.file_sha256}, "
+                      f"the plan approved {expected_source_sha256}")
 
     interval_start = start.strftime("%Y-%m-%dT%H:%M:%SZ")
     interval_end = (start + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -312,7 +319,8 @@ def compare_archive_day_with_parquet(
     the old file must not carry them either). A row of the old file without a ``trade_id`` cannot be matched and is a difference.
     """
 
-    archive = read_bybit_archive_day(archive_path, instrument=instrument, day=day).records
+    archive_day = read_bybit_archive_day(archive_path, instrument=instrument, day=day)
+    archive = archive_day.records
     existing: dict[str, Any] = {}
     parquet_rows = 0
     null_trade_ids = 0
@@ -345,6 +353,7 @@ def compare_archive_day_with_parquet(
     return {
         "instrument": instrument,
         "day": day,
+        "archive_sha256": archive_day.evidence.file_sha256,
         "archive_rows": len(archive),
         "parquet_rows": parquet_rows,
         "parquet_null_trade_ids": null_trade_ids,
@@ -380,6 +389,12 @@ def _acquire_lock(path: Path) -> None:
         raise ArchiveImportRefused("LOCK", f"cannot create the lock {path}: {exc}") from exc
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(f"pid={os.getpid()} host={socket.gethostname()} at={_utc_text(datetime.now(timezone.utc))}")
+
+
+def day_lock(dataset_root: Path, day: str):
+    """The lock of one legacy day (``dt=<day>``), the one the ordinary import and the rebuild import take; it never waits."""
+
+    return _day_lock(dataset_root / f".import-dt={day}.lock")
 
 
 @contextmanager
@@ -499,6 +514,7 @@ __all__ = [
     "bybit_archive_file_name",
     "bybit_archive_url",
     "compare_archive_day_with_parquet",
+    "day_lock",
     "REBUILD_SEGMENT",
     "import_bybit_archive_day",
     "import_bybit_archive_day_after_retirement",

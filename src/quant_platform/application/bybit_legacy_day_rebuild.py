@@ -25,11 +25,12 @@ is lost in the served data (declared and accepted in A2.4; the old bytes are kep
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from quant_platform.access.catalog import Catalog
 from quant_platform.access.gateway import DataGateway
@@ -37,6 +38,7 @@ from quant_platform.access.models import DataRequest, LifecyclePolicy
 from quant_platform.application.bybit_archive_import import (
     ArchiveImportRefused,
     compare_archive_day_with_parquet,
+    day_lock,
     import_bybit_archive_day_after_retirement,
     rebuild_partition_key,
 )
@@ -126,21 +128,23 @@ def _live_rows(rows: Sequence[Mapping[str, Any]], key: str) -> list[Mapping[str,
     return [r for r in rows if r["key"] == key and r["state"] != "superseded"]
 
 
-def _readable_without_us(connection: Any, day: str) -> bool:
-    """The neighbouring day is already served: a ``valid`` partition of its legacy key or of the key a rebuild creates."""
+def _held_by_valid(connection: Any, dataset_root: Path, owner: str, trade_ids: Iterable[str]) -> bool:
+    """Every trade id is in a ``valid`` partition of the day ``owner`` (its legacy key, a rebuilt key or a slice): it is served there.
 
-    identity = _identity()
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT 1 FROM catalog.partitions p JOIN catalog.datasets d ON d.dataset_id = p.dataset_id "
-            "WHERE d.layer = %s AND d.kind = %s AND d.venue = %s AND d.instrument = %s AND d.schema_id = %s "
-            "AND d.feature_set_def_id IS NULL AND p.state = 'valid' AND p.partition_key IN (%s, %s) LIMIT 1",
-            (identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id,
-             f"dt={day}", rebuild_partition_key(day)),
-        )
-        row = cursor.fetchone()
-    connection.rollback()
-    return row is not None
+    A ``valid`` partition of the day is not enough: a later, partial batch of the day does not hold what an earlier one did."""
+
+    wanted = set(trade_ids)
+    for row in _day_partitions(connection, owner):
+        if not wanted:
+            break
+        path = dataset_root / row["rel_path"]
+        if row["state"] != "valid" or not path.is_file():
+            continue
+        for batch in scan_trade_v1_all(path, batch_size=65_536):
+            wanted.difference_update(record.trade_id for record in batch)
+            if not wanted:
+                break
+    return not wanted
 
 
 def _assessment_scopes(connection: Any, partition_id: str) -> list[tuple[str, str]]:
@@ -227,10 +231,12 @@ def _row(record: Any) -> tuple[Any, ...]:
     return (record.venue, record.instrument, record.aggressor_side, record.price, record.size, record.exchange_ts.epoch_ns)
 
 
-def _conservation(
-    connection: Any, incumbent_file: Path, day: str, archive_dir: Path, plan_days: Sequence[str],
-) -> tuple[list[str], dict[str, Any]]:
-    """Refusals and a summary: every record of the incumbent is in the archive file of its own day, equal in the common fields."""
+def _conservation(incumbent_file: Path, day: str, archive_dir: Path) -> tuple[list[str], dict[str, Any], dict[str, set[str]]]:
+    """Refusals, a summary and the trade ids that belong to other days.
+
+    Every record of the incumbent must be in the archive file of its own UTC day, equal in the common fields. Whether the records of
+    another day stay served once the incumbent is retired is not decided here: the plan sees all its days (:func:`_resolve_dependencies`).
+    The summary carries the hash of each archive file read, so that the digest binds the neighbours' files too."""
 
     refusals: list[str] = []
     incumbent: dict[str, Any] = {}
@@ -239,17 +245,18 @@ def _conservation(
         for record in batch:
             if record.trade_id is None:
                 refusals.append("a record of the incumbent has no trade_id and cannot be compared with the archive")
-                return refusals, {}
+                return refusals, {}, {}
             first = incumbent.setdefault(record.trade_id, record)
             if first is not record:
                 duplicated += 1
                 if _row(first) != _row(record):
                     refusals.append(f"the incumbent holds trade_id {record.trade_id!r} twice with different content")
-                    return refusals, {}
+                    return refusals, {}, {}
     by_day: dict[str, list[Any]] = {}
     for record in incumbent.values():
         by_day.setdefault(Instant(record.exchange_ts.epoch_ns // _DAY_NS * _DAY_NS).isoformat()[:10], []).append(record)
-    summary: dict[str, Any] = {"rows": len(incumbent), "duplicate_trade_ids": duplicated, "days": {}, "text_only_differences": 0}
+    summary: dict[str, Any] = {"rows": len(incumbent), "duplicate_trade_ids": duplicated, "days": {}, "text_only_differences": 0, "archives": {}}
+    outside: dict[str, set[str]] = {}
     for owner in sorted(by_day):
         records = by_day[owner]
         summary["days"][owner] = len(records)
@@ -262,6 +269,7 @@ def _conservation(
         except Exception as exc:  # noqa: BLE001 - a malformed neighbour file refuses the day, never crashes the plan
             refusals.append(f"the archive file of {owner} fails the strict parsing: {exc}")
             continue
+        summary["archives"][owner] = parsed.evidence.file_sha256
         wanted = {r.trade_id for r in records}
         found = {r.trade_id: r for r in parsed.records if r.trade_id in wanted}
         del parsed
@@ -277,9 +285,9 @@ def _conservation(
                     differing.append((record.trade_id, names))
         if differing:
             refusals.append(f"{len(differing)} records of the incumbent differ from the archive of {owner} (e.g. {differing[:_EXAMPLES]})")
-        if owner != day and owner not in plan_days and not _readable_without_us(connection, owner):
-            refusals.append(f"the incumbent holds {len(records)} records of {owner}, which is neither rebuilt in this plan nor already valid")
-    return refusals, summary
+        if owner != day:
+            outside[owner] = wanted
+    return refusals, summary, outside
 
 
 def _day_text(day: str) -> tuple[int, int]:
@@ -356,8 +364,9 @@ def plan_rebuild(
     checkpoint = CheckpointStore(Path(checkpoint_path)).load() if Path(checkpoint_path).exists() else None
     gaps = load_open_long_gap_records(storage_root=abs_path, instrument=INSTRUMENT)
     entries = [
-        _plan_day(connection, day, days, archive_dir, abs_path, storage_root_id, checkpoint, gaps, now) for day in days
+        _plan_day(connection, day, archive_dir, abs_path, checkpoint, gaps, now) for day in days
     ]
+    _resolve_dependencies(entries)
     plan: dict[str, Any] = {
         "schema": PLAN_SCHEMA,
         "instrument": INSTRUMENT,
@@ -370,8 +379,7 @@ def plan_rebuild(
 
 
 def _plan_day(
-    connection: Any, day: str, plan_days: Sequence[str], archive_dir: Path, abs_path: Path, storage_root_id: str,
-    checkpoint: Any, gaps: Any, now: datetime,
+    connection: Any, day: str, archive_dir: Path, abs_path: Path, checkpoint: Any, gaps: Any, now: datetime,
 ) -> dict[str, Any]:
     refusals: list[str] = []
     start_ns, end_ns = _day_text(day)
@@ -435,8 +443,12 @@ def _plan_day(
         refusals += _incumbent_evidence(connection, abs_path, incumbent)
         incumbent_file = _dataset_root(abs_path) / incumbent["rel_path"]
         if incumbent_file.is_file() and _sha256_file(incumbent_file) == incumbent["content_sha256"]:
-            found, summary = _conservation(connection, incumbent_file, day, archive_dir, plan_days)
+            found, summary, outside = _conservation(incumbent_file, day, archive_dir)
             refusals += found
+            if summary:
+                summary["outside_held"] = {
+                    owner: _held_by_valid(connection, _dataset_root(abs_path), owner, ids) for owner, ids in sorted(outside.items())
+                }
             entry["conservation"] = summary
     entry["incumbent"] = incumbent
     if created:
@@ -454,6 +466,35 @@ def _plan_day(
         else:
             entry["action"] = "retire+import"
     return entry
+
+
+def _resolve_dependencies(entries: list[dict[str, Any]]) -> None:
+    """Refuse a day whose incumbent holds records of another day that would stop being served.
+
+    The records of another day stay served if a ``valid`` partition of that day holds them (``outside_held``, decided against the
+    catalog) or if that day is in this plan and is not refused, so it ends rebuilt from its own archive file. A day of the plan that
+    is refused contributes nothing, and what depended on it is refused in turn, until nothing changes. An entry that is not a
+    retirement to come (the incumbent is retired already, or the day is rebuilt) is not judged again."""
+
+    by_day = {entry["day"]: entry for entry in entries}
+    changed = True
+    while changed:
+        changed = False
+        for entry in entries:
+            if entry["action"] != "retire+import" or not entry["conservation"]:
+                continue
+            for owner, held in sorted(entry["conservation"].get("outside_held", {}).items()):
+                other = by_day.get(owner)
+                if held or (other is not None and other["action"] != "refused"):
+                    continue
+                count = entry["conservation"]["days"].get(owner, 0)
+                where = "that day is refused in this plan" if other is not None else "that day is not in this plan"
+                entry["refusals"].append(
+                    f"{count} records of the incumbent belong to {owner}, no valid partition of {owner} holds them and {where}: "
+                    "they would stop being served")
+                entry["action"] = "refused"
+                changed = True
+                break
 
 
 def _certified_coverage(connection: Any, partition_id: str) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
@@ -561,14 +602,17 @@ def _execute_day(connection: Any, entry: Mapping[str, Any], plan: Mapping[str, A
         try:
             report = import_bybit_archive_day_after_retirement(
                 connection, instrument=INSTRUMENT, day=day, archive_path=archive_path, storage_root_id=plan["storage_root_id"],
-                code_ref=plan["code_ref"],
+                code_ref=plan["code_ref"], expected_source_sha256=entry["archive"]["sha256"],
             )
         except ArchiveImportRefused as exc:
             return {**result, "outcome": "import_refused", "phase": exc.phase, "detail": str(exc), "steps": steps}
         steps.append(f"imported {report.row_count} rows as {report.state}")
         if report.state != "valid":
             return {**result, "outcome": "import_not_valid", "detail": report.state, "steps": steps}
-    verified = verify_rebuilt_day(connection, day=day, archive_dir=archive_dir, storage_root_id=plan["storage_root_id"])
+    verified = verify_rebuilt_day(
+        connection, day=day, archive_dir=archive_dir, storage_root_id=plan["storage_root_id"],
+        expected_archive_sha256=entry["archive"]["sha256"],
+    )
     steps.append("verified" if verified["passed"] else "verification failed")
     outcome = ("verified" if entry["action"] == "verify" else "rebuilt") if verified["passed"] else "verify_failed"
     return {**result, "outcome": outcome, "steps": steps, "verification": verified}
@@ -598,8 +642,13 @@ def _retire(connection: Any, entry: Mapping[str, Any], plan: Mapping[str, Any]) 
 # ------------------------------------------------------------------------------------------------------------ verify, restore
 
 
-def verify_rebuilt_day(connection: Any, *, day: str, archive_dir: str | Path, storage_root_id: str) -> dict[str, Any]:
-    """Read-only. The imported records equal the archive field by field, and a strict gateway read returns them exactly."""
+def verify_rebuilt_day(
+    connection: Any, *, day: str, archive_dir: str | Path, storage_root_id: str, expected_archive_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Read-only. The imported records equal the archive field by field, and a strict gateway read returns them exactly.
+
+    The report names the hash of the archive file it compared. With ``expected_archive_sha256`` (the plan's) another file is a
+    finding: the verification does not accept whatever file is in the directory now."""
 
     archive_path = Path(archive_dir) / bybit_archive_file_name(INSTRUMENT, day)
     key = rebuild_partition_key(day)
@@ -610,6 +659,10 @@ def verify_rebuilt_day(connection: Any, *, day: str, archive_dir: str | Path, st
         return report
     parquet = _dataset_root(_storage_root(connection, storage_root_id)) / created[0]["rel_path"]
     compared = compare_archive_day_with_parquet(archive_path, parquet, instrument=INSTRUMENT, day=day)
+    report["archive_sha256"] = compared["archive_sha256"]
+    if expected_archive_sha256 is not None and compared["archive_sha256"] != expected_archive_sha256:
+        report["problems"].append(
+            f"the archive file now in the directory hashes to {compared['archive_sha256']}, not to the approved {expected_archive_sha256}")
     report["comparison"] = {k: compared[k] for k in ("archive_rows", "parquet_rows", "only_in_archive", "only_in_parquet",
                                                      "field_differences", "same_trades", "identical")}
     if not compared["identical"]:
@@ -642,8 +695,20 @@ def verify_rebuilt_day(connection: Any, *, day: str, archive_dir: str | Path, st
 def restore_retired_day(connection: Any, *, day: str, storage_root_id: str, code_ref: str) -> ReassessmentResult:
     """The documented way back: a superseding ``pass`` returns the retired legacy revision to ``valid``. Never automatic.
 
-    Refused while the day has any partition under ``dt=<day>/``: restoring would put two valid partitions over one day."""
+    Refused while the day has any partition under ``dt=<day>/``: restoring would put two valid partitions over one day. It takes the
+    day's lock, the one the rebuild import holds from its check to its publication, and decides under it: a restore cannot slip in
+    between the import's check and its publication, and an import after a restore finds a valid day and refuses."""
 
+    dataset_root = _dataset_root(_storage_root(connection, storage_root_id))
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(day_lock(dataset_root, day))
+        except ArchiveImportRefused as exc:
+            raise RebuildRefused("RESTORE", f"the day is locked by an import ({exc}); nothing was changed") from exc
+        return _restore_locked(connection, day=day, storage_root_id=storage_root_id, code_ref=code_ref)
+
+
+def _restore_locked(connection: Any, *, day: str, storage_root_id: str, code_ref: str) -> ReassessmentResult:
     rows = _day_partitions(connection, day)
     under = [r["key"] for r in rows if r["key"] != f"dt={day}"]
     if under:

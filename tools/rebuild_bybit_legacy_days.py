@@ -65,6 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="read-only verification of rebuilt days")
     verify.add_argument("--days", required=True)
     verify.add_argument("--archive-dir", required=True, type=Path)
+    verify.add_argument("--plan", type=Path, help="the executed plan: a day is verified against the archive file the plan approved")
     restore = sub.add_parser("restore", help="return a retired, not rebuilt day to valid")
     restore.add_argument("--day", required=True)
     restore.add_argument("--code-ref", help="producing commit; default: the clean HEAD of this checkout")
@@ -107,8 +108,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(result, sort_keys=True))
                 return 0 if all(d["outcome"] in ("rebuilt", "verified") for d in result["days"]) else 1
             if arguments.command == "verify":
+                approved = {}
+                if arguments.plan is not None:
+                    approved = {e["day"]: e["archive"]["sha256"] for e in json.loads(arguments.plan.read_text(encoding="utf-8"))["days"]
+                                if e.get("archive")}
                 reports = [verify_rebuilt_day(connection, day=d.strip(), archive_dir=arguments.archive_dir,
-                                              storage_root_id=arguments.storage_root_id)
+                                              storage_root_id=arguments.storage_root_id, expected_archive_sha256=approved.get(d.strip()))
                            for d in arguments.days.split(",") if d.strip()]
                 print(json.dumps(reports, sort_keys=True))
                 return 0 if all(r["passed"] for r in reports) else 1

@@ -80,6 +80,10 @@ def write_archive(directory: Path, day: str, rows, name: str | None = None) -> P
     return path
 
 
+def sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def sql(connection, query, params=()):
     with connection.cursor() as cursor:
         cursor.execute(query, params)
@@ -222,7 +226,7 @@ def main() -> int:
             refused_plan([PILOT], "live slices")
             try:
                 import_bybit_archive_day_after_retirement(connection, instrument=INSTRUMENT, day=PILOT, archive_path=archives / f"{INSTRUMENT}{PILOT}.csv.gz",
-                                                          storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF)
+                                                          storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF, expected_source_sha256=sha(archives / f"{INSTRUMENT}{PILOT}.csv.gz"))
             except ArchiveImportRefused as exc:
                 assert exc.phase == "CATALOG"
             else:
@@ -341,14 +345,14 @@ def main() -> int:
             for day in ("2026-10-18",):  # valid legacy day: the variant refuses
                 try:
                     import_bybit_archive_day_after_retirement(connection, instrument=INSTRUMENT, day=day, archive_path=archives / f"{INSTRUMENT}{day}.csv.gz",
-                                                              storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF)
+                                                              storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF, expected_source_sha256=sha(archives / f"{INSTRUMENT}{day}.csv.gz"))
                 except ArchiveImportRefused as exc:
                     assert exc.phase == "CATALOG"
                 else:
                     raise AssertionError("the variant must refuse a day whose legacy revision is valid")
             try:  # and a rebuilt day, again
                 import_bybit_archive_day_after_retirement(connection, instrument=INSTRUMENT, day=PILOT, archive_path=archives / f"{INSTRUMENT}{PILOT}.csv.gz",
-                                                          storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF)
+                                                          storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF, expected_source_sha256=sha(archives / f"{INSTRUMENT}{PILOT}.csv.gz"))
             except ArchiveImportRefused as exc:
                 assert exc.phase == "CATALOG"
             else:
@@ -385,22 +389,32 @@ def main() -> int:
             far = "2026-10-30"
             write_archive(archives, far, world(far))
             mixed = full[PILOT][::7][:3] + full["2026-10-19"][:2]
-            refusals, summary = rebuild._conservation(connection, crafted("mixed.parquet", mixed), PILOT, archives, [PILOT])
-            assert refusals == [] and summary["days"] == {PILOT: 3, "2026-10-19": 2}, (refusals, summary)  # the neighbour is valid already
-            refusals, _ = rebuild._conservation(connection, crafted("far.parquet", full[PILOT][:2] + world(far)[:1]), PILOT, archives, [PILOT])
-            assert len(refusals) == 1 and "neither rebuilt in this plan nor already valid" in refusals[0], refusals
-            refusals, _ = rebuild._conservation(connection, crafted("far.parquet", full[PILOT][:2] + world(far)[:1]), PILOT, archives, [PILOT, far])
-            assert refusals == [], refusals  # rebuilt in the same plan
+            refusals, summary, outside = rebuild._conservation(crafted("mixed.parquet", mixed), PILOT, archives)
+            assert refusals == [] and summary["days"] == {PILOT: 3, "2026-10-19": 2}, (refusals, summary)
+            assert outside == {"2026-10-19": {r[1] for r in full["2026-10-19"][:2]}}, outside
+            assert summary["archives"] == {d: sha(archives / f"{INSTRUMENT}{d}.csv.gz") for d in (PILOT, "2026-10-19")}, summary
+
+            # whether those records stay served is the plan's question: a valid partition of their day must hold them (a valid partition
+            # of the day is not enough: the later, partial batch of a day does not hold what the batch before it did)
+            def held(owner, ids):
+                return rebuild._held_by_valid(connection, dataset_root, owner, ids)
+
+            assert held("2026-10-19", {r[1] for r in full["2026-10-19"][::7]})
+            assert not held("2026-10-19", {full["2026-10-19"][1][1]}), "a trade the partial revision does not hold"
+            assert not held("2026-10-19", {full["2026-10-19"][0][1], full["2026-10-19"][1][1]}), "one held, one not"
+            assert not held(far, {world(far)[0][1]}), "a day without any partition"
+            refusals, _, outside = rebuild._conservation(crafted("far.parquet", full[PILOT][:2] + world(far)[:1]), PILOT, archives)
+            assert refusals == [] and set(outside) == {far}, (refusals, outside)
             (archives / f"{INSTRUMENT}{far}.csv.gz").rename(archives / "gone")
-            refusals, _ = rebuild._conservation(connection, crafted("far.parquet", full[PILOT][:2] + world(far)[:1]), PILOT, archives, [PILOT, far])
+            refusals, _, _ = rebuild._conservation(crafted("far.parquet", full[PILOT][:2] + world(far)[:1]), PILOT, archives)
             assert len(refusals) == 1 and "is missing" in refusals[0], refusals
             (archives / "gone").rename(archives / f"{INSTRUMENT}{far}.csv.gz")
             bad = world(far)[:1]
             bad = [(bad[0][0], bad[0][1], bad[0][2], "1.0", bad[0][4])]
-            refusals, _ = rebuild._conservation(connection, crafted("bad.parquet", full[PILOT][:2] + bad), PILOT, archives, [PILOT, far])
+            refusals, _, _ = rebuild._conservation(crafted("bad.parquet", full[PILOT][:2] + bad), PILOT, archives)
             assert len(refusals) == 1 and "differ from the archive" in refusals[0], refusals
             nameless = crafted("ok.parquet", full[PILOT][:2])
-            assert rebuild._conservation(connection, nameless, PILOT, archives, [PILOT])[0] == []
+            assert rebuild._conservation(nameless, PILOT, archives)[0] == []
             # 10. a neighbouring day whose legacy coverage crossed midnight: until its own retirement it overlaps the rebuilt day, which
             #     the gateway refuses to read strictly; after its own rebuild both days read correctly
             neighbour = "2026-10-21"
@@ -499,7 +513,7 @@ def main() -> int:
             try:
                 import_bybit_archive_day_after_retirement(connection, instrument=INSTRUMENT, day="2026-10-19",
                                                           archive_path=archives / f"{INSTRUMENT}2026-10-19.csv.gz",
-                                                          storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF)
+                                                          storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF, expected_source_sha256=sha(archives / f"{INSTRUMENT}2026-10-19.csv.gz"))
             except ArchiveImportRefused as exc:
                 assert exc.phase == "CATALOG" and "seg=120000.000" in str(exc), exc
             else:
@@ -559,6 +573,133 @@ def main() -> int:
             assert states(connection)["dt=2026-10-08"] == ["invalid"]
             done = run(make_plan(["2026-10-08", "2026-10-09"]))  # and a new run, with the first day retired, completes both
             assert [d["outcome"] for d in done["days"]] == ["rebuilt", "rebuilt"], done
+
+            # 12. the records of a neighbouring day must stay served (the review of #531, P1). Two incumbents hold two trades of the next
+            #     day, the shape of the live batch across midnight; the next day's own legacy revision is a later, partial batch
+            dataset_identity_12 = bybit_archive_dataset_identity(INSTRUMENT)
+
+            def crossing_legacy(day: str, owner: str, rows) -> None:
+                path = write_archive(staging, owner, rows)
+                start_of = datetime.fromisoformat(day).replace(tzinfo=timezone.utc) + timedelta(hours=23, minutes=59)
+                importer._import_locked(connection, identity=dataset_identity_12, instrument=INSTRUMENT, day=owner, start=start_of,
+                                        partition_key=f"dt={day}", archive_path=path, storage_root_id=STORAGE_ROOT_ID,
+                                        code_ref="legacy-commit", dataset_root=dataset_root)
+                path.unlink()
+
+            bare, owner_lacking, positive, owner_holding = "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17"
+            for day in (bare, owner_lacking, positive, owner_holding):
+                full[day] = world(day)
+                write_archive(archives, day, full[day])
+            crossing_legacy(bare, owner_lacking, full[owner_lacking][:2])
+            legacy(owner_lacking, subset=[full[owner_lacking][5]])  # its valid revision does not hold the two trades
+            crossing_legacy(positive, owner_holding, full[owner_holding][:2])
+            legacy(owner_holding, subset=full[owner_holding][:2] + [full[owner_holding][5]])  # this one does
+            lost = {full[owner_lacking][0][1], full[owner_lacking][1][1]}
+            assert not rebuild._held_by_valid(connection, dataset_root, owner_lacking, lost)
+            refused_plan([bare], "stop being served")
+            sql(connection, "UPDATE catalog.partitions SET state='closed' WHERE partition_key=%s", (f"dt={owner_lacking}",))
+            assert not rebuild._held_by_valid(connection, dataset_root, owner_lacking, {full[owner_lacking][5][1]}), "a closed partition serves nothing"
+            both = make_plan([bare, owner_lacking])  # the day that would hold them is in the plan but is refused: it contributes nothing
+            assert [d["action"] for d in both["days"]] == ["refused", "refused"], [d["refusals"] for d in both["days"]]
+            assert any("refused in this plan" in r for r in both["days"][0]["refusals"]), both["days"][0]["refusals"]
+            sql(connection, "UPDATE catalog.partitions SET state='valid' WHERE partition_key=%s", (f"dt={owner_lacking}",))
+            ok = make_plan([bare, owner_lacking])  # the day is rebuilt by the same plan: it serves them from its own archive file
+            assert [d["action"] for d in ok["days"]] == ["retire+import", "retire+import"], [d["refusals"] for d in ok["days"]]
+            result = run(ok)
+            assert [d["outcome"] for d in result["days"]] == ["rebuilt", "rebuilt"], result
+            assert lost <= set(gateway_ids(connection, owner_lacking)) and gateway_ids(connection, bare) == [r[1] for r in full[bare]]
+            held_plan = make_plan([positive])  # a valid partition of the other day holds both: nothing is lost
+            assert held_plan["days"][0]["action"] == "retire+import", held_plan["days"][0]["refusals"]
+            assert held_plan["days"][0]["conservation"]["outside_held"] == {owner_holding: True}
+            kept = {full[owner_holding][0][1], full[owner_holding][1][1]}
+            result = run(held_plan)
+            assert result["days"][0]["outcome"] == "rebuilt", result
+            assert kept <= set(gateway_ids(connection, owner_holding))
+
+            # 13. restore and import share the day's guard (P1): a restore cannot slip in between the import's check and its publication
+            retired_day = "2026-10-12"
+            full[retired_day] = world(retired_day)
+            write_archive(archives, retired_day, full[retired_day])
+            legacy(retired_day)
+            with mock.patch.object(rebuild, "import_bybit_archive_day_after_retirement", side_effect=ArchiveImportRefused("S13", "probe")):
+                assert run(make_plan([retired_day]))["days"][0]["outcome"] == "import_refused"
+            assert states(connection)[f"dt={retired_day}"] == ["invalid"]
+            with importer.day_lock(dataset_root, retired_day):
+                try:
+                    restore_retired_day(connection, day=retired_day, storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF)
+                except RebuildRefused as exc:
+                    assert exc.phase == "RESTORE" and "locked by an import" in str(exc), exc
+                else:
+                    raise AssertionError("a restore must be refused while the import holds the day")
+            assert states(connection)[f"dt={retired_day}"] == ["invalid"]
+            real_locked, attempts = importer._import_locked, []
+
+            def interleaved(*args, **kwargs):  # the restore arrives after the import's checks and before its publication
+                try:
+                    restore_retired_day(connection, day=retired_day, storage_root_id=STORAGE_ROOT_ID, code_ref=CODE_REF)
+                except RebuildRefused as exc:
+                    attempts.append(str(exc))
+                return real_locked(*args, **kwargs)
+
+            with mock.patch.object(importer, "_import_locked", interleaved):
+                result = run(make_plan([retired_day]))
+            assert result["days"][0]["outcome"] == "rebuilt", result
+            assert len(attempts) == 1 and "locked by an import" in attempts[0], attempts
+            assert states(connection)[f"dt={retired_day}"] == ["invalid"]
+            assert states(connection)[f"dt={retired_day}/seg=000000.000"] == ["valid"]
+            assert gateway_ids(connection, retired_day) == [r[1] for r in full[retired_day]]  # one valid partition, a strict read works
+
+            # 14. the imported bytes are the approved ones (P1): a file replaced after the plan is refused, and so is a verification of
+            #     another file
+            swapped_day = "2026-10-11"
+            full[swapped_day] = world(swapped_day)
+            archive_file = write_archive(archives, swapped_day, full[swapped_day])
+            approved = archive_file.read_bytes()
+            approved_sha = hashlib.sha256(approved).hexdigest()
+            legacy(swapped_day)
+            swap_plan = make_plan([swapped_day])
+            real_import = rebuild.import_bybit_archive_day_after_retirement
+
+            def replace_archive():
+                write_archive(archives, swapped_day, [(ms, i.replace(swapped_day, "replaced"), s, p, z) for ms, i, s, p, z in full[swapped_day]])
+
+            def swapped(*args, **kwargs):
+                replace_archive()
+                return real_import(*args, **kwargs)
+
+            with mock.patch.object(rebuild, "import_bybit_archive_day_after_retirement", swapped):
+                result = run(swap_plan)
+            outcome = result["days"][0]
+            assert outcome["outcome"] == "import_refused" and outcome["phase"] == "SOURCE" and "not the approved one" in outcome["detail"], outcome
+            assert states(connection)[f"dt={swapped_day}"] == ["invalid"] and f"dt={swapped_day}/seg=000000.000" not in states(connection)
+            archive_file.write_bytes(approved)
+            result = run(make_plan([swapped_day]))  # the retired day resumes with the approved file
+            assert result["days"][0]["outcome"] == "rebuilt" and result["days"][0]["verification"]["archive_sha256"] == approved_sha
+            replace_archive()
+            verdict = verify_rebuilt_day(connection, day=swapped_day, archive_dir=archives, storage_root_id=STORAGE_ROOT_ID,
+                                         expected_archive_sha256=approved_sha)
+            assert not verdict["passed"] and any("not to the approved" in problem for problem in verdict["problems"]), verdict
+            archive_file.write_bytes(approved)
+            assert verify_rebuilt_day(connection, day=swapped_day, archive_dir=archives, storage_root_id=STORAGE_ROOT_ID,
+                                      expected_archive_sha256=approved_sha)["passed"]
+            # and a file replaced between the import and the executor's own verification is a failed verification, not a pass
+            late_day = "2026-10-10"
+            full[late_day] = world(late_day)
+            late_file = write_archive(archives, late_day, full[late_day])
+            late_bytes = late_file.read_bytes()
+            legacy(late_day)
+
+            def late_swap(*args, **kwargs):
+                report = real_import(*args, **kwargs)
+                write_archive(archives, late_day, [(ms, i.replace(late_day, "replaced"), s, p, z) for ms, i, s, p, z in full[late_day]])
+                return report
+
+            with mock.patch.object(rebuild, "import_bybit_archive_day_after_retirement", late_swap):
+                result = run(make_plan([late_day]))
+            outcome = result["days"][0]
+            assert outcome["outcome"] == "verify_failed" and any("not to the approved" in x for x in outcome["verification"]["problems"]), outcome
+            late_file.write_bytes(late_bytes)
+            assert verify_rebuilt_day(connection, day=late_day, archive_dir=archives, storage_root_id=STORAGE_ROOT_ID)["passed"]
     print("POSTGRESQL LEGACY DAY REBUILD GATE PASSED")
     return 0
 
