@@ -66,6 +66,63 @@ class ManifestNamingTests(unittest.TestCase):
                          rebuild._manifest_files(root, "dt=d/part-412.parquet"))
 
 
+class LegacyManifestLocationTests(unittest.TestCase):
+    """The live publisher before the slices (#510) wrote its manifests in the dataset root, ``HHMMSS`` without the date."""
+
+    def test_the_manifests_beside_the_artifact_or_in_the_dataset_root_by_the_catalog_hash(self) -> None:
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as holder:
+            root = Path(holder)
+            (root / "dt=d").mkdir()
+            rel = "dt=d/part-235942.parquet"
+            mine = b'{"day": "d"}'
+            digest = hashlib.sha256(mine).hexdigest()
+            # nothing on disk: the first location is named, so that the refusal can say what is missing
+            self.assertEqual((root / "dt=d/partition-manifest-235942.json", root / "dt=d/coverage-manifest-235942.json"),
+                             rebuild._manifest_files(root, rel, digest))
+            # the legacy layout: only the dataset root holds them
+            (root / "partition-manifest-235942.json").write_bytes(mine)
+            self.assertEqual((root / "partition-manifest-235942.json", root / "coverage-manifest-235942.json"),
+                             rebuild._manifest_files(root, rel, digest))
+            # a file of the same second of another day overwrote the root one: it is still the only one found, and the caller
+            # (the evidence check) refuses it because it does not hash to the catalog's
+            (root / "partition-manifest-235942.json").write_bytes(b'{"day": "other"}')
+            found = rebuild._manifest_files(root, rel, digest)[0]
+            self.assertEqual(root / "partition-manifest-235942.json", found)
+            self.assertNotEqual(digest, hashlib.sha256(found.read_bytes()).hexdigest())
+            # both locations hold one: the one with the catalog's hash wins, whichever it is
+            (root / "dt=d/partition-manifest-235942.json").write_bytes(mine)
+            self.assertEqual(root / "dt=d/partition-manifest-235942.json", rebuild._manifest_files(root, rel, digest)[0])
+            (root / "dt=d/partition-manifest-235942.json").write_bytes(b'{"day": "x"}')
+            (root / "partition-manifest-235942.json").write_bytes(mine)
+            self.assertEqual(root / "partition-manifest-235942.json", rebuild._manifest_files(root, rel, digest)[0])
+
+
+class DuplicateTradeIdTests(unittest.TestCase):
+    def conservation(self, *records):
+        with mock.patch.object(rebuild, "scan_trade_v1_all", lambda *a, **k: iter([list(records)])):
+            return rebuild._conservation(None, Path("incumbent.parquet"), "2026-10-20", Path("."), ["2026-10-20"])
+
+    def with_id(self, trade_id, **kwargs):
+        item = record(**kwargs)
+        item.trade_id = trade_id
+        return item
+
+    def test_a_trade_id_twice_with_different_content_refuses_the_day(self) -> None:
+        refusals, summary = self.conservation(self.with_id("t1", price="100.1"), self.with_id("t1", price="100.2"))
+        self.assertEqual({}, summary)
+        self.assertEqual(1, len(refusals))
+        self.assertIn("twice with different content", refusals[0])
+
+    def test_a_trade_id_twice_with_the_same_content_is_counted_not_hidden(self) -> None:
+        refusals, summary = self.conservation(self.with_id("t1"), self.with_id("t1"))
+        # the archive file of the day is absent in this directory, so the day still refuses; the duplicate is counted
+        self.assertEqual(1, summary["duplicate_trade_ids"])
+        self.assertEqual(1, summary["rows"])
+        self.assertFalse(any("twice" in item for item in refusals))
+
+
 class DifferenceTests(unittest.TestCase):
     def test_a_value_difference_is_a_difference_and_a_trailing_zero_is_not(self) -> None:
         self.assertEqual(([], False), rebuild._differences(record(), record()))
@@ -96,6 +153,8 @@ class DigestTests(unittest.TestCase):
             "incumbent partition": lambda p: p["days"][0]["incumbent"].update(partition_id="q"),
             "incumbent revision": lambda p: p["days"][0]["incumbent"].update(revision=8),
             "incumbent coverage": lambda p: p["days"][0]["incumbent"].update(coverage_manifest_sha256="0" * 64),
+            "incumbent coverage ids": lambda p: p["days"][0]["incumbent"].update(coverage_ids=["c1"]),
+            "incumbent assertion ids": lambda p: p["days"][0]["incumbent"].update(assertion_ids=["a1"]),
             "conservation": lambda p: p["days"][0]["conservation"].update(rows=11),
             "refusals": lambda p: p["days"][0].update(refusals=["not closed"]),
             "key": lambda p: p["days"][0].update(key_to_create="dt=2026-10-20/seg=000001.000"),

@@ -169,15 +169,31 @@ def _retired_for(connection: Any, partition_id: str, archive_sha256: str) -> boo
     return False
 
 
-def _manifest_files(dataset_root: Path, rel_path: str) -> tuple[Path, Path]:
-    """The partition and coverage manifests that belong to an artifact ``<dir>/part-<suffix>.parquet`` (``001`` is unsuffixed)."""
+def _manifest_files(dataset_root: Path, rel_path: str, manifest_sha256: str | None = None) -> tuple[Path, Path]:
+    """The partition and coverage manifests that belong to an artifact ``<dir>/part-<suffix>.parquet`` (``001`` is unsuffixed).
+
+    Two layouts exist. The importer and the live slices write them beside the artifact; the live publisher before the slices (#510)
+    wrote ``partition-manifest-<HHMMSS>.json`` and ``coverage-manifest-<HHMMSS>.json`` in the root of the dataset, the time without
+    the date. The pair beside the artifact is looked at first; with the catalog's manifest hash, the first location whose partition
+    manifest has that hash wins, so a root file that a later day overwrote (the same second) is never taken for this revision's."""
 
     artifact = dataset_root / rel_path
     stem = artifact.stem  # part-<suffix>
     suffix = stem.split("-", 1)[1] if "-" in stem else "001"
     if suffix == "001":
         return artifact.parent / "partition-manifest.json", artifact.parent / "coverage-manifest.json"
-    return artifact.parent / f"partition-manifest-{suffix}.json", artifact.parent / f"coverage-manifest-{suffix}.json"
+    names = (f"partition-manifest-{suffix}.json", f"coverage-manifest-{suffix}.json")
+    candidates = [(artifact.parent / names[0], artifact.parent / names[1])]
+    if artifact.parent != dataset_root:
+        candidates.append((dataset_root / names[0], dataset_root / names[1]))
+    if manifest_sha256 is not None:
+        for partition_manifest, coverage_manifest in candidates:
+            if partition_manifest.is_file() and _sha256_file(partition_manifest) == manifest_sha256:
+                return partition_manifest, coverage_manifest
+    for partition_manifest, coverage_manifest in candidates:
+        if partition_manifest.is_file():
+            return partition_manifest, coverage_manifest
+    return candidates[0]
 
 
 # ------------------------------------------------------------------------------------------------------------ the checks
@@ -207,6 +223,10 @@ def _differences(archive: Any, live: Any) -> tuple[list[str], bool]:
     return differences, text_only
 
 
+def _row(record: Any) -> tuple[Any, ...]:
+    return (record.venue, record.instrument, record.aggressor_side, record.price, record.size, record.exchange_ts.epoch_ns)
+
+
 def _conservation(
     connection: Any, incumbent_file: Path, day: str, archive_dir: Path, plan_days: Sequence[str],
 ) -> tuple[list[str], dict[str, Any]]:
@@ -220,9 +240,12 @@ def _conservation(
             if record.trade_id is None:
                 refusals.append("a record of the incumbent has no trade_id and cannot be compared with the archive")
                 return refusals, {}
-            if record.trade_id in incumbent:
+            first = incumbent.setdefault(record.trade_id, record)
+            if first is not record:
                 duplicated += 1
-            incumbent[record.trade_id] = record
+                if _row(first) != _row(record):
+                    refusals.append(f"the incumbent holds trade_id {record.trade_id!r} twice with different content")
+                    return refusals, {}
     by_day: dict[str, list[Any]] = {}
     for record in incumbent.values():
         by_day.setdefault(Instant(record.exchange_ts.epoch_ns // _DAY_NS * _DAY_NS).isoformat()[:10], []).append(record)
@@ -290,6 +313,7 @@ def _validated_days(days: Sequence[str]) -> list[str]:
 _INCUMBENT_IDENTITY = (
     "partition_id", "key", "revision", "rel_path", "ts_start", "ts_end", "row_count", "content_sha256", "manifest_sha256",
     "check_suite", "certification_profile", "partition_manifest_file", "coverage_manifest_file", "coverage_manifest_sha256",
+    "coverage_ids", "assertion_ids",
 )
 
 
@@ -408,7 +432,7 @@ def _plan_day(
             refusals.append(f"the incumbent's assessments name {len(scopes)} suite/profile pairs; exactly one is required")
         else:
             incumbent["check_suite"], incumbent["certification_profile"] = scopes[0]
-        refusals += _incumbent_evidence(abs_path, incumbent)
+        refusals += _incumbent_evidence(connection, abs_path, incumbent)
         incumbent_file = _dataset_root(abs_path) / incumbent["rel_path"]
         if incumbent_file.is_file() and _sha256_file(incumbent_file) == incumbent["content_sha256"]:
             found, summary = _conservation(connection, incumbent_file, day, archive_dir, plan_days)
@@ -432,8 +456,22 @@ def _plan_day(
     return entry
 
 
-def _incumbent_evidence(abs_path: Path, incumbent: dict[str, Any]) -> list[str]:
-    """The incumbent's file and durable manifests exist and are the ones the catalog holds."""
+def _certified_coverage(connection: Any, partition_id: str) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+    """The coverage manifest hashes and ids the incumbent's quality reports certified (the distinct pairs; one is expected)."""
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT DISTINCT metrics->'coverage_manifest_sha256', metrics->'coverage_manifest_ids' FROM catalog.quality_reports "
+            "WHERE partition_id = %s AND metrics ? 'coverage_manifest_sha256'",
+            (partition_id,),
+        )
+        rows = cursor.fetchall()
+    connection.rollback()
+    return sorted((tuple(map(str, hashes or ())), tuple(map(str, ids or ()))) for hashes, ids in rows)
+
+
+def _incumbent_evidence(connection: Any, abs_path: Path, incumbent: dict[str, Any]) -> list[str]:
+    """The incumbent's file and durable manifests exist, load, are the ones the catalog holds and the coverage the reports certified."""
 
     problems: list[str] = []
     dataset_root = _dataset_root(abs_path)
@@ -442,7 +480,7 @@ def _incumbent_evidence(abs_path: Path, incumbent: dict[str, Any]) -> list[str]:
         problems.append(f"the incumbent's Parquet {incumbent['rel_path']} is not on disk")
     elif _sha256_file(artifact) != incumbent["content_sha256"]:
         problems.append("the incumbent's Parquet does not hash to the catalog's content hash")
-    partition_manifest, coverage_manifest = _manifest_files(dataset_root, incumbent["rel_path"])
+    partition_manifest, coverage_manifest = _manifest_files(dataset_root, incumbent["rel_path"], incumbent["manifest_sha256"])
     for label, path in (("partition", partition_manifest), ("coverage", coverage_manifest), ("dataset", dataset_root / "dataset-manifest.json")):
         if not path.is_file():
             problems.append(f"the incumbent's {label} manifest {path.name} is not on disk")
@@ -453,6 +491,23 @@ def _incumbent_evidence(abs_path: Path, incumbent: dict[str, Any]) -> list[str]:
     if coverage_manifest.is_file():
         incumbent["coverage_manifest_file"] = str(coverage_manifest.relative_to(dataset_root)).replace("\\", "/")
         incumbent["coverage_manifest_sha256"] = _sha256_file(coverage_manifest)
+    if not problems:
+        certified = _certified_coverage(connection, incumbent["partition_id"])
+        if len(certified) != 1:
+            problems.append(f"the incumbent's quality reports certify {len(certified)} coverage manifest sets; exactly one is required")
+        else:
+            try:
+                loaded = load_lifecycle_inputs(
+                    dataset_root / "dataset-manifest.json", partition_manifest, [coverage_manifest],
+                )
+            except Exception as exc:  # noqa: BLE001 - a manifest that does not load refuses the day in the plan, not in the retire
+                problems.append(f"the incumbent's durable manifests do not load: {exc}")
+            else:
+                hashes, ids = certified[0]
+                if loaded.coverage_sha256 != hashes or tuple(loaded.coverage_ids) != ids:
+                    problems.append("the incumbent's coverage manifest is not the one its quality reports certified")
+                incumbent["coverage_ids"] = list(loaded.coverage_ids)
+                incumbent["assertion_ids"] = list(loaded.assertion_ids)
     return problems
 
 
@@ -602,7 +657,7 @@ def restore_retired_day(connection: Any, *, day: str, storage_root_id: str, code
         raise RebuildRefused("RESTORE", "the incumbent's assessments name more than one suite/profile pair")
     incumbent["check_suite"], incumbent["certification_profile"] = scopes[0]
     abs_path = _storage_root(connection, storage_root_id)
-    problems = _incumbent_evidence(abs_path, incumbent)
+    problems = _incumbent_evidence(connection, abs_path, incumbent)
     if problems:
         raise RebuildRefused("RESTORE", "; ".join(problems))
     return reassess_live_partition(

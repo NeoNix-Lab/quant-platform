@@ -113,10 +113,15 @@ conservation summary (how many records the damaged revision holds and the days t
 
 A day is **refused**, and nothing is changed for it, when: it is not closed in UTC; it has a live slice (`dt=<day>/seg=...`), a
 checkpoint bound to one of its partitions or an open gap record that names it; its live revision is not `valid` (or `invalid`
-retired by this operation for the same archive file); the archive file is missing or fails the strict parsing; or **conservation
+retired by this operation for the same archive file); the incumbent's Parquet or durable manifests are missing, do not load, or are not
+the ones the catalog and its quality reports certified (the manifests are looked for beside the Parquet and, for a day published by the
+live publisher before the slices, in the root of the dataset as `partition-manifest-<HHMMSS>.json` and
+`coverage-manifest-<HHMMSS>.json`, the time without the date: a root file that a later day overwrote in the same second is not this
+revision's and the day is refused); the archive file is missing or fails the strict parsing; or **conservation
 fails**: every record of the damaged revision, by `(exchange_ts, trade_id)`, must exist in the archive file of its own UTC day with
 the same venue, instrument, exchange time (millisecond), side, price and size, and that day must be readable afterwards (rebuilt in
-the same plan or already `valid`). Any difference refuses the day; there is no partial acceptance.
+the same plan or already `valid`). A trade id that the damaged revision holds twice with different content refuses the day too. Any
+difference refuses the day; there is no partial acceptance.
 
 ### 6.3 Execute
 

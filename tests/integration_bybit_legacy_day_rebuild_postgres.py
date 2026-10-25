@@ -439,6 +439,26 @@ def main() -> int:
             refused_plan(["2026-10-19"], "partition manifest")
             manifest.with_name("moved.json").rename(manifest)
             assert make_plan(["2026-10-19"])["days"][0]["action"] == "retire+import"
+            # the coverage manifest is checked by the plan, not first by the retire: unreadable, or not the one the reports certified
+            coverage_file = dataset_root / "dt=2026-10-19" / "coverage-manifest.json"
+            coverage_raw = coverage_file.read_bytes()
+            coverage_file.write_bytes(coverage_raw + b"\n")
+            refused_plan(["2026-10-19"], "not the one its quality reports certified")
+            coverage_file.write_bytes(b"{not json")
+            refused_plan(["2026-10-19"], "do not load")
+            coverage_file.write_bytes(coverage_raw)
+            # two reports that certify different coverage sets: the plan cannot tell which one is the incumbent's
+            sql(connection, "INSERT INTO catalog.quality_reports (partition_id, check_suite, status, metrics) SELECT q.partition_id, q.check_suite, 'pass', "
+                            "jsonb_build_object('certification_profile', q.metrics->>'certification_profile', "
+                            "'coverage_manifest_sha256', jsonb_build_array(repeat('0', 64)), 'coverage_manifest_ids', jsonb_build_array('other')) "
+                            "FROM catalog.quality_reports q JOIN catalog.partitions p ON p.partition_id = q.partition_id "
+                            "WHERE p.partition_key='dt=2026-10-19' LIMIT 1")
+            try:
+                refused_plan(["2026-10-19"], "certify 2 coverage manifest sets")
+            finally:
+                sql(connection, "DELETE FROM catalog.quality_reports WHERE metrics->'coverage_manifest_ids' = '[\"other\"]'::jsonb")
+            incumbent_19 = make_plan(["2026-10-19"])["days"][0]["incumbent"]
+            assert incumbent_19["coverage_ids"] == ["bybit-archive-btcusdt-2026-10-19-v1"] and incumbent_19["assertion_ids"], incumbent_19
 
             # the verification checks the gateway's answer for count, order and duplicates, not only the Parquet
             class Shuffled:
@@ -515,6 +535,21 @@ def main() -> int:
             assert coverage_ids == {"rebuilt": f"bybit-archive-btcusdt-{PILOT}-rebuild-v1", "legacy": "bybit-archive-btcusdt-2026-10-19-v1"}, coverage_ids
 
             # 11. the executor does one day at a time and stops at the first that fails: the next day is not attempted
+            # a day published by the live publisher before the slices: ``part-<HHMMSS>`` and its manifests in the dataset root
+            old_dir = dataset_root / "dt=2026-10-08"
+            (old_dir / "part-001.parquet").rename(old_dir / "part-235942.parquet")
+            (old_dir / "partition-manifest.json").rename(dataset_root / "partition-manifest-235942.json")
+            (old_dir / "coverage-manifest.json").rename(dataset_root / "coverage-manifest-235942.json")
+            sql(connection, "UPDATE catalog.partitions SET rel_path=%s WHERE partition_key='dt=2026-10-08'", ("dt=2026-10-08/part-235942.parquet",))
+            two = make_plan(["2026-10-08", "2026-10-09"])
+            assert two["days"][0]["incumbent"]["partition_manifest_file"] == "partition-manifest-235942.json", two["days"][0]["incumbent"]
+            assert two["days"][0]["incumbent"]["coverage_manifest_file"] == "coverage-manifest-235942.json"
+            assert two["days"][0]["action"] == "retire+import" and not two["days"][0]["refusals"], two["days"][0]
+            # the manifest inside still names part-001, so the layout is only good for the plan: put the day back before the retire
+            (old_dir / "part-235942.parquet").rename(old_dir / "part-001.parquet")
+            (dataset_root / "partition-manifest-235942.json").rename(old_dir / "partition-manifest.json")
+            (dataset_root / "coverage-manifest-235942.json").rename(old_dir / "coverage-manifest.json")
+            sql(connection, "UPDATE catalog.partitions SET rel_path=%s WHERE partition_key='dt=2026-10-08'", ("dt=2026-10-08/part-001.parquet",))
             two = make_plan(["2026-10-08", "2026-10-09"])
             assert [d["action"] for d in two["days"]] == ["retire+import", "retire+import"], [d["refusals"] for d in two["days"]]
             with mock.patch.object(rebuild, "import_bybit_archive_day_after_retirement", side_effect=ArchiveImportRefused("S13", "probe")):
