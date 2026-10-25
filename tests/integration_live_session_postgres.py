@@ -16,7 +16,11 @@ session.
 
 from __future__ import annotations
 
+import contextlib
 from datetime import timedelta
+import gzip
+import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -29,9 +33,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "tools"))
 import psycopg  # noqa: E402
 import quant_platform.application.bybit_live as app  # noqa: E402
-from integration_live_slices_postgres import gateway_read, key_of, partitions, rows  # noqa: E402
+import live_window_evidence as evidence_tool  # noqa: E402
+from integration_live_slices_postgres import ARCHIVE_HEADER, gateway_read, key_of, partitions, rows  # noqa: E402
 from quant_platform.application.live_gap_orchestration import load_open_long_gap_records  # noqa: E402
 from quant_platform.application.live_ingest_server import (  # noqa: E402
     SERVER_FAILED,
@@ -384,6 +390,47 @@ def main() -> int:
                 time.sleep(0.4)
                 behind.finish()
             found = check_catalog(connection, delivered)  # the three unlistened trades are not in it: nothing was claimed for them
+
+            # 7. The evidence tool (O03) over this real catalog: the archive is every trade the world made, listened to or not. A
+            #    strict read of each exact chain returns what was claimed; every archive trade that is not read back lies in a hole
+            #    the run itself left (an explicit gap), none inside a claimed window; the tool passes and states the shortfall. An
+            #    archive trade inside a claimed window that was never published is an undeclared loss: the tool fails.
+            archive_dir = Path(holder) / "archive"
+            archive_dir.mkdir()
+
+            def write_archive(extra: tuple = ()) -> Path:
+                lines = [ARCHIVE_HEADER]
+                for r in world.trades:
+                    ms = r.exchange_ts.epoch_ns // MS
+                    lines.append(f"{ms // 1000}.{ms % 1000:03d},{INSTRUMENT},{'Buy' if r.aggressor_side == 'buy' else 'Sell'},"
+                                 f"{r.size},{r.price},PlusTick,{r.trade_id},1,2,1")
+                lines.extend(extra)
+                path = archive_dir / f"{INSTRUMENT}2026-10-21.csv.gz"
+                path.write_bytes(gzip.compress((chr(10).join(lines) + chr(10)).encode("utf-8")))
+                return path
+
+            def run_tool(*extra: str) -> tuple[int, dict]:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code = evidence_tool.main(["--instrument", INSTRUMENT, "--dsn", dsn, "--archive", str(write_archive()), *extra])
+                return code, json.loads(out.getvalue())
+
+            code, report = run_tool()
+            assert code == 0 and report["passed"], report["stop_conditions"]
+            assert report["missing_inside_claimed_windows"] == 0 and report["read_not_in_archive"] == 0 and not report["conflicts"]
+            assert report["read_through_gateway"] == len(delivered) == report["captured_of_archive"], report
+            assert report["slices"]["chain_segments"] >= 3 and len(report["holes"]) == report["slices"]["chain_segments"] - 1
+            assert report["missing_inside_unclaimed_spans"] > 0 and report["captured_ratio"] < 1.0, "the shortfall is stated"
+            assert sum(h["archive_trades_inside"] for h in report["holes"]) == report["missing_inside_unclaimed_spans"]
+            assert report["slices"]["not_valid_in_catalog"] == 0 and report["slices"]["revisions_above_one"] == 0
+
+            first_start = Instant.parse(found[0][3]).epoch_ns // MS
+            ghost = f"{(first_start + 1) // 1000}.{(first_start + 1) % 1000:03d},{INSTRUMENT},Buy,1,100.99,PlusTick,ghost-1,1,2,1"
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = evidence_tool.main(["--instrument", INSTRUMENT, "--dsn", dsn, "--archive", str(write_archive((ghost,)))])
+            ghost_report = json.loads(out.getvalue())
+            assert code == 1 and not ghost_report["passed"] and ghost_report["examples_missing_inside_claimed_windows"] == ["ghost-1"], ghost_report
 
         assert [r[0] for r in rows(connection, "SELECT instrument FROM catalog.datasets ORDER BY 1")] == [INSTRUMENT]
     print("POSTGRESQL LIVE SESSION GATE PASSED")
