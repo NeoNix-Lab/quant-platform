@@ -656,6 +656,41 @@ def main() -> int:
             assert gateway_ids(connection, first_day) == [r[1] for r in full[first_day]]
             assert gateway_ids(connection, second_day) == [r[1] for r in full[second_day]]
 
+            # 12c. an external dependency lost between the retire and the retry: the other day, not in the plan, is retired by something
+            #      else after the first day was retired and before it was imported. The old digest does not authorize the retry
+            ext_a, ext_b = "2026-10-04", "2026-10-05"
+            for day in (ext_a, ext_b):
+                full[day] = world(day)
+                write_archive(archives, day, full[day])
+            crossing_legacy(ext_a, ext_b, full[ext_b][:2])
+            legacy(ext_b, subset=full[ext_b][:2] + [full[ext_b][5]])  # B holds the two trades, so A alone is planned
+            external = make_plan([ext_a])
+            assert external["days"][0]["action"] == "retire+import" and external["days"][0]["conservation"]["outside_held"] == {ext_b: True}
+            with mock.patch.object(rebuild, "import_bybit_archive_day_after_retirement", side_effect=RuntimeError("crash after the retire")):
+                try:
+                    run(external)
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("the crash was not raised")
+            assert states(connection)[f"dt={ext_a}"] == ["invalid"] and f"dt={ext_a}/seg=000000.000" not in states(connection)
+            assert make_plan([ext_a])["digest"] == external["digest"] and make_plan([ext_a])["days"][0]["action"] == "import"
+            sql(connection, "UPDATE catalog.partitions SET state='invalid' WHERE partition_key=%s", (f"dt={ext_b}",))  # B retired by another operation
+            lost_plan = make_plan([ext_a])
+            assert lost_plan["days"][0]["action"] == "refused" and lost_plan["digest"] != external["digest"], lost_plan["days"][0]
+            before_stale = snapshot(connection, storage, checkpoint)
+            try:
+                run(external)
+            except RebuildRefused as exc:
+                assert exc.phase == "STALE", exc
+            else:
+                raise AssertionError("the plan approved with B holding the records must not complete once B is retired")
+            assert snapshot(connection, storage, checkpoint) == before_stale, "the refused retry must change nothing"
+            sql(connection, "UPDATE catalog.partitions SET state='valid' WHERE partition_key=%s", (f"dt={ext_b}",))
+            assert make_plan([ext_a])["digest"] == external["digest"]
+            result = run(external)  # B holds the records again: the same plan completes
+            assert result["days"][0]["outcome"] == "rebuilt", result
+
             # 13. restore and import share the day's guard (P1): a restore cannot slip in between the import's check and its publication
             retired_day = "2026-10-12"
             full[retired_day] = world(retired_day)

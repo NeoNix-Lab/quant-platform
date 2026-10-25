@@ -331,8 +331,9 @@ def _digest(plan: Mapping[str, Any]) -> str:
     import (the crash of A2.5) and is stale as soon as anything the operation depends on changes.
 
     ``outside_held`` (whether a valid partition of another day holds the incumbent's records of that day) is progress too: it turns
-    true when the plan itself rebuilds that day. It is left out; what it means for the plan is in the refusals, which are bound, so a
-    change from outside (a held record no longer held, a day of the plan no longer rebuildable) still changes the digest."""
+    true when the plan itself rebuilds that day. It is left out; what it means for the plan is in the refusals, which are bound and
+    are decided for every day on each planning, a retry after a crash included (:func:`_resolve_dependencies`), so a change from
+    outside (a held record no longer held, a day of the plan no longer rebuildable) still changes the digest."""
 
     days = []
     for entry in plan["days"]:
@@ -479,15 +480,17 @@ def _resolve_dependencies(entries: list[dict[str, Any]]) -> None:
 
     The records of another day stay served if a ``valid`` partition of that day holds them (``outside_held``, decided against the
     catalog) or if that day is in this plan and is not refused, so it ends rebuilt from its own archive file. A day of the plan that
-    is refused contributes nothing, and what depended on it is refused in turn, until nothing changes. An entry that is not a
-    retirement to come (the incumbent is retired already, or the day is rebuilt) is not judged again."""
+    is refused contributes nothing, and what depended on it is refused in turn, until nothing changes. Every day that is not refused
+    is judged, a retirement to come and a day already retired or rebuilt (a retry after a crash) alike: the progress of the days of
+    the plan is allowed (the other day, rebuilt by this plan, serves the records), the loss of an external dependency (the other day,
+    not in the plan, retired by something else) is a refusal, so the retry is refused before any further change."""
 
     by_day = {entry["day"]: entry for entry in entries}
     changed = True
     while changed:
         changed = False
         for entry in entries:
-            if entry["action"] != "retire+import" or not entry["conservation"]:
+            if entry["action"] == "refused" or not entry["conservation"]:
                 continue
             for owner, held in sorted(entry["conservation"].get("outside_held", {}).items()):
                 other = by_day.get(owner)

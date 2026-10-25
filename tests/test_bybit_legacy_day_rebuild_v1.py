@@ -159,8 +159,15 @@ class DependencyTests(unittest.TestCase):
         a, b = dependent("a", {"b": False}), dependent("b", {"c": False})
         self.assertEqual({"a": "refused", "b": "refused"}, self.resolve(a, b))
 
-    def test_a_day_already_retired_is_not_judged_again(self) -> None:
-        self.assertEqual({"a": "import"}, self.resolve(dependent("a", {"b": False}, action="import")))
+    def test_a_retry_after_a_crash_is_judged_again(self) -> None:
+        # the incumbent is retired already (a retry): the loss of an external dependency is a refusal, before any further change
+        for action in ("import", "verify"):
+            entry = dependent("a", {"b": False}, action=action)
+            self.assertEqual({"a": "refused"}, self.resolve(entry), action)
+            self.assertIn("they would stop being served", entry["refusals"][0])
+        # the progress of the days of the plan is allowed: the other day is rebuilt (or being rebuilt) by this plan
+        self.assertEqual({"a": "verify", "b": "import"}, self.resolve(dependent("a", {"b": True}, action="verify"), dependent("b", {}, action="import")))
+        self.assertEqual({"a": "import", "b": "verify"}, self.resolve(dependent("a", {"b": False}, action="import"), dependent("b", {}, action="verify")))
 
 
 class DifferenceTests(unittest.TestCase):
