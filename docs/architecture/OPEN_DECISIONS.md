@@ -2,7 +2,7 @@
 
 This document records only decisions that are still live or intentionally deferred. Accepted ADRs/contracts remain semantic authority; [`../product/CAPABILITY_DAG.md`](../product/CAPABILITY_DAG.md) records which atoms each decision blocks and when a branch of a gate family is activated.
 
-## Inventory checkpoint — DG-R registration (#518)
+## Inventory checkpoint — DG-N/DG-O closeout (#527)
 
 Recomputed from the union of the actual DAG rows and checked against expanded
 Capability Map rows, preserving both parents' accepted credits. No new atom,
@@ -19,7 +19,7 @@ OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
 ROADMAP_DEFINED                 = 120 + 3 + 9 = 132
 ROADMAP_PLANNING_COMPLETENESS   = 132 / 132 = 100%
-IMPLEMENTATION_COMPLETE         = 105 / 132 = 79.5%
+IMPLEMENTATION_COMPLETE         = 110 / 132 = 83.3%
 ```
 
 ## Resolved foundation — reference only
@@ -944,7 +944,7 @@ linear USDT instruments (BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT) in one co
 identity with every BTCUSDT identity unchanged; one live process per instrument; ADR-0044 unchanged (explicit gaps, no repair source);
 existing Parquet enters only through the producer path; a capacity rule (at least 365 days to the critical-pressure threshold) that gates
 production enabling and waits for the #378 measurements; explicit fees per instrument. Implementation of `T01`, `T04`, `T03`, `T02` is
-authorized (`SCOPE.md` Part B): `T01` and `T04` are `COMPLETE` (#489; PR #486, #488), `T03` and `T02` are not started. Amendment 1
+authorized (`SCOPE.md` Part B): `T01` and `T04` are `COMPLETE` (#489; PR #486, #488), `T03` and `T02` are `COMPLETE` within their bounds (closeout #527; PR #492, #494 to #502, #526). Amendment 1
 (#487, accepted 2026-10-20) decided the historical source: the Bybit public trade archive for every instrument, BTCUSDT included, with
 versioned source profiles, certification accepting the SQLite and the archive profile, and the existing Parquet replaced through the
 archive import instead of registered (their declared CSV source profile was never produced by any commit and S13 refuses it).
@@ -961,13 +961,34 @@ instance decoupled from publication by a bounded buffer; slices with chained exc
 midnight); each slice is revision 1 of its own partition `dt=<day>/seg=<start>` and a valid slice is never superseded (Amendment 1, accepted 2026-10-23: a bridge slice with no trade across a
 UTC midnight in a reconciliation, and the next revision only over an attempt that never became valid); checkpoint invariants unchanged
 (it binds a slice partition); interruptions as ADR-0040 section 7 and ADR-0042 section 5 already decide, ADR-0044 unchanged. Implementation of
-`O01`, `O02`, `O03` is authorized (`SCOPE.md` Part C) and not started; `T02` closes with `O03`.
+`O01`, `O02`, `O03` was authorized (`SCOPE.md` Part C) and is `COMPLETE` within the bounds of the closeout #527 (PR #510, #524, #526); `T02` closed with `O03`.
 
 Live follow-ups, none authorized: consolidation of a closed day's slices into one partition (a read optimization, opened only on a measured
 read or admission cost); the already damaged live days (the superseded revisions and the trades never acquired before the fix), left as they
 are by DG-O and rebuilt, day by day, by DG-R once it is implemented; the assumption that the provider's `exchange_ts` is
 non-decreasing along the stream, measured by `O03`; the retention policy's classification of `superseded` partitions as candidates by age
 (the cleanup code is the maintainer's and is untouched).
+
+### Closeout of DG-N and DG-O (#527): reopening triggers (none authorized)
+
+`T03`, `T02`, `O01`, `O02` and `O03` are credited within their bounds. **The one-hour `ETHUSDT` real-provider run of `O03` (the `T02` proof) was not performed; the maintainer
+credited the atoms without it (2026-10-25).** Each limit has a named way to reopen:
+
+1. **Real-provider run.** No continuous session has run against the real Bybit provider for an hour and no report of `tools/live_window_evidence.py` exists. Trigger: the operator
+   performs the run (procedure in `docs/engineering/LIVE_INGEST_SERVER_DEPLOYMENT.md`) on a host, catalog and root of their choice and records the report.
+2. **`exchange_ts` ordering.** That the provider's stream is non-decreasing in `exchange_ts` stays an assumption (ADR-0075 "Not claimed"); a violation is an interruption by design.
+   Trigger: the report of trigger 1 counts the violations.
+3. **The bounds.** 300 s, 50 000 trades and 20 000 messages are accepted, not measured. Trigger: evidence from trigger 1.
+4. **Default mode and deployment.** The default of the CLI, the environment examples and the units is `cycles`; the server is not redeployed with `O01` to `O03`; enabling the
+   continuous mode on a unit is an operator step. Flipping the default is the maintainer's decision after the numbers of trigger 1.
+5. **Thin instruments and gaps.** After a reconnect the session waits for the first trade of the new subscription before reconciling; on a quiet interval this delays the
+   reconciliation, and a REST window that does not meet the subscription is an explicit gap. How often this happens on `ETHUSDT` is unmeasured. Trigger: evidence from trigger 1.
+6. **Clock of the recorded gap span.** The `known_gap` span ends at the detection instant of the local clock; the evidence tool classifies missing trades against that span, so a
+   local clock far behind the exchange could report a trade near the end of a hole as undeclared. Trigger: a false stop observed in a real report.
+7. **Capacity and further instruments.** #378 is not measured; nothing beyond the bounded `ETHUSDT` proof is enabled before the measurement and the 365-day rule (ADR-0074 section 6).
+   No non-BTC dataset is registered in the server catalog; replacing the maintainer's Parquet by the archive import is an operator step.
+8. **Damaged legacy days.** Left as they are by DG-O; their rebuild is DG-R (`R01`, `R02`, authorized, post-version) and the run on the server is the operator's.
+9. **Consolidation of slices.** Outside the first version; opened only on a measured read or admission cost (ADR-0075).
 
 ## DG-R — Rebuild of damaged legacy live days v1 — RESOLVED (ADR-0074 Amendment 2 `ACCEPTED`, #515)
 
