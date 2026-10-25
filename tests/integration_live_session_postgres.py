@@ -365,6 +365,11 @@ def main() -> int:
             with mock.patch.object(app, "fetch_recent_public_trades", recent_stale), websockets_stub(provider6):
                 behind.start()
                 behind.until(lambda: provider6.sockets, "the connection")
+                # a frame with no trade (an empty snapshot is admitted by the canonical entry) is not the overlap candidate:
+                # nothing is fetched or reconciled until a trade of the subscription arrives
+                provider6.push({"topic": f"publicTrade.{INSTRUMENT}", "type": "snapshot", "ts": 1, "data": []})
+                time.sleep(0.4)
+                assert not behind.health("reconcile"), "an empty snapshot unlocked the reconciliation"
                 rows_ = world.make(2)
                 provider6.push(world.message(rows_))
                 delivered.update(r["i"] for r in rows_)

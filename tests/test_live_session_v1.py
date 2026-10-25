@@ -605,6 +605,18 @@ class ContinuityProofTests(unittest.TestCase):
         log = provider.log
         self.assertLess(log.index("subscribe"), log.index("fetch_recent"))
 
+    def test_an_empty_snapshot_is_not_a_trade_the_session_keeps_waiting_for_one(self) -> None:
+        provider = FakeProvider()
+        with Harness(provider, checkpoint=True, reconcile=lambda r, b: pass_restart(T0 + 2, [record(T0 + 1, "x")])) as h:
+            h.until(lambda: provider.sockets, "the connection")
+            provider.push({"topic": f"publicTrade.{INSTRUMENT}", "type": "snapshot", "ts": T0, "data": []})
+            time.sleep(0.3)
+            self.assertNotIn("fetch_recent", provider.log)  # a frame with no trade proves no overlap
+            self.assertNotIn("reconcile", provider.log)
+            provider.push(trade_message(T0 + 5, "w1", "w2"))
+            h.until(lambda: h.reconciled, "the reconciliation after the first real trade")
+        self.assertEqual(["w1", "w2"], [r.trade_id for r in h.reconciled[0][1]])
+
     def test_a_session_that_ends_before_any_trade_reconciles_nothing_and_is_an_interruption(self) -> None:
         provider = FakeProvider()
         with Harness(provider, checkpoint=True, reconcile=lambda r, b: pass_restart(T0, [record(T0, "x")])) as h:

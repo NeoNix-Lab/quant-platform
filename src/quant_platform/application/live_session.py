@@ -384,7 +384,7 @@ class LiveSessionEngine:
             assembler.start_window(None)
             self._chain_end = None
             return staged
-        while not staged:
+        while not any(batch.records for batch in staged):  # a frame with no trade is not a trade (an empty snapshot is admitted)
             if stop_requested() or reader.finished.is_set():
                 return None
             try:
