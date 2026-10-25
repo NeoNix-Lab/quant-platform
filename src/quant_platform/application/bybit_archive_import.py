@@ -129,6 +129,83 @@ def import_bybit_archive_day(
         )
 
 
+REBUILD_SEGMENT = "seg=000000.000"
+REBUILD_COVERAGE_TAG_SUFFIX = "-rebuild"
+
+
+def rebuild_partition_key(day: str) -> str:
+    """The fixed key a rebuilt day is imported under: the two-level grammar of ADR-0075 for a window that starts at the day's start."""
+
+    return f"dt={day}/{REBUILD_SEGMENT}"
+
+
+def import_bybit_archive_day_after_retirement(
+    connection: Any,
+    *,
+    instrument: str,
+    day: str,
+    archive_path: str | Path,
+    storage_root_id: str,
+    code_ref: str,
+) -> ArchiveImportReport:
+    """The rebuild variant of the import (ADR-0074 Amendment 2, A2.2): the day's legacy revision, once ``invalid``, does not occupy it.
+
+    The ordinary :func:`import_bybit_archive_day` refuses any day that has a partition, in any state, and keeps doing so. This
+    variant lets through one thing only: the live revision of the **exact** key ``dt=<day>`` in the state ``invalid`` (its
+    superseded predecessors are history). A ``valid``, ``degraded``, ``closed`` or ``writing`` revision of that key, and every
+    partition ``dt=<day>/...`` (including the key it would create), still refuses. The key it creates is fixed
+    (:func:`rebuild_partition_key`); it is not a ``--force`` and takes no key argument."""
+
+    try:
+        identity = bybit_archive_dataset_identity(instrument)
+        bybit_archive_file_name(instrument, day)  # validates the day
+        start = datetime.combine(date.fromisoformat(day), datetime.min.time(), tzinfo=timezone.utc)
+    except Exception as exc:
+        raise ArchiveImportRefused("REQUEST", str(exc)) from exc
+    if not isinstance(code_ref, str) or not code_ref.strip():
+        raise ArchiveImportRefused("REQUEST", "code_ref must name the producing code")
+    abs_path = _storage_root_path(connection, storage_root_id)
+    _refuse_unless_retired(connection, identity, day, instrument)
+    dataset_root = Path(abs_path).joinpath(
+        identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id
+    )
+    try:
+        dataset_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ArchiveImportRefused("TARGET", f"cannot create the dataset root: {exc}") from exc
+    # the lock is the day's, the same file the ordinary import takes: the two exclude each other (its name is derived from the day,
+    # not from the two-level key, which would name a directory that does not exist)
+    with _day_lock(dataset_root / f".import-dt={day}.lock"):
+        _refuse_unless_retired(connection, identity, day, instrument)
+        return _import_locked(
+            connection, identity=identity, instrument=instrument, day=day, start=start, partition_key=rebuild_partition_key(day),
+            archive_path=archive_path, storage_root_id=storage_root_id, code_ref=code_ref, dataset_root=dataset_root,
+            coverage_tag_suffix=REBUILD_COVERAGE_TAG_SUFFIX,
+        )
+
+
+def _refuse_unless_retired(connection: Any, identity: Any, day: str, instrument: str) -> None:
+    legacy_key = f"dt={day}"
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT p.partition_key, p.state FROM catalog.partitions p JOIN catalog.datasets d ON d.dataset_id = p.dataset_id "
+            "WHERE d.layer = %s AND d.kind = %s AND d.venue = %s AND d.instrument = %s AND d.schema_id = %s "
+            "AND d.feature_set_def_id IS NULL AND (p.partition_key = %s OR p.partition_key LIKE %s)",
+            (identity.layer, identity.dataset_kind, identity.venue, identity.instrument, identity.record_schema_id,
+             legacy_key, f"{legacy_key}/%"),
+        )
+        rows = cursor.fetchall()
+    connection.rollback()
+    foreign = [key for key, _state in rows if key != legacy_key]
+    if foreign:
+        raise ArchiveImportRefused("CATALOG", f"{instrument} {day} has partitions under {legacy_key}/ ({', '.join(sorted(foreign))}); "
+                                              "the rebuild creates its key only on a day that has none")
+    live = [state for _key, state in rows if state != "superseded"]
+    if live != ["invalid"]:
+        raise ArchiveImportRefused(
+            "CATALOG", f"{instrument} {legacy_key} must have exactly one live revision and it must be invalid (retired); found {live}")
+
+
 def _import_locked(
     connection: Any,
     *,
@@ -141,6 +218,7 @@ def _import_locked(
     storage_root_id: str,
     code_ref: str,
     dataset_root: Path,
+    coverage_tag_suffix: str = "",
 ) -> ArchiveImportReport:
     rel_path = f"{partition_key}/part-001.parquet"
     artifact_path = dataset_root / rel_path
@@ -169,7 +247,7 @@ def _import_locked(
             partition_key=partition_key, revision=1, rel_path=rel_path, created_at=now, closed_at=now,
             producer=ARCHIVE_IMPORT_PRODUCER, code_ref=code_ref,
         )
-        tag = f"bybit-archive-{instrument.lower()}-{day}"
+        tag = f"bybit-archive-{instrument.lower()}-{day}{coverage_tag_suffix}"
         coverage = build_bybit_trade_v1_source_extract_coverage(
             dataset_identity=identity, coverage_id=f"{tag}-v1", intent_start=interval_start, intent_end=interval_end,
             assertion_id=f"{tag}-complete-v1", assertion_start=interval_start, assertion_end=interval_end,
@@ -421,5 +499,8 @@ __all__ = [
     "bybit_archive_file_name",
     "bybit_archive_url",
     "compare_archive_day_with_parquet",
+    "REBUILD_SEGMENT",
     "import_bybit_archive_day",
+    "import_bybit_archive_day_after_retirement",
+    "rebuild_partition_key",
 ]
