@@ -8,6 +8,7 @@ import copy
 import dataclasses
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -63,6 +64,13 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="l2-golden-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
+        # Tripwire: nothing in this file may publish into a catalog (tests/integration_l2_golden_postgres.py owns that leg).
+        leg = mock.patch.object(
+            golden_module, "_catalog_leg",
+            side_effect=AssertionError("a unit test reached the catalog leg: a DSN leaked in from the environment"),
+        )
+        leg.start()
+        self.addCleanup(leg.stop)
 
     def archive(self, messages, day=DAY, **kwargs):
         return fixtures.make_archive(self.tmp, day, messages, **kwargs)
@@ -318,9 +326,14 @@ class RefusalTests(Base):
 
 
 class ToolTests(Base):
+    EXPORTED_DSN = "host=catalog.invalid dbname=must_not_be_used"
+
     def run_tool(self, *argv):
         out, err = io.StringIO(), io.StringIO()
-        code = l2_golden_e2e.run(list(argv), out=out, err=err)
+        # The tool defaults --dsn to CATALOG_DSN: the shell that runs the suite must never choose the catalog.
+        with mock.patch.dict(os.environ):
+            os.environ.pop("CATALOG_DSN", None)
+            code = l2_golden_e2e.run(list(argv), out=out, err=err)
         return code, out.getvalue(), err.getvalue()
 
     def base_args(self, archive):
@@ -366,6 +379,30 @@ class ToolTests(Base):
         with mock.patch.object(l2_golden_e2e, "run_l2_golden", fake):
             self.run_tool(*self.base_args(self.archive(fixtures.CLEAN)))
         self.assertTrue(seen["reproduce"])
+
+    def test_the_tool_itself_still_defaults_the_dsn_to_catalog_dsn(self):
+        with mock.patch.dict(os.environ, {"CATALOG_DSN": self.EXPORTED_DSN}):
+            args = l2_golden_e2e.build_parser().parse_args(self.base_args(self.tmp / "x.zip"))
+        self.assertEqual(args.dsn, self.EXPORTED_DSN)
+
+    def test_an_exported_catalog_dsn_is_never_forwarded_by_the_tool_tests(self):
+        seen = {}
+
+        def fake(*args, **kwargs):
+            seen.update(kwargs)
+            return {"ok": True, "claims": []}
+
+        with mock.patch.dict(os.environ, {"CATALOG_DSN": self.EXPORTED_DSN}),                 mock.patch.object(l2_golden_e2e, "run_l2_golden", fake):
+            self.run_tool(*self.base_args(self.archive(fixtures.CLEAN)))
+        self.assertIsNone(seen["dsn"])
+
+    def test_the_real_success_path_with_an_exported_catalog_dsn_never_reaches_the_catalog_leg(self):
+        with mock.patch.dict(os.environ, {"CATALOG_DSN": self.EXPORTED_DSN}):
+            code, out, err = self.run_tool(*self.base_args(self.archive(fixtures.ONE_GAP)))
+            self.assertEqual(os.environ["CATALOG_DSN"], self.EXPORTED_DSN, "the test must restore the caller's environment")
+        self.assertEqual(code, 0, err)
+        self.assertIsNone(json.loads(out)["catalog"])
+        golden_module._catalog_leg.assert_not_called()
 
 
 if __name__ == "__main__":
