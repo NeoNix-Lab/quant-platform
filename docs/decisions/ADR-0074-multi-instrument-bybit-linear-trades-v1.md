@@ -569,10 +569,12 @@ manifest hashes), their rows and distinct trade ids, the covered and uncovered s
 archive's distinct ids that no slice holds), and the open long-gap records that name the day (path, SHA-256, interval). The
 measured loss is the number that this amendment lacks today.
 
-A day is refused, and nothing is changed for it, if any of the following holds:
+A day is refused if any of the following holds. The first two refuse the whole operation and change nothing. Every other
+one refuses the import only, and A3.12 says what is then done with the day:
 
-- the day is not closed in UTC: its end is less than 24 hours before execution;
-- the live checkpoint is bound to a partition of the day;
+- the day is not closed: it has not ended in UTC, or the live checkpoint is not yet bound to a partition of a later day
+  (ADR-0042 keeps the key monotonic, so no slice of the day can still arrive). For a slice day this replaces the 24-hour margin
+  of A2.4;
 - a live revision of the day is `writing` or `closed`;
 - **conservation fails.** Every record of every `valid` slice, by `(exchange_ts, trade_id)`, must be found with equal venue,
   instrument, exchange time, side, price and size in the archive file of its own UTC day, and that day must be readable after
@@ -681,10 +683,12 @@ the unattended run replaces the reviewed date plan of A2.6 by the guards of A3.1
    open record contained in it (proposed; the unattended operation forces the question), or keep the records open and accept
    a permanent explicit-gap state. A gap that crosses a midnight needs a rule of its own, which one coverage document cannot
    restate.
-3. **Trigger.** Unattended, as the maintainer requires: a daily run (A3.12). Still to decide: the hour of the run, the maximum
-   number of days per run and who receives the failure signals.
-4. **Archive availability.** The 24-hour closed-day rule of A2.4 stands. The publication lag of the archive file is not measured
-   here. The plan records the source-observation time and refuses when the file cannot be fetched; it does not wait.
+3. **Trigger.** Unattended, as the maintainer requires: a daily run at 12:00 UTC for the previous day (A3.12). Still to
+   decide: the maximum number of days per run and who receives the failure signals.
+4. **Archive availability.** The publication time of the archive file is not measured here, so it is not known whether the file
+   of the previous day exists at 12:00 UTC. The plan records the source-observation time and never waits: a run that cannot
+   fetch the file takes the fallback of A3.12 and the next run completes the day. If the file is regularly later than the run,
+   the hour is the thing to change.
 5. **Retention.** The retired slices, the directories moved aside on 2026-10-26 and the catalog dump: who keeps them and for how
    long (ADR-0049).
 6. **Complete live days.** A day that the continuous session published without a pause is never replaced (A3.7). Say so
@@ -711,32 +715,48 @@ The runtime proof is required after implementation; this design-only proposal do
 4. **The daily run (A3.12).** Over a disposable PostgreSQL and a fake archive source: two instruments, with days in each of the
    three outcomes in one run; a refusal on one day does not stop the others; a rerun after a crash completes the day; a stale
    plan; an archive file that changes between two runs; the per-run bound; a second run changes nothing; no day outside the
-   rule changes by a byte; a verification failure restores the retired slices and signals.
+   rule changes by a byte. The fallback: an archive absent at the run leaves the day retired and the next run imports it; a
+   conservation difference, an overlap and a hash change each leave the day retired and signalled; a verification failure
+   retires the imported partition too and signals; the retired slices can be restored to `valid` by the A2.3 restore path.
 
 ### A3.12 Unattended operation
 
 The requirement is that no day needs a hand. One run, started by a timer on the server, is the only actor: the A2.4 plan
 followed by the A3.2 steps for every selected day, with no operator in between.
 
-**Selection.** For each instrument of the allow-list, in a fixed order, the run takes the closed UTC days (A2.4) whose live
+**Schedule.** Once a day at 12:00 UTC, for the previous UTC day and for any earlier day still not closed. The hour is a
+configuration of the timer, not of the data.
+
+**Selection.** For each instrument of the allow-list, in a fixed order, the run takes the closed days (A3.3) whose live
 revisions are slice partitions and that no `valid` archive-sourced `dt=<day>/seg=000000.000` already closes. The selection is
 bounded by the data: a day that the rule does not name is never touched, and nothing widens the set.
 
-**Per day, one of three outcomes**, decided by the plan and recorded:
+**Per day.** The run plans the day and then does one of these, decided by the plan and recorded:
 
-1. *Complete.* The slices cover the day without a pause and conserve against the archive: the run only verifies (A3.7), retires
-   and imports nothing, and records the evidence.
-2. *Incomplete and conserved.* The run closes the day (A3.2) and verifies it.
-3. *Refused.* Any refusal of A3.3 or A3.6: the day is left exactly as it is, a failure signal names the instrument, the day and
-   the reason, and the run goes on with the other days and instruments. The next run reconsiders the day; within a run it is
-   never retried and never forced.
+1. *The slices are complete and conserve against the archive.* The run only verifies (A3.7), retires and imports nothing, and
+   records the evidence.
+2. *The slices are incomplete, the archive is fetched and conserved, and nothing overlaps.* The run replaces the day for its
+   whole length: it retires every slice, imports the archive day and verifies it (A3.2).
+3. *Anything else that refuses the import:* the archive cannot be fetched or parsed, its hash changed, a live record differs
+   from the archive, an overlap, a gap record that is not contained, a bridge slice without its neighbour. The run **marks the
+   day invalid** with what exists already: it retires every slice with the A2.3 reassessment (`valid -> invalid`), writes
+   nothing else, and signals. The day is then honestly not served (a strict read refuses it with `NoCoverage`) instead of being
+   served incomplete or suspect, and the retired slices keep their bytes and can be restored. Because retired slices do not
+   occupy the day (A3.2), the next run takes the same day again from item 2.
+4. *A verification that fails after the import.* The run retires the imported partition as well, so the day is not served, and
+   signals.
+5. *The whole operation refused* (the day is not closed; a slice is `writing` or `closed`): nothing changes and the run signals.
+
+A signal names the instrument, the day, the reason and the number of days the day has been unclosed. The run goes on with the
+other days and instruments. A day is retried by every later run, never within the same run and never forced; a day that is
+still unclosed after repeated runs is a signal of higher severity, not a silent state.
 
 **What replaces the reviewed plan.** Amendment 2 required a reviewed date plan because its days were damaged and nobody could
-read them. Here the review is replaced by what makes the operation safe to run alone: nothing is deleted; the retirement is
-reversible by the restore path of A2.3 until the import is verified; the plan binds the archive hash and the incumbent
-identities and is refused as stale if either changed; conservation proves that no live record is lost or altered; every refusal
-stops that day only; the run is idempotent and takes the day lock without waiting. A run that finds a day retired and not
-imported (a crash) completes it; a day whose verification fails is restored to `valid`, signalled and left.
+read them. Here the review is replaced by what makes the operation safe to run alone: nothing is deleted; every retirement is
+reversible by the restore path of A2.3; the plan binds the archive hash and the incumbent identities and is refused as stale if
+either changed; conservation proves that no live record is lost or altered before any replacement; every failure stops that day
+only; the run is idempotent and takes the day lock without waiting. A run that finds a day retired and not imported, whether
+after a crash or after a fallback, completes it.
 
 **Evidence and state.** No new control table (A2.6). The state of a day is read from the catalog: slices `valid`, slices
 `invalid` with the archive key `valid`, or refused. The plan, its digest and the verification result are written as report
@@ -746,9 +766,10 @@ of a complete day is kept durably is decided by the implementation issue, within
 **Bounds.** One instrument and one day at a time; a configured maximum number of days per run (a safety bound, not a policy); the
 live service is never stopped and never waits for the run beyond the short lock of A3.4.
 
-**What this does not do.** It does not make the current day complete: a day is closed only after it ends and the archive of the
-day is published. While the service runs in `cycles`, the last day or two stay incomplete and a strict read refuses them; only
-the continuous session (`O02`) makes a day complete as it happens. The unattended run closes what is behind; it does not replace
+**What this does not do.** It does not make the current day complete: a day is closed only after it ends, at the next 12:00 UTC
+run, and from an archive file that exists by then. While the service runs in `cycles`, the day being written is incomplete and a
+strict read refuses it, and a day whose archive is late stays marked invalid until the run that finds it; only the continuous
+session (`O02`) makes a day complete as it happens. The unattended run closes what is behind; it does not replace
 the continuous session, and the system the maintainer asks for is the two together.
 
 ### A3.13 Acceptance record
