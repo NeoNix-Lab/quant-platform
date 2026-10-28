@@ -602,6 +602,21 @@ one refuses the import only, and A3.12 says what is then done with the day:
   live publication takes, for a short transaction. The service writes slices of the current day, never of a closed one. The
   closure of a `cycles` day is about 3,300 such transactions; their total duration and their effect on the publication latency
   of the live service are to be measured by the implementation proof, not assumed.
+- **The live service is never blocked by the closure.** This is a requirement of the design, not a property assumed of it. The
+  closure is a separate process, started by its own timer, outside the process and the unit of the live service, which neither
+  starts it, waits for it nor reads its state; the closure can fail, hang or be killed without the service noticing. The one
+  resource that both touch is the dataset row lock, and the rule is that the closure always yields:
+  1. every lock is requested with a short `lock_timeout`; a lock not granted in time ends the attempt on that day, which is
+     resumed by the next run (the state is read from the catalog, so nothing is lost);
+  2. every transaction retires or publishes one object and commits; the closure never holds a lock across a download, a parse
+     or a verification;
+  3. the retirements are paced: a pause between two transactions that is at least as long as the longest one, so that the
+     service finds the lock free between them;
+  4. the heavy work (download, parse, S13/S14 certification, verification) holds no catalog lock and runs under CPU and memory
+     limits of its own unit and a lower scheduling priority, so that it cannot starve the service or the database;
+  5. the whole run has a wall-clock limit, after which it is stopped and the next run resumes.
+  How much the pacing and the limits cost, and that the publication latency of the service does not grow beyond a stated bound
+  while the closure runs, are measured by A3.11 and reported; if the bound is not met, the pacing is tightened, not the bound.
 - **Untouched.** The live checkpoint, the long-gap record files, the manifests, the bytes of the retired slices, other days and
   other datasets. No deletion, catalog reset or retention is part of the operation
   ([ADR-0049](ADR-0049-retention-deletion-authority-v1.md)).
@@ -683,12 +698,13 @@ the unattended run replaces the reviewed date plan of A2.6 by the guards of A3.1
    open record contained in it (proposed; the unattended operation forces the question), or keep the records open and accept
    a permanent explicit-gap state. A gap that crosses a midnight needs a rule of its own, which one coverage document cannot
    restate.
-3. **Trigger.** Unattended, as the maintainer requires: a daily run at 12:00 UTC for the previous day (A3.12). Still to
-   decide: the maximum number of days per run and who receives the failure signals.
+3. **Trigger.** Unattended, as the maintainer requires: from 12:00 UTC of the following day, retried every hour (A3.12). Still
+   to decide: the maximum number of days per run, the age after which a day that stays unclosed raises the severity of its signal,
+   and who receives the failure signals.
 4. **Archive availability.** The publication time of the archive file is not measured here, so it is not known whether the file
    of the previous day exists at 12:00 UTC. The plan records the source-observation time and never waits: a run that cannot
-   fetch the file takes the fallback of A3.12 and the next run completes the day. If the file is regularly later than the run,
-   the hour is the thing to change.
+   fetch the file takes the fallback of A3.12 and the next hourly run completes the day. If the file is regularly later than
+   12:00 UTC, the first hour is the thing to change; the hourly retry already absorbs a late file.
 5. **Retention.** The retired slices, the directories moved aside on 2026-10-26 and the catalog dump: who keeps them and for how
    long (ADR-0049).
 6. **Complete live days.** A day that the continuous session published without a pause is never replaced (A3.7). Say so
@@ -710,22 +726,35 @@ The runtime proof is required after implementation; this design-only proposal do
 2. **The overlap guard of A3.6** in the plan of R02, with its own probe.
 3. **Operation.** Dry-run, execute and verify on `2026-10-24` first (the first closed slice day); `2026-10-25` and later days
    only from a new reviewed plan. The duration of the retirements and their effect on the publication latency of the live
-   service are measured and reported.
+   service are measured and reported (item 5).
 
-4. **The daily run (A3.12).** Over a disposable PostgreSQL and a fake archive source: two instruments, with days in each of the
+4. **The unattended run (A3.12).** Over a disposable PostgreSQL and a fake archive source: two instruments, with days in each of the
    three outcomes in one run; a refusal on one day does not stop the others; a rerun after a crash completes the day; a stale
    plan; an archive file that changes between two runs; the per-run bound; a second run changes nothing; no day outside the
    rule changes by a byte. The fallback: an archive absent at the run leaves the day retired and the next run imports it; a
    conservation difference, an overlap and a hash change each leave the day retired and signalled; a verification failure
    retires the imported partition too and signals; the retired slices can be restored to `valid` by the A2.3 restore path.
+   The hourly retry: a day refused at the first attempt is taken again by the next run without retiring anything twice; a day
+   that cannot be closed (a conservation difference) is retried every hour without producing a signal per hour; a run that finds
+   nothing to do reads the catalog and ends.
+5. **The live service is not blocked (A3.4).** With the real service publishing slices on a disposable PostgreSQL, a closure runs
+   and the publication latency of the service (the time of a cycle's publish) is measured before, during and after it: it does
+   not exceed the stated bound. Probes: a lock held by the live publication makes the closure yield and resume at the next run
+   with no change to the day; a lock held by the closure beyond the timeout is never waited for by the service; a closure that
+   hangs, is killed or crashes mid-run leaves the service publishing and the catalog consistent; the closure's unit stays
+   inside its CPU and memory limits during an import of a full day; the service starts, restarts and runs without the closure
+   installed.
 
 ### A3.12 Unattended operation
 
 The requirement is that no day needs a hand. One run, started by a timer on the server, is the only actor: the A2.4 plan
 followed by the A3.2 steps for every selected day, with no operator in between.
 
-**Schedule.** Once a day at 12:00 UTC, for the previous UTC day and for any earlier day still not closed. The hour is a
-configuration of the timer, not of the data.
+**Schedule.** A timer starts the run every hour. A day is taken from 12:00 UTC of the following UTC day (the previous day
+at its first attempt) and then at every later run until it is closed; an earlier day still not closed is taken in the same
+way. Before 12:00 UTC the run finds no day to take and ends after one catalog read. The first hour and the interval are
+configuration of the timer, not of the data. A run takes the run lock without waiting: a run that starts while the previous one
+is still going ends at once.
 
 **Selection.** For each instrument of the allow-list, in a fixed order, the run takes the closed days (A3.3) whose live
 revisions are slice partitions and that no `valid` archive-sourced `dt=<day>/seg=000000.000` already closes. The selection is
@@ -742,14 +771,17 @@ bounded by the data: a day that the rule does not name is never touched, and not
    day invalid** with what exists already: it retires every slice with the A2.3 reassessment (`valid -> invalid`), writes
    nothing else, and signals. The day is then honestly not served (a strict read refuses it with `NoCoverage`) instead of being
    served incomplete or suspect, and the retired slices keep their bytes and can be restored. Because retired slices do not
-   occupy the day (A3.2), the next run takes the same day again from item 2.
+   occupy the day (A3.2), the next hourly run takes the same day again from item 2, without retiring anything a second time.
 4. *A verification that fails after the import.* The run retires the imported partition as well, so the day is not served, and
    signals.
 5. *The whole operation refused* (the day is not closed; a slice is `writing` or `closed`): nothing changes and the run signals.
 
-A signal names the instrument, the day, the reason and the number of days the day has been unclosed. The run goes on with the
-other days and instruments. A day is retried by every later run, never within the same run and never forced; a day that is
-still unclosed after repeated runs is a signal of higher severity, not a silent state.
+A signal names the instrument, the day, the reason and the number of hours the day has been unclosed. The run goes on with the
+other days and instruments. A day is retried by every later run (hourly), never within the same run and never forced. A retry
+that ends in the same refusal as the previous one is not signalled again: a signal is sent when the reason of a day changes,
+when it is closed after having been signalled, and when its age crosses a threshold, so that a day that cannot be closed raises
+its severity with time and does not repeat every hour. The state read by the run is the catalog, not the signals. The archive
+host is asked once per day and run, and a refusal (a missing file) is not retried inside the run.
 
 **What replaces the reviewed plan.** Amendment 2 required a reviewed date plan because its days were damaged and nobody could
 read them. Here the review is replaced by what makes the operation safe to run alone: nothing is deleted; every retirement is
@@ -763,11 +795,13 @@ after a crash or after a fallback, completes it.
 files in an operator evidence directory and emitted as signals through the existing observability seam; where the verification
 of a complete day is kept durably is decided by the implementation issue, within the existing seams.
 
-**Bounds.** One instrument and one day at a time; a configured maximum number of days per run (a safety bound, not a policy); the
-live service is never stopped and never waits for the run beyond the short lock of A3.4.
+**Bounds.** One instrument and one day at a time; a configured maximum number of days per run (a safety bound, not a policy); a
+wall-clock limit per run; the run's unit has CPU and memory limits and a lower priority; the live service is never stopped and
+never waits for the run: A3.4 makes the closure yield on every lock, and the run is a separate process whose failure the
+service does not see.
 
-**What this does not do.** It does not make the current day complete: a day is closed only after it ends, at the next 12:00 UTC
-run, and from an archive file that exists by then. While the service runs in `cycles`, the day being written is incomplete and a
+**What this does not do.** It does not make the current day complete: a day is closed only after it ends, at the first run from 12:00 UTC
+that finds its archive file. While the service runs in `cycles`, the day being written is incomplete and a
 strict read refuses it, and a day whose archive is late stays marked invalid until the run that finds it; only the continuous
 session (`O02`) makes a day complete as it happens. The unattended run closes what is behind; it does not replace
 the continuous session, and the system the maintainer asks for is the two together.
