@@ -698,9 +698,9 @@ the unattended run replaces the reviewed date plan of A2.6 by the guards of A3.1
    open record contained in it (proposed; the unattended operation forces the question), or keep the records open and accept
    a permanent explicit-gap state. A gap that crosses a midnight needs a rule of its own, which one coverage document cannot
    restate.
-3. **Trigger.** Unattended, as the maintainer requires: from 12:00 UTC of the following day, retried every hour (A3.12). Still
-   to decide: the maximum number of days per run, the age after which a day that stays unclosed raises the severity of its signal,
-   and who receives the failure signals.
+3. **Trigger, bound and signals (decided by the maintainer, 2026-10-28).** Unattended: from 12:00 UTC of the following day,
+   retried every hour; a day that is not closed after 23 attempts is marked invalid and abandoned; the signals are lines
+   appended to a JSON-lines log, nothing else for now (A3.12).
 4. **Archive availability.** The publication time of the archive file is not measured here, so it is not known whether the file
    of the previous day exists at 12:00 UTC. The plan records the source-observation time and never waits: a run that cannot
    fetch the file takes the fallback of A3.12 and the next hourly run completes the day. If the file is regularly later than
@@ -735,8 +735,12 @@ The runtime proof is required after implementation; this design-only proposal do
    conservation difference, an overlap and a hash change each leave the day retired and signalled; a verification failure
    retires the imported partition too and signals; the retired slices can be restored to `valid` by the A2.3 restore path.
    The hourly retry: a day refused at the first attempt is taken again by the next run without retiring anything twice; a day
-   that cannot be closed (a conservation difference) is retried every hour without producing a signal per hour; a run that finds
-   nothing to do reads the catalog and ends.
+   that cannot be closed (a conservation difference) is retried every hour; a run that finds nothing to do reads the catalog and
+   ends. The attempts: the 23rd attempt that does not close a day leaves it invalid and abandoned, the 24th run does not take
+   it, and an attempt that closes the day on the 23rd is not abandoned; a day that is not closed yet is not counted; a run
+   cut by its wall-clock limit does not count the days it did not reach; a crash between the catalog change and the log append
+   costs at most one more attempt; a lost log restarts the counts and changes no data; the log is only appended to, one line per
+   attempt, and a line is never rewritten.
 5. **The live service is not blocked (A3.4).** With the real service publishing slices on a disposable PostgreSQL, a closure runs
    and the publication latency of the service (the time of a cycle's publish) is measured before, during and after it: it does
    not exceed the stated bound. Probes: a lock held by the live publication makes the closure yield and resume at the next run
@@ -776,12 +780,24 @@ bounded by the data: a day that the rule does not name is never touched, and not
    signals.
 5. *The whole operation refused* (the day is not closed; a slice is `writing` or `closed`): nothing changes and the run signals.
 
-A signal names the instrument, the day, the reason and the number of hours the day has been unclosed. The run goes on with the
-other days and instruments. A day is retried by every later run (hourly), never within the same run and never forced. A retry
-that ends in the same refusal as the previous one is not signalled again: a signal is sent when the reason of a day changes,
-when it is closed after having been signalled, and when its age crosses a threshold, so that a day that cannot be closed raises
-its severity with time and does not repeat every hour. The state read by the run is the catalog, not the signals. The archive
-host is asked once per day and run, and a refusal (a missing file) is not retried inside the run.
+**Attempts and abandonment.** An attempt is one run that takes a closed day and plans it. A day that is not closed yet is not
+an attempt, and neither is a day that the run did not reach before its wall-clock limit. A day is retried by every later run
+(hourly), never within the same run and never forced. If the 23rd attempt on a day does not close it, the run marks the day
+invalid by retiring any slice of it that is still `valid` (item 3 above), records it as **abandoned**, and no later run takes
+the day again. With no missed run, the 23rd attempt is at 10:00 UTC of the second day after the day's end. An abandoned day is
+honestly not served (`NoCoverage`), its slices keep their bytes and can be restored by the A2.3 path, and what to do with it is
+the operator's decision. If the day cannot be retired because a slice is `writing` or `closed` (item 5), the day is left as it
+is and recorded as abandoned with that reason. Appending a `reopen` line for the day makes the run take it again, with the count
+restarted. The run goes on with the other days and instruments after every attempt.
+
+**The log.** The signals are lines appended to one JSON-lines file in the operator evidence directory (outside Git, as the
+repository rules require for operational data). One line per attempt, written after the attempt and never rewritten:
+timestamp, instrument, day, attempt number, outcome (`closed`, `verified`, `retired`, `refused`, `failed`, `abandoned`,
+`reopen`), reason, plan digest, archive hash and the row counts of the live day and of the archive day. The run reads the same file
+for the attempt count and for the abandoned days; nothing else is read from it. The catalog remains the state of the data. The
+log is the state of the attempts only, and every way in which it can go wrong is on the safe side: a line that is lost or
+a log that is deleted gives more attempts, never fewer, and changes no data, because every step of the run is idempotent. The
+archive host is asked once per day and run, and a refusal (a missing file) is not retried inside the run.
 
 **What replaces the reviewed plan.** Amendment 2 required a reviewed date plan because its days were damaged and nobody could
 read them. Here the review is replaced by what makes the operation safe to run alone: nothing is deleted; every retirement is
@@ -791,12 +807,13 @@ only; the run is idempotent and takes the day lock without waiting. A run that f
 after a crash or after a fallback, completes it.
 
 **Evidence and state.** No new control table (A2.6). The state of a day is read from the catalog: slices `valid`, slices
-`invalid` with the archive key `valid`, or refused. The plan, its digest and the verification result are written as report
-files in an operator evidence directory and emitted as signals through the existing observability seam; where the verification
-of a complete day is kept durably is decided by the implementation issue, within the existing seams.
+`invalid` with the archive key `valid`, or refused; the attempts and the abandoned days are read from the log. The plan and
+the verification result are written as report files beside the log; where the verification of a complete day is kept durably is
+decided by the implementation issue, within the existing seams.
 
-**Bounds.** One instrument and one day at a time; a configured maximum number of days per run (a safety bound, not a policy); a
-wall-clock limit per run; the run's unit has CPU and memory limits and a lower priority; the live service is never stopped and
+**Bounds.** One instrument and one day at a time; the days a run can take are bounded by the data and by the 23 attempts (a day
+leaves the selection when it is closed or abandoned), and a wall-clock limit per run stops the rest, which waits for the next
+run; the run's unit has CPU and memory limits and a lower priority; the live service is never stopped and
 never waits for the run: A3.4 makes the closure yield on every lock, and the run is a separate process whose failure the
 service does not see.
 
