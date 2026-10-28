@@ -2,7 +2,7 @@
 
 **Status:** ACCEPTED (design gate #377, PR #481; accepted by the maintainer 2026-10-19, recorded in issue #377). Amendment 1
 (historical source, design gate #487): ACCEPTED 2026-10-20. Amendment 2 (rebuild of damaged legacy live days, design gate #515):
-ACCEPTED 2026-10-24.
+ACCEPTED 2026-10-24. Amendment 3 (close every live day from the archive, unattended, for the whole allow-list; design gate #538): PROPOSED 2026-10-27.
 **Date:** 2026-10-19
 
 Design gate #377; evidence issue #378. Amends ADR-0040, ADR-0043 and the applicability of the Bybit `trade-v1` ordering and
@@ -489,3 +489,350 @@ operator-reported evidence of A2.1 is accepted as evidence, not as an audit.
 Not done by this acceptance: the implementation (`R01`, issue #519; `R02`, issue #520); the governance registration of those
 atoms (issue #518); any change of production data; the choice of the days to rebuild, which comes only from a reviewed plan
 (A2.4). Cleaning retired or superseded legacy revisions remains the maintainer's retention decision.
+
+---
+
+## Amendment 3 - Close every live day from the archive, unattended, for the whole allow-list
+
+**Status:** PROPOSED (design gate [#538](https://github.com/NeoNix-Lab/quant-platform/issues/538))
+**Date:** 2026-10-27
+
+The accepted ADR and Amendments 1 and 2 remain operative. This amendment is not an implementation, a governance
+reconciliation or authority to change production data. The maintainer's requirement (2026-10-27) is that the system serve
+**every instrument of the allow-list** (section 1: BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT), **run by itself** and
+**close every day well**, so that no day is repaired by hand again. This amendment proposes how a closed live day is verified
+against the Bybit archive and, when it is incomplete, closed from it in the two steps of Amendment 2 (retire, then import), and
+how that runs unattended (A3.12). It leaves to the maintainer the choices listed in A3.10.
+
+### A3.1 Problem and evidence
+
+[ADR-0075](ADR-0075-live-trades-continuous-session-and-append-only-slices-v1.md) section 3 gives a slice `complete` coverage
+over its own window and says that consecutive slices chain by construction. That holds for the continuous session (section 1,
+`O02`). The service on `homelab` runs in the default `cycles` mode: each cycle opens a WebSocket, publishes one slice and pauses
+before the next. The pause between two slices is not covered: a read that spans it is refused under `strict` coverage
+(`LIVE_INGEST_SERVER_DEPLOYMENT.md`), and the steady state reconciles only at start, restart or after a cycle that proved nothing
+(`live_ingest_server`, ADR-0043), so the trades of the pause are not recovered either. Issue #504 measured 27.2% of the trades of
+2026-10-20 missing against the archive on the publication that preceded the slices.
+
+Operator-reported read-only catalog queries on `homelab`, 2026-10-26 (`kind='trades'`, `instrument='BTCUSDT'`, state `valid`).
+These are supplied operational evidence, not a new independent server audit.
+
+| Check | Result |
+| --- | --- |
+| 2026-10-24 slices | 3,327 valid slices, 749,441 rows, 3,326 gaps between consecutive slices, 28,718.2 s uncovered (33.2% of the day), longest gap 299.5 s, shortest 6.03 s. |
+| 2026-10-24 gap distribution | 3,324 gaps of at most 30 s; one between 30 and 120 s; one between 120 and 300 s. |
+| 2026-10-25 slices | 3,333 gaps, 29,681.6 s uncovered (34.4% of the day), longest gap 31.0 s, shortest 6.05 s. |
+
+A slice per cycle is 3,327 partitions for a day, not the "about 288" that section 7 of ADR-0075 expects of the continuous
+session. The two long gaps of 2026-10-24 are consistent with restarts of the service; that was not checked against its logs.
+The share of trades actually lost on these two days is not measured: their archive files are not on the server. #504 is the
+only measured loss.
+
+On 2026-10-26 the maintainer replaced the damaged period by hand, outside the guarantees of Amendment 2 and by explicit
+instruction: a catalog dump (`/srv/marketdata/backups/catalog-before-replace-20261026.dump`), then one transaction by an
+untracked operator script that deleted the 85,684 `trades` catalog rows of 2026-09-23 and of 2026-09-25 through 2026-10-23, the
+day directories renamed (not removed) into `/srv/marketdata/replaced/BTCUSDT-trades-20261026/`, and the 30 days imported with
+`tools/import_bybit_archive_day.py` (30 `valid`, none refused). 2026-09-24 had been rebuilt before by R02. The result is
+contiguous `valid` coverage from 2026-09-20 through 2026-10-23, checked by SQL. The open long-gap record files in the dataset
+root were left in place. That procedure is not a precedent for this amendment (A3.9, item 1).
+
+Amendment 2 cannot do this for a slice day. The plan of R02 refuses a day that has live slices, and the rebuild import refuses
+any partition under `dt=<day>/` other than the legacy key. From 2026-10-24 every live day is a slice day, and the service keeps
+publishing in `cycles` mode until `O02` runs against the real provider (a run that has not been performed).
+
+### A3.2 Decision (proposed)
+
+Authorize the closure of closed UTC days of `canonical/trades/bybit/<instrument>/trade-v1`, for each instrument of the
+allow-list, whose publication is a family of live slices `dt=<day>/seg=...` (ADR-0075 section 3). The days are selected by that
+rule (A3.12), never from a free list. Per selected day, in this order:
+
+1. **Retire every slice.** For each `valid` slice of the day, record the superseding quality reassessment of A2.3 (`fail` on
+   completeness, `valid -> invalid` through the existing ADR-0030 seam), with the violation `live_slices_incomplete_day` and the
+   archive identity that shows it. Nothing is deleted or rewritten: each slice stays the live row of its key, now `invalid`,
+   with its bytes, manifests and reports. One short transaction per slice, as A2.3; the step is idempotent, so a day that is
+   partly retired is an honest state (the slices not yet retired are still served) and rerunning completes it.
+2. **Import.** Import the whole-day archive file of Amendment 1 as revision 1 of `dt=<day>/seg=000000.000` through S13/S14, with
+   the importer variant of A2.2 widened by one case: the day's slices, all of them `invalid`, do not occupy the day. A `valid`,
+   `closed` or `writing` partition of the day, a retired partition that is not a slice of the day, or a slice that already
+   holds the key `seg=000000.000` still refuses (a window that starts at the day's first instant is a case to refuse, not to
+   collide with).
+3. **Verify.** As A2.2 item 3: full comparison with the archive file, then a strict `DataGateway` read of the day.
+
+The ordinary importer keeps its refusal of an occupied day; the closure is never a `--force` of it. As in A2.5, retire and import
+are not one transaction: between them the day is honestly not served, and the order guarantees that two valid partitions never
+cover the same day.
+
+### A3.3 Plan, preconditions and refusals
+
+The plan and its digest are those of A2.4. For each day the plan also records: the slices (key, revision, state, physical and
+manifest hashes), their rows and distinct trade ids, the covered and uncovered seconds of the day, the measured loss (the
+archive's distinct ids that no slice holds), and the open long-gap records that name the day (path, SHA-256, interval). The
+measured loss is the number that this amendment lacks today.
+
+A day is refused if any of the following holds. The first two refuse the whole operation and change nothing. Every other
+one refuses the import only, and A3.12 says what is then done with the day:
+
+- the day is not closed: it has not ended in UTC, or the live checkpoint is not yet bound to a partition of a later day
+  (ADR-0042 keeps the key monotonic, so no slice of the day can still arrive). For a slice day this replaces the 24-hour margin
+  of A2.4;
+- a live revision of the day is `writing` or `closed`;
+- **conservation fails.** Every record of every `valid` slice, by `(exchange_ts, trade_id)`, must be found with equal venue,
+  instrument, exchange time, side, price and size in the archive file of its own UTC day, and that day must be readable after
+  the operation (selected in the same plan, or already `valid`). Any difference in a common field refuses the day; there is no
+  partial acceptance. The rows lose the live `sequence` and `receive_ts` they carry now (ADR-0040 keeps them as live evidence):
+  a declared loss of provenance, recoverable from the retained bytes, and not a claim of the original session's continuity;
+- a slice crosses a UTC midnight (ADR-0075 Amendment 1, the bridge slice) and the neighbouring day is not selected in the same
+  plan: both days refuse;
+- an overlap exists (A3.6);
+- an open long-gap record that names the day is not contained in it (A3.5);
+- **there is nothing to repair:** the slices of the day cover it without a pause (the `continuous` case, A3.7). The plan
+  reports it and the closure does not run;
+- the archive file fails Amendment 1's strict parsing, or its hash differs from the plan, or its manifest hash recorded in the
+  catalog differs from the manifest beside the artifact.
+
+### A3.4 Readers, concurrency and failure
+
+- **Coherent reads.** As A2.5: `select_partitions` filters by lifecycle state in one statement, so each reassessment is seen
+  whole or not at all.
+- **Crash and retry.** After a crash between two retirements the day is partly retired; rerunning continues. After a crash
+  between the last retirement and the import, rerunning imports. After a crash between the import and the verification the
+  executor finds the valid key and goes to the verification, which is read-only and repeatable. The attempt is identified by
+  the plan digest.
+- **Concurrency.** The closure takes the day lock of the importer (it never waits) and, per slice, the dataset row lock that the
+  live publication takes, for a short transaction. The service writes slices of the current day, never of a closed one. The
+  closure of a `cycles` day is about 3,300 such transactions; their total duration and their effect on the publication latency
+  of the live service are to be measured by the implementation proof, not assumed.
+- **The live service is never blocked by the closure.** This is a requirement of the design, not a property assumed of it. The
+  closure is a separate process, started by its own timer, outside the process and the unit of the live service, which neither
+  starts it, waits for it nor reads its state; the closure can fail, hang or be killed without the service noticing. The one
+  resource that both touch is the dataset row lock, and the rule is that the closure always yields:
+  1. every lock is requested with a short `lock_timeout`; a lock not granted in time ends the attempt on that day, which is
+     resumed by the next run (the state is read from the catalog, so nothing is lost);
+  2. every transaction retires or publishes one object and commits; the closure never holds a lock across a download, a parse
+     or a verification;
+  3. the retirements are paced: a pause between two transactions that is at least as long as the longest one, so that the
+     service finds the lock free between them;
+  4. the heavy work (download, parse, S13/S14 certification, verification) holds no catalog lock and runs under CPU and memory
+     limits of its own unit and a lower scheduling priority, so that it cannot starve the service or the database;
+  5. the whole run has a wall-clock limit, after which it is stopped and the next run resumes.
+  How much the pacing and the limits cost, and that the publication latency of the service does not grow beyond a stated bound
+  while the closure runs, are measured by A3.11 and reported; if the bound is not met, the pacing is tightened, not the bound.
+- **Untouched.** The live checkpoint, the long-gap record files, the manifests, the bytes of the retired slices, other days and
+  other datasets. No deletion, catalog reset or retention is part of the operation
+  ([ADR-0049](ADR-0049-retention-deletion-authority-v1.md)).
+
+### A3.5 Open long-gap records and manifests
+
+The long-gap record files (`coverage-manifest-long-gap-*.json` in the dataset root) are not modified, moved or deleted by the
+closure. [ADR-0044](ADR-0044-live-ingest-long-gap-remediation-v1.md) reaches `REPAIR_CUTOVER_COMPLETE` only through A10's
+cutover, and this amendment does not amend it. A record whose interval lies inside the day does not block the closure: the
+import is certified by S13 over the whole day. A record whose interval is not contained in the day (a gap that crosses a
+midnight) blocks the closure of that day until the neighbouring day is in the same plan, because one coverage document names one
+partition. The record stays open. The live service keeps loading it and keeps reporting an explicit-gap session state.
+
+**The validity of a day does not depend on the records (decided by the maintainer, 2026-10-28).** When a day closes, its data
+are verified against the archive; if the archive is downloaded and verified within the 23 attempts of A3.12 the day is valid,
+otherwise it is not. A long-gap record neither makes a day valid nor invalid. The only refusal that names a record is the
+technical one above (a record whose interval is not contained in the day cannot be restated by one coverage document); such a
+day is retried like any other and, if the plan still cannot be made, is abandoned after the 23 attempts. ADR-0044 is not
+amended: the records are not superseded, not closed and not moved, and the explicit-gap state of the live service that an open
+record causes is not ended by this amendment. That state is a property of the live service and not of the data of a day.
+
+On 2026-10-26 the record files named nine of the replaced days and were left in place; the 30 imports certified. Their effect on
+the live service and on the gateway after the replacement has not been checked. The open records also name 2026-10-24, the
+first day to close: whether that record's interval lies inside the day is read from the file by the plan, not assumed here.
+
+The manifests of the slices are written beside the artifact (`#510`), so the lost-manifest blocker that stopped R02 on the
+legacy days does not apply to slice days. The plan still compares the manifest hash with the catalog and refuses a difference.
+
+### A3.6 The overlap rule (and a correction of A2.4)
+
+The `DataGateway` refuses overlapping eligible partitions (`CatalogConflict`) on any read that touches the overlap. The plan of
+Amendment 2 does not check it: a legacy day whose predecessor crosses midnight and is blocked cannot be rebuilt, and R02's plan
+did not say so (observed on 2026-10-26). The rule, for every closure and every A2 rebuild: after the retirements of the plan, no
+`valid` partition outside the plan may have a coverage interval that intersects the UTC interval of a day to import; otherwise
+that day refuses. This corrects the plan of R02 as a defect of its implementation, not a change of A2.
+
+### A3.7 Relation to the continuous session
+
+The closure is transitional. When the service runs `continuous` (`O02`, `O03`), slices chain without a pause and the plan finds
+no uncovered second: it refuses with "nothing to repair". The archive then serves as a verification: the slices of a closed day
+are compared with it by the existing O03 evidence tool, and nothing is retired or imported. A day published partly in `cycles`
+and partly in `continuous` (the day of the switch) is closed like any other day, because it has pauses. This amendment does not
+choose the date of the switch and does not depend on it.
+
+### A3.8 Exact effect if accepted
+
+| Authority | Bounded amendment |
+| --- | --- |
+| ADR-0075 section 7, "taking the day from the Bybit archive" and "the already damaged days" | Section 7 describes that archive day as a **consolidation**, an optimization of reads opened only on a measured cost. This is a **repair** of an incomplete day on its own evidence (A3.1) and lifts the pause only for the explicitly selected, closed slice days. Consolidation of complete days is not opened. |
+| This ADR, Amendment 2 (A2.2, A2.4) | Extends retire-and-import to slice families. The refusal "the day has a live slice" is lifted only for the selected day's own slices, which step 1 retires; every other A2 refusal stands; A3.6 is added. |
+| ADR-0030 (A16) | No change of meaning. The writer of A2.3 is used per slice. |
+| ADR-0044 | Not amended: the validity of a day is decided by the archive verification, not by the long-gap records, which stay open (A3.5, A3.10 item 2). |
+| ADR-0043, ADR-0075 sections 1 to 6 | Unchanged. No reconciliation between cycles is added (A3.9, item 3). |
+| ADR-0049 | Unchanged: the run deletes nothing; the retired slices of a day closed from the archive carry no retention duty (A3.10 item 5), and their disposal, if wanted, is an ADR-0049 act and not the run's. |
+| S13, S14, identity, ordering, key grammar | Unchanged; the import uses them as they are. |
+
+This proposal does not accept the 2026-10-26 replacement as a procedure, does not complete `O02` or `O03`, and changes no
+governance file. Acceptance must be recorded explicitly and followed by a separately authorized implementation issue and a
+governance reconciliation that registers its atoms in `SCOPE.md`. Production execution follows a reviewed, pinned implementation;
+the unattended run replaces the reviewed date plan of A2.6 by the guards of A3.12.
+
+### A3.9 Considered and not adopted
+
+1. **A catalog `DELETE`, as on 2026-10-26.** It removes the days from the catalog, and the quality reports and relocation rows
+   that cascade from the partitions with them; only a dump remains as evidence. A2.5 forbids deletion and catalog reset. It was
+   the maintainer's instruction for an exceptional damaged period, not a procedure to repeat per day.
+2. **A day-level retirement** (one reassessment for all the slices of a day). It needs a new ADR-0030 target kind. Not adopted.
+   Its cost is visible: a `cycles` day is about 3,300 reassessments and as many quality reports, which is one more reason to
+   leave `cycles`.
+3. **A bounded REST reconciliation after every cycle.** The recent-trades window returns at most 1,000 trades: about 36 s at the
+   27 trades a second of 2026-09-24, about 77 s at the 13 trades a second of the covered time on 2026-10-24. That is enough for
+   the 3,324 gaps of at most 30 s and not for a restart gap of 299.5 s, and it would turn the loop into the REST poller that
+   `live_ingest_server` documents it must not become. The continuous session removes the pause itself, and belongs to `O02`.
+4. **An operator-only closure with a reviewed date plan per run.** Not adopted: the maintainer requires an unattended system
+   (A3.12), and the review of A2.6 is replaced there by refusals that stop the day and signal.
+5. **An atomic replacement of the slices.** As A2.8.
+
+### A3.10 Open items for the maintainer
+
+1. **Instruments.** Every instrument of the allow-list, as the maintainer requires. The rule of A3.12 selects only days that
+   exist as slice families: an instrument that has no live ingest has none, and nothing happens for it.
+2. **Gap records (decided by the maintainer, 2026-10-28).** The validity of a day is decided by the verification against the
+   archive within 23 attempts, not by the records; ADR-0044 is not amended and the records stay open (A3.5). Still open, and
+   outside this amendment: whether the explicit-gap state of the live service that an open record causes should ever end, and a
+   rule for a record that crosses a midnight.
+3. **Trigger, bound and signals (decided by the maintainer, 2026-10-28).** Unattended: from 12:00 UTC of the following day,
+   retried every hour; a day that is not closed after 23 attempts is marked invalid and abandoned; the signals are lines
+   appended to a JSON-lines log, nothing else for now (A3.12).
+4. **Archive availability.** The publication time of the archive file is not measured here, so it is not known whether the file
+   of the previous day exists at 12:00 UTC. The plan records the source-observation time and never waits: a run that cannot
+   fetch the file takes the fallback of A3.12 and the next hourly run completes the day. If the file is regularly later than
+   12:00 UTC, the first hour is the thing to change; the hourly retry already absorbs a late file.
+5. **Retention (decided by the maintainer, 2026-10-28, for the slices).** The retired slices of a day that is then closed from
+   the archive are not retained by this amendment: no retention period or duty is attached to them, because the conservation
+   check has proved that every live record is in the archive day. The run itself still deletes nothing (A3.4;
+   [ADR-0049](ADR-0049-retention-deletion-authority-v1.md) holds the deletion authority), so they stay in the catalog and on
+   disk until a disposal under ADR-0049 removes them; an automatic deletion by the run would need its own amendment of ADR-0049.
+   The slices of an abandoned or marked-invalid day are the only copy of that day's live data and are not covered by this
+   decision. Still open: the directories moved aside on 2026-10-26 and the catalog dump.
+6. **Complete live days.** A day that the continuous session published without a pause is never replaced (A3.7). Say so
+   explicitly if a replacement should ever be allowed.
+
+### A3.11 Required implementation and operational proof
+
+The runtime proof is required after implementation; this design-only proposal does not claim any of these probes passed.
+
+1. **Slice-day closure.** The plan, execute, verify and restore of A2 extended to slice families, over a disposable PostgreSQL.
+   Probes: N slices retired and the day imported; a strict `DataGateway` read returns exactly the archive's records, in order,
+   without duplicates, with full-field equality (null `receive_ts` and `sequence` expected). Each refusal of A3.3 changes
+   nothing: an open day, a checkpoint binding, a `writing` or `closed` slice, a differing common field, a differing archive hash,
+   a bridge slice without its neighbour, a gap record that is not contained, an overlapping valid partition, a day without a
+   pause, a slice already at `seg=000000.000`. Crashes between two retirements, between retire and import, and between import
+   and verify are recovered by rerunning; the restore path returns the retired slices to `valid`. Non-target days, the
+   checkpoint and the gap record files are byte-identical. Mutation checks weaken the conservation and the overlap rules, and
+   the tests fail.
+2. **The overlap guard of A3.6** in the plan of R02, with its own probe.
+3. **Operation.** Dry-run, execute and verify on `2026-10-24` first (the first closed slice day); `2026-10-25` and later days
+   only from a new reviewed plan. The duration of the retirements and their effect on the publication latency of the live
+   service are measured and reported (item 5).
+
+4. **The unattended run (A3.12).** Over a disposable PostgreSQL and a fake archive source: two instruments, with days in each of the
+   three outcomes in one run; a refusal on one day does not stop the others; a rerun after a crash completes the day; a stale
+   plan; an archive file that changes between two runs; the per-run bound; a second run changes nothing; no day outside the
+   rule changes by a byte. The fallback: an archive absent at the run leaves the day retired and the next run imports it; a
+   conservation difference, an overlap and a hash change each leave the day retired and signalled; a verification failure
+   retires the imported partition too and signals; the retired slices can be restored to `valid` by the A2.3 restore path.
+   The hourly retry: a day refused at the first attempt is taken again by the next run without retiring anything twice; a day
+   that cannot be closed (a conservation difference) is retried every hour; a run that finds nothing to do reads the catalog and
+   ends. The attempts: the 23rd attempt that does not close a day leaves it invalid and abandoned, the 24th run does not take
+   it, and an attempt that closes the day on the 23rd is not abandoned; a day that is not closed yet is not counted; a run
+   cut by its wall-clock limit does not count the days it did not reach; a crash between the catalog change and the log append
+   costs at most one more attempt; a lost log restarts the counts and changes no data; the log is only appended to, one line per
+   attempt, and a line is never rewritten.
+5. **The live service is not blocked (A3.4).** With the real service publishing slices on a disposable PostgreSQL, a closure runs
+   and the publication latency of the service (the time of a cycle's publish) is measured before, during and after it: it does
+   not exceed the stated bound. Probes: a lock held by the live publication makes the closure yield and resume at the next run
+   with no change to the day; a lock held by the closure beyond the timeout is never waited for by the service; a closure that
+   hangs, is killed or crashes mid-run leaves the service publishing and the catalog consistent; the closure's unit stays
+   inside its CPU and memory limits during an import of a full day; the service starts, restarts and runs without the closure
+   installed.
+
+### A3.12 Unattended operation
+
+The requirement is that no day needs a hand. One run, started by a timer on the server, is the only actor: the A2.4 plan
+followed by the A3.2 steps for every selected day, with no operator in between.
+
+**Schedule.** A timer starts the run every hour. A day is taken from 12:00 UTC of the following UTC day (the previous day
+at its first attempt) and then at every later run until it is closed; an earlier day still not closed is taken in the same
+way. Before 12:00 UTC the run finds no day to take and ends after one catalog read. The first hour and the interval are
+configuration of the timer, not of the data. A run takes the run lock without waiting: a run that starts while the previous one
+is still going ends at once.
+
+**Selection.** For each instrument of the allow-list, in a fixed order, the run takes the closed days (A3.3) whose live
+revisions are slice partitions and that no `valid` archive-sourced `dt=<day>/seg=000000.000` already closes. The selection is
+bounded by the data: a day that the rule does not name is never touched, and nothing widens the set.
+
+**Per day.** The run plans the day and then does one of these, decided by the plan and recorded:
+
+1. *The slices are complete and conserve against the archive.* The run only verifies (A3.7), retires and imports nothing, and
+   records the evidence.
+2. *The slices are incomplete, the archive is fetched and conserved, and nothing overlaps.* The run replaces the day for its
+   whole length: it retires every slice, imports the archive day and verifies it (A3.2).
+3. *Anything else that refuses the import:* the archive cannot be fetched or parsed, its hash changed, a live record differs
+   from the archive, an overlap, a gap record that is not contained, a bridge slice without its neighbour. The run **marks the
+   day invalid** with what exists already: it retires every slice with the A2.3 reassessment (`valid -> invalid`), writes
+   nothing else, and signals. The day is then honestly not served (a strict read refuses it with `NoCoverage`) instead of being
+   served incomplete or suspect, and the retired slices keep their bytes and can be restored. Because retired slices do not
+   occupy the day (A3.2), the next hourly run takes the same day again from item 2, without retiring anything a second time.
+4. *A verification that fails after the import.* The run retires the imported partition as well, so the day is not served, and
+   signals.
+5. *The whole operation refused* (the day is not closed; a slice is `writing` or `closed`): nothing changes and the run signals.
+
+**Attempts and abandonment.** An attempt is one run that takes a closed day and plans it. A day that is not closed yet is not
+an attempt, and neither is a day that the run did not reach before its wall-clock limit. A day is retried by every later run
+(hourly), never within the same run and never forced. If the 23rd attempt on a day does not close it, the run marks the day
+invalid by retiring any slice of it that is still `valid` (item 3 above), records it as **abandoned**, and no later run takes
+the day again. With no missed run, the 23rd attempt is at 10:00 UTC of the second day after the day's end. An abandoned day is
+honestly not served (`NoCoverage`), its slices keep their bytes and can be restored by the A2.3 path, and what to do with it is
+the operator's decision. If the day cannot be retired because a slice is `writing` or `closed` (item 5), the day is left as it
+is and recorded as abandoned with that reason. Appending a `reopen` line for the day makes the run take it again, with the count
+restarted. The run goes on with the other days and instruments after every attempt.
+
+**The log.** The signals are lines appended to one JSON-lines file in the operator evidence directory (outside Git, as the
+repository rules require for operational data). One line per attempt, written after the attempt and never rewritten:
+timestamp, instrument, day, attempt number, outcome (`closed`, `verified`, `retired`, `refused`, `failed`, `abandoned`,
+`reopen`), reason, plan digest, archive hash and the row counts of the live day and of the archive day. The run reads the same file
+for the attempt count and for the abandoned days; nothing else is read from it. The catalog remains the state of the data. The
+log is the state of the attempts only, and every way in which it can go wrong is on the safe side: a line that is lost or
+a log that is deleted gives more attempts, never fewer, and changes no data, because every step of the run is idempotent. The
+archive host is asked once per day and run, and a refusal (a missing file) is not retried inside the run.
+
+**What replaces the reviewed plan.** Amendment 2 required a reviewed date plan because its days were damaged and nobody could
+read them. Here the review is replaced by what makes the operation safe to run alone: nothing is deleted; every retirement is
+reversible by the restore path of A2.3; the plan binds the archive hash and the incumbent identities and is refused as stale if
+either changed; conservation proves that no live record is lost or altered before any replacement; every failure stops that day
+only; the run is idempotent and takes the day lock without waiting. A run that finds a day retired and not imported, whether
+after a crash or after a fallback, completes it.
+
+**Evidence and state.** No new control table (A2.6). The state of a day is read from the catalog: slices `valid`, slices
+`invalid` with the archive key `valid`, or refused; the attempts and the abandoned days are read from the log. The plan and
+the verification result are written as report files beside the log; where the verification of a complete day is kept durably is
+decided by the implementation issue, within the existing seams.
+
+**Bounds.** One instrument and one day at a time; the days a run can take are bounded by the data and by the 23 attempts (a day
+leaves the selection when it is closed or abandoned), and a wall-clock limit per run stops the rest, which waits for the next
+run; the run's unit has CPU and memory limits and a lower priority; the live service is never stopped and
+never waits for the run: A3.4 makes the closure yield on every lock, and the run is a separate process whose failure the
+service does not see.
+
+**What this does not do.** It does not make the current day complete: a day is closed only after it ends, at the first run from 12:00 UTC
+that finds its archive file. While the service runs in `cycles`, the day being written is incomplete and a
+strict read refuses it, and a day whose archive is late stays marked invalid until the run that finds it; only the continuous
+session (`O02`) makes a day complete as it happens. The unattended run closes what is behind; it does not replace
+the continuous session, and the system the maintainer asks for is the two together.
+
+### A3.13 Acceptance record
+
+Pending. Not done by this proposal: the acceptance; the governance registration of an atom; the implementation; any change of
+production data; the first run; the deployment; the switch of the service to the continuous session.
