@@ -66,15 +66,29 @@ trap cleanup_validate_dir EXIT
 git worktree add --detach "$validate_dir" "$target" >/dev/null 2>&1 || \
   fail "could not create a validation worktree for $target"
 
+# The candidate suite must be hermetic: this host exports catalog connection
+# settings for its own services, and a test that defaults to one of them would
+# act on the production catalog. Drop every PG* and *DSN* variable for the
+# suite only (names are logged, never values); the rest of the environment,
+# PATH included, is unchanged.
+validation_env_unset=()
+unset_names=()
+while IFS= read -r name; do
+  case "$name" in
+    PG*|*DSN*) validation_env_unset+=(-u "$name"); unset_names+=("$name") ;;
+  esac
+done < <(compgen -e)
+
 echo "validating_candidate: $target (isolated worktree: $validate_dir)"
-if ! (cd "$validate_dir" && python3 tools/run_tests.py); then
+echo "validation_env_unset: ${unset_names[*]:-none}"
+if ! (cd "$validate_dir" && env ${validation_env_unset[@]+"${validation_env_unset[@]}"} python3 tools/run_tests.py); then
   echo "promote-main: FATAL: candidate $target failed validation in an isolated worktree." >&2
   echo "  operational checkout was NOT moved." >&2
   echo "  previous_sha (still checked out) = $sha" >&2
   echo "  target_sha (rejected candidate)  = $target" >&2
   echo "  next: inspect the candidate manually, e.g.:" >&2
   echo "    git worktree add --detach /tmp/promote-inspect $target" >&2
-  echo "    cd /tmp/promote-inspect && python3 tools/run_tests.py" >&2
+  echo "    cd /tmp/promote-inspect && env -u CATALOG_DSN python3 tools/run_tests.py  # and every other PG*/*DSN* variable" >&2
   exit 1
 fi
 

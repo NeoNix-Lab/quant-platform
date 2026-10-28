@@ -149,6 +149,28 @@ def _write_candidate_commit_that_pushes_a_sneaky_commit_during_validation(
     return _git(["rev-parse", "HEAD"], cwd=repo, env=env).stdout.strip()
 
 
+def _write_candidate_commit_that_audits_its_validation_environment(repo: Path, *, message: str, env: dict[str, str]) -> str:
+    """A candidate whose validation step passes only when no catalog connection variable reached it.
+
+    Any PG* or *DSN* variable fails it (named on stdout, never its value); the sentinel proves the rest of the
+    environment is passed through, so the check cannot pass because the environment was lost altogether."""
+    tools_dir = repo / "tools"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    (tools_dir / "run_tests.py").write_text(
+        """import os, sys
+leaked = sorted(name for name in os.environ if name.upper().startswith('PG') or 'DSN' in name.upper())
+kept = os.environ.get('QP_PROMOTE_TEST_KEEP')
+print('validation_environment leaked=%s kept=%s' % (','.join(leaked) or 'none', kept))
+sys.exit(1 if leaked or kept != '1' else 0)
+""",
+        encoding="utf-8",
+    )
+    shutil.copyfile(REPO_IDENTITY_SCRIPT, tools_dir / "repo_identity.py")
+    _git(["add", "-A"], cwd=repo, env=env)
+    _git(["commit", "-m", message], cwd=repo, env=env)
+    return _git(["rev-parse", "HEAD"], cwd=repo, env=env).stdout.strip()
+
+
 class PromoteMainValidatesBeforeAdvancingTests(unittest.TestCase):
     def setUp(self):
         _require("bash")
@@ -255,6 +277,36 @@ class PromoteMainValidatesBeforeAdvancingTests(unittest.TestCase):
         self.assertEqual(passing_sha, self._current_sha())
         self.assertIn("validating_candidate", result.stdout)
         self.assertIn("post_promotion_identity", result.stdout)
+
+    def test_validation_runs_without_catalog_connection_variables(self):
+        """The operational host exports its catalog settings; the candidate suite must not inherit them (#536)."""
+        candidate_sha = _write_candidate_commit_that_audits_its_validation_environment(
+            self.author_repo, message="audits the validation environment", env=self.env
+        )
+        _git(["push", "-q", str(self.origin_bare), "main"], cwd=self.author_repo, env=self.env)
+        secret = "must-not-appear-in-the-log"
+        exported = {
+            "CATALOG_DSN": f"host=catalog.invalid password={secret}",
+            "QP_RUNTIME_DSN": "host=runtime.invalid",
+            "DATA_GATEWAY_TEST_DSN": "host=test.invalid",
+            "PGHOST": "catalog.invalid",
+            "PGPASSWORD": secret,
+            "PGSERVICE": "production",
+            "QP_PROMOTE_TEST_KEEP": "1",
+        }
+        self.env.update(exported)
+
+        result = self._run_promote()
+
+        output = result.stdout + result.stderr
+        self.assertEqual(0, result.returncode, output)
+        self.assertEqual(candidate_sha, self._current_sha())
+        self.assertIn("validation_environment leaked=none kept=1", result.stdout)
+        unset_line = next(line for line in result.stdout.splitlines() if line.startswith("validation_env_unset:"))
+        for name in ("CATALOG_DSN", "QP_RUNTIME_DSN", "DATA_GATEWAY_TEST_DSN", "PGHOST", "PGPASSWORD", "PGSERVICE"):
+            self.assertIn(name, unset_line.split())
+        self.assertNotIn("QP_PROMOTE_TEST_KEEP", unset_line)
+        self.assertNotIn(secret, output, "only the names of the dropped variables may be logged")
 
     def test_merge_stays_pinned_to_the_validated_oid_despite_a_concurrent_push(self):
         """Review-caught race: origin/main is a mutable local ref. If the
