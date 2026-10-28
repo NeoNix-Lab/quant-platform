@@ -670,7 +670,7 @@ choose the date of the switch and does not depend on it.
 | ADR-0030 (A16) | No change of meaning. The writer of A2.3 is used per slice. |
 | ADR-0044 | Not amended: the validity of a day is decided by the archive verification, not by the long-gap records, which stay open (A3.5, A3.10 item 2). |
 | ADR-0043, ADR-0075 sections 1 to 6 | Unchanged. No reconciliation between cycles is added (A3.9, item 3). |
-| ADR-0049 | Unchanged: no deletion; retention of the retired slices stays the maintainer's decision. |
+| ADR-0049 | Unchanged: the run deletes nothing; the retired slices of a day closed from the archive carry no retention duty (A3.10 item 5), and their disposal, if wanted, is an ADR-0049 act and not the run's. |
 | S13, S14, identity, ordering, key grammar | Unchanged; the import uses them as they are. |
 
 This proposal does not accept the 2026-10-26 replacement as a procedure, does not complete `O02` or `O03`, and changes no
@@ -709,8 +709,13 @@ the unattended run replaces the reviewed date plan of A2.6 by the guards of A3.1
    of the previous day exists at 12:00 UTC. The plan records the source-observation time and never waits: a run that cannot
    fetch the file takes the fallback of A3.12 and the next hourly run completes the day. If the file is regularly later than
    12:00 UTC, the first hour is the thing to change; the hourly retry already absorbs a late file.
-5. **Retention.** The retired slices, the directories moved aside on 2026-10-26 and the catalog dump: who keeps them and for how
-   long (ADR-0049).
+5. **Retention (decided by the maintainer, 2026-10-28, for the slices).** The retired slices of a day that is then closed from
+   the archive are not retained by this amendment: no retention period or duty is attached to them, because the conservation
+   check has proved that every live record is in the archive day. The run itself still deletes nothing (A3.4;
+   [ADR-0049](ADR-0049-retention-deletion-authority-v1.md) holds the deletion authority), so they stay in the catalog and on
+   disk until a disposal under ADR-0049 removes them; an automatic deletion by the run would need its own amendment of ADR-0049.
+   The slices of an abandoned or marked-invalid day are the only copy of that day's live data and are not covered by this
+   decision. Still open: the directories moved aside on 2026-10-26 and the catalog dump.
 6. **Complete live days.** A day that the continuous session published without a pause is never replaced (A3.7). Say so
    explicitly if a replacement should ever be allowed.
 
