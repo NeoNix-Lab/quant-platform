@@ -628,11 +628,15 @@ closure. [ADR-0044](ADR-0044-live-ingest-long-gap-remediation-v1.md) reaches `RE
 cutover, and this amendment does not amend it. A record whose interval lies inside the day does not block the closure: the
 import is certified by S13 over the whole day. A record whose interval is not contained in the day (a gap that crosses a
 midnight) blocks the closure of that day until the neighbouring day is in the same plan, because one coverage document names one
-partition. The record stays open. The live service keeps loading it and keeps reporting an explicit-gap session state. Run
-unattended, a record left open would keep that state for good, so item 2 of A3.10 is a decision that the requirement forces: it
-is proposed that a record whose whole interval lies inside a day certified `complete` from the archive be superseded by that
-coverage. That amends ADR-0044, so it is a separate amendment of it and not part of this one; until it is accepted the records
-stay open.
+partition. The record stays open. The live service keeps loading it and keeps reporting an explicit-gap session state.
+
+**The validity of a day does not depend on the records (decided by the maintainer, 2026-10-28).** When a day closes, its data
+are verified against the archive; if the archive is downloaded and verified within the 23 attempts of A3.12 the day is valid,
+otherwise it is not. A long-gap record neither makes a day valid nor invalid. The only refusal that names a record is the
+technical one above (a record whose interval is not contained in the day cannot be restated by one coverage document); such a
+day is retried like any other and, if the plan still cannot be made, is abandoned after the 23 attempts. ADR-0044 is not
+amended: the records are not superseded, not closed and not moved, and the explicit-gap state of the live service that an open
+record causes is not ended by this amendment. That state is a property of the live service and not of the data of a day.
 
 On 2026-10-26 the record files named nine of the replaced days and were left in place; the 30 imports certified. Their effect on
 the live service and on the gateway after the replacement has not been checked. The open records also name 2026-10-24, the
@@ -664,7 +668,7 @@ choose the date of the switch and does not depend on it.
 | ADR-0075 section 7, "taking the day from the Bybit archive" and "the already damaged days" | Section 7 describes that archive day as a **consolidation**, an optimization of reads opened only on a measured cost. This is a **repair** of an incomplete day on its own evidence (A3.1) and lifts the pause only for the explicitly selected, closed slice days. Consolidation of complete days is not opened. |
 | This ADR, Amendment 2 (A2.2, A2.4) | Extends retire-and-import to slice families. The refusal "the day has a live slice" is lifted only for the selected day's own slices, which step 1 retires; every other A2 refusal stands; A3.6 is added. |
 | ADR-0030 (A16) | No change of meaning. The writer of A2.3 is used per slice. |
-| ADR-0044 | Not amended here: the supersession of a contained long-gap record is a separate amendment of it (A3.5, A3.10 item 2). |
+| ADR-0044 | Not amended: the validity of a day is decided by the archive verification, not by the long-gap records, which stay open (A3.5, A3.10 item 2). |
 | ADR-0043, ADR-0075 sections 1 to 6 | Unchanged. No reconciliation between cycles is added (A3.9, item 3). |
 | ADR-0049 | Unchanged: no deletion; retention of the retired slices stays the maintainer's decision. |
 | S13, S14, identity, ordering, key grammar | Unchanged; the import uses them as they are. |
@@ -694,10 +698,10 @@ the unattended run replaces the reviewed date plan of A2.6 by the guards of A3.1
 
 1. **Instruments.** Every instrument of the allow-list, as the maintainer requires. The rule of A3.12 selects only days that
    exist as slice families: an instrument that has no live ingest has none, and nothing happens for it.
-2. **Gap records.** Amend ADR-0044, by its own amendment, so that a certified archive coverage of a whole day supersedes an
-   open record contained in it (proposed; the unattended operation forces the question), or keep the records open and accept
-   a permanent explicit-gap state. A gap that crosses a midnight needs a rule of its own, which one coverage document cannot
-   restate.
+2. **Gap records (decided by the maintainer, 2026-10-28).** The validity of a day is decided by the verification against the
+   archive within 23 attempts, not by the records; ADR-0044 is not amended and the records stay open (A3.5). Still open, and
+   outside this amendment: whether the explicit-gap state of the live service that an open record causes should ever end, and a
+   rule for a record that crosses a midnight.
 3. **Trigger, bound and signals (decided by the maintainer, 2026-10-28).** Unattended: from 12:00 UTC of the following day,
    retried every hour; a day that is not closed after 23 attempts is marked invalid and abandoned; the signals are lines
    appended to a JSON-lines log, nothing else for now (A3.12).
