@@ -2,7 +2,7 @@
 
 **Status:** ACCEPTED (design gate #377, PR #481; accepted by the maintainer 2026-10-19, recorded in issue #377). Amendment 1
 (historical source, design gate #487): ACCEPTED 2026-10-20. Amendment 2 (rebuild of damaged legacy live days, design gate #515):
-ACCEPTED 2026-10-24. Amendment 3 (close every live day from the archive, unattended, for the whole allow-list; design gate #538): PROPOSED 2026-10-27.
+ACCEPTED 2026-10-24. Amendment 3 (close every live day from the archive, unattended, for the whole allow-list; design gate #538): ACCEPTED 2026-10-29.
 **Date:** 2026-10-19
 
 Design gate #377; evidence issue #378. Amends ADR-0040, ADR-0043 and the applicability of the Bybit `trade-v1` ordering and
@@ -494,7 +494,7 @@ atoms (issue #518); any change of production data; the choice of the days to reb
 
 ## Amendment 3 - Close every live day from the archive, unattended, for the whole allow-list
 
-**Status:** PROPOSED (design gate [#538](https://github.com/NeoNix-Lab/quant-platform/issues/538))
+**Status:** ACCEPTED (design gate [#538](https://github.com/NeoNix-Lab/quant-platform/issues/538), PR #539; accepted by the maintainer 2026-10-29, see A3.13)
 **Date:** 2026-10-27
 
 The accepted ADR and Amendments 1 and 2 remain operative. This amendment is not an implementation, a governance
@@ -834,5 +834,15 @@ the continuous session, and the system the maintainer asks for is the two togeth
 
 ### A3.13 Acceptance record
 
-Pending. Not done by this proposal: the acceptance; the governance registration of an atom; the implementation; any change of
-production data; the first run; the deployment; the switch of the service to the continuous session.
+Accepted by the maintainer on 2026-10-29, after the PR that proposed it (#539) was merged on 2026-10-28 and the maintainer
+instructed to proceed ("mergiata procedi", then "procedi"). The text of A3.1 to A3.12 stands as written, including the decisions
+the maintainer took while it was drafted: every instrument of the allow-list; unattended; a day not closed after 23 hourly
+attempts is marked invalid and abandoned; the signals are lines appended to a JSON-lines log; the validity of a day is decided
+by the archive verification and not by the long-gap records (ADR-0044 is not amended); the slices retired by an archive closure
+carry no retention duty and the run deletes nothing (ADR-0049 unchanged). The operator-reported evidence of A3.1 is accepted as
+evidence, not as an audit.
+
+Not done by this acceptance: the governance registration of the atoms (issue #540); the implementation; any change of
+production data; the first run; the deployment; the switch of the service to the continuous session. Still open, as listed in
+A3.10: the publication time of the archive file against 12:00 UTC; the directories moved aside on 2026-10-26 and the catalog
+dump; a replacement of a complete live day (proposed never); the explicit-gap state caused by an open long-gap record.
