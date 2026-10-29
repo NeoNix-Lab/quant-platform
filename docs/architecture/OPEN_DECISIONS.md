@@ -987,19 +987,30 @@ credited the atoms without it (2026-10-25).** Each limit has a named way to reop
    local clock far behind the exchange could report a trade near the end of a hole as undeclared. Trigger: a false stop observed in a real report.
 7. **Capacity and further instruments.** #378 is not measured; nothing beyond the bounded `ETHUSDT` proof is enabled before the measurement and the 365-day rule (ADR-0074 section 6).
    No non-BTC dataset is registered in the server catalog; replacing the maintainer's Parquet by the archive import is an operator step.
-8. **Damaged legacy days.** Left as they are by DG-O; their rebuild is DG-R (`R01`, `R02`, authorized, post-version) and the run on the server is the operator's.
+8. **Damaged legacy days.** Left as they are by DG-O; their rebuild is DG-R (`R01`, `R02`, authorized, post-version; slice days: `R03`, `R04`) and the run on the server is the operator's.
 9. **Consolidation of slices.** Outside the first version; opened only on a measured read or admission cost (ADR-0075).
 
-## DG-R — Rebuild of damaged legacy live days v1 — RESOLVED (ADR-0074 Amendment 2 `ACCEPTED`, #515)
+## DG-R — Rebuild of damaged legacy live days v1 — RESOLVED (ADR-0074 Amendments 2 and 3 `ACCEPTED`, #515, #538)
 
 Designed by #515 (ADR-0074 Amendment 2, PR #516), accepted on 2026-10-24 (PR #521) and registered by #518. Decided: for explicitly selected, closed UTC days of the
 legacy `dt=<day>` publication, retire the damaged live revision with an ordinary ADR-0030 reassessment (`fail` -> `invalid`, nothing deleted), import the whole-day
 archive file as revision 1 of `dt=<day>/seg=000000.000` through the ordinary S13/S14 path, verify in full. The ordinary importer keeps refusing an occupied day.
-Implementation of `R01` and `R02` is authorized (`SCOPE.md` Part D) and not started; they are post-version.
+Implementation of `R01` and `R02` is authorized (`SCOPE.md` Part D); they are post-version.
+
+Amendment 3 (design gate #538, PR #539 and #541, accepted 2026-10-29, registered by #540) extends the closure to the days made of live slices and runs it unattended for every
+instrument of the allow-list. Decided: closed slice days are verified against the archive and, when incomplete, replaced by it (retire every slice, import
+`dt=<day>/seg=000000.000`, verify); an hourly run from 12:00 UTC of the day after; a day not closed after 23 attempts is marked invalid and abandoned; the signals are lines appended
+to a JSON-lines log; the validity of a day is decided by the archive verification, not by the long-gap records (ADR-0044 unchanged); the slices retired by an archive closure carry no
+retention duty and the run deletes nothing (ADR-0049 unchanged); the closure never blocks the live service. `R03` and `R04` are authorized (`SCOPE.md` Part D) and not started.
 
 Live follow-ups, none authorized: the atomic replacement of a live revision (ADR-0033 cutover extended to a component of adjacent days), opened only if a consumer of
 those days appears (A2.8); retention or deletion of retired and superseded legacy revisions (the cleanup code is the maintainer's); the days to rebuild, which come only
 from a reviewed plan; who reacts to the state `invalid` (retention, eligibility, admitted inputs), to be checked first by `R01`.
+
+Open after Amendment 3, none authorized: whether the Bybit archive file of the previous day exists at 12:00 UTC (not measured; the hourly retry absorbs a late file); the directories moved
+aside on 2026-10-26 and the catalog dump (who keeps them and for how long, ADR-0049); whether a complete live day may ever be replaced (proposed never); whether the explicit-gap state of the
+live service caused by an open long-gap record should ever end, and a rule for a record that crosses a midnight; the measured bound on the live publication latency while a closure runs
+(a required measurement of `R04`); the share of trades actually lost on 2026-10-24 and 2026-10-25 (not measured).
 
 ## Explicitly deferable decisions
 

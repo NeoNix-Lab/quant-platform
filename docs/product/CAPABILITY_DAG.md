@@ -9,7 +9,7 @@ supervised happy-path proof on the smallest real partition; deployability carrie
 ADR-0072 Amendment 1 bounds and the recorded proof findings. S08 is not authorized,
 J11 remains deferred, and no Wave 8 or DG-K/DG-K2 Golden proof is claimed.
 L2 promotion to main is a separate final wave PR; no deployment is performed here. DG-M — Canonical feature identity for deck
-results v1 is CLOSED on `implement/fid` (#475). DG-N — Multi-instrument Bybit linear trades v1 is registered and authorized (#483, ADR-0074 `ACCEPTED`): `T01` and `T04` are `COMPLETE` within their row bounds (PR #486, #488; ADR-0074 Amendment 1, #489), `T03` and `T02` are `COMPLETE` within their row bounds at the DG-N/DG-O closeout (#527). DG-O — Live publication: continuous session and append-only slices v1 is registered and authorized (#507, ADR-0075 `ACCEPTED`): `O01`-`O03` are `COMPLETE` within their row bounds at the closeout (#527; PR #510, #524, #526), and `T02` additionally required `O03`. The one-hour `ETHUSDT` real-provider run is not claimed. DG-R — Rebuild of damaged legacy live days v1 is registered and authorized (#518, ADR-0074 Amendment 2 `ACCEPTED`): `R01` and `R02` are `FROZEN`/`MISSING`, nothing is implemented. DG-M detail: `M01`, `M02`, `M04` and `M05` are COMPLETE within their row bounds (PR #466, #468,
+results v1 is CLOSED on `implement/fid` (#475). DG-N — Multi-instrument Bybit linear trades v1 is registered and authorized (#483, ADR-0074 `ACCEPTED`): `T01` and `T04` are `COMPLETE` within their row bounds (PR #486, #488; ADR-0074 Amendment 1, #489), `T03` and `T02` are `COMPLETE` within their row bounds at the DG-N/DG-O closeout (#527). DG-O — Live publication: continuous session and append-only slices v1 is registered and authorized (#507, ADR-0075 `ACCEPTED`): `O01`-`O03` are `COMPLETE` within their row bounds at the closeout (#527; PR #510, #524, #526), and `T02` additionally required `O03`. The one-hour `ETHUSDT` real-provider run is not claimed. DG-R — Rebuild of damaged legacy live days v1 is registered and authorized (#518, ADR-0074 Amendment 2 `ACCEPTED`): `R01` and `R02` are `FROZEN`/`MISSING` in this document (their code is merged, #519 and #520; the credit is a closeout's and is not given here). ADR-0074 Amendment 3 (`ACCEPTED` 2026-10-29, design gate #538, PR #539 and #541) adds `R03` and `R04` (#540), `FROZEN`/`MISSING`, nothing implemented. DG-M detail: `M01`, `M02`, `M04` and `M05` are COMPLETE within their row bounds (PR #466, #468,
 #473, #474) under ADR-0073 and its Amendment 1, `M03` is superseded; the server now seals the identities of the definitions a deck
 names and the deck builder must declare them. No real-host run is claimed, and promotion into `main` is the operator's separate PR.**
 
@@ -21,19 +21,19 @@ Roadmap readiness is not the same thing as freezing every future semantic choice
 
 An atom is roadmap-defined when its observable outcome, owner, dependencies, unlocks, acceptance proposition and decision state are classified, and any unresolved decision is either assigned to an atom-specific blocking gate or has an explicit deferable evidence trigger.
 
-Current audited inventory after the DG-N/DG-O closeout (#527),
+Current audited inventory after the DG-R Amendment 3 registration (#540),
 recomputed mechanically from the atom tables, not by hand:
 
 ```text
-TOTAL_ATOMS                     = 132
-CLASSIFIED_ATOMS                = 132
+TOTAL_ATOMS                     = 134
+CLASSIFIED_ATOMS                = 134
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 120 / 132 = 90.9%
+SEMANTIC_FROZEN_OR_RESOLVED     = 122 / 134 = 91.0%
 OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 120 + 3 + 9 = 132
-ROADMAP_PLANNING_COMPLETENESS   = 132 / 132 = 100%
-IMPLEMENTATION_COMPLETE         = 110 / 132 = 83.3%
+ROADMAP_DEFINED                 = 122 + 3 + 9 = 134
+ROADMAP_PLANNING_COMPLETENESS   = 134 / 134 = 100%
+IMPLEMENTATION_COMPLETE         = 110 / 134 = 82.1%
 ```
 
 Reconciliation #444 preserves all accepted DG-K/DG-K2 credits from main and
@@ -42,6 +42,11 @@ had 111 / 84, and their union has 119 / 99. No new atom or capability is
 invented by this merge; the seven L2 subatoms and eight S atoms were already
 registered on their respective lines. [SCOPE.md](../../SCOPE.md#executable-governance-verification)
 contains the executable two-parent verification.
+
+DG-R Amendment 3 registration and authorization (issue #540): ADR-0074 Amendment 3 is `ACCEPTED` (#538, 2026-10-29; PR #539, moved onto the main line by #541). Two atoms `R03` and
+`R04` are added directly as `FROZEN`/`MISSING` (132 -> 134 atoms; 120 -> 122 decided; semantic 90.9% -> 91.0%; implementation 83.3% -> 82.1%, because the inventory grew, not because
+anything regressed); no existing atom changes state and nothing is credited. `R01` and `R02` stay `FROZEN`/`MISSING` here: their code is merged (#519, #520) and their credit belongs to a
+closeout, not to this reconciliation. The counts are recomputed from these tables by script.
 
 DG-N/DG-O closeout (issue #527): `T03`, `T02`, `O01`, `O02` and `O03` move from `MISSING` to `COMPLETE` on `implement/fid` within the bounds their rows record (105 -> 110 of 132;
 implementation 79.5% -> 83.3%); no new atom and no decision-state change (120 decided, 3 `OPEN_BLOCKING`, 9 `OPEN_DEFERABLE`). `R01` and `R02` stay `FROZEN`/`MISSING`. The
@@ -413,12 +418,14 @@ Registered and authorized by governance issue #507 after the design gate #504 pr
 
 ### R — Rebuild of damaged legacy live days (DG-R)
 
-Registered and authorized by governance issue #518 after the design gate #515 produced ADR-0074 Amendment 2, `ACCEPTED` on 2026-10-24 (PR #516 and #521). Operator-reported evidence (2026-10-23/24, not an audit): 31 candidate legacy days, 2026-09-23 to 2026-10-23; for 2026-10-20 the archive has 1,568,861 trades and the local in-day unique IDs are 1,141,530 (427,331 absent; 529 rows outside the day). `SCOPE.md` Part D records the start gate and the acceptance of each atom; the order is `R01`, `R02`. No atom here is implemented, and no legacy day has been rebuilt. They are post-version work: they do not block `O02` or `O03`.
+Registered and authorized by governance issue #518 after the design gate #515 produced ADR-0074 Amendment 2, `ACCEPTED` on 2026-10-24 (PR #516 and #521). Operator-reported evidence (2026-10-23/24, not an audit): 31 candidate legacy days, 2026-09-23 to 2026-10-23; for 2026-10-20 the archive has 1,568,861 trades and the local in-day unique IDs are 1,141,530 (427,331 absent; 529 rows outside the day). `SCOPE.md` Part D records the start gate and the acceptance of each atom; the order is `R01`, `R02`. `R01` and `R02` are merged (#519, #520) and their credit is a closeout's, not given here; no legacy day has been rebuilt by this document's authority. ADR-0074 Amendment 3 (`ACCEPTED` 2026-10-29, design gate #538) added `R03` and `R04` by governance issue #540: the order is `R01`, `R02`, `R03`, `R04`, and neither new atom is implemented; no slice day has been closed from the archive. Operator-reported evidence for Amendment 3 (not an audit): in `cycles` mode 33.2% of 2026-10-24 and 34.4% of 2026-10-25 lay in uncovered gaps; the share of trades actually lost on those days is not measured. All of them are post-version work: they do not block `O02` or `O03`.
 
 | ID | Capability | Owner | Requires | Unlocks | Decision | Impl | Acceptance / authority |
 |---|---|---|---|---|---|---|---|
-| R01 | Superseding reassessment writer v1 | Data Plane | A16, A08, A09 | R02 | FROZEN | MISSING | ADR-0074 Amendment 2 A2.3 (accepted; authorized by #518). A writer of a target-bound reassessment report for the current live revision of a natural partition that is not `closed` (today `record_quality_report` refuses it): it copies the bound evidence of the superseded assessment, carries `metrics.supersedes_assessment_signature`, and is applied through the existing ADR-0030 seam (`fail` -> `invalid`; a superseding `pass` restores `valid`); nothing is deleted or rewritten; idempotent; locks in the lifecycle order. |
-| R02 | Legacy-day rebuild: plan, retire, import, verify v1 | Source/Application | R01, T04 | BTCUSDT live-era history readable | FROZEN | MISSING | ADR-0074 Amendment 2 A2.2, A2.4 to A2.7 (accepted; authorized by #518). For explicitly selected, closed UTC days of the damaged legacy `dt=<day>` publication: a read-only plan with a digest, retire the live revision (`R01`), import the archive day as revision 1 of `dt=<day>/seg=000000.000` through the ordinary S13/S14 path, verify in full and through the DataGateway; refusals (open day, slices, checkpoint binding, conservation, differing field, stale plan); the ordinary importer still refuses an occupied day. |
+| R01 | Superseding reassessment writer v1 | Data Plane | A16, A08, A09 | R02, R03 | FROZEN | MISSING | ADR-0074 Amendment 2 A2.3 (accepted; authorized by #518). A writer of a target-bound reassessment report for the current live revision of a natural partition that is not `closed` (today `record_quality_report` refuses it): it copies the bound evidence of the superseded assessment, carries `metrics.supersedes_assessment_signature`, and is applied through the existing ADR-0030 seam (`fail` -> `invalid`; a superseding `pass` restores `valid`); nothing is deleted or rewritten; idempotent; locks in the lifecycle order. |
+| R02 | Legacy-day rebuild: plan, retire, import, verify v1 | Source/Application | R01, T04 | R03, BTCUSDT live-era history readable | FROZEN | MISSING | ADR-0074 Amendment 2 A2.2, A2.4 to A2.7 (accepted; authorized by #518). For explicitly selected, closed UTC days of the damaged legacy `dt=<day>` publication: a read-only plan with a digest, retire the live revision (`R01`), import the archive day as revision 1 of `dt=<day>/seg=000000.000` through the ordinary S13/S14 path, verify in full and through the DataGateway; refusals (open day, slices, checkpoint binding, conservation, differing field, stale plan); the ordinary importer still refuses an occupied day. |
+| R03 | Slice-day closure from the archive v1 | Source/Application | R01, R02, O01 | R04 | FROZEN | MISSING | ADR-0074 Amendment 3 A3.2 to A3.7 (accepted; authorized by #540). For closed UTC days of `canonical/trades/bybit/<instrument>/trade-v1` made of live slices `dt=<day>/seg=...` (ADR-0075): a read-only plan with a digest; retire every slice with the `R01` reassessment (`valid` -> `invalid`, nothing deleted); import the archive day as `dt=<day>/seg=000000.000` through the ordinary S13/S14 path (the A2.2 importer variant widened to invalid slices); verify in full and through the DataGateway. A day is closed when it has ended in UTC and the live checkpoint is bound to a partition of a later day. Conservation by `(exchange_ts, trade_id)` with full-field equality; refusals (open day, checkpoint binding, a `writing` or `closed` slice, a bridge slice without its neighbour, an uncontained gap record, an overlap, a day with nothing to repair, a differing archive or manifest hash, a slice already at `seg=000000.000`); **and the overlap guard of A3.6 added to the `R02` plan** (a valid partition of an adjacent day overlapping the day). Gap records are not modified and do not decide validity (ADR-0044 unchanged). |
+| R04 | Unattended closure run v1 | Operations/Application | R03 | multi-asset live research with closed days | FROZEN | MISSING | ADR-0074 Amendment 3 A3.12, A3.4 (accepted; authorized by #540). A timer-started run, every hour, over every instrument of the allow-list: a day is taken from 12:00 UTC of the following day; per day verify only (complete and conserved), replace the whole day (incomplete, archive conserved), or mark invalid by retiring its slices and retry; the 23rd attempt that does not close a day marks it invalid and abandons it (a `reopen` line restores it); the attempts and the signals are lines appended to a JSON-lines log, and a lost log only gives more attempts. A separate process that never blocks the live service: short `lock_timeout`, one object per transaction, pacing, CPU and memory limits, a wall-clock limit, a run lock without waiting. Deletes nothing (ADR-0049 unchanged). Not claimed: the publication time of the archive file against 12:00 UTC, the live publication-latency bound (a required measurement), a deployment, a first run. |
 
 ## Dependency integrity
 
@@ -621,10 +628,10 @@ O01 ──> O02 ──> O03 ──> T02
 
 ### DG-R — Rebuild of damaged legacy live days v1 — CLOSED (design gate; ADR-0074 Amendment 2 `ACCEPTED`, #515)
 
-Closed by ADR-0074 Amendment 2: for explicitly selected, closed UTC days, retire the damaged live revision with an ordinary ADR-0030 reassessment (`fail` -> `invalid`; nothing deleted), import the whole-day archive file as revision 1 of `dt=<day>/seg=000000.000` through the ordinary S13/S14 path, verify in full. The first draft's atomic replacement (ADR-0033 cutover extended to a component of adjacent days) is considered and not adopted (A2.8). Implementation of `R01` and `R02` is authorized by #518 and not started. Not decided: the atomic replacement, until a consumer of those days appears. Out of scope: consolidation of slices, automatic repair of live gaps (ADR-0044), retention or deletion of retired or superseded revisions, any change to `trade-v1`, the ordering key, `TradeKeyV1` or the J02 wire.
+Closed by ADR-0074 Amendment 2: for explicitly selected, closed UTC days, retire the damaged live revision with an ordinary ADR-0030 reassessment (`fail` -> `invalid`; nothing deleted), import the whole-day archive file as revision 1 of `dt=<day>/seg=000000.000` through the ordinary S13/S14 path, verify in full. The first draft's atomic replacement (ADR-0033 cutover extended to a component of adjacent days) is considered and not adopted (A2.8). `R01` and `R02` are authorized by #518. ADR-0074 Amendment 3 (`ACCEPTED` 2026-10-29, design gate #538) extends the closure to the days made of live slices and runs it unattended: `R03` and `R04` are authorized by #540 and not started. Validity of a day is decided only by the archive verification within 23 attempts; long-gap records do not decide it (ADR-0044 unchanged); the slices retired by an archive closure carry no retention duty and the run deletes nothing (ADR-0049 unchanged). Not decided: the atomic replacement, until a consumer of those days appears; the publication time of the archive file against 12:00 UTC; the directories moved aside on 2026-10-26 and the catalog dump; a replacement of a complete live day (proposed never); the explicit-gap state of the live service caused by an open long-gap record. Out of scope: consolidation of slices, automatic repair of live gaps (ADR-0044), retention or deletion of retired or superseded revisions, any change to `trade-v1`, the ordering key, `TradeKeyV1` or the J02 wire.
 
 ```text
-R01 ──> R02
+R01 ──> R02 ──> R03 ──> R04
 ```
 
 ## Vertical milestones
@@ -771,7 +778,7 @@ DG-C/L2 L2 historical v1 (#442)                         COMPLETE on implement/l2
 DG-M   Canonical feature identity for deck results v1   COMPLETE within recorded bounds on implement/fid (closeout #475); M01,M02,M04,M05; M03 superseded; no real-host run claimed
 DG-N   Multi-instrument Bybit linear trades v1          CLOSED within bounds on implement/fid (#483, #489, #527; ADR-0074 ACCEPTED #377 and Amendment 1); T01,T04,T03,T02 COMPLETE (the one-hour ETHUSDT run is not claimed)
 DG-O   Live publication: continuous session and append-only slices v1   CLOSED within bounds on implement/fid (#507, #527; ADR-0075 ACCEPTED #504); O01,O02,O03 COMPLETE (no real-provider run)
-DG-R   Rebuild of damaged legacy live days v1   AUTHORIZED (#518; ADR-0074 Amendment 2 ACCEPTED #515); R01,R02 FROZEN/MISSING; post-version; nothing implemented
+DG-R   Rebuild of damaged legacy live days v1   AUTHORIZED (#518; ADR-0074 Amendment 2 ACCEPTED #515); R01,R02 FROZEN/MISSING here (code merged, credit is a closeout's); R03,R04 authorized by #540 (ADR-0074 Amendment 3 ACCEPTED #538), FROZEN/MISSING; post-version
 Wave 9  Reinforcement Learning                            I06 strategic RL, I07 execution RL
 Wave 10 Paper / Live product                              J07 then J08 after required data/execution/ops gates
 ```

@@ -84,7 +84,7 @@ DG-M Canonical feature identity (implement/fid)  COMPLETE within recorded bounds
                                                     M03 superseded; no real-host run claimed; promotion to main is separate
 DG-N Multi-instrument Bybit linear trades (implement/fid)  CLOSED within bounds (#483, #489, #527; ADR-0074 ACCEPTED #377, Amendment 1); T01,T04,T03,T02 COMPLETE (PR #486, #488, #492, #494-#502, #526); no real-provider run
 DG-O Live publication (implement/fid)  CLOSED within bounds (#507, #527; ADR-0075 ACCEPTED #504); O01,O02,O03 COMPLETE (PR #510, #524, #526); T02 closed with O03; no real-provider run
-DG-R Rebuild of damaged legacy live days (implement/fid)  AUTHORIZED (#518; ADR-0074 Amendment 2 ACCEPTED #515); R01,R02 not started; post-version
+DG-R Rebuild of damaged legacy live days (R01,R02: implement/fid; R03,R04: implement/dgr-closure)  AUTHORIZED (#518; ADR-0074 Amendment 2 ACCEPTED #515; #540; Amendment 3 ACCEPTED #538); R03,R04 not started; post-version
 DG-C L2 historical v1 (implement/l2, #442)       COMPLETE (A14,A14a-A14e; PR #375/#379/#401/#411/#417/#408;
                                                     golden #413/#430, 11/11 at 1cdd78f; explicit gaps);
                                                     A14f/A14g held MISSING; promotion to main is separate
@@ -110,16 +110,19 @@ Completed checkpoints are credited and must not be re-proved absent a concrete i
 ## Roadmap vNext planning state
 
 ```text
-TOTAL_ATOMS                     = 132
-CLASSIFIED_ATOMS                = 132
+TOTAL_ATOMS                     = 134
+CLASSIFIED_ATOMS                = 134
 UNCLASSIFIED_GAPS               = 0
-SEMANTIC_FROZEN_OR_RESOLVED     = 120 / 132 = 90.9%
+SEMANTIC_FROZEN_OR_RESOLVED     = 122 / 134 = 91.0%
 OPEN_BLOCKING                   = 3
 OPEN_DEFERABLE                  = 9
-ROADMAP_DEFINED                 = 120 + 3 + 9 = 132
-ROADMAP_PLANNING_COMPLETENESS   = 132 / 132 = 100%
-IMPLEMENTATION_COMPLETE         = 110 / 132 = 83.3%
+ROADMAP_DEFINED                 = 122 + 3 + 9 = 134
+ROADMAP_PLANNING_COMPLETENESS   = 134 / 134 = 100%
+IMPLEMENTATION_COMPLETE         = 110 / 134 = 82.1%
 ```
+
+DG-R Amendment 3 registration (#540): ADR-0074 Amendment 3 accepted (#538, 2026-10-29); `R03` and `R04` added as `FROZEN`/`MISSING` (132 -> 134 atoms; semantic 90.9% -> 91.0%;
+implementation 83.3% -> 82.1%, the inventory grew); no existing atom changes state and nothing is credited or implemented.
 
 DG-N/DG-O closeout (#527): `T03`, `T02`, `O01`, `O02` and `O03` are credited `COMPLETE` on `implement/fid` within their bounds (PR #492, #494 to #502, #510, #524, #526;
 105 -> 110 of 132; implementation 79.5% -> 83.3%); no new atom and no decision-state change. The one-hour `ETHUSDT` real-provider run is not performed and not claimed.
@@ -207,7 +210,7 @@ DG-K2 Server/deck deployment composition         RESOLVED / IMPLEMENTED within r
 DG-M  Canonical feature identity for deck results   RESOLVED / IMPLEMENTED within recorded bounds (ADR-0073, Amendment 1; closeout #475)
 DG-N  Multi-instrument Bybit linear trades v1       CLOSED within bounds (ADR-0074 ACCEPTED #377 and Amendment 1; reconciliations #483, #489, #527); T01,T04,T03,T02 COMPLETE
 DG-O  Live publication: continuous session and append-only slices v1   CLOSED within bounds (ADR-0075 ACCEPTED #504; reconciliations #507, #527); O01,O02,O03 COMPLETE; the one-hour real-provider run is not claimed
-DG-R  Rebuild of damaged legacy live days v1   AUTHORIZED (ADR-0074 Amendment 2 ACCEPTED #515; reconciliation #518); implementation not started
+DG-R  Rebuild of damaged legacy live days v1   AUTHORIZED (ADR-0074 Amendments 2 and 3 ACCEPTED #515, #538; reconciliations #518, #540); R03,R04 not started
 ```
 
 Important current boundaries:
@@ -229,7 +232,7 @@ Explicit deferables — second-provider resolution, exact L3/MBO semantics, Data
 - DG-M: registered by #453 after the DG-K2 closeout; the maintainer named feature traceability as a requirement on 2026-10-18. Its design gate #454 produced ADR-0073, accepted on 2026-10-18 (#457), #458 authorized `M01` (bar-flow representation), `M02` (failed-aggression feature), `M04` (server registry and `definitions` carriage) and `M05` (deck declaration rule and proof) on the integration branch `implement/fid`; `M03` is superseded. Closed by operator closeout #475: all four are implemented and merged (PR #466, #468, #473, #474) within the bounds recorded in `CAPABILITY_DAG.md`; no real-host run is claimed, and promotion into `main` is the operator's separate PR. Follow-on #477 / PR #478: the deck protocol client carries `definitions` (not an atom). Independent of the FEI line. Default proposed placement: after DG-K2 and before Wave 9; the order remains the maintainer's.
 - DG-N: the maintainer holds Parquet trades for other Bybit linear USDT instruments and wants them read, delivered and ingested live (2026-10-19). The design gate #377 produced ADR-0074 (accepted, #482) and #483 authorized `T01` (read and delivery), `T04` (historical import), `T03` (explicit fees) and `T02` (live ingest per instrument) on `implement/fid`, in the current wave; the wave is promoted to `main` at its end. Amendment 1 (#487, accepted 2026-10-20) chose the Bybit public trade archive as the only historical source, because the existing files declare a source profile no commit produced and S13 refuses; `T01` and `T04` are `COMPLETE` (#489); `T03` and `T02` are `COMPLETE` within their bounds (closeout #527). A second venue, spot, inverse and L2 for other instruments are out of scope.
 - DG-O: measured on the maintainer's server on 2026-10-21 (a read-only catalog query and the Bybit public archive): the live publication supersedes each cycle with the next, so a day reads as under 0.4% of its published trades, and the loop closes its WebSocket between cycles, so about 27% of a day's trades are never acquired. The design gate #504 produced ADR-0075 (accepted) and #507 authorizes `O01` (append-only slices), `O02` (continuous session) and `O03` (configuration, runbook, real-provider proof) on `implement/fid`, before the rest of the wave; `T02` closed with `O03`; all three are `COMPLETE` within their bounds (closeout #527) and the one-hour real-provider run is not performed. Consolidation of slices is outside the first version; the already damaged live days are not repaired by DG-O (see DG-R).
-- DG-R: the days published by the legacy live path (31 candidate days, 2026-09-23 to 2026-10-23) read as their last batch and miss trades never acquired. ADR-0074 Amendment 2 (accepted 2026-10-24) rebuilds explicitly selected, closed days: retire the damaged revision with an ordinary reassessment, import the archive day under a free key, verify. #518 authorizes `R01` (reassessment writer) and `R02` (plan, retire, import, verify) on `implement/fid`; they are post-version and do not block `O02` or `O03`. The atomic replacement of the first draft is not adopted; the run on the server is the operator's, from a reviewed plan.
+- DG-R: the days published by the legacy live path (31 candidate days, 2026-09-23 to 2026-10-23) read as their last batch and miss trades never acquired. ADR-0074 Amendment 2 (accepted 2026-10-24) rebuilds explicitly selected, closed days: retire the damaged revision with an ordinary reassessment, import the archive day under a free key, verify. #518 authorizes `R01` (reassessment writer) and `R02` (plan, retire, import, verify) on `implement/fid`; they are post-version and do not block `O02` or `O03`. The atomic replacement of the first draft is not adopted; the run on the server is the operator's, from a reviewed plan. ADR-0074 Amendment 3 (accepted 2026-10-29, design gate #538) extends the closure to days made of live slices and runs it unattended for every instrument of the allow-list: measured on the server (operator-reported, not an audit), `cycles` mode left 33.2% of 2026-10-24 and 34.4% of 2026-10-25 uncovered. #540 authorizes `R03` (slice-day closure from the archive) and `R04` (hourly unattended run; 23 attempts, then the day is invalid and abandoned; a JSON-lines log) on `implement/dgr-closure`, cut from `main`; they are post-version and do not block `O02` or `O03`. Only the continuous session (`O02`) completes a day as it happens; the system asked for is the two together, and the live service is still in `cycles` mode.
 
 ## Operational dependency direction
 
